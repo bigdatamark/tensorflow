@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# DTensor-aware stateless random number generation and dropout. Offers stateless normal, uniform
+# and truncated normal generators, a seed-splitting function, and a stateless dropout that all
+# accept an optional layout so results can be created directly as sharded DTensors. The generators
+# ignore the layout outside eager mode. Built on the DTensor api module and the stateless random
+# ops. No import-time side effects.
+
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -42,6 +49,13 @@ def _old_tf_random_stateless_normal(
     name=None,
     layout=None,
 ):
+  # [FUNCTION DOC]
+  # HELPER: implementation behind stateless_random_normal.
+  # Inputs: shape (shape of the output); seed (integer pair seed, converted to a 32-bit integer
+  # tensor); mean and stddev (scalars, default 0 and 1); dtype (default 32-bit float); name
+  # (optional op name); layout (optional DTensor layout). Draws standard normal values through
+  # the layout-aware call helper, scales by stddev and adds mean, and sets the static shape.
+  # Returns the resulting tensor.
   """DTensor stateless normal implementation that takes an layout."""
   with ops.name_scope(
       name, "stateless_random_normal", [shape, seed, mean, stddev]
@@ -71,6 +85,17 @@ def _old_tf_random_stateless_uniform(
     name=None,
     layout=None,
 ):
+  # [FUNCTION DOC]
+  # HELPER: implementation behind stateless_random_uniform.
+  # Inputs: shape; seed (integer pair); minval (default 0); maxval (default nothing, meaning 1 for
+  # floats and the full integer range for integers); dtype (default 32-bit float); name (optional);
+  # layout (optional DTensor layout). Raises a value error if dtype is not one of float16, bfloat16,
+  # float32, float64, int32, int64, uint32, uint64; if for integer types only one of minval/maxval
+  # is given; or if minval is given for an unsigned type. Integer types with no bounds use the
+  # full-range generator; integer types with bounds use the ranged integer generator; floats scale a
+  # unit uniform value by the range and add minval. Sets the static shape and returns the tensor.
+  # KNOWN ISSUE: for integer types the converted range tensor is computed but unused, and minval and
+  # maxval are passed as given to the op.
   """DTensor stateless uniform implementation that takes an layout."""
   dtype = dtypes.as_dtype(dtype)
   accepted_dtypes = (
@@ -154,6 +179,11 @@ def _old_tf_stateless_truncated_normal(
     name=None,
     layout=None,
 ):
+  # [FUNCTION DOC]
+  # HELPER: implementation behind stateless_truncated_normal.
+  # Same inputs as the normal generator helper (shape, seed, mean default 0, stddev default 1, dtype
+  # default 32-bit float, name, layout). Draws truncated normal values through the layout-aware call
+  # helper, scales by stddev, adds mean, sets the static shape and returns the tensor.
   """DTensor stateless truncated normal implementation that takes an layout."""
   with ops.name_scope(
       name, "stateless_truncated_normal", [shape, seed, mean, stddev]
@@ -183,6 +213,11 @@ def stateless_random_normal(
     name=None,
     layout=None,
 ):
+  # [FUNCTION DOC]
+  # Stateless normal random generator. Inputs: shape, seed (pair), mean (default 0), stddev
+  # (default 1), dtype (default 32-bit float), name (optional), layout (optional DTensor layout).
+  # The layout is dropped (treated as nothing) when not executing eagerly. Returns a normally
+  # distributed tensor, sharded per the layout if given. Delegates to the private helper.
   """DTensor stateless RNG."""
   if not context.executing_eagerly():
     layout = None
@@ -207,6 +242,11 @@ def stateless_random_uniform(
     name=None,
     layout=None,
 ):
+  # [FUNCTION DOC]
+  # Stateless uniform random generator. Inputs: shape, seed (pair), minval (default 0), maxval
+  # (default nothing), dtype (default 32-bit float), name (optional), layout (optional DTensor
+  # layout). The layout is dropped when not executing eagerly. Returns a uniformly distributed
+  # tensor; see the private helper for dtype validation errors it raises.
   """DTensor stateless random uniform."""
   if not context.executing_eagerly():
     layout = None
@@ -231,6 +271,12 @@ def stateless_truncated_normal(
     name=None,
     layout=None,
 ):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring is the generic "stateless RNG" text; this specifically generates
+  # truncated normal values.
+  # Stateless truncated normal generator. Inputs: shape, seed (pair), mean (default 0), stddev
+  # (default 1), dtype (default 32-bit float), name (optional), layout (optional DTensor layout).
+  # The layout is dropped when not executing eagerly. Returns a truncated normal tensor.
   """DTensor stateless RNG."""
   if not context.executing_eagerly():
     layout = None
@@ -247,6 +293,11 @@ def stateless_truncated_normal(
 
 
 def stateless_split(seed, num=2, mesh=None):
+  # [FUNCTION DOC]
+  # Splits a seed into several new seeds. Inputs: seed (integer pair, converted to a tensor); num
+  # (number of new seeds, default 2); mesh (optional mesh; when given, the result is fully
+  # replicated on it). Draws a num-by-2 matrix of full-range random integers of the seed's dtype
+  # via the stateless uniform generator. Returns that tensor.
   seed = ops.convert_to_tensor(seed)
   layout = None
   if mesh:
@@ -267,6 +318,12 @@ def stateless_split(seed, num=2, mesh=None):
 
 
 def _get_noise_shape(x, noise_shape):
+  # [FUNCTION DOC]
+  # HELPER: computes the shape of the dropout noise tensor (copied from the core nn ops).
+  # Inputs: x (tensor being dropped out); noise_shape (nothing, or a shape-like value). With nothing
+  # returns the dynamic shape of x. If noise_shape cannot be converted to a shape, returns it
+  # unchanged for the op to handle. If ranks match, unknown noise dimensions are filled in with the
+  # static dimensions of x, and a shape object is returned; otherwise returns noise_shape as given.
   """Noisve shape util copied from tf nn_ops."""
   # If noise_shape is none return immediately.
   if noise_shape is None:
@@ -297,6 +354,14 @@ def _get_noise_shape(x, noise_shape):
 # tensor `x` to the tf.mul and then back propagate the layout to the
 # `random_tensor`.
 def dropout(x, rate, noise_shape=None, seed=None, name=None):
+  # [FUNCTION DOC]
+  # Stateless DTensor replacement for dropout. Inputs: x (tensor, typically a DTensor); rate
+  # (fraction to drop, must be a float); noise_shape (optional shape of the random mask, default the
+  # shape of x); seed (required integer; combined with zero into a pair); name (optional).
+  # Raises a value error if rate is not a float or seed is nothing. Scales x by one over the keep
+  # probability, draws a uniform mask using the layout of x (eager only; none in graph mode), keeps
+  # elements whose random value is at least rate, multiplies by the mask cast to the dtype of x, and
+  # restores the static shape in graph mode. Returns the resulting tensor.
   """DTensor replacement for dropout."""
   if not isinstance(rate, float):
     raise ValueError("rate should be float for dropout.")

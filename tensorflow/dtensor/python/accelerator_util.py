@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Utilities for initializing and shutting down the accelerator system (CPU, GPU or TPU) used by
+# DTensor, in local mode or multi-client mode. Exposes is_initialized, set_initialized,
+# initialize_multi_client_cluster, initialize_accelerator_system and shutdown_accelerator_system;
+# the last two are exported publicly under the experimental dtensor namespace. Keeps a module-level
+# global holding the device type string that was initialized (nothing when not initialized).
+# Relies on the sibling config module (environment-driven settings) and tpu_util. No import-time
+# side effects other than creating the global state and registering exports.
+
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,11 +40,19 @@ _INITIALIZED_ACCELERATOR_SYSTEM_TYPE = None
 
 
 def is_initialized() -> bool:
+  # [FUNCTION DOC]
+  # Reports whether the accelerator system has been initialized, i.e. whether the module-level
+  # recorded device type is set to a non-empty value. Takes no inputs; returns a boolean.
   """Returns whether accelerator system has been initialized."""
   return bool(_INITIALIZED_ACCELERATOR_SYSTEM_TYPE)
 
 
 def set_initialized(value):
+  # [FUNCTION DOC]
+  # HELPER: lets other modules override the module-level initialization state.
+  # Overwrites the module-level record of the initialized device type with the given value (a
+  # device type string to mark as initialized, or nothing to mark as not initialized). No
+  # validation is done. Returns nothing.
   """Sets if accelerator system has been initialized."""
   global _INITIALIZED_ACCELERATOR_SYSTEM_TYPE
   _INITIALIZED_ACCELERATOR_SYSTEM_TYPE = value
@@ -48,6 +65,21 @@ def initialize_multi_client_cluster(job_name: str,
                                     port: Optional[int] = None,
                                     gpu_use_nccl_communication: bool = False,
                                     enable_coordination_service: bool = True):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it raises a runtime error inside a tf.function, but the code
+  # only asserts eager execution, so it raises an assertion error (and not at all under -O).
+  # Sets up the gRPC server and collective ops for a multi-client DTensor cluster.
+  # Inputs: job_name (string, job shared by all clients); dtensor_jobs (list of "host:port"
+  # strings, one per client, index is the task id); client_id (integer, this client's task index);
+  # collective_leader (string, job/task running collectives; "/job:" is prepended if missing);
+  # port (optional integer, server port; when nothing the port from the server definition/job list
+  # is used); gpu_use_nccl_communication (boolean, default false); enable_coordination_service
+  # (boolean, default true; configures a standalone coordination service led by the leader).
+  # Behavior: configures collective ops on the eager context, optionally the coordination service,
+  # builds a cluster definition with one job and a server definition from the current context
+  # config (4 channels per target, unlimited receive buffer chunk), logs it, enables collective ops
+  # with it, and ensures the context is initialized. Returns nothing. Mutates the global eager
+  # context and starts a server.
   """Initialize GRPC servers and collectives for multi-client DTensor setup.
 
   This function can be used to initialize a multi-client cluster and enable
@@ -123,6 +155,23 @@ def initialize_accelerator_system(
     experimental_reset_context: Optional[bool] = False,
     experimental_enable_megcore: Optional[bool] = False,
 ) -> str:
+  # [FUNCTION DOC]
+  # Initializes accelerators and the communication fabric for DTensor in local or multi-client mode
+  # (mode and job layout come from environment-driven settings in the config module).
+  # Inputs (all optional): device_type (string CPU, GPU or TPU, case-insensitive; default is the
+  # preferred device type); enable_coordination_service (boolean, default true, used only in
+  # multi-client mode); num_logical_cpu_devices (integer; for GPU/TPU defaults to the larger of
+  # local CPU and local accelerator device counts, and must not be smaller than the local
+  # accelerator count); experimental_reset_context (boolean, default false; resets the TensorFlow
+  # context if already initialized); experimental_enable_megcore (boolean, default false, TPU only).
+  # Returns the upper-cased device type string that was initialized.
+  # Raises a value error if: already initialized; TensorFlow context already initialized (and no
+  # reset requested); unknown device type; NCCL requested with more logical than physical GPUs;
+  # num_logical_cpu_devices too small. Asserts eager execution.
+  # Side effects: clears context caches, sets logical CPU device configuration, in multi-client
+  # mode starts the cluster via initialize_multi_client_cluster, in local mode GPU sets the NCCL
+  # flag on the context, initializes the TPU system for TPU, and records the device type in the
+  # module-level global.
   """Initializes accelerators and communication fabrics for DTensor.
 
   DTensor configures TensorFlow to run in the local mode or multi-client mode.
@@ -270,6 +319,15 @@ def initialize_accelerator_system(
     "experimental.dtensor.shutdown_tpu_system",
     v1=[])
 def shutdown_accelerator_system() -> None:
+  # [FUNCTION DOC]
+  # Shuts down the accelerator system initialized earlier. Takes no inputs; returns nothing.
+  # Waits for pending async eager work, then (in a finally block, so the checks run even if the
+  # wait failed) raises a value error if the system is not initialized or if running in
+  # multi-client mode (unsupported). For TPU it shuts down the TPU system. It then resets the
+  # TensorFlow context (stopping gRPC servers), clears caches and clears the module-level
+  # initialized device type.
+  # KNOWN ISSUE: because the checks are in a finally block, an error from the async wait can be
+  # replaced by the validation error, or the context is reset after a failed wait.
   """Shuts down the accelerator system."""
   global _INITIALIZED_ACCELERATOR_SYSTEM_TYPE
   try:

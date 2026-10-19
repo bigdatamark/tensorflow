@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# HELPER: command-line generator of a test fixture (a toy v1 saved model) for TFRT saved model tests.
+# Script that builds a small graph-mode (v1) saved model containing a while loop. The graph has an
+# integer scalar placeholder named input; a loop increments the value by one until it reaches ten.
+# The model is exported with a serving tag and two signatures (the name serving_default and the
+# default serving signature key), both mapping input x to output r with the predict method name.
+# Defines one command-line flag, saved_model_path (string, default empty), where the model is
+# written. Running the script as main executes the generator; importing only defines the flag.
+# Side effects: the main function first recursively deletes the directory at saved_model_path
+# (it fails if the path does not exist), then writes the saved model there.
+
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -34,6 +45,15 @@ FLAGS = flags.FLAGS
 
 
 def main(argv):
+  # [FUNCTION DOC]
+  # HELPER: entry point of the saved model generator script.
+  # KNOWN ISSUE: it deletes the output directory first, which raises a file-not-found error if the
+  # directory does not already exist, so the output path must be pre-created.
+  # Takes the command-line argument list; raises a usage error if more than the program name is
+  # given. Removes the directory named by the saved_model_path flag, builds a while-loop graph
+  # (placeholder input, loop adding one until value reaches ten), starts a session, and saves a
+  # v1 saved model with the serving tag and two signature entries (serving_default and the default
+  # serving signature key) mapping x to r, stripping default attributes. Returns nothing.
   if len(argv) > 1:
     raise app.UsageError('Too many command-line arguments.')
 

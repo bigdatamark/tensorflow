@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Core DTensor Python API. Provides entry points to run computations under a DTensor mesh
+# (call_with_layout, run_on, default_mesh, get_default_mesh, device_name, is_dtensor), data
+# transfer (copy_to_mesh, pack, unpack), layout operations (fetch_layout, check_layout, relayout,
+# relayout_like) and testing hooks (reset_dtensor_device). Most functions are exported publicly
+# under the experimental dtensor namespace and delegate to a lazily created process-wide DTensor
+# device singleton guarded by a lock. Import-time side effects: registers gradient functions for
+# the Relayout, RelayoutLike, CopyToMesh and CopyToMeshGrad ops.
+
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -38,6 +47,14 @@ _dtensor_singleton_lock = threading.Lock()
 def call_with_layout(fn: Callable[...,
                                   Any], layout: Optional[layout_lib.Layout],
                      *args, **kwargs) -> Any:
+  # [FUNCTION DOC]
+  # Calls a function, placing its result on the DTensor device with a given layout when requested.
+  # Inputs: fn (callable such as a tensor-creating API); layout (optional layout; nothing means no
+  # DTensor handling); extra positional and keyword arguments forwarded to fn.
+  # Behavior: with no layout, simply calls fn. With a layout in eager mode, calls fn inside the
+  # default-mesh scope of the layout's mesh with the layout set as the default output layout. In
+  # graph mode, calls fn normally and then applies relayout to its result. Returns fn's result
+  # (a DTensor when a layout was given). Exceptions from fn propagate.
   """Calls a function in the DTensor device scope if `layout` is not None.
 
   If `layout` is not None, `fn` consumes DTensor(s) as input and produces a
@@ -68,6 +85,10 @@ def call_with_layout(fn: Callable[...,
 @deprecation.deprecated(None, "Use `dtensor.default_mesh` scope instead.")
 @contextlib.contextmanager
 def run_on(mesh: layout_lib.Mesh):
+  # [FUNCTION DOC]
+  # Deprecated context manager (use default_mesh instead). Enters the default_mesh scope for the
+  # given mesh, so ops and functions inside run on the DTensor device with that mesh. Input: a
+  # mesh. Yields nothing; same errors as default_mesh (value error if not a mesh).
   """Runs enclosed functions in the DTensor device scope.
 
   This function returns a scope. All the ops and tf.functions in this scope will
@@ -89,6 +110,11 @@ def run_on(mesh: layout_lib.Mesh):
 @tf_export("experimental.dtensor.default_mesh", v1=[])
 @contextlib.contextmanager
 def default_mesh(mesh: layout_lib.Mesh):
+  # [FUNCTION DOC]
+  # Context manager that sets the default DTensor mesh for enclosed ops and functions, used when a
+  # mesh cannot be inferred from inputs. Input: a mesh; raises a value error if it is not a mesh.
+  # Side effects: temporarily sets the default mesh on the DTensor device singleton (creating it
+  # if needed) and enters the DTensor device name as the active device scope. Yields nothing.
   """Sets the default DTensor device mesh to use for enclosed functions.
 
   This function returns a scope. All the ops and tf.functions in this scope will
@@ -114,6 +140,9 @@ def default_mesh(mesh: layout_lib.Mesh):
 
 @tf_export("experimental.dtensor.get_default_mesh", v1=[])
 def get_default_mesh() -> Optional[layout_lib.Mesh]:
+  # [FUNCTION DOC]
+  # Returns the current default mesh of the DTensor device, or nothing if the DTensor device
+  # singleton has not been created yet. Does not create the singleton. Takes no inputs.
   """Return the default mesh under the current dtensor device context.
 
   In the case that dtensor device system is not initialized, this function
@@ -130,6 +159,9 @@ def get_default_mesh() -> Optional[layout_lib.Mesh]:
 
 @tf_export("experimental.dtensor.device_name", v1=[])
 def device_name() -> str:
+  # [FUNCTION DOC]
+  # Returns the name string of the singleton DTensor device, creating the singleton if needed.
+  # Takes no inputs.
   """Returns the singleton DTensor device's name.
 
   This function can be used in the following way:
@@ -146,6 +178,9 @@ def device_name() -> str:
 
 @tf_export("experimental.dtensor.is_dtensor", v1=[])
 def is_dtensor(tensor) -> bool:
+  # [FUNCTION DOC]
+  # Returns a boolean telling whether the given object is a DTensor, by asking the DTensor device
+  # singleton (created if needed). Input: any object to check.
   """Check whether the input tensor is a DTensor.
 
   In Python, a DTensor has the same type as a `tf.Tensor`. This method will
@@ -169,6 +204,11 @@ def copy_to_mesh(
     tensor: Any,
     layout: layout_lib.Layout,
     source_layout: Optional[layout_lib.Layout] = None) -> tensor_lib.Tensor:
+  # [FUNCTION DOC]
+  # Copies a regular tensor onto the DTensor device with the target layout (and its mesh).
+  # Inputs: tensor (regular tensor); layout (target layout); source_layout (optional, deprecated
+  # and ignored: it is discarded). Implemented by calling relayout with the tensor and layout.
+  # Returns the resulting DTensor.
   """Copies a tf.Tensor onto the DTensor device with the given layout.
 
   Copies a regular tf.Tensor onto the DTensor device. Use the mesh attached to
@@ -190,6 +230,12 @@ def copy_to_mesh(
 
 @tf_export("experimental.dtensor.pack", v1=[])
 def pack(tensors: Sequence[Any], layout: layout_lib.Layout) -> Any:
+  # [FUNCTION DOC]
+  # Packs per-device tensor components into one DTensor with the given layout. Inputs: tensors
+  # (sequence of local component tensors, one per local device of the layout's mesh, in device
+  # order); layout (layout of the result). The caller must ensure values match the layout; no data
+  # moves between clients. Returns the DTensor. Delegates to the DTensor device singleton, which
+  # raises a runtime error when not called eagerly.
   """Packs `tf.Tensor` components into a DTensor.
 
   Packing and unpacking are inverse operations:
@@ -341,6 +387,10 @@ def pack(tensors: Sequence[Any], layout: layout_lib.Layout) -> Any:
 
 @tf_export("experimental.dtensor.unpack", v1=[])
 def unpack(tensor: Any) -> Sequence[Any]:
+  # [FUNCTION DOC]
+  # Splits a DTensor into the raw component tensors placed on this client's local devices (the
+  # inverse of pack). Input: a DTensor. Returns a sequence of component tensors. Delegates to the
+  # DTensor device singleton, which raises a runtime error when not called eagerly.
   """Unpacks a DTensor into `tf.Tensor` components.
 
   Packing and unpacking are inverse operations:
@@ -378,6 +428,9 @@ def unpack(tensor: Any) -> Sequence[Any]:
 
 @tf_export("experimental.dtensor.fetch_layout", v1=[])
 def fetch_layout(tensor: tensor_lib.Tensor) -> layout_lib.Layout:
+  # [FUNCTION DOC]
+  # Returns the layout of the given DTensor, obtained from the DTensor device singleton. Raises a
+  # runtime error when not called eagerly (raised by the device).
   """Fetches the layout of a DTensor.
 
   Args:
@@ -394,6 +447,10 @@ def fetch_layout(tensor: tensor_lib.Tensor) -> layout_lib.Layout:
 
 @tf_export("experimental.dtensor.check_layout", v1=[])
 def check_layout(tensor: tensor_lib.Tensor, layout: layout_lib.Layout) -> None:
+  # [FUNCTION DOC]
+  # Verifies that a DTensor has the expected layout. Inputs: tensor (a DTensor) and layout
+  # (expected). Raises a value error, with both layouts in the message, if they differ. Returns
+  # nothing.
   """Asserts that the layout of the DTensor is `layout`.
 
   Args:
@@ -414,6 +471,10 @@ def relayout(
     layout: layout_lib.Layout,
     name: Optional[str] = None,
 ) -> tensor_lib.Tensor:
+  # [FUNCTION DOC]
+  # Changes the layout of a tensor by emitting a relayout op. Inputs: tensor (a DTensor); layout
+  # (new layout); name (optional op name). Converts the layout to its string form and creates the
+  # op inside the default-mesh scope of the layout's mesh. Returns the output tensor of the op.
   """Changes the layout of `tensor`.
 
   Changes the layout of `tensor` to `layout`. This is used to fine-tune the
@@ -455,6 +516,10 @@ def relayout_like(
     layout_tensor: tensor_lib.Tensor,
     name: Optional[str] = None,
 ) -> tensor_lib.Tensor:
+  # [FUNCTION DOC]
+  # Changes the layout (and mesh) of a tensor to match that of another tensor by emitting a
+  # relayout-like op. Inputs: tensor (a DTensor); layout_tensor (tensor whose layout is copied;
+  # its shape and type are irrelevant); name (optional op name). Returns the output tensor.
   """Changes the layout of `tensor` to the same as `layout_tensor`.
 
   `relayout_like` is often used inside a `tf.function`, to ensure a tensor is
@@ -504,6 +569,11 @@ def relayout_like(
 
 @tf_export("experimental.dtensor._reset_dtensor_device", v1=[])
 def reset_dtensor_device(is_async: bool) -> None:
+  # [FUNCTION DOC]
+  # Testing and diagnostics helper that replaces the module-level DTensor device singleton with a
+  # new device that has no meshes. Input: is_async (boolean, whether the device executes
+  # asynchronously). Mutates the global singleton without taking the lock and without clearing the
+  # previous device. Returns nothing.
   """Resets the Eager execution device for DTensor.
 
   This function is only intended for testing and diagnostics.
@@ -517,6 +587,10 @@ def reset_dtensor_device(is_async: bool) -> None:
 
 
 def _dtensor_device() -> dtensor_device.DTensorDevice:
+  # [FUNCTION DOC]
+  # HELPER: accessor for the process-wide DTensor device used by all public functions here.
+  # Under the singleton lock, creates the device (asynchronous mode) if it does not exist yet, and
+  # returns it.
   with _dtensor_singleton_lock:
     if _dtensor_singleton is None:
       reset_dtensor_device(is_async=True)
@@ -524,6 +598,10 @@ def _dtensor_device() -> dtensor_device.DTensorDevice:
 
 
 def _reset() -> None:
+  # [FUNCTION DOC]
+  # HELPER: internal reset used when tearing down the DTensor runtime (e.g. in tests).
+  # Under the singleton lock, clears the TPU core ids on the existing device (if any) and drops
+  # the singleton so a new one is created on next use. Returns nothing.
   global _dtensor_singleton
   with _dtensor_singleton_lock:
     if _dtensor_singleton is not None:
@@ -537,12 +615,20 @@ def _reset() -> None:
 
 @ops.RegisterGradient("Relayout")
 def _relayout_gradient(op, grad):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient function for the Relayout op.
+  # Returns the incoming gradient relaid out to match the layout of the op's first input, using the
+  # relayout-like op.
   grad = gen_dtensor_ops.relayout_like(grad, layout_input=op.inputs[0])
   return grad
 
 
 @ops.RegisterGradient("RelayoutLike")
 def _relayout_grad_gradient(op, grad):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient function for the RelayoutLike op.
+  # Returns a pair: the gradient relaid out like the op's first input, and nothing for the second
+  # input (the layout-source tensor gets no gradient).
   # Gradient of RelayoutGrad is relayout to the original Relayout's output.
   grad = gen_dtensor_ops.relayout_like(grad, layout_input=op.inputs[0])
   # Return None for forward_input's partial gradient since it is not connected
@@ -552,6 +638,10 @@ def _relayout_grad_gradient(op, grad):
 
 @ops.RegisterGradient("CopyToMesh")
 def _copy_to_mesh_gradient(op, grad):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient function for the CopyToMesh op.
+  # Returns the gradient passed through the copy-to-mesh-grad op, using the op's first input as the
+  # forward input.
   grad = gen_dtensor_ops.copy_to_mesh_grad(
       grad,
       forward_input=op.inputs[0],
@@ -561,6 +651,10 @@ def _copy_to_mesh_gradient(op, grad):
 
 @ops.RegisterGradient("CopyToMeshGrad")
 def _copy_to_mesh_grad_gradient(op, grad):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient function for the CopyToMeshGrad op.
+  # Returns a pair: the gradient passed through the copy-to-mesh-grad op using the op's first
+  # input as forward input, and nothing for the second input.
   grad = gen_dtensor_ops.copy_to_mesh_grad(
       grad,
       forward_input=op.inputs[0],

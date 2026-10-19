@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Deprecated DTensor checkpointing support. Provides a DTensor-aware saver (_DSaver) that writes
+# and reads sharded tensors through DTensor save/restore ops, a restore coordinator that uses it, a
+# trackable saver subclass (DTrackableSaver) and the public DTensorCheckpoint class (a checkpoint
+# bound to a mesh), exported under the experimental dtensor namespace and marked deprecated in favor
+# of the standard checkpoint class, which now supports DTensors directly. Builds on the generic
+# checkpoint machinery, overriding private hooks of its classes. Registers the export and
+# deprecation wrapper at import time.
+
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -49,10 +58,18 @@ from tensorflow.python.util.tf_export import tf_export
 
 
 class _DSaver:  # pylint: disable=protected-access
+  # [CLASS DOC]
+  # HELPER: internal saver used by the DTensor checkpoint classes.
+  # Saves and restores a list of saveable objects on the DTensor device for a given mesh. Holds the
+  # saveable objects and the mesh. Created by the trackable saver at save time and by the restore
+  # coordinator at restore time.
   """A single device saver that places tensors on DTensor Device."""
 
   def __init__(self, mesh: layout.Mesh,
                saveable_objects: List[saveable_object.SaveableObject]):
+    # [FUNCTION DOC]
+    # Constructor. Stores the mesh (the DTensor mesh to save from or restore onto) and the list of
+    # saveable objects to handle. Returns nothing.
     self._saveable_objects = saveable_objects
     self._mesh = mesh
 
@@ -61,6 +78,14 @@ class _DSaver:  # pylint: disable=protected-access
       file_prefix: str,
       options: Optional[checkpoint_options.CheckpointOptions] = None
   ) -> Optional[ops.Operation]:
+    # [FUNCTION DOC]
+    # Saves all saveable objects to a checkpoint with the given prefix using the sharded DTensor
+    # save helper. Inputs: file_prefix (string or scalar string tensor); options (optional
+    # checkpoint options; ignored except that setting an IO device raises a value error).
+    # Gathers name, slice spec and tensor from every spec whose tensor is present (specs with no
+    # tensor are skipped). A tensor whose spec device is not the DTensor device (for example a small
+    # counter on CPU) is packed as a replicated DTensor over the host mesh. Returns the operation
+    # from the sharded save, or nothing when eager (per the underlying helper).
     """Saves the saveable objects to a checkpoint with `file_prefix`.
 
     Also query the generated shards from the distributed DTensor SaveV2 ops and
@@ -109,6 +134,16 @@ class _DSaver:  # pylint: disable=protected-access
       file_prefix: str,
       options: Optional[checkpoint_options.CheckpointOptions] = None
   ) -> Dict[str, ops.Operation]:
+    # [FUNCTION DOC]
+    # Restores all saveable objects from a checkpoint with the given prefix using the DTensor
+    # restore op. Inputs: file_prefix (string or scalar string tensor); options (optional; setting an
+    # IO device raises a value error, otherwise ignored).
+    # For each spec, records name, slice spec, dtype, layout and global shape: DTensor save specs
+    # supply their own layout and shape; ordinary save specs fall back to a replicated layout on the
+    # host mesh with the shape of the current tensor (so variables must already exist). Runs the
+    # DTensor restore op on the DTensor device, regroups results per saveable, and calls each
+    # saveable's restore. Returns a mapping from saveable names to restore operations. Fails
+    # (unpacking error) if there are no specs at all.
     """Restore the saveable objects from a checkpoint with `file_prefix`.
 
     Args:
@@ -170,9 +205,17 @@ class _DSaver:  # pylint: disable=protected-access
 
 
 class _DCheckpointRestoreCoordinator(util._CheckpointRestoreCoordinator):  # pylint: disable=protected-access
+  # [CLASS DOC]
+  # HELPER: internal restore coordinator for DTensor checkpoints.
+  # Subclass of the generic object-based checkpoint restore coordinator that remembers the mesh and
+  # overrides restoring of saveables so that the DTensor saver is used. Created by the trackable
+  # saver during restore.
   """Holds the status of an object-based checkpoint load."""
 
   def __init__(self, mesh: layout.Mesh, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. Passes all keyword arguments to the parent coordinator and stores the mesh.
+    # Returns nothing.
     super().__init__(**kwargs)
     self._mesh = mesh
 
@@ -184,6 +227,15 @@ class _DCheckpointRestoreCoordinator(util._CheckpointRestoreCoordinator):  # pyl
                             str, base.Trackable]]] = None,
                         reader: py_checkpoint_reader.NewCheckpointReader = None
                         ) -> Optional[List[ops.Operation]]:
+    # [FUNCTION DOC]
+    # Runs or builds restore operations for saveable objects, overriding the parent to restore via
+    # the DTensor saver. Inputs: tensor_saveables (mapping from names to saveable objects for
+    # tensors); python_positions (checkpoint positions of Python-state trackables, restored eagerly
+    # by reading their value from the checkpoint and deserializing); registered_savers (ignored;
+    # not supported); reader (optional checkpoint reader, created lazily from the save path).
+    # Raises an assertion error if validating/slicing changes the set of saveable keys. In graph
+    # mode, caches the new restore operations by name (asserting a name is not restored twice) and
+    # appends them to the result. Returns the list of restore operations (empty when eager).
     """Run or build restore operations for SaveableObjects.
 
     Args:
@@ -233,13 +285,28 @@ class _DCheckpointRestoreCoordinator(util._CheckpointRestoreCoordinator):  # pyl
 
 
 class DTrackableSaver(util.TrackableSaver):
+  # [CLASS DOC]
+  # Trackable saver for DTensor checkpoints. Extends the generic trackable saver so that saveable
+  # gathering, save-op construction and restore use the DTensor saver and a mesh. Holds the mesh in
+  # addition to the parent's state. Used by DTensorCheckpoint.
+  # KNOWN ISSUE: docstring mentions a single-device saver, but the code uses the DTensor saver.
   """A DTensor trackable saver that uses _SingleDeviceSaver."""
 
   def __init__(self, mesh: layout.Mesh, graph_view):
+    # [FUNCTION DOC]
+    # Constructor. Initializes the parent saver with the graph view (view of the object graph to
+    # save/restore) and stores the mesh. Returns nothing.
     super(DTrackableSaver, self).__init__(graph_view)
     self._mesh = mesh
 
   def _gather_saveables(self, object_graph_tensor=None):
+    # [FUNCTION DOC]
+    # HELPER: collects saveable objects for saving, since the base class does not return them.
+    # Input: object_graph_tensor (optional tensor that carries the serialized object graph). Gathers
+    # serialized tensors; reuses the cached saveables when present, otherwise removes the object
+    # graph entry from the serialized tensors (taking the tensor from it) and converts the rest to
+    # saveables. Flattens all saveables and appends a no-restore saveable for the object graph.
+    # Returns a four-tuple: list of saveable objects, graph proto, feed additions, registered savers.
     # Since the base Checkpoint class does not return SaveableObjects, re-use
     # the saveables cache or generate new Saveables.
     (serialized_tensors, feed_additions, registered_savers,
@@ -271,6 +338,15 @@ class DTrackableSaver(util.TrackableSaver):
                                        object_graph_tensor,
                                        options,
                                        update_ckpt_state=False):
+    # [FUNCTION DOC]
+    # Creates or reuses the save operation, overriding the parent's private method to use the
+    # DTensor saver. Inputs: file_prefix (checkpoint file prefix); object_graph_tensor (tensor fed
+    # the current object graph); options (checkpoint options); update_ckpt_state (boolean, default
+    # false, accepted but unused; async checkpointing is not supported).
+    # Gathers saveables; if the object graph changed, or when eager or inside a function, builds a
+    # new DTensor saver, saves, and caches an identity of the file prefix on CPU that depends on the
+    # save op, recording the graph proto. Returns a two-element tuple: the cached save-operation
+    # tensor and the feed additions.
     """Create or retrieve save ops, overrides parents's private method.
 
     Args:
@@ -313,6 +389,15 @@ class DTrackableSaver(util.TrackableSaver):
 
   # TODO(b/180466245): Use proper mesh placement semantic.
   def restore(self, save_path, options=None):
+    # [FUNCTION DOC]
+    # Restores a training checkpoint, placing file prefixes on the host mesh. Inputs: save_path
+    # (checkpoint path; if nothing, returns an initialization-only status); options (optional
+    # checkpoint options, default created). If the checkpoint has no object graph, falls back to
+    # name-based restore: registers a name-based coordinator on each existing trackable (eager only)
+    # and returns a name-based status. Otherwise packs the path as a replicated DTensor on the host
+    # mesh (a placeholder with a feed dictionary in graph mode), parses the object graph, restores
+    # from the root using the DTensor restore coordinator, and also restores attached dependencies
+    # (skipping the root and objects already restored). Returns a load status object.
     """Restore a training checkpoint with host mesh placement."""
     options = options or checkpoint_options.CheckpointOptions()
     if save_path is None:
@@ -411,9 +496,21 @@ class DTrackableSaver(util.TrackableSaver):
     "used out of the box to save and restore dtensors.")
 @tf_export("experimental.dtensor.DTensorCheckpoint", v1=[])
 class DTensorCheckpoint(util.Checkpoint):
+  # [CLASS DOC]
+  # Deprecated checkpoint class for DTensor (use the standard checkpoint class instead). Extends the
+  # generic checkpoint with a mesh and replaces its saver with the DTensor trackable saver. Holds
+  # the mesh and a lazily created save counter. Exported publicly under the experimental dtensor
+  # namespace.
   """Manages saving/restoring trackable values to disk, for DTensor."""
 
   def __init__(self, mesh: layout.Mesh, root=None, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: mesh (DTensor mesh); root (optional trackable to checkpoint; when given
+    # it becomes the saver root and its save counter is reused); keyword arguments (named trackable
+    # objects to track). Calls the parent constructor, then sets each keyword argument as an
+    # attribute in sorted name order, validating each is trackable. When a root is given, attaches
+    # them as dependencies, raising a value error if the root already has a different child of that
+    # name. Finally replaces the saver with the DTensor trackable saver for the mesh. Returns nothing.
     super(DTensorCheckpoint, self).__init__(root=root, **kwargs)
     self._mesh = mesh
 

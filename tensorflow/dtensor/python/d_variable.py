@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# DTensor variable support. Defines DSaveSpec (a save specification that also records global shape
+# and layout), a private saveable object describing how to checkpoint a DTensor variable, and the
+# public DVariable class (exported under the experimental dtensor namespace), a resource variable
+# whose placement follows its initial value and which can be saved as bfloat16. Used by the DTensor
+# checkpoint module. Registers the export at import time; no other import-time side effects.
+
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,6 +38,10 @@ from tensorflow.python.util.tf_export import tf_export
 
 
 class DSaveSpec(saveable_object.SaveSpec):
+  # [CLASS DOC]
+  # Save specification for one DTensor tensor. Extends the standard save spec with two attributes:
+  # global_shape (full unsharded shape) and layout (layout, as a string, of the value on the host
+  # mesh). The DTensor saver and restorer inspect these to write and read sharded data.
   """DTensor SaveSpec that additionaly captures global_shape and layout."""
 
   def __init__(self,
@@ -41,6 +52,11 @@ class DSaveSpec(saveable_object.SaveSpec):
                layout,
                dtype=None,
                device=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: tensor (value or callable producing it); slice_spec (slice description);
+    # name (checkpoint key); global_shape (unsharded shape); layout (layout string); dtype and device
+    # (optional, default nothing). Passes tensor, slice spec, name, dtype and device to the parent
+    # and stores global_shape and layout. Returns nothing.
     super().__init__(
         tensor=tensor,
         slice_spec=slice_spec,
@@ -52,9 +68,22 @@ class DSaveSpec(saveable_object.SaveSpec):
 
 
 class _DVariableSaveable(saveable_object.SaveableObject):
+  # [CLASS DOC]
+  # HELPER: internal saveable describing how a DVariable is saved to and restored from a
+  # checkpoint. Holds the variable and its original layout. Saves the value copied to the host
+  # mesh (optionally cast to bfloat16) with a DSaveSpec; restores by copying back to the original
+  # layout and assigning. Created through the variable's checkpoint saveable hook.
   """Class for defining how to save/restore DTensor variable."""
 
   def __init__(self, dvariable, name):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: dvariable (the DVariable to save); name (checkpoint key). Records the
+    # variable's current layout and the variable, builds the host-mesh layout with the same sharding
+    # specs, and calls the parent with a single DSaveSpec whose tensor is a callable reading the
+    # variable on the host mesh, whose slice spec and name are replicated string DTensors on the
+    # host mesh (one copy per local device), whose global shape is the variable shape, layout is the
+    # host layout string, dtype is bfloat16 if saving as bfloat16 applies else the variable dtype,
+    # and device is the variable device. Returns nothing.
     with ops.device(dvariable.device):
       original_layout = api.fetch_layout(dvariable)
     # Record original layout to allow restore.
@@ -62,6 +91,10 @@ class _DVariableSaveable(saveable_object.SaveableObject):
     self._dvariable = dvariable
 
     def pack(tensors, layout):
+      # [FUNCTION DOC]
+      # HELPER: packs component tensors into a DTensor with the given layout while placing the pack
+      # on the variable's device. Inputs: tensors (list of per-device components); layout. Returns
+      # the packed DTensor.
       with ops.device(dvariable.device):
         return api.pack(tensors, layout)
 
@@ -69,6 +102,11 @@ class _DVariableSaveable(saveable_object.SaveableObject):
                                     original_layout.mesh.host_mesh())
 
     def get_host_dtensor():
+      # [FUNCTION DOC]
+      # HELPER: callable used as the save tensor; reads the variable and returns it on the host
+      # mesh. If the variable's mesh is not CPU, it is moved to the host layout (unpack then pack in
+      # eager mode, copy-to-mesh in graph mode); otherwise read directly. Casts to bfloat16 when
+      # the variable is set to save as bfloat16 and is float32. Takes no inputs.
       # Copy to host mesh if needed.
       if original_layout.mesh.device_type().upper() != 'CPU':
         # Prefer pack and unpack in eager mode because it supports sharded
@@ -106,6 +144,10 @@ class _DVariableSaveable(saveable_object.SaveableObject):
         name)
 
   def should_cast(self, v):
+    # [FUNCTION DOC]
+    # Tells whether a value should be cast to bfloat16 when saving: true only if the owning
+    # variable has bfloat16 saving enabled and the given value has 32-bit float dtype. Input: v, the
+    # tensor or variable to test. Returns a boolean.
     """Returns True if v has float32 dtype and is intructed to save as bf16.
 
     Args:
@@ -118,11 +160,20 @@ class _DVariableSaveable(saveable_object.SaveableObject):
     return self._dvariable.save_as_bf16 and v.dtype == dtypes.float32
 
   def restore(self, restored_tensors, restored_shapes):
+    # [FUNCTION DOC]
+    # Restores the variable from a loaded tensor. Inputs: restored_tensors (sequence holding exactly
+    # one tensor, on CPU/host); restored_shapes (ignored). If the variable's mesh is not CPU, the
+    # tensor is first copied to the original layout inside a traced function so the layout can be
+    # tracked. Assigns the value to the variable, casting back to the variable dtype if it was saved
+    # as bfloat16. Returns the assignment result.
     """Restores the same value into all variables."""
     tensor, = restored_tensors
 
     @def_function.function
     def _restore(t):
+      # [FUNCTION DOC]
+      # HELPER: traced function that copies a restored tensor to the variable's original layout on
+      # the variable's device. Input: t, the restored tensor. Returns the resulting DTensor.
       with ops.device(self._dvariable.device):
         return api.copy_to_mesh(t, self._original_layout)
 
@@ -142,6 +193,12 @@ class _DVariableSaveable(saveable_object.SaveableObject):
 
 @tf_export('experimental.dtensor.DVariable', v1=[])
 class DVariable(resource_variable_ops.ResourceVariable):
+  # [CLASS DOC]
+  # Resource variable for DTensor. Unlike a plain variable, its placement follows the initial
+  # value (the DTensor device when that is a DTensor) and it records a layout attribute (eager
+  # mode). Supports optionally saving float32 values as bfloat16 and provides the DTensor-aware
+  # checkpoint saveable. Falls back to ordinary behavior if the initial value is not a DTensor but
+  # a layout is given (it is relaid out). Exported publicly under the experimental dtensor namespace.
   """A replacement for tf.Variable which follows initial value placement.
 
     The class also handles restore/save operations in DTensor. Note that,
@@ -150,6 +207,21 @@ class DVariable(resource_variable_ops.ResourceVariable):
   """
 
   def __init__(self, initial_value, *args, dtype=None, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: initial_value (tensor, or callable producing it, possibly wrapped in a
+    # partial or a checkpoint initial value); extra positional arguments and keyword arguments passed
+    # to the parent variable (dtype is a named optional argument). The optional keyword layout is
+    # removed from the keyword arguments before calling the parent; shape is read from them.
+    # If the initial value is a checkpoint-restore callable, shape and layout are required (else
+    # a value error is raised) and the callable is invoked under the layout with shard info built
+    # from the shape; any other callable is simply called. A wrapped checkpoint value is unwrapped,
+    # then the value is converted to a tensor and the variable placed on its device.
+    # Eager mode: if the value is a DTensor, its layout is used, raising an invalid-argument error if
+    # a different layout was also given; otherwise if a layout is given the value is relaid out;
+    # else an invalid-argument error is raised. Stores the layout attribute and builds the parent
+    # variable under the default mesh of the layout. Graph mode: relays out if a layout is given and
+    # builds the parent variable; the layout attribute is not recorded.
+    # Sets the bfloat16-saving flag to false. Returns nothing.
     """Overrides tf.Variable to fix VarHandleOp placements."""
     # Variables by default use the current device scope for placement. This
     # wrapper has them follow the initial value's placement instead (which will
@@ -246,14 +318,25 @@ class DVariable(resource_variable_ops.ResourceVariable):
 
   @property
   def save_as_bf16(self):
+    # [FUNCTION DOC]
+    # Property getter. Returns a boolean telling whether this variable is saved to checkpoints as
+    # bfloat16 (false by default).
     return self._save_as_bf16
 
   @save_as_bf16.setter
   def save_as_bf16(self, save_as_bf16):
+    # [FUNCTION DOC]
+    # Property setter. Input: save_as_bf16, a boolean request. The stored flag becomes true only if
+    # the request is true and the variable dtype is 32-bit float; for other dtypes it silently stays
+    # false. Returns nothing.
     """Enables saving float32 as bfloat16."""
     self._save_as_bf16 = save_as_bf16 and self.dtype == dtypes.float32
 
   def _gather_saveables_for_checkpoint(self):
+    # [FUNCTION DOC]
+    # HELPER: checkpoint hook called by the trackable machinery. Returns a mapping from the standard
+    # variable-value key to a factory (the variable-saveable class bound to this variable) that,
+    # given a name, creates the DTensor-aware saveable for this variable.
     return {
         trackable.VARIABLE_VALUE_KEY:
             functools.partial(_DVariableSaveable, self)

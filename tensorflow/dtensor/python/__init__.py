@@ -1,3 +1,9 @@
+# [PACKAGE DOC]
+# Package holding the Python implementation of the DTensor API (distributed tensors with
+# mesh and layout sharding). This file is intentionally empty: it exports nothing and has no
+# import-time side effects. Functionality lives in submodules such as accelerator_util, api,
+# config, d_checkpoint, d_random and d_variable, which are imported directly by users.
+
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
