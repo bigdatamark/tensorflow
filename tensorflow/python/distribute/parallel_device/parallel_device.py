@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Defines ParallelDevice, a custom virtual device that executes each eager operation in parallel
+# on several component devices, plus a module-level helper to unpack a tensor by looking up its
+# parallel device. Packing combines one tensor per component into a single parallel tensor;
+# unpacking splits it back. Works only in eager mode (not inside traced functions).
+# Module state: a counter (with lock) giving each device a unique custom device number, and a
+# weak registry from device name to ParallelDevice instance used by the unpack helper.
+# Creating a device registers a custom device with the eager context.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,6 +45,12 @@ _all_parallel_devices = weakref.WeakValueDictionary()
 
 
 def unpack(tensor):
+  # [FUNCTION DOC]
+  # Module-level convenience: finds the ParallelDevice a tensor lives on (by the tensor's device
+  # name, using the weak registry of all parallel devices) and unpacks the tensor into its
+  # per-component tensors. Input: a tensor placed on a parallel device. Returns the list from
+  # the device's unpack method. Raises a value error if the tensor's device is not a known
+  # parallel device (including when the device object was garbage collected).
   """Finds `tensor`'s parallel device and unpacks its components."""
   parallel_device = _all_parallel_devices.get(tensor.device, None)
   if parallel_device is None:
@@ -51,9 +65,25 @@ def unpack(tensor):
 # indication of how many other devices there are total for collectives which
 # don't have a number of participants hard-coded in their attributes.
 class ParallelDevice(object):
+  # [CLASS DOC]
+  # A custom eager device that runs every operation placed on it on all of its component
+  # devices simultaneously. Holds the canonicalized tuple of component device names, a unique
+  # generated device name, a lazily created tensor of device ids and the currently active
+  # device scope (used as a context manager). Instances are created from a list of device names,
+  # register themselves in a module-level weak registry, and are used either as a context manager
+  # (operations inside run in parallel) or through pack and unpack to move tensors in and out.
   """A device which executes operations in parallel."""
 
   def __init__(self, components):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring claims it returns a string with the new device's name, but a
+    # constructor returns nothing; the name is only stored on the instance.
+    # Input: components, a non-empty list of device name strings; each is canonicalized. Builds
+    # a unique custom device name from the host address space and a global counter (taken under
+    # a lock, then incremented), creates the native parallel device capsules, registers the
+    # custom device with the eager context and records the instance in the weak registry.
+    # Raises a value error if components is empty. Side effects: global counter, registry and
+    # eager context registration. Device ids and device scope start as unset.
     """Creates a device which executes operations in parallel on `components`.
 
     Args:
@@ -82,6 +112,12 @@ class ParallelDevice(object):
     _all_parallel_devices[self._name] = self
 
   def _pack_tensor(self, *tensors):
+    # [FUNCTION DOC]
+    # HELPER: per-leaf worker for pack, applied through structure mapping.
+    # Input: one tensor-like value per component device (tensor, composite tensor or variable).
+    # Raises a value error if any value is not one of those types. Under this device's scope it
+    # combines them into one parallel tensor using the replicated-input operation. Returns that
+    # tensor placed on the parallel device.
     """Helper to pack plain-old-tensors, not structures or composites."""
     for tensor in tensors:
       if not isinstance(
@@ -101,6 +137,14 @@ class ParallelDevice(object):
       return tpu_ops.tpu_replicated_input(inputs=tensors)
 
   def pack(self, tensors):
+    # [FUNCTION DOC]
+    # Builds a parallel tensor from one value per component device. Input: tensors, a sequence
+    # whose length must equal the number of components; each element may be a tensor, composite
+    # tensor, variable or a nested structure of them (all with the same structure). Must be
+    # called eagerly (raises a not-implemented error inside a traced function). Raises a value
+    # error on a length mismatch or non-tensor leaves. Variables are first converted to their
+    # current values outside the parallel device scope. Returns a tensor (or matching nested
+    # structure) placed on the parallel device.
     """Create a tensor on the parallel device from a sequence of tensors.
 
     Args:
@@ -135,6 +179,11 @@ class ParallelDevice(object):
                               expand_composites=True)
 
   def _unpack_tensor(self, parallel_tensor):
+    # [FUNCTION DOC]
+    # HELPER: per-leaf worker for unpack. Input: a single tensor, composite tensor or variable
+    # on this device; raises a value error for any other type. Under this device's scope it
+    # applies the replicated-output operation with one replica per component. Returns the
+    # sequence of per-component tensors.
     """Helper to unpack a single tensor."""
     if not isinstance(
         parallel_tensor,
@@ -150,6 +199,12 @@ class ParallelDevice(object):
           parallel_tensor, num_replicas=len(self.components))
 
   def unpack(self, parallel_tensor):
+    # [FUNCTION DOC]
+    # Splits a parallel tensor into its per-component values. Input: a tensor, composite tensor,
+    # variable or nested structure of them placed on this device (variables are read to values).
+    # Must be called eagerly (raises a not-implemented error otherwise). Flattens the structure,
+    # unpacks every leaf, and regroups per component. Returns a list with one entry per component
+    # device, each having the same structure as the input.
     """Unpack a parallel tensor into its components.
 
     Args:
@@ -178,6 +233,11 @@ class ParallelDevice(object):
 
   @property
   def device_ids(self):
+    # [FUNCTION DOC]
+    # Read-only property. Lazily creates and caches a parallel tensor whose component i is the
+    # scalar integer i placed on the i-th component device. Creation happens outside any
+    # enclosing function (via the initialization scope), so a function that uses it captures an
+    # eager tensor. Side effect: stores the cached tensor on the instance. Returns that tensor.
     """A parallel tensor with scalar integers numbering component devices.
 
     Each device ID is placed on its corresponding device, in the same order as
@@ -210,6 +270,9 @@ class ParallelDevice(object):
     return self._device_ids
 
   def _assert_eager(self):
+    # [FUNCTION DOC]
+    # HELPER: guard used by pack, unpack and scope entry. Returns nothing; raises a
+    # not-implemented error with usage advice when not executing eagerly (i.e. while tracing).
     """Verifies that tracing is not active."""
     if not context.executing_eagerly():
       raise NotImplementedError(
@@ -218,6 +281,11 @@ class ParallelDevice(object):
           "with ParallelDevice() as p:\n  f()")
 
   def __enter__(self):
+    # [FUNCTION DOC]
+    # Context manager entry: makes operations in the block run on all components. Raises an
+    # assertion error if this device scope is already active (no re-entry), and a not-implemented
+    # error if not eager. Opens the device scope for this device's name and stores it on the
+    # instance. Returns the device itself.
     """Runs ops in parallel, makes variables which save independent buffers."""
     if self._device_scope is not None:
       raise AssertionError(
@@ -228,5 +296,9 @@ class ParallelDevice(object):
     return self
 
   def __exit__(self, typ, exc, tb):
+    # [FUNCTION DOC]
+    # Context manager exit: closes the active device scope, passing along any exception info
+    # (type, value, traceback), and clears the stored scope so the device can be entered again.
+    # Returns nothing, so exceptions are not suppressed.
     self._device_scope.__exit__(typ, exc, tb)
     self._device_scope = None

@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Integration test module for TPUStrategy memory handling (TPU high-bandwidth memory, HBM).
+# It defines a synthetic dataset helper and one test class that checks the TPU runtime can
+# automatically defragment memory when loading a large TPU program and when allocating a big
+# buffer. Behavior depends on the command-line flag that says whether the TFRT TPU runtime is
+# used. Requires a real TPU; nothing is registered at import time except reading the shared
+# flags object and defining a module-level constant for the number of classes.
+# Run as a script it starts the standard TensorFlow test runner.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,13 +34,28 @@ NUM_CLASS = 10
 
 
 def get_dataset():
+  # [FUNCTION DOC]
+  # HELPER: builds the synthetic input pipeline used by the TPU memory test.
+  # Takes no arguments. Returns a dataset that repeats forever and yields batches of 128
+  # (remainder dropped) pairs of an all-ones 500x500x3 float image and a one-hot label of
+  # length ten (the label is always class zero). Mapping runs with autotuned parallelism.
+  # No side effects beyond building the dataset objects.
 
   def generate_data(_):
+    # [FUNCTION DOC]
+    # HELPER: map function producing one synthetic example.
+    # Ignores its input element. Returns a tuple of an all-ones float image of shape
+    # 500x500x3 and an integer label tensor of shape one containing zero.
     image = tf.ones([500, 500, 3], dtype=tf.float32)
     label = tf.zeros([1], dtype=tf.int32)
     return image, label
 
   def preprocess(image, label):
+    # [FUNCTION DOC]
+    # HELPER: map function converting the raw label into a one-hot vector.
+    # Inputs are an image tensor and an integer label tensor. The label is cast to 32-bit
+    # integer, one-hot encoded with the module-level class count and reshaped to a flat
+    # vector of that length. Returns the unchanged image and the one-hot label.
     label = tf.cast(label, tf.int32)
     label = tf.one_hot(label, NUM_CLASS)
     label = tf.reshape(label, [NUM_CLASS])
@@ -50,8 +73,20 @@ def get_dataset():
 
 
 class TpuMemoryTest(tf.test.TestCase):
+  # [CLASS DOC]
+  # Test case covering TPUStrategy memory behavior: automatic defragmentation of TPU memory
+  # when loading a large program and when allocating a large buffer. Each test gets a fresh
+  # runtime context and a TPU cluster resolver stored on the instance (set up in setUp).
+  # Needs TPU hardware; the expected outcome depends on whether the TFRT runtime flag is set.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Test fixture run before each test. Resets the eager context to drop cached tensors,
+    # runs garbage collection, then runs a small random computation and copies the result to
+    # the host (asserting the sum exceeds one) so deferred deallocations are flushed and memory
+    # is allocated less fragmented. Finally creates a TPU cluster resolver with default
+    # (empty) TPU name, stores it on the instance, connects to the cluster and initializes
+    # the TPU system. Side effects: resets global eager context, initializes TPUs.
     super().setUp()
     # Clear all cached tensors
     context._reset_context()
@@ -73,6 +108,16 @@ class TpuMemoryTest(tf.test.TestCase):
     tf.tpu.experimental.initialize_tpu_system(self.resolver)
 
   def testAutoDefragInProgramLoading(self):
+    # [FUNCTION DOC]
+    # Scenario: train a deliberately huge Keras model (close to the 15G HBM limit) on a TPU
+    # strategy using a host-side training loop that triggers weight-update sharding, so the
+    # runtime must unload the step program to make room and later defragment to reload it.
+    # Setup: creates the strategy from the resolver, distributes the synthetic dataset,
+    # builds the model, SGD optimizer and unreduced categorical cross-entropy loss in scope.
+    # Action: runs a compiled training function that loops twenty steps then one more step,
+    # returning a dummy value of one.
+    # Expectation: with the TFRT flag set the call succeeds and returns one within a tight
+    # tolerance; otherwise (StreamExecutor runtime) a resource-exhausted error is expected.
     # This test covers the case when training a large model on TPU. TPU HBM
     # is not big enough to hold all TPU buffers and preserve stack for the
     # TPU program. Runtime will automatically unload unused TPU program to
@@ -141,8 +186,18 @@ class TpuMemoryTest(tf.test.TestCase):
 
     @tf.function
     def train_step(iterator):
+      # [FUNCTION DOC]
+      # HELPER: compiled training function for the defragmentation test.
+      # Takes the distributed dataset iterator. Runs the per-replica step function twenty
+      # times inside a graph loop, then once more, each time with the next batch. Returns the
+      # constant one as a marker that the function completed. Updates the model variables.
 
       def step_fn(inputs):
+        # [FUNCTION DOC]
+        # HELPER: single training step run on each replica.
+        # Input is a pair of images and targets. Computes the model outputs in training mode,
+        # the loss, the gradients of the loss with respect to trainable variables and applies
+        # them with the model's optimizer. Returns the loss.
         images, targets = inputs
         with tf.GradientTape() as tape:
           outputs = model(images, training=True)
@@ -181,6 +236,13 @@ class TpuMemoryTest(tf.test.TestCase):
         _ = train_step(iterator)
 
   def testAutoDefragInBufferAllocation(self):
+    # [FUNCTION DOC]
+    # Scenario: fragment TPU memory then request a large contiguous buffer. Skipped unless
+    # the TFRT flag is set (StreamExecutor does not support defragmentation on allocation).
+    # On the first TPU device it allocates seven random two-gigabyte buffers, frees two
+    # non-adjacent ones and forces garbage collection, then allocates a four-gigabyte buffer
+    # that needs defragmentation. Expectation: allocation succeeds and the new buffer's
+    # device name ends with the first TPU device.
     if not FLAGS.tpu_use_tfrt:
       self.skipTest(
           "TPU StreamExecutor does not support auto-defrag in allocation.")

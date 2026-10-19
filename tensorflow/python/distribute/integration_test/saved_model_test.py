@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Integration tests documenting past, present and potential problems when saving and loading
+# models trained under tf.distribute strategies. Test classes cover: saving with multiple workers
+# (skipped), saving for serving and loading without a strategy, saving then loading for continued
+# training under mirrored strategies, and parameter-server strategy save/load. Tests whose names
+# end with "broken" assert the current incorrect behavior. Import-time side effects: creates a
+# deferred multi-worker pool runner (eight workers plus a chief, no GPUs required). Not intended
+# as exhaustive coverage. Run as a script it starts the distribute test main.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -64,8 +72,17 @@ _sixteen_worker_pool = strategy_combinations._deferred_pool_runner(
         ],
         mode=["eager"]))
 class SaveModelForMultipleWorkers(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case (eager mode, eight-worker plus chief multi-worker mirrored strategy on
+  # CPU) for saving a model when several workers are involved. Currently its only test is skipped.
 
   def test_read_sync_on_read_variable(self, strategy):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: skipped unconditionally at the start (known bug: multiple workers write to the
+    # same file location), so the body never runs.
+    # Intended scenario: under the strategy scope, create a module with a sum-aggregated
+    # on-read variable, assign one, and save the module to a temporary directory; this currently
+    # fails when workers collide on the file.
     # TODO(b/178943315): Enable test when the design in b/17894331 is
     # implemented.
     self.skipTest(
@@ -73,8 +90,13 @@ class SaveModelForMultipleWorkers(test.TestCase, parameterized.TestCase):
         " to same file location: b/178943315")
 
     class Model(tf.Module):
+      # [CLASS DOC]
+      # Local module holding one on-read variable (sum aggregation, initial zero) and a no-input
+      # function that returns the variable's value.
 
       def __init__(self):
+        # [FUNCTION DOC]
+        # Creates the on-read, sum-aggregated float variable with initial value zero.
         self.v = tf.Variable(
             0.,
             synchronization=tf.VariableSynchronization.ON_READ,
@@ -82,6 +104,8 @@ class SaveModelForMultipleWorkers(test.TestCase, parameterized.TestCase):
 
       @tf.function(input_signature=[])
       def __call__(self):
+        # [FUNCTION DOC]
+        # Compiled function with an empty input signature returning the variable's current value.
         return self.v.read_value()
 
     export_dir = os.path.join(self._get_tempdir_path_test(),
@@ -104,6 +128,11 @@ class SaveModelForMultipleWorkers(test.TestCase, parameterized.TestCase):
         mode="eager",
     ))
 class SaveAndLoadForServingTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized eager-mode tests (two-CPU mirrored, two-GPU mirrored and TPU strategies) of
+  # models trained under a strategy and later loaded for serving without any strategy. Verifies
+  # that distributed variables are saved as single variables, that on-read variables save their
+  # aggregated value and that device annotations are not saved.
   # These test cases cover the case when a model is trained under
   # tf.distribute.Strategy and used for serving later. Serving usually only uses
   # one device and this is simulated by loading the model under no strategy
@@ -125,12 +154,22 @@ class SaveAndLoadForServingTest(test.TestCase, parameterized.TestCase):
   # context or the default strategy's replica context.
 
   def test_read_sync_on_read_variable(self, strategy):
+    # [FUNCTION DOC]
+    # Under the strategy, creates a module with a sum-aggregated on-read variable and assigns one
+    # (each of the two replicas holds one half; asserts local results are one half each), saves
+    # it, then loads it without a strategy. Expects the loaded variable and the loaded function
+    # both to read the aggregated value one.
     # synchronizaiton=ON_READ variables are typically used in Keras metrics and
     # batch norm layers.
 
     class Model(tf.Module):
+      # [CLASS DOC]
+      # Local module with one sum-aggregated on-read variable and a no-input function returning
+      # its value.
 
       def __init__(self):
+        # [FUNCTION DOC]
+        # Creates the on-read, sum-aggregated float variable with initial value zero.
         self.v = tf.Variable(
             0.,
             synchronization=tf.VariableSynchronization.ON_READ,
@@ -138,6 +177,8 @@ class SaveAndLoadForServingTest(test.TestCase, parameterized.TestCase):
 
       @tf.function(input_signature=[])
       def __call__(self):
+        # [FUNCTION DOC]
+        # Compiled function (empty input signature) returning the variable's value.
         return self.v.read_value()
 
     export_dir = self.get_temp_dir()
@@ -156,19 +197,28 @@ class SaveAndLoadForServingTest(test.TestCase, parameterized.TestCase):
     self.assertEqual(self.evaluate(loaded()), 1.)
 
   def test_read_mirrored_variable(self, strategy):
+    # [FUNCTION DOC]
+    # Under the strategy, creates a module with an on-write (mirrored) variable, assigns one,
+    # saves, then loads without a strategy and expects the loaded function to return one.
     # synchronizaiton=ON_WRITE is the default variable created under
     # tf.distribute.Strategy.scope(). Most model parameters are this kind of
     # variable. Reading a synchronization=ON_WRITE simply reads the primary
     # component, so it works as intended.
 
     class Model(tf.Module):
+      # [CLASS DOC]
+      # Local module with one on-write variable and a no-input function returning its value.
 
       def __init__(self):
+        # [FUNCTION DOC]
+        # Creates the on-write float variable with initial value zero.
         self.v = tf.Variable(
             0., synchronization=tf.VariableSynchronization.ON_WRITE)
 
       @tf.function(input_signature=[])
       def __call__(self):
+        # [FUNCTION DOC]
+        # Compiled function (empty input signature) returning the variable's value.
         return self.v.read_value()
 
     export_dir = self.get_temp_dir()
@@ -181,13 +231,21 @@ class SaveAndLoadForServingTest(test.TestCase, parameterized.TestCase):
     self.assertEqual(self.evaluate(loaded()), 1.)
 
   def test_update_sync_on_read_variable(self, strategy):
+    # [FUNCTION DOC]
+    # Saves (under the strategy) a module with a sum-aggregated on-read variable and an update
+    # function that adds one and returns the value. Loads without a strategy, calls update once
+    # and expects the variable to read one.
     # It's rare to update aggregation=ON_READ variables in serving, but it's
     # possible that the SavedModel contains both serving and training graphs,
     # and the training may contain metrics layers.
 
     class Model(tf.Module):
+      # [CLASS DOC]
+      # Local module with a sum-aggregated on-read variable and an update function.
 
       def __init__(self):
+        # [FUNCTION DOC]
+        # Creates the on-read, sum-aggregated float variable with initial value zero.
         self.v = tf.Variable(
             0.,
             synchronization=tf.VariableSynchronization.ON_READ,
@@ -195,6 +253,9 @@ class SaveAndLoadForServingTest(test.TestCase, parameterized.TestCase):
 
       @tf.function(input_signature=[])
       def update(self):
+        # [FUNCTION DOC]
+        # Compiled function (empty input signature) adding one to the variable and returning the
+        # variable's value afterwards.
         self.v.assign_add(1.)
         return self.v.read_value()
 
@@ -208,12 +269,19 @@ class SaveAndLoadForServingTest(test.TestCase, parameterized.TestCase):
     self.assertEqual(self.evaluate(loaded.v), 1.)
 
   def test_update_mirrored_variable(self, strategy):
+    # [FUNCTION DOC]
+    # Saves (under the strategy) a module with a mean-aggregated on-write variable and an update
+    # function adding one. Loads without a strategy, expects zero, calls update and expects one.
     # It's very rare to update aggregation=ON_WRITE variables in the forward
     # path, and this test case is mainly for completeness.
 
     class Model(tf.Module):
+      # [CLASS DOC]
+      # Local module with a mean-aggregated on-write variable and an update function.
 
       def __init__(self):
+        # [FUNCTION DOC]
+        # Creates the on-write, mean-aggregated float variable with initial value zero.
         self.v = tf.Variable(
             0.,
             synchronization=tf.VariableSynchronization.ON_WRITE,
@@ -221,6 +289,8 @@ class SaveAndLoadForServingTest(test.TestCase, parameterized.TestCase):
 
       @tf.function(input_signature=[])
       def update(self):
+        # [FUNCTION DOC]
+        # Compiled function (empty input signature) adding one to the variable; returns nothing.
         self.v.assign_add(1.)
 
     export_dir = self.get_temp_dir()
@@ -234,6 +304,13 @@ class SaveAndLoadForServingTest(test.TestCase, parameterized.TestCase):
     self.assertEqual(self.evaluate(loaded.v), 1.)
 
   def test_training_only_device(self, strategy):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the second temporary export directory is created after saving and the load
+    # uses that new, empty directory instead of the one the model was saved into, so the load
+    # step cannot be reading the saved model as the test intends.
+    # Saves a trivial module under the strategy and a GPU device scope, then (in the new
+    # directory, see above) loads it and expects every operation in the serving signature graph to
+    # have no device annotation and the function to return one.
     # tf.distribute APIs may enter device scopes, but the saved model should not
     # contain device annotations, since devices during training may not be
     # available when the saved model is used.
@@ -244,9 +321,13 @@ class SaveAndLoadForServingTest(test.TestCase, parameterized.TestCase):
     # with soft placement enabled.
 
     class Model(tf.Module):
+      # [CLASS DOC]
+      # Local module with a single no-input function returning the constant one.
 
       @tf.function(input_signature=[])
       def __call__(self):
+        # [FUNCTION DOC]
+        # Compiled function (empty input signature) returning the identity of the constant one.
         return tf.identity(1.)
 
     export_dir = self.get_temp_dir()
@@ -262,6 +343,12 @@ class SaveAndLoadForServingTest(test.TestCase, parameterized.TestCase):
     self.assertEqual(loaded().numpy(), 1.)
 
   def test_model_with_loaded_layer(self, strategy):
+    # [FUNCTION DOC]
+    # Saves a layer module (one variable of one, no-input function reading it), loads it under the
+    # strategy and wraps it in a model whose function calls the loaded layer. Saving that model with
+    # an explicit concrete-function signature must raise a value error recommending an input
+    # signature; saving normally must succeed. Loading the result and running it per replica must
+    # give one on each of the two replicas.
     # When a model is loaded under strategy, we wrap it so that when it's passed
     # to strategy.run(), the captured variables resolve to the ones of the
     # current replica. Since the saved tf.function may contain updates to the
@@ -271,21 +358,33 @@ class SaveAndLoadForServingTest(test.TestCase, parameterized.TestCase):
     # We need to test save-load-save-load to make sure things work correctly.
 
     class Layer(tf.Module):
+      # [CLASS DOC]
+      # Local layer module holding a float variable of value one and a no-input function reading it.
 
       def __init__(self):
+        # [FUNCTION DOC]
+        # Creates the variable with initial value one.
         self.v = tf.Variable(1.)
 
       @tf.function(input_signature=[])
       def __call__(self):
+        # [FUNCTION DOC]
+        # Compiled function (empty input signature) returning the variable's value.
         return self.v.read_value()
 
     class Model(tf.Module):
+      # [CLASS DOC]
+      # Local model module wrapping a given layer and exposing a no-input function that calls it.
 
       def __init__(self, layer):
+        # [FUNCTION DOC]
+        # Stores the layer (a module or loaded object) to be called later.
         self.layer = layer
 
       @tf.function(input_signature=[])
       def __call__(self):
+        # [FUNCTION DOC]
+        # Compiled function (empty input signature) returning the result of calling the layer.
         return self.layer()
 
     layer_export_dir = self.get_temp_dir()
@@ -321,6 +420,11 @@ class SaveAndLoadForServingTest(test.TestCase, parameterized.TestCase):
         mode="eager",
     ))
 class SaveAndLoadForTrainingTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized eager-mode tests (two-CPU and two-GPU mirrored strategies) of saving a model and
+  # loading it under a strategy to keep training: reading and updating on-read and mirrored
+  # variables in replica and cross-replica contexts, save-load-save round trips, and one known
+  # broken scenario with a loaded TF1 layer.
   # These test cases cover the case when the user loads a model and continues to
   # train it. The model could originally be trained with or without
   # tf.distribute.Strategy.
@@ -334,6 +438,12 @@ class SaveAndLoadForTrainingTest(test.TestCase, parameterized.TestCase):
   # saved configs if possible, in which case the saved graph is not used.
 
   def test_read_sync_on_read_variable(self, strategy):
+    # [FUNCTION DOC]
+    # Distributes different values (three and seven) to the two replicas of a sum-aggregated
+    # on-read variable, checks local values and the aggregated read (ten), saves, loads under the
+    # strategy and expects each replica to read five (aggregate split evenly) while the
+    # cross-replica read is ten. Saves the loaded model again and expects ten both without and with
+    # a strategy.
     # Reading a synchronizaiton=ON_READ in the replica context should just read
     # the local value. Reading it in the cross replica context aggregates the
     # value from all replicas. Both are true with a loaded model.
@@ -343,8 +453,12 @@ class SaveAndLoadForTrainingTest(test.TestCase, parameterized.TestCase):
     # save it again, the values of the variables don't change.
 
     class Model(tf.Module):
+      # [CLASS DOC]
+      # Local module with a sum-aggregated on-read variable and a no-input function reading it.
 
       def __init__(self):
+        # [FUNCTION DOC]
+        # Creates the on-read, sum-aggregated float variable with initial value zero.
         self.v = tf.Variable(
             0.,
             synchronization=tf.VariableSynchronization.ON_READ,
@@ -352,6 +466,8 @@ class SaveAndLoadForTrainingTest(test.TestCase, parameterized.TestCase):
 
       @tf.function(input_signature=[])
       def __call__(self):
+        # [FUNCTION DOC]
+        # Compiled function (empty input signature) returning the variable's value.
         return self.v.read_value()
 
     export_dir = self.get_temp_dir()
@@ -387,6 +503,12 @@ class SaveAndLoadForTrainingTest(test.TestCase, parameterized.TestCase):
       self.assertEqual(self.evaluate(loaded.v.read_value()), 10.)
 
   def test_update_sync_on_read_variable(self, strategy):
+    # [FUNCTION DOC]
+    # Saves a module with a sum-aggregated on-read variable, assigns ten in the cross-replica
+    # context and expects each replica to hold five. Then loads the saved model under the strategy,
+    # assigns ten again and expects five on each replica. The parts that would run the update per
+    # replica are commented out because of an open bug about running such functions through the
+    # strategy.
     # Updating a synchronizaiton=ON_READ in the replica context should just
     # update the local value. Updating it in the cross replica context updates
     # each component of the variable. Both are true with a loaded model.
@@ -396,8 +518,12 @@ class SaveAndLoadForTrainingTest(test.TestCase, parameterized.TestCase):
     # number of replicas.
 
     class Model(tf.Module):
+      # [CLASS DOC]
+      # Local module with a sum-aggregated on-read variable and an update function taking a value.
 
       def __init__(self):
+        # [FUNCTION DOC]
+        # Creates the on-read, sum-aggregated float variable with initial value zero.
         self.v = tf.Variable(
             0.,
             synchronization=tf.VariableSynchronization.ON_READ,
@@ -405,6 +531,9 @@ class SaveAndLoadForTrainingTest(test.TestCase, parameterized.TestCase):
 
       @tf.function(input_signature=[tf.TensorSpec(shape=(), dtype=tf.float32)])
       def update(self, value):
+        # [FUNCTION DOC]
+        # Compiled function whose input signature is one scalar float. Adds the given value to
+        # the variable; returns nothing.
         self.v.assign_add(value)
 
     export_dir = self.get_temp_dir()
@@ -439,15 +568,24 @@ class SaveAndLoadForTrainingTest(test.TestCase, parameterized.TestCase):
       #     [8., 12.])
 
   def test_read_mirrored_variable(self, strategy):
+    # [FUNCTION DOC]
+    # Saves (under the strategy) a module with an on-write variable set to one, loads it under the
+    # strategy and runs the loaded function per replica; expects one on both replicas.
 
     class Model(tf.Module):
+      # [CLASS DOC]
+      # Local module with one on-write variable and a no-input function returning its value.
 
       def __init__(self):
+        # [FUNCTION DOC]
+        # Creates the on-write float variable with initial value zero.
         self.v = tf.Variable(
             0., synchronization=tf.VariableSynchronization.ON_WRITE)
 
       @tf.function(input_signature=[])
       def __call__(self):
+        # [FUNCTION DOC]
+        # Compiled function (empty input signature) returning the variable's value.
         return self.v.read_value()
 
     export_dir = self.get_temp_dir()
@@ -464,6 +602,10 @@ class SaveAndLoadForTrainingTest(test.TestCase, parameterized.TestCase):
         [1., 1.])
 
   def test_update_mirrored_variable(self, strategy):
+    # [FUNCTION DOC]
+    # Saves a module with a mean-aggregated on-write variable, loads it under the strategy and
+    # expects zero on both replicas; assigns one in the cross-replica context and expects one on
+    # both replicas. The per-replica update part is commented out because of an open bug.
     # This is also uncommon since most model parameters should be updated by
     # optimizer, and this test case is for completeness.
     #
@@ -477,8 +619,12 @@ class SaveAndLoadForTrainingTest(test.TestCase, parameterized.TestCase):
     # through optimizer. This is work as intended but can be surprising.
 
     class Model(tf.Module):
+      # [CLASS DOC]
+      # Local module with a mean-aggregated on-write variable and an update function taking a value.
 
       def __init__(self):
+        # [FUNCTION DOC]
+        # Creates the on-write, mean-aggregated float variable with initial value zero.
         self.v = tf.Variable(
             0.,
             synchronization=tf.VariableSynchronization.ON_WRITE,
@@ -486,6 +632,9 @@ class SaveAndLoadForTrainingTest(test.TestCase, parameterized.TestCase):
 
       @tf.function(input_signature=[tf.TensorSpec(shape=(), dtype=tf.float32)])
       def update(self, value):
+        # [FUNCTION DOC]
+        # Compiled function whose input signature is one scalar float. Adds the value to the
+        # variable; returns nothing.
         self.v.assign_add(value)
 
     export_dir = self.get_temp_dir()
@@ -512,6 +661,11 @@ class SaveAndLoadForTrainingTest(test.TestCase, parameterized.TestCase):
   # TODO(crccw): add a test case that trains a saved model with optimizer.
 
   def test_model_with_loaded_v1_layer_broken(self, strategy):
+    # [FUNCTION DOC]
+    # Known-broken scenario (asserts the current incorrect behavior). Builds a TF1 saved model
+    # with one resource variable, loads it with the TF2 loader, re-saves it, then loads that copy
+    # under the strategy. Currently this raises an invalid-argument error about the cross-replica
+    # context in an in-replica context; the test expects that error (a fix should flip it).
     # If a model contains a layer loaded from SavedModel, and if the model is
     # loaded under tf.distribute.Strategy, it can't be saved and loaded again
     # under tf.distribute.Strategy.
@@ -553,12 +707,19 @@ class SaveAndLoadForTrainingTest(test.TestCase, parameterized.TestCase):
 
 
 class PSStrategySaveAndLoadTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests saving and loading for the parameter server strategy. Shares one in-process cluster
+  # (two workers, two parameter servers) created once per class and exposes a nested model with two
+  # variables and a hash table, plus a helper to run saved models through the TF1 loader.
   # Test saved_model saving and loading for parameter server strategy. These
   # tests are different enough than the tests in `SaveAndLoadForXXX` so we make
   # a separate test class for them.
 
   @classmethod
   def setUpClass(cls):
+    # [FUNCTION DOC]
+    # Class-level fixture: starts an in-process cluster with two workers and two parameter servers
+    # and stores a simple cluster resolver for it on the class for the tests to use.
     super().setUpClass()
     cluster_def = multi_worker_test_base.create_in_process_cluster(
         num_workers=2, num_ps=2)
@@ -566,6 +727,9 @@ class PSStrategySaveAndLoadTest(test.TestCase):
         tf.train.ClusterSpec(cluster_def))
 
   def tearDown(self):
+    # [FUNCTION DOC]
+    # Per-test cleanup: after the base cleanup, resets the global eager context so later tests
+    # start fresh.
     super().tearDown()
     context._reset_context()
 
@@ -574,6 +738,13 @@ class PSStrategySaveAndLoadTest(test.TestCase):
                       inputs,
                       signature_key=tf1.saved_model.signature_constants
                       .DEFAULT_SERVING_SIGNATURE_DEF_KEY):
+    # [FUNCTION DOC]
+    # HELPER: loads a saved model with the TF1-style loader and runs one signature.
+    # Inputs: model_dir (directory of the saved model), inputs (mapping from input argument names
+    # to values to feed), signature_key (defaults to the default serving signature). Loads the
+    # serving-tagged graph into a new graph and session, feeds the inputs by tensor name, fetches
+    # all outputs and returns only the output named output zero. Raises a key error if a name is
+    # missing from the signature.
     """Load a SavedModel into a TF 1.x-style graph and run `signature_key`."""
     graph = tf.Graph()
     with graph.as_default(), tf1.Session() as session:
@@ -592,14 +763,23 @@ class PSStrategySaveAndLoadTest(test.TestCase):
       return session.run(output_dict, feed_dict)["output_0"]
 
   class Model(tf.Module):
+    # [CLASS DOC]
+    # Nested test model with two integer vector variables and a mutable hash table (int to int,
+    # default minus one). Its call function adds both variables and the looked-up table value.
 
     def __init__(self):
+      # [FUNCTION DOC]
+      # Creates variable one (all zeros, length four), variable two (all ones, length four) and an
+      # empty mutable hash table with default value minus one.
       self.v1 = tf.Variable([0, 0, 0, 0])
       self.v2 = tf.Variable([1, 1, 1, 1])
       self.table = lookup_ops.MutableHashTable(
           key_dtype=tf.int32, value_dtype=tf.int32, default_value=-1)
 
     def train(self):
+      # [FUNCTION DOC]
+      # Simulates training by mutating state: assigns twos to variable one, threes to variable two
+      # and inserts key one with value one into the table. Returns nothing.
       # simulate a training process to mutate the state of the model.
       self.v1.assign([2, 2, 2, 2])
       self.v2.assign([3, 3, 3, 3])
@@ -609,10 +789,18 @@ class PSStrategySaveAndLoadTest(test.TestCase):
         tf.TensorSpec(shape=(), dtype=tf.dtypes.int32, name="x")
     ])
     def __call__(self, x):
+      # [FUNCTION DOC]
+      # Compiled function whose input signature is one named scalar 32-bit integer x. Returns the
+      # sum of both variables plus the table value looked up for x (minus one if absent).
       t = tf.math.add(self.v1, self.v2)
       return tf.math.add(t, self.table.lookup(x))
 
   def test_basic(self):
+    # [FUNCTION DOC]
+    # Creates the model under a parameter server strategy, trains it, saves it, loads it with the
+    # TF2 loader (variables must be placed on the chief task zero) and checks the call result for
+    # input one is sixes, and after resetting variable two to ones it is fours. Also runs the
+    # saved model through the TF1 loader and expects sixes.
     strategy = parameter_server_strategy_v2.ParameterServerStrategyV2(
         self.cluster_resolver)
     model_dir = self.get_temp_dir()
@@ -633,6 +821,10 @@ class PSStrategySaveAndLoadTest(test.TestCase):
     self.assertAllEqual(self.load_and_run_v1(model_dir, {"x": 1}), [6, 6, 6, 6])
 
   def test_load_to_same_strategy(self):
+    # [FUNCTION DOC]
+    # Trains and saves a model created under a parameter server strategy, then loads it under a
+    # strategy scope. Expects the two variables placed on different parameter servers (in either
+    # order) and the call result for input one to be sixes.
     strategy = parameter_server_strategy_v2.ParameterServerStrategyV2(
         self.cluster_resolver)
     model_dir = self.get_temp_dir()
@@ -654,6 +846,10 @@ class PSStrategySaveAndLoadTest(test.TestCase):
     self.assertAllEqual(loaded(tf.identity(1)), [6, 6, 6, 6])
 
   def test_load_to_different_strategy(self):
+    # [FUNCTION DOC]
+    # Trains and saves a model under a parameter server strategy, deletes it and resets the eager
+    # context, then loads it under a single-CPU mirrored strategy. Expects variable one to be a
+    # distributed variable and the call result for input one to be sixes.
     strategy = parameter_server_strategy_v2.ParameterServerStrategyV2(
         self.cluster_resolver)
     model_dir = self.get_temp_dir()
@@ -672,6 +868,10 @@ class PSStrategySaveAndLoadTest(test.TestCase):
     self.assertAllEqual(loaded(tf.identity(1)), [6, 6, 6, 6])
 
   def test_sharded_variable(self):
+    # [FUNCTION DOC]
+    # Creates the model under a parameter server strategy with a two-shard fixed-size partitioner,
+    # asserts variable one is a sharded variable, trains, saves, and expects the TF1 loader to run
+    # it and return sixes for input one.
     strategy = parameter_server_strategy_v2.ParameterServerStrategyV2(
         self.cluster_resolver, tf1.fixed_size_partitioner(2))
     model_dir = self.get_temp_dir()
@@ -684,6 +884,10 @@ class PSStrategySaveAndLoadTest(test.TestCase):
     self.assertAllEqual(self.load_and_run_v1(model_dir, {"x": 1}), [6, 6, 6, 6])
 
   def test_load_with_partitioner_works(self):
+    # [FUNCTION DOC]
+    # Saves a plain model created without any strategy, then loads it inside a parameter server
+    # strategy scope configured with a two-shard fixed-size partitioner. Expects loading to
+    # succeed without errors (no value assertions).
     model = self.Model()
     model_dir = self.get_temp_dir()
     tf.saved_model.save(model, model_dir)
