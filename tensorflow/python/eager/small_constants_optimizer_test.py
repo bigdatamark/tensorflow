@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Performance and error-handling tests for the "runtime constant optimization" (small constants
+# optimizer) of traced functions, which folds small boolean host tensors into constants so that
+# branches are resolved at run time. Contains a context manager helper that temporarily sets
+# experimental optimizer options, and one test class that compares timings of optimized and
+# unoptimized traced functions (with and without the graph optimizer) and checks error behavior for
+# GPU-resident and multi-element boolean inputs. When run as a script, eager execution is enabled
+# before starting the test runner.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,6 +35,12 @@ from tensorflow.python.platform import test
 
 @contextlib.contextmanager
 def options(optimizer_options):
+  # [FUNCTION DOC]
+  # HELPER: context manager used by the tests to temporarily change optimizer settings.
+  # Input: a mapping of experimental optimizer option names to values. On entry it saves the
+  # current experimental optimizer options of the global eager context and installs the given
+  # ones; it yields nothing; on exit (even after an exception) it restores the saved options.
+  # Side effect: mutates global eager context state for the duration of the with-block.
   old_opts = context.context().get_optimizer_experimental_options()
   context.context().set_optimizer_experimental_options(optimizer_options)
   try:
@@ -36,11 +50,23 @@ def options(optimizer_options):
 
 
 class FunctionTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests that traced functions containing a thousand data-dependent branches run much faster when
+  # constant folding (by the graph optimizer or by the runtime small-constants optimization) is
+  # active. Timing based: each test asserts a minimum speedup ratio of the optimized variant.
 
   @test_util.run_v2_only
   def test_grappler_optimization(self):
+    # [FUNCTION DOC]
+    # Scenario (v2 only): trace a function that branches on a boolean tensor argument one thousand
+    # times, and a second function that branches on a constant true tensor created inside it.
+    # Checks both return the same result, times each (best of five repeats of one hundred calls),
+    # and asserts the constant-branch version is more than three times faster.
     @polymorphic_function.function
     def brancher(inp):
+      # [FUNCTION DOC]
+      # Traced function: starts from one and adds one or two, one thousand times, choosing the
+      # increment by the boolean input. Returns the final sum tensor.
       x = constant_op.constant(1)
       for _ in range(1000):
         if inp:
@@ -51,6 +77,10 @@ class FunctionTest(test.TestCase):
 
     @polymorphic_function.function
     def brancher_true():
+      # [FUNCTION DOC]
+      # Traced function: same one-thousand-step branching sum as the other, but the condition is a
+      # constant true tensor built inside, so the branches can be folded away. Takes no input;
+      # returns the final sum tensor.
       left = constant_op.constant(True)
       x = constant_op.constant(1)
       for _ in range(1000):
@@ -72,7 +102,15 @@ class FunctionTest(test.TestCase):
 
   @test_util.run_v2_only
   def test_small_constants_optimization_with_grappler(self):
+    # [FUNCTION DOC]
+    # Scenario (v2 only): wrap one branching function twice, plainly and with the runtime constant
+    # optimization attribute on. Feed a boolean tensor placed on the CPU, check both give equal
+    # results, time both (best of five repeats of one hundred calls) and assert the optimized one
+    # is more than twice as fast, with the normal graph optimizer enabled.
     def func(inp):
+      # [FUNCTION DOC]
+      # Undecorated function wrapped by the test: one thousand steps adding one or two to a running
+      # sum depending on the boolean input; returns the final sum tensor.
       x = constant_op.constant(1)
       for _ in range(1000):
         if inp:
@@ -104,10 +142,16 @@ class FunctionTest(test.TestCase):
   @test_util.run_v2_only
   @test_util.run_gpu_only
   def test_small_constants_optimization_disabled(self):
+    # [FUNCTION DOC]
+    # Scenario (v2 only, GPU only): a function with the runtime constant optimization attribute is
+    # called with a boolean tensor in default placement (on the GPU). Asserts an invalid-argument
+    # error saying the boolean tensor must be on the host when the optimization is enabled.
     @polymorphic_function.function(
         experimental_attributes={'runtime_constant_optimization': True}
     )
     def func(inp):
+      # [FUNCTION DOC]
+      # Traced identity function: returns its input unchanged.
       return inp
 
     x = constant_op.constant(True)
@@ -122,10 +166,16 @@ class FunctionTest(test.TestCase):
 
   @test_util.run_v2_only
   def test_small_constants_optimization_invalid_input(self):
+    # [FUNCTION DOC]
+    # Scenario (v2 only): call an identity function having the runtime constant optimization with
+    # a two-element boolean tensor on the CPU. Asserts no crash occurs and the output equals the
+    # input, i.e. non-scalar booleans are simply not optimized.
     @polymorphic_function.function(
         experimental_attributes={'runtime_constant_optimization': True}
     )
     def func(inp):
+      # [FUNCTION DOC]
+      # Traced identity function: returns its input unchanged.
       return inp
 
     with ops.device_v2('CPU'):
@@ -136,7 +186,15 @@ class FunctionTest(test.TestCase):
 
   @test_util.run_v2_only
   def test_small_constants_optimization_without_grappler(self):
+    # [FUNCTION DOC]
+    # Scenario (v2 only): like the with-grappler test, but the graph meta optimizer is disabled
+    # through the options helper while timing, so only the runtime constant optimization can help.
+    # Checks equal results for plain and optimized wrappers, then asserts the optimized one is
+    # more than five times faster (best of five repeats of one hundred calls).
     def func(inp):
+      # [FUNCTION DOC]
+      # Undecorated function wrapped by the test: one thousand steps adding one or two to a running
+      # sum depending on the boolean input; returns the final sum tensor.
       x = constant_op.constant(1)
       for _ in range(1000):
         if inp:

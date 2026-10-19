@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Tests for the transformation that strips summary-writing operations from a traced function when
+# summaries are disabled at run time. Defines a single test class that builds a function with
+# summary writes (in its body and in a while-loop body), compares the stripped runtime variant's
+# function definition against a function traced without summaries, and counts summary events
+# written to disk. Defines no flags itself but reads the test temp directory flag.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,8 +43,15 @@ FLAGS = flags.FLAGS
 
 
 class SummaryOpsTransformationTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for stripping summary ops from traced functions at run time. Fixture: a summary
+  # directory under the test temp directory, deleted before each test.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Test fixture: calls the base setUp, records the summary directory path (a "mylogs" folder
+    # under the test temp directory) as an attribute, and tries to delete it recursively, ignoring
+    # any error, so summaries are written only if enabled during the test.
     super().setUp()
     self.summary_dir = os.path.join(FLAGS.test_tmpdir, 'mylogs')
 
@@ -51,7 +64,22 @@ class SummaryOpsTransformationTest(test.TestCase):
 
   @test_util.run_v2_only
   def test_strip_summary_ops(self):
+    # [FUNCTION DOC]
+    # Scenario (v2 only): create a file summary writer and a variable, and define a traced function
+    # (autograph off, with an attribute naming the record-summary argument as the runtime summary
+    # switch) that adds two inputs, writes a summary in its body and inside a three-iteration
+    # while-loop body when a flag is true, all under a record-if condition. Asserts: results are
+    # equal with and without summaries and when summaries are disabled only at run time; the
+    # function definition of the runtime-stripped instance, after normalizing names, while-node
+    # inputs, signature inputs and writer attributes, equals the definition traced without
+    # summaries; and exactly three summary events exist on disk, from the enabled call only.
     def normalize_while_node(fndef):
+      # [FUNCTION DOC]
+      # HELPER: normalizes a function definition for comparison. For every while node, replaces the
+      # body and condition function names with fixed names, clears the type and output-shape lists,
+      # and (only if the record-summary input is present) removes the summary writer and
+      # record-summary inputs and decrements the original-output count by two. Mutates and returns
+      # the given function definition.
       """Helper method to normalize the while node for comparison."""
       for node in fndef.node_def:
         if node.op == 'While':
@@ -80,6 +108,10 @@ class SummaryOpsTransformationTest(test.TestCase):
       return fndef
 
     def normalize_fdef(fndef):
+      # [FUNCTION DOC]
+      # HELPER: normalizes a function definition for comparison. Sets the signature name to a fixed
+      # name, removes the summary writer input argument from the signature, and clears the
+      # attribute that lists summary-disabling info. Mutates and returns the given definition.
       """Method to normalize the tf.function's FunctionDefs for comparison."""
       # Normalize the names for comparison as they have a uid appended.
       fndef.signature.name = '__inference_add'
@@ -101,6 +133,11 @@ class SummaryOpsTransformationTest(test.TestCase):
     var = variables.Variable(1.0)
 
     def remove_writer_attr(fndef):
+      # [FUNCTION DOC]
+      # HELPER: removes the per-argument attribute entry that belongs to the captured summary
+      # writer placeholder (identified by its user-specified name), shifting later entries down so
+      # indexes stay contiguous and deleting the last one. Does nothing if no entry matches.
+      # Mutates and returns the given function definition.
       arg_attr = fndef.arg_attr
       attr_idx = None
       # tf.function uses TraceType to create placeholder for captures.
@@ -123,7 +160,18 @@ class SummaryOpsTransformationTest(test.TestCase):
         },
     )
     def add(x, y, record_summary, include_summary):
+      # [FUNCTION DOC]
+      # Traced function under test. Inputs: two float tensors, a boolean tensor controlling
+      # summary recording at run time, and a Python flag deciding at trace time whether summary
+      # code is included. Adds x and y, optionally writes a summary of the sum, runs a three step
+      # while loop whose body adds the step to the result and writes further summaries, assigns
+      # the result to the captured variable, and returns the sum. Side effects: variable
+      # assignment, summary writes and flushes.
       def body(step, result):
+        # [FUNCTION DOC]
+        # While-loop body: adds the step (cast to float) to the result, assigns the result to the
+        # captured variable, optionally writes a summary and flushes the writer, and returns the
+        # incremented step. Inputs: loop step counter and current result tensor.
         result += math_ops.cast(step, dtypes.float32)
         var.assign(result)
         if include_summary:

@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# Prototype support for wrapping legacy (graph-mode, TF 1.x style) Python code into callable
+# eager-compatible graph functions. Provides the public v1 wrap-function decorator-style function,
+# a wrapped-function class (a concrete function that can prune itself to a feeds/fetches subgraph),
+# a wrapped-graph class that lets several functions share one graph, variables and collections, a
+# variable holder that creates variables through a creator scope and mirrors them into legacy
+# collections, a helper that builds a concrete function from a graph definition, and private
+# helpers for lifting variables out of imported graphs and for filtering returned operations.
+# Import-time side effect: registers the v1 public symbol for wrap-function with the export
+# machinery.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -42,9 +52,20 @@ from tensorflow.python.util.tf_export import tf_export
 
 
 class VariableHolder(object):
+  # [CLASS DOC]
+  # Owns the variables created while tracing a Python function. Holds the function (optional),
+  # a flag saying whether variables with the same name are shared between creations, and a
+  # trackable mapping from variable names to variables. Instances are callable: calling one runs
+  # the wrapped function under a variable-creator scope that records every created variable here
+  # and registers it in the legacy graph collections (global, plus trainable when applicable).
   """Holds variables for a python function."""
 
   def __init__(self, fn=None, share_variables=False):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: fn (optional Python function to be wrapped and called later, default
+    # none) and share_variables (optional boolean, default false; when true a variable requested
+    # under an already-used name is reused instead of being created again). Creates an empty
+    # trackable name-to-variable mapping. Returns nothing.
     self._fn = fn
 
     self._share_variables = share_variables
@@ -52,9 +73,22 @@ class VariableHolder(object):
 
   @property
   def variables(self):
+    # [FUNCTION DOC]
+    # Property returning the trackable mapping from variable names to the variables created or
+    # lifted so far. The same mapping object is returned each time (not a copy).
     return self._variables_by_name
 
   def variable_creator_scope(self, next_creator, **kwargs):
+    # [FUNCTION DOC]
+    # Variable-creator hook installed while the wrapped function runs. Inputs: next_creator (the
+    # next creator in the chain, called to really build a variable) and keyword arguments for the
+    # variable; an optional "collections" entry (list of collection names, default global
+    # variables) is removed from the keywords. Computes the full scoped variable name using a name
+    # scope (also stored back into the keywords as the name). If sharing is on and a variable with
+    # that name exists, returns it; otherwise builds one with the next creator and records it by
+    # name. Adds the variable to the requested collections, plus the trainable collection if the
+    # variable is trainable and that collection is not already listed. Returns the variable.
+    # Side effects: records in the holder mapping and mutates graph collections.
     """Creates variables & adds them to collections to match legacy code."""
     collections = kwargs.pop("collections", None)
     v = None
@@ -82,11 +116,24 @@ class VariableHolder(object):
     return v
 
   def __call__(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Calls the stored function with the given positional and keyword arguments inside the
+    # variable-creator scope of this holder, so created variables are tracked. Returns whatever the
+    # function returns. Fails if no function was supplied at construction time (the stored value is
+    # none and cannot be called).
     return self.call_with_variable_creator_scope(self._fn)(*args, **kwargs)
 
   def call_with_variable_creator_scope(self, fn):
+    # [FUNCTION DOC]
+    # Decorates a function so that it runs inside this holder's variable-creator scope. Input: any
+    # Python function. Returns a new function taking the same arguments, which enters the scope,
+    # calls the original function and returns its result. Nothing runs until the returned function
+    # is called.
 
     def wrapped(*args, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: closure returned by the decorating method. Enters the holder's variable-creator
+      # scope, calls the original function with the given arguments, returns its result.
       with variable_scope.variable_creator_scope(self.variable_creator_scope):
         return fn(*args, **kwargs)
 
@@ -94,6 +141,13 @@ class VariableHolder(object):
 
 
 def _get_element_from_tensor_info(tensor_info, graph):
+  # [FUNCTION DOC]
+  # HELPER: used by pruning to resolve fetch descriptors; a simplified copy of a deprecated
+  # library function. Inputs: a tensor-info message and a graph. Depending on the message's
+  # encoding: "name" returns the graph element (tensor or, in some cases, operation) with that
+  # name; sparse coordinate encoding returns a sparse tensor built from the named indices, values
+  # and dense-shape tensors; composite encoding decodes the stored type spec and rebuilds the
+  # composite tensor from the named component tensors. Raises a value error for any other encoding.
   """Simplified copy of the deprecated `get_tensor_from_tensor_info`."""
   encoding = tensor_info.WhichOneof("encoding")
   if encoding == "name":
@@ -120,6 +174,14 @@ def _get_element_from_tensor_info(tensor_info, graph):
 
 
 def _lift_single_variable(old_variable, graph, variable_holder):
+  # [FUNCTION DOC]
+  # HELPER: lifts one variable out of a function graph, used by the unlifted-variables helper.
+  # Inputs: the old resource variable created inside the function graph, the function graph, and
+  # the variable holder. Creates an uninitialized variable with the same shape, dtype, name,
+  # trainable flag and handle data, copies the initializer operation, registers its handle as a
+  # capture of the graph (and triggers capture post-processing such as tape recording), records the
+  # new variable in the holder by name and in the graph's weak variable list, and has the graph
+  # watch it. Returns the new variable. Mutates the graph and the holder.
   """Lifts `old_variable` out of the `FuncGraph` `graph`."""
   new_variable = resource_variable_ops.UninitializedVariable(
       shape=old_variable.shape,
@@ -143,6 +205,15 @@ def _lift_single_variable(old_variable, graph, variable_holder):
 
 
 def _lift_unlifted_variables(graph, variable_holder):
+  # [FUNCTION DOC]
+  # HELPER: used when constructing a wrapped function, and again when pruning (it is idempotent).
+  # Inputs: a function graph and a variable holder. Scans the global and local variable
+  # collections of the graph for resource variables that were created in graph mode inside a
+  # function-building graph and are not yet captured, lifts each into the outer context through
+  # the single-variable helper, and (for local ones) moves the lifted variable from the global to
+  # the local collection of its outer graph. Then rewrites the graph's collections, replacing old
+  # variables with the lifted ones, and logs a warning (at most five times) for any entry that is
+  # not a resource variable (reference variables cannot be given Python objects). Returns nothing.
   """Finds resource variables and lifts them into the outer context.
 
   When we import a GraphDef inside a wrap_function, no Python graph building
@@ -166,6 +237,10 @@ def _lift_unlifted_variables(graph, variable_holder):
     lifted_variables = {}
 
     def _should_lift_variable(v):
+      # [FUNCTION DOC]
+      # HELPER: predicate for the lifting loop. Input: a variable. Returns true only if the
+      # variable lives in graph mode in a graph that is building a function, is a resource
+      # variable, and its handle is not already captured by the function graph.
       return ((v._in_graph_mode  # pylint: disable=protected-access
                and v.graph.building_function)
               and isinstance(v, resource_variable_ops.BaseResourceVariable)
@@ -217,6 +292,12 @@ def _lift_unlifted_variables(graph, variable_holder):
 
 # TODO(allenl): make this trackable
 class WrappedFunction(function.ConcreteFunction):
+  # [CLASS DOC]
+  # A concrete function built from a legacy function graph. Keeps the variable holder that owns
+  # the function's variables and the optional input signature used to convert plain arguments to
+  # tensors. Overrides calling so that, when no keyword names are set, positional arguments are
+  # converted per the signature and passed straight to the flat call; and adds a prune method that
+  # extracts the subgraph between given feeds and fetches into a new wrapped function.
   """Wraps a tf V1 piece of code in a function."""
 
   def __init__(
@@ -227,6 +308,16 @@ class WrappedFunction(function.ConcreteFunction):
       signature=None,
       are_keyword_args_also_positional=False,
   ):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: fn_graph (the function graph), variable_holder (owner of the variables),
+    # attrs (optional mapping of function attributes), signature (optional nested specs used to
+    # convert call arguments), are_keyword_args_also_positional (optional boolean, default false;
+    # whether keyword arguments of the structured signature may also be passed positionally).
+    # First lifts unlifted variables so the captured inputs are complete, registers every function
+    # definition of the graph's library with the global eager context, builds the function type
+    # from the graph's structured signature, outputs and capture types, creates the atomic
+    # function and initializes the base class with it. Side effect: adds function definitions to
+    # the eager context and may modify the graph's collections and captures.
     self._variable_holder = variable_holder
     _lift_unlifted_variables(fn_graph, variable_holder)
     # We call __init__ after lifting variables so that the function's signature
@@ -246,6 +337,13 @@ class WrappedFunction(function.ConcreteFunction):
     super().__init__(atomic_fn)
 
   def _call_impl(self, args, kwargs):
+    # [FUNCTION DOC]
+    # Implements a call. Inputs: a sequence of positional arguments and a mapping of keyword
+    # arguments. If the function has no recorded keyword names (it was not produced by pruning),
+    # keyword arguments are rejected with a not-implemented error; when a signature exists, each
+    # positional argument whose signature entry is a dense tensor spec is converted to a tensor of
+    # that dtype; then the flat call is made with the arguments plus the captured inputs and its
+    # result returned. Otherwise delegates to the base class implementation.
     if self._arg_keywords is None:
       if kwargs:
         raise NotImplementedError(
@@ -268,7 +366,20 @@ class WrappedFunction(function.ConcreteFunction):
       input_signature=None,
       are_keyword_args_also_positional=False,
   ):
+    # [FUNCTION DOC]
+    # Extracts the subgraph that computes the fetches from the feeds into a new wrapped function.
+    # Inputs: feeds (tensors, possibly nested, which become inputs; captured ones are ignored),
+    # fetches (nested structure of tensors, operations, tensor-info messages or names), plus the
+    # optional name (default "pruned"), input_signature (optional pair of args and kwargs specs
+    # stored as the structured input signature) and the keyword-also-positional flag. Raises a
+    # value error if a feed is not a tensor, or if a feed or fetch belongs to a different graph.
+    # Algorithm: flatten the feeds, preprocess fetches into operations, tensors and tensor infos,
+    # create a new function graph, lift the needed ops into it with captures preserved, copy
+    # functions and variables, apply shapes from tensor infos, remap structured outputs (operations
+    # become nothing), build a new wrapped function sharing the variable holder, and set its
+    # positional argument count and keyword names from the feed op names. Returns that function.
     """Extract a subgraph of this function's underlying graph.
+
 
     Wraps the subgraph in a new `WrappedFunction` object.
 
@@ -316,6 +427,13 @@ class WrappedFunction(function.ConcreteFunction):
     tensor_infos = []
 
     def _fetch_preprocessing_callback(fetch):
+      # [FUNCTION DOC]
+      # HELPER: mapping callback used by prune. Input: one fetch (operation, tensor-info message,
+      # tensor, composite tensor, or a name string). Appends operations to the operation list,
+      # tensors to the tensor list, and tensor-info messages to the info list (they are first
+      # resolved to graph elements and filed as tensors or operations accordingly); a name is
+      # resolved to a graph element and processed recursively. Returns the resolved element in
+      # place of the fetch. Mutates the enclosing lists.
       """Extract out lists of ops, tensors, and tensor type info.
 
       Turns TensorInfos into Tensors in the original `fetches` structure.
@@ -388,6 +506,10 @@ class WrappedFunction(function.ConcreteFunction):
     pruned_graph.variables = self.graph.variables
 
     def _structured_output_mapping(fetched):
+      # [FUNCTION DOC]
+      # HELPER: mapping callback used by prune. Input: a fetched element of the original graph.
+      # Looks it up in the lift map; returns nothing for operations and the lifted tensor (or
+      # composite) otherwise.
       """callback for `nest.map_structure()`"""
       lifted = lift_map[fetched]
       if isinstance(lifted, ops.Operation):
@@ -419,6 +541,12 @@ class WrappedFunction(function.ConcreteFunction):
 
 
 def _filter_returned_ops(fn):
+  # [FUNCTION DOC]
+  # HELPER: used by the wrapped-graph class so that operations returned by a legacy function do
+  # not break tracing. Input: a function. Returns a pair: a wrapper function that calls fn,
+  # flattens the output, replaces every operation by nothing while remembering it by flat index
+  # in a mapping, and repacks the output in the original structure; and that mapping from flat
+  # index to the removed operation (filled when the wrapper runs).
   """Filtering out any ops returned by function.
 
   Args:
@@ -433,6 +561,11 @@ def _filter_returned_ops(fn):
   returned_ops = {}
 
   def wrap_and_filter_returned_ops(*args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: wrapper returned by the filtering helper. Calls the original function with all given
+    # arguments, flattens its outputs, replaces each operation with nothing while recording it in
+    # the enclosing mapping by flat position, and returns the outputs repacked in the original
+    # nested structure. Side effect: mutates the enclosing mapping.
     outputs = fn(*args, **kwargs)
     flat_outputs = nest.flatten(outputs)
     for n in range(len(flat_outputs)):
@@ -446,6 +579,12 @@ def _filter_returned_ops(fn):
 
 
 class WrappedGraph(object):
+  # [CLASS DOC]
+  # Container that wraps several legacy functions into one shared function graph so they can see
+  # each other's variables and collections. Holds the variable holder (shared-variable mode by
+  # default), the shared function graph (exposed as a public attribute), a base wrapped function
+  # over that graph used for pruning, and a mapping from names to the wrapped functions created.
+  # Public API: wrap-function method, functions and variables properties.
   """Class for wrapping multiple TF 1.X functions in a single graph.
 
   Maintains a dictionary mapping names to wrapped functions. See
@@ -486,6 +625,13 @@ class WrappedGraph(object):
   """
 
   def __init__(self, variable_holder=None, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: variable_holder (optional existing holder; default creates a new one
+    # with sharing of same-named variables enabled) and keyword arguments: name (default
+    # "wrapped_function_graph") and collections (default empty, meaning start with empty
+    # collections; none would copy the outer graph's), the rest forwarded to the function graph
+    # constructor. Creates the shared function graph, a base wrapped function over it, and an
+    # empty mapping of wrapped functions. Returns nothing.
     self._variable_holder = (
         variable_holder or VariableHolder(share_variables=True))
 
@@ -500,13 +646,25 @@ class WrappedGraph(object):
 
   @property
   def functions(self):
+    # [FUNCTION DOC]
+    # Property returning the mapping (not a copy) from names to the functions wrapped so far.
     return self._functions
 
   @property
   def variables(self):
+    # [FUNCTION DOC]
+    # Property returning the shared variable mapping of the underlying variable holder.
     return self._variable_holder.variables
 
   def wrap_function(self, fn, signature, name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring example calls the wrap method for the update function without the
+    # required signature argument, so it would fail as written; the docstring also says the name
+    # is an optional string while the function name is used by default (this matches the code).
+    # Public wrapper over the internal wrapping method. Inputs: fn (legacy function), signature
+    # (nested specs for its arguments) and optional name (key in the functions mapping; default
+    # is the function's own name). Returns the eager-compatible wrapped function and stores it in
+    # the functions mapping.
     """Wraps a TF 1.X function and returns an eager-compatible function.
 
     All functions wrapped in the same `WrappedGraph` will have access to the
@@ -562,7 +720,21 @@ class WrappedGraph(object):
                      kwargs=None,
                      signature=None,
                      name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the inputs are computed by slicing off the last N entries where N is the number
+    # of captures; with zero captures this slice removes every input instead of none, so a function
+    # with arguments and no captures would be pruned with no feeds. The code itself also admits it
+    # relies on questionable behavior of the tracing helper (the passed-in graph's inputs and
+    # structured outputs are overwritten).
+    # Internal implementation of wrapping. Inputs: fn (function), optional args and kwargs (example
+    # arguments for tracing), optional signature, optional name (default the function name).
+    # Wraps fn so it runs in the holder's variable-creator scope and so returned operations are
+    # filtered out, traces it into the shared graph without automatic control dependencies, puts
+    # the filtered operations back into the structured outputs, prunes the base wrapped function
+    # from the graph inputs (excluding captures) to those outputs, stores the result in the
+    # functions mapping under the name, and returns it. Side effects: mutates the shared graph.
     """Internal wrap function method with extended func_graph arguments."""
+
     fn_with_filter_and_scope, returned_ops = _filter_returned_ops(
         self._variable_holder.call_with_variable_creator_scope(fn))
 
@@ -597,6 +769,14 @@ class WrappedGraph(object):
 
 @tf_export(v1=["wrap_function"])
 def wrap_function(fn, signature, name=None):
+  # [FUNCTION DOC]
+  # Public v1 API: traces a legacy function once into a graph function. Inputs: fn (Python
+  # function), signature (placeholder specs and plain Python values, one per argument) and
+  # optional name (graph name becomes wrapped function plus underscore plus the name; default
+  # "wrapped_function"). Creates a variable holder around fn, traces it without automatic control
+  # dependencies and with empty collections, and returns a wrapped function that owns the created
+  # variables and converts call arguments per the signature. Operations run only if needed by the
+  # outputs. Side effects: registers function definitions with the eager context.
   """Wraps the TF 1.x function fn into a graph function.
 
   The python function `fn` will be called once with symbolic arguments specified
@@ -670,6 +850,13 @@ def wrap_function(fn, signature, name=None):
 
 
 def function_from_graph_def(graph_def, inputs, outputs, captures=None):
+  # [FUNCTION DOC]
+  # Builds a concrete function from a graph definition. Inputs: graph_def, inputs and outputs
+  # (a tensor name or nested structure of tensor names to use as inputs and outputs) and optional
+  # captures (mapping from node names to tensors providing their values, default none). Wraps an
+  # import step in the wrap-function helper so the graph definition is imported with empty name
+  # prefix and each capture is registered against the named tensor's output zero; then prunes the
+  # wrapped function between the named inputs and outputs. Returns the pruned wrapped function.
   """Creates a ConcreteFunction from a GraphDef.
 
   Args:
@@ -687,6 +874,11 @@ def function_from_graph_def(graph_def, inputs, outputs, captures=None):
   """
 
   def _imports_graph_def():
+    # [FUNCTION DOC]
+    # HELPER: no-argument function traced by the wrapper. Imports the enclosing graph definition
+    # into the current default graph with no name prefix and, for each capture, registers the
+    # given external tensor as the capture for the imported tensor named with output index zero.
+    # Returns nothing.
     importer.import_graph_def(graph_def, name="")
     graph = ops.get_default_graph()
     if captures is not None:

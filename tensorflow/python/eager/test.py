@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: small shared test utility module for eager-mode tests.
+# Re-exports everything from the platform test module (test case base classes, benchmark base,
+# and so on) via a wildcard import and overrides the main entry point so that eager execution is
+# enabled before the tests are run. Marked by its authors as a candidate for removal.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,5 +26,10 @@ from tensorflow.python.platform.test import *  # pylint: disable=wildcard-import
 
 # TODO(akshayka): Do away with this file.
 def main(argv=None):  # pylint: disable=function-redefined
+  # [FUNCTION DOC]
+  # HELPER: test runner entry point for eager tests; shadows the wildcard-imported main function.
+  # Enables eager execution globally and then delegates to the platform test runner, passing along
+  # the optional argument list (default none, meaning the process arguments). Does not return
+  # until tests finish; side effect: turns on eager execution for the process.
   _ops.enable_eager_execution()
   _test.main(argv)
