@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Template-based AST generation for autograph: parse a snippet of source text containing
+# placeholder symbols and substitute them with AST nodes, names or qualified names.
+# Exposes: ContextAdjuster (fixes read/write context of substituted nodes), ReplaceTransformer
+# (does the substitution), and the functions replace and replace_as_expression. Underscore
+# function _convert_to_ast normalizes replacement values. Used by many autograph converters.
+# No import-time side effects.
 """AST conversion templates.
 
 Adapted from Tangent.
@@ -29,6 +36,12 @@ from tensorflow.python.autograph.pyct import qual_names
 
 
 class ContextAdjuster(gast.NodeTransformer):
+  # [CLASS DOC]
+  # Transformer that rewrites the read/write context field of names, tuples, lists, attributes
+  # and subscripts to a requested context class, so substituted nodes match their position in a
+  # template. Holds one piece of state, the current override (a context class or nothing). The
+  # override is reset to nothing below calls, dicts, comprehensions and lambdas (those contexts
+  # are only checked, not changed) and set to load below attribute and subscript bases.
   """Adjusts the ctx field of nodes to ensure consistency.
 
   This transformer can change the ctx fields of a variable, tuple and other
@@ -37,9 +50,16 @@ class ContextAdjuster(gast.NodeTransformer):
   """
 
   def __init__(self, override_value):
+    # [FUNCTION DOC]
+    # Stores override_value, a context class (load, store, delete) used to build new context
+    # objects, or nothing to disable overriding. Returns nothing.
     self._ctx_override = override_value
 
   def visit(self, node):
+    # [FUNCTION DOC]
+    # Visits a node with the normal dispatch, then asserts that any node having a context field
+    # has it set (assertion error otherwise), and restores the override that was active on entry
+    # so changes made while visiting children do not leak to siblings. Returns the visited node.
     original_override = self._ctx_override
     node = super(ContextAdjuster, self).visit(node)
     if hasattr(node, 'ctx'):
@@ -48,28 +68,46 @@ class ContextAdjuster(gast.NodeTransformer):
     return node
 
   def _apply_override(self, node):
+    # [FUNCTION DOC]
+    # HELPER: shared by the visit methods of ContextAdjuster.
+    # If an override is active, replaces the node's context with a fresh instance of it (mutates
+    # the node). Returns nothing.
     if self._ctx_override is not None:
       node.ctx = self._ctx_override()
 
   def visit_Attribute(self, node):
+    # [FUNCTION DOC]
+    # Applies the override to the attribute node, then sets the override to load for its
+    # children (the object being accessed is only read) and visits them. Returns the node.
     self._apply_override(node)
     self._ctx_override = gast.Load
     node = self.generic_visit(node)
     return node
 
   def visit_Tuple(self, node):
+    # [FUNCTION DOC]
+    # Applies the override to the tuple and keeps it active while visiting the elements.
+    # Returns the node.
     self._apply_override(node)
     return self.generic_visit(node)
 
   def visit_List(self, node):
+    # [FUNCTION DOC]
+    # Applies the override to the list and keeps it active while visiting the elements.
+    # Returns the node.
     self._apply_override(node)
     return self.generic_visit(node)
 
   def visit_Name(self, node):
+    # [FUNCTION DOC]
+    # Applies the override to the name node, then visits children. Returns the node.
     self._apply_override(node)
     return self.generic_visit(node)
 
   def visit_Call(self, node):
+    # [FUNCTION DOC]
+    # Applies the override to the call node itself, then disables overriding for its children
+    # (they must already have contexts, which the visit method asserts). Returns the node.
     self._apply_override(node)
     # We may be able to override these to Load(), but for now it's simpler
     # to just assert that they're set.
@@ -77,24 +115,35 @@ class ContextAdjuster(gast.NodeTransformer):
     return self.generic_visit(node)
 
   def visit_Dict(self, node):
+    # [FUNCTION DOC]
+    # Disables overriding for the dict's children (their contexts are only asserted to be set)
+    # and visits them. Returns the node.
     # We may be able to override these to Load(), but for now it's simpler
     # to just assert that they're set.
     self._ctx_override = None
     return self.generic_visit(node)
 
   def visit_Subscript(self, node):
+    # [FUNCTION DOC]
+    # Applies the override to the subscript node, sets the override to load, visits the indexed
+    # value explicitly, then visits all children generically (so the value is visited twice).
+    # Returns the node.
     self._apply_override(node)
     self._ctx_override = gast.Load
     node.value = self.visit(node.value)
     return self.generic_visit(node)
 
   def visit_comprehension(self, node):
+    # [FUNCTION DOC]
+    # Disables overriding below a comprehension clause and visits its children. Returns the node.
     # We may be able to override some of these, but for now it's simpler
     # to just assert that they're set.
     self._ctx_override = None
     return self.generic_visit(node)
 
   def visit_Lambda(self, node):
+    # [FUNCTION DOC]
+    # Disables overriding below a lambda and visits its children. Returns the node.
     # We may be able to override some of these, but for now it's simpler
     # to just assert that they're set.
     self._ctx_override = None
@@ -102,9 +151,19 @@ class ContextAdjuster(gast.NodeTransformer):
 
 
 class ReplaceTransformer(gast.NodeTransformer):
+  # [CLASS DOC]
+  # Transformer that substitutes placeholder names, keyword arguments, function names and
+  # attribute names in a parsed template with caller-supplied replacement nodes. State: the
+  # replacements mapping, an unused in-replacements flag, and the set of annotation keys kept
+  # when replacement nodes are copied. Used by the replace function, one instance per node.
   """Replace AST nodes."""
 
   def __init__(self, replacements):
+    # [FUNCTION DOC]
+    # Stores the replacements mapping (placeholder name to node or list of nodes), initializes an
+    # unused flag, and defines the set of annotation keys preserved when copying replacement
+    # nodes (directives, extra loop test, origin, skip-processing, original definitions and the
+    # function context name). Returns nothing.
     """Create a new ReplaceTransformer.
 
     Args:
@@ -123,6 +182,11 @@ class ReplaceTransformer(gast.NodeTransformer):
     }
 
   def _prepare_replacement(self, replaced, key):
+    # [FUNCTION DOC]
+    # HELPER: fetches and cleans replacement nodes for the visit methods of ReplaceTransformer.
+    # Looks up the replacement for key, makes a clean copy (keeping only the preserved
+    # annotations) and returns it as a list (a single node is wrapped in a list). The replaced
+    # argument is unused. Raises a missing-key error if key is absent.
     """Prepares a replacement AST that's safe to swap in for a node.
 
     Args:
@@ -140,6 +204,10 @@ class ReplaceTransformer(gast.NodeTransformer):
     return new_nodes
 
   def visit_Expr(self, node):
+    # [FUNCTION DOC]
+    # Visits the wrapped expression. If it was replaced, returns the replacement directly (so a
+    # statement placeholder is not wrapped in an expression statement); otherwise returns the
+    # original node.
     # When replacing a placeholder with an entire statement, the replacement
     # must stand on its own and not be wrapped in an Expr.
     new_value = self.visit(node.value)
@@ -148,6 +216,10 @@ class ReplaceTransformer(gast.NodeTransformer):
     return new_value
 
   def visit_keyword(self, node):
+    # [FUNCTION DOC]
+    # Replaces a keyword argument whose name is a placeholder. The replacement must be a keyword
+    # node or a non-empty list/tuple of keyword nodes, which is returned. Non-placeholder
+    # keywords are visited normally. Raises ValueError for any other replacement kind.
     if node.arg not in self.replacements:
       return self.generic_visit(node)
 
@@ -166,6 +238,10 @@ class ReplaceTransformer(gast.NodeTransformer):
             repl, node.arg))
 
   def visit_FunctionDef(self, node):
+    # [FUNCTION DOC]
+    # Visits children, then if the function's name is a placeholder, renames the function to the
+    # identifier of the replacement, which must be a name node. Raises ValueError otherwise.
+    # Returns the node.
     node = self.generic_visit(node)
     if node.name not in self.replacements:
       return node
@@ -179,6 +255,10 @@ class ReplaceTransformer(gast.NodeTransformer):
     return node
 
   def visit_Attribute(self, node):
+    # [FUNCTION DOC]
+    # Visits children, then if the attribute name is a placeholder, replaces it with the
+    # identifier of the replacement, which must be a gast name node (ValueError otherwise).
+    # Returns the node.
     node = self.generic_visit(node)
     if node.attr not in self.replacements:
       return node
@@ -191,6 +271,11 @@ class ReplaceTransformer(gast.NodeTransformer):
     return node
 
   def visit_Name(self, node):
+    # [FUNCTION DOC]
+    # If the name is a placeholder, returns its replacement: a cleaned copy of the replacement
+    # nodes, with their read/write context adjusted to that of the original name. An empty
+    # replacement list yields the empty value (the node is removed). A single replacement is
+    # returned as one node, several as a list. Non-placeholder names are returned unchanged.
     if node.id not in self.replacements:
       return node
 
@@ -212,6 +297,11 @@ class ReplaceTransformer(gast.NodeTransformer):
 
 
 def _convert_to_ast(n):
+  # [FUNCTION DOC]
+  # HELPER: normalizes replacement values for the replace function.
+  # Converts a string into a name node with unset context, a QN into its AST form, lists and
+  # tuples element-wise (recursively, preserving the container kind), and returns anything else
+  # unchanged. Pure.
   """Converts from a known data type to AST."""
   # Note: When generating AST nodes from strings/QNs in isolation, ctx is
   # unknown. ctx must be filled in according to the template being used.
@@ -228,6 +318,15 @@ def _convert_to_ast(n):
 
 
 def replace(template, **replacements):
+  # [FUNCTION DOC]
+  # Main entry point. template is a string of source code (indented text is dedented);
+  # replacements maps placeholder names to nodes, lists of nodes, strings or QNs. Converts the
+  # replacements to AST, prepends the standard preamble, parses the template into statements,
+  # applies a ReplaceTransformer to each, flattens list results, and resolves qualified names on
+  # every result. Returns a list of nodes. Mutates the passed replacements mapping values to their
+  # AST forms. Raises ValueError if the template is not a string.
+  # KNOWN ISSUE: the docstring claims a node or single AST is returned in some cases, but the
+  # code always returns a list of nodes.
   """Replaces placeholders in a Python template.
 
   AST Name and Tuple nodes always receive the context that inferred from
@@ -273,6 +372,10 @@ def replace(template, **replacements):
 
 
 def replace_as_expression(template, **replacements):
+  # [FUNCTION DOC]
+  # Like replace, but the template must produce exactly one expression. Returns the expression
+  # node (the value of an expression statement, or a bare name node). Raises ValueError if the
+  # result is not a single node, or if that node is neither an expression statement nor a name.
   """Variant of replace that generates expressions, instead of code blocks."""
   replacement = replace(template, **replacements)
   if len(replacement) != 1:

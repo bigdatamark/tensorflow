@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Defines the qualified-name (QN) data model used by autograph's static analyses, and a node
+# transformer that attaches a QN annotation to name, attribute and subscript syntax nodes.
+# Exposes: Symbol and Literal (small immutable records), QN (the qualified name itself),
+# QnResolver (annotating transformer), resolve (annotate a tree) and from_str (parse text to QN).
+# No import-time side effects beyond imports. Not a helper module; other pyct modules
+# (activity analysis, etc.) depend on it.
 """Utilities for manipulating qualified names.
 
 A qualified name is a uniform way to refer to simple (e.g. 'foo') and composite
@@ -30,30 +37,61 @@ from tensorflow.python.autograph.pyct import parser
 
 
 class CallerMustSetThis(object):
+  # [CLASS DOC]
+  # HELPER: sentinel used by QN.ast to mark the expression context of generated nodes.
+  # Empty marker class; its class object is placed in the context field of AST nodes built from a
+  # QN to signal that the caller must replace it with a real load/store/delete context.
   pass
 
 
 class Symbol(collections.namedtuple('Symbol', ['name'])):
+  # [CLASS DOC]
+  # Immutable record with a single field, name, representing a plain symbol. Inherits all
+  # behavior from the named tuple; adds nothing.
   """Represents a Python symbol."""
 
 
 class Literal(collections.namedtuple('Literal', ['value'])):
+  # [CLASS DOC]
+  # Immutable record with a single field, value, holding a literal constant (such as a number or
+  # string) that appears as a subscript index inside a qualified name. Overrides text conversion
+  # so strings are shown quoted and other values in their usual text form.
   """Represents a Python numeric literal."""
 
   def __str__(self):
+    # [FUNCTION DOC]
+    # Returns the text form: string values wrapped in single quotes, any other value converted
+    # with the ordinary text conversion. No side effects.
     if isinstance(self.value, str):
       return "'{}'".format(self.value)
     return str(self.value)
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns the same text as the text-conversion method. No side effects.
     return str(self)
 
 
 # TODO(mdan): Use subclasses to remove the has_attr has_subscript booleans.
 class QN(object):
+  # [CLASS DOC]
+  # A qualified name: a simple symbol (like foo), an attribute access on another QN (foo.bar), or
+  # a subscript of another QN (foo[bar]). Holds a tuple qn (one element for simple names, two for
+  # composite: base QN plus attribute string or subscript QN), a parent link (none for simple
+  # names) and booleans recording whether it is an attribute or subscript form. Instances are
+  # hashable and comparable (equality uses the tuple and the form flags; ordering uses the text
+  # form), so they work as set members and mapping keys. Created directly or through from_str and
+  # the QnResolver transformer.
   """Represents a qualified name."""
 
   def __init__(self, base, attr=None, subscript=None):
+    # [FUNCTION DOC]
+    # Builds a QN. base is a string or Literal for a simple name, or a QN when attr or subscript
+    # is given. attr (optional string) makes an attribute name; subscript (optional QN) makes a
+    # subscript name. Returns nothing; sets internal state.
+    # Raises ValueError if both attr and subscript are given, if base is not a QN for composite
+    # forms, if attr is not a string, or if a simple base is neither string nor Literal.
+    # Also asserts (assertion error) that a simple base string contains no dot or brackets.
     if attr is not None and subscript is not None:
       raise ValueError('A QN can only be either an attr or a subscript, not '
                        'both: attr={}, subscript={}.'.format(attr, subscript))
@@ -89,34 +127,54 @@ class QN(object):
       self.qn = (base,)
 
   def is_symbol(self):
+    # [FUNCTION DOC]
+    # Returns true if the first element of the name is a string (an identifier) rather than a
+    # Literal.
     return isinstance(self.qn[0], str)
 
   def is_simple(self):
+    # [FUNCTION DOC]
+    # Returns true if the name has a single element (neither attribute nor subscript).
     return len(self.qn) <= 1
 
   def is_composite(self):
+    # [FUNCTION DOC]
+    # Returns true if the name is an attribute or subscript form (more than one element).
     return len(self.qn) > 1
 
   def has_subscript(self):
+    # [FUNCTION DOC]
+    # Returns true if this QN is a subscript form.
     return self._has_subscript
 
   def has_attr(self):
+    # [FUNCTION DOC]
+    # Returns true if this QN is an attribute form.
     return self._has_attr
 
   @property
   def attr(self):
+    # [FUNCTION DOC]
+    # Property returning the attribute string of an attribute-form QN.
+    # Raises ValueError if the QN is not an attribute form.
     if not self._has_attr:
       raise ValueError('Cannot get attr of non-attribute "%s".' % self)
     return self.qn[1]
 
   @property
   def parent(self):
+    # [FUNCTION DOC]
+    # Property returning the base QN of a composite name (e.g. a.b for a.b.c).
+    # Raises ValueError for a simple name, which has no parent.
     if self._parent is None:
       raise ValueError('Cannot get parent of simple name "%s".' % self.qn[0])
     return self._parent
 
   @property
   def owner_set(self):
+    # [FUNCTION DOC]
+    # Property returning a new set of all ancestor QNs (parent, grandparent, ...) of this name;
+    # empty for simple names. Computed recursively; no side effects.
     """Returns all the symbols (simple or composite) that own this QN.
 
     In other words, if this symbol was modified, the symbols in the owner set
@@ -133,6 +191,11 @@ class QN(object):
 
   @property
   def support_set(self):
+    # [FUNCTION DOC]
+    # Property returning a new set of simple QNs the name depends on: for an attribute, the
+    # support of its parent; for a subscript, the support of the parent plus that of the index
+    # QN; for a simple name, the name itself. Note that a literal index is a simple QN and so is
+    # included as a member. May raise an attribute error if a subscript index is not a QN.
     """Returns the set of simple symbols that this QN relies on.
 
     This would be the smallest set of symbols necessary for the QN to
@@ -155,20 +218,33 @@ class QN(object):
     return roots
 
   def __hash__(self):
+    # [FUNCTION DOC]
+    # Returns a hash of the element tuple combined with the attribute and subscript flags,
+    # consistent with equality.
     return hash(self.qn + (self._has_attr, self._has_subscript))
 
   def __eq__(self, other):
+    # [FUNCTION DOC]
+    # Returns true if other is a QN with equal element tuple and the same attribute and
+    # subscript flags; false otherwise (including for non-QN values).
     return (isinstance(other, QN) and self.qn == other.qn and
             self.has_subscript() == other.has_subscript() and
             self.has_attr() == other.has_attr())
 
   def __lt__(self, other):
+    # [FUNCTION DOC]
+    # Orders QNs by comparing their text forms (string comparison); gives a stable sort order.
     return str(self) < str(other)
 
   def __gt__(self, other):
+    # [FUNCTION DOC]
+    # Greater-than counterpart of the less-than method, comparing text forms.
     return str(self) > str(other)
 
   def __str__(self):
+    # [FUNCTION DOC]
+    # Returns the source-like text: root[index] for subscripts, dotted names for attributes, or
+    # just the root for simple names.
     root = self.qn[0]
     if self.has_subscript():
       return '{}[{}]'.format(root, self.qn[1])
@@ -178,9 +254,15 @@ class QN(object):
       return str(root)
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns the same text as the text-conversion method.
     return str(self)
 
   def ssf(self):
+    # [FUNCTION DOC]
+    # Returns the "simple symbol form": a valid-identifier-like string joining the elements with
+    # an underscore for attributes, or a "_sub_" marker for subscripts, applied recursively to
+    # nested QNs. Pure; no side effects.
     """Simple symbol form."""
     ssfs = [n.ssf() if isinstance(n, QN) else n for n in self.qn]
     ssf_string = ''
@@ -193,6 +275,14 @@ class QN(object):
     return ssf_string + ssfs[-1]
 
   def ast(self):
+    # [FUNCTION DOC]
+    # Builds and returns a gast expression node equivalent to this name: a subscript node, an
+    # attribute node, a name node, or a constant node for literal bases. Nested parts are built
+    # recursively. The context field of name, attribute and subscript nodes is set to the
+    # CallerMustSetThis sentinel; callers must replace it with a real context.
+    # KNOWN ISSUE: for subscripts the index is converted via the index QN's own conversion, so a
+    # non-QN index would fail; the final branch is an unreachable assertion guarded by the
+    # constructor.
     """AST representation."""
     # The caller must adjust the context appropriately.
     if self.has_subscript():
@@ -216,17 +306,27 @@ class QN(object):
 
 
 class QnResolver(gast.NodeTransformer):
+  # [CLASS DOC]
+  # Tree transformer that attaches a QN annotation (under the basic QN annotation key) to name,
+  # attribute and subscript nodes, bottom-up so that child annotations exist when parents are
+  # processed. Stateless. Modifies nodes in place and returns them. Used through resolve.
   """Annotates nodes with QN information.
 
   Note: Not using NodeAnnos to avoid circular dependencies.
   """
 
   def visit_Name(self, node):
+    # [FUNCTION DOC]
+    # Visits children, then annotates the name node with a simple QN of its identifier.
+    # Returns the same node.
     node = self.generic_visit(node)
     anno.setanno(node, anno.Basic.QN, QN(node.id))
     return node
 
   def visit_Attribute(self, node):
+    # [FUNCTION DOC]
+    # Visits children, then, if the value expression carries a QN annotation, annotates this
+    # node with an attribute QN built on it. Otherwise leaves it unannotated. Returns the node.
     node = self.generic_visit(node)
     if anno.hasanno(node.value, anno.Basic.QN):
       anno.setanno(node, anno.Basic.QN,
@@ -234,6 +334,12 @@ class QnResolver(gast.NodeTransformer):
     return node
 
   def visit_Subscript(self, node):
+    # [FUNCTION DOC]
+    # Visits children, then annotates the node with a subscript QN when possible. Tuple and slice
+    # indices are silently skipped (node returned unannotated). A constant index (other than the
+    # ellipsis) becomes a literal QN; otherwise the index's own QN annotation is used, and if
+    # absent the node is left unannotated. The annotation is only set if the indexed value has a
+    # QN annotation. Returns the node.
     # TODO(mdan): This may no longer apply if we overload getitem.
     node = self.generic_visit(node)
     s = node.slice
@@ -257,10 +363,17 @@ class QnResolver(gast.NodeTransformer):
 
 
 def resolve(node):
+  # [FUNCTION DOC]
+  # Annotates the given syntax tree in place with qualified names using a QnResolver and returns
+  # the resulting root node.
   return QnResolver().visit(node)
 
 
 def from_str(qn_str):
+  # [FUNCTION DOC]
+  # Parses a string holding a single expression (such as a dotted or subscripted name), resolves
+  # qualified names on it and returns the QN annotation of the root. Raises whatever the parser
+  # raises on invalid text, or a missing-annotation error if the expression has no QN.
   node = parser.parse_expression(qn_str)
   node = resolve(node)
   return anno.getanno(node, anno.Basic.QN)

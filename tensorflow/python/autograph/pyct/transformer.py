@@ -12,6 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Base infrastructure for autograph source-code transformers. Provides: AnalysisLevel (which
+# static analyses have been run), Context (per-conversion information), EntityInfo (record about
+# the function or class being converted), private state-tracking helpers (_StateStack, _State),
+# NodeStateTracker (shared helpers: scoped state, block visiting, debug printing), Base (an AST
+# to AST transformer that tracks origin info and fixes expression wrappers) and CodeGenerator
+# (an AST to string visitor that builds a source map). Converters and analyses subclass these.
+# No import-time side effects.
 """A node transformer that includes utilities for SCT."""
 
 import collections
@@ -26,6 +34,10 @@ from tensorflow.python.autograph.pyct import templates
 
 
 class AnalysisLevel(enum.IntEnum):
+  # [CLASS DOC]
+  # Integer enumeration ordering the static analyses available on a tree: none, activity,
+  # definedness and liveness (0 to 3). Higher values imply the lower analyses were run. Pure
+  # constants, no behavior.
 
   NONE = 0
   ACTIVITY = 1
@@ -35,6 +47,11 @@ class AnalysisLevel(enum.IntEnum):
 
 # TODO(znado): Use namedtuple.
 class Context(object):
+  # [CLASS DOC]
+  # Mutable, non-thread-safe bag of information shared by a transformation pass. Attributes:
+  # info (immutable entity description), namer (generator of unique names), current_origin
+  # (origin info of the last successfully processed node, starts as nothing, maintained by the
+  # transformers for error reporting) and user (opaque user-supplied object passed through).
   """Contains information about a source code transformation.
 
   This object is mutable, and is updated during conversion. Not thread safe.
@@ -49,6 +66,9 @@ class Context(object):
   """
 
   def __init__(self, info, namer, user_context):
+    # [FUNCTION DOC]
+    # Stores the entity info, the name generator and the opaque user context, and initializes
+    # the current origin to nothing. Returns nothing.
     self.info = info
     self.namer = namer
     self.current_origin = None
@@ -61,6 +81,11 @@ class EntityInfo(
         'EntityInfo',
         ('name', 'source_code', 'source_file', 'future_features', 'namespace'))
 ):
+  # [CLASS DOC]
+  # Immutable named record describing a function or class being converted, with fields name,
+  # source_code, source_file, future_features (tuple of future-feature names the entity was
+  # compiled with) and namespace (mapping of symbols visible to the entity, excluding
+  # parameters). Adds no behavior.
   """Contains information about a Python entity.
 
   Immutable.
@@ -81,6 +106,13 @@ class EntityInfo(
 
 
 class _StateStack(object):
+  # [CLASS DOC]
+  # HELPER: implementation detail of the state tracking used by transformers (see _State).
+  # A stack of instances of one given type, usable as a context manager (entering pushes a new
+  # instance, leaving pops it). Attribute reads and writes on the stack object are forwarded to
+  # the instance at the top of the stack. If the type has a marker attribute meaning "no root",
+  # the stack starts empty; otherwise one instance is pushed at construction. Reading or writing
+  # attributes on an empty stack fails with an index error.
   """Templated context manager.
 
   This class provides syntactic sugar for a stack of objects of known
@@ -110,6 +142,10 @@ class _StateStack(object):
   """
 
   def __init__(self, type_):
+    # [FUNCTION DOC]
+    # HELPER: part of the state stack implementation.
+    # Records the element type and creates the empty internal list, bypassing the attribute
+    # forwarding. Unless the type declares it has no root, immediately pushes one instance.
     # Because we override __setattr__, we need to attach these attributes using
     # the superclass' setattr.
     object.__setattr__(self, 'type', type_)
@@ -118,41 +154,67 @@ class _StateStack(object):
       self.enter()
 
   def __enter__(self):
+    # [FUNCTION DOC]
+    # Context-manager entry: pushes a new instance and returns the stack object itself.
     self.enter()
     return self
 
   def __exit__(self, exc_type, exc_value, traceback):
+    # [FUNCTION DOC]
+    # Context-manager exit: pops the top instance. Exception details are ignored, so exceptions
+    # propagate. Returns nothing.
     self.exit()
 
   def enter(self):
+    # [FUNCTION DOC]
+    # Pushes a new default-constructed instance of the element type onto the stack.
     self._stack.append(self.type())
 
   def exit(self):
+    # [FUNCTION DOC]
+    # Pops the top instance. Fails with an index error if the stack is empty.
     self._stack.pop()
 
   @property
   def stack(self):
+    # [FUNCTION DOC]
+    # Property returning the underlying list (not a copy).
     return self._stack
 
   @property
   def level(self):
+    # [FUNCTION DOC]
+    # Property returning the current depth (number of instances on the stack).
     return len(self._stack)
 
   @property
   def value(self):
+    # [FUNCTION DOC]
+    # Property returning the instance at the top of the stack; index error if empty.
     return self._stack[-1]
 
   def __iter__(self):
+    # [FUNCTION DOC]
+    # Iterates over the instances from the bottom of the stack to the top.
     return iter(self._stack)
 
   def __getattr__(self, key):
+    # [FUNCTION DOC]
+    # Called for attributes not found normally; forwards the lookup to the top instance.
     return getattr(self._stack[-1], key)
 
   def __setattr__(self, key, value):
+    # [FUNCTION DOC]
+    # Forwards every attribute assignment to the instance at the top of the stack, so the stack
+    # object itself never gains attributes this way.
     setattr(self._stack[-1], key, value)
 
 
 class _State(object):
+  # [CLASS DOC]
+  # HELPER: container behind the state attribute of NodeStateTracker. Maps a type to a state
+  # stack of that type, creating the stack on first access, like a default-valued mapping.
+  # This allows independent scoped state per type during tree walks.
   """Syntactic sugar for accessing an instance of a StateStack context manager.
 
   This structure offers syntactic sugar over a dict of stacks of objects
@@ -185,15 +247,26 @@ class _State(object):
   """
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Creates the empty internal mapping from types to state stacks.
     self._value = {}
 
   def __getitem__(self, key):
+    # [FUNCTION DOC]
+    # Returns the state stack for the given type key, creating and storing a new one if absent.
     if key not in self._value:
       self._value[key] = _StateStack(key)
     return self._value[key]
 
 
 class NodeStateTracker(object):
+  # [CLASS DOC]
+  # Mixin-style base for code transformers and generators. Holds the conversion Context (ctx),
+  # an unused line/column pair, and a state container giving independent scoped state per type
+  # (see _State). Offers debugging printers and a block-visiting helper. Meant to be combined
+  # with a node visitor class (as Base and CodeGenerator do), since it relies on a visit method.
+  # KNOWN ISSUE: the docstring mentions enter/exit_local_scope and set/get_local, which do not
+  # exist here; scoped state is only available through the state attribute.
   """Base class for general-purpose Python code transformation.
 
   This abstract class provides helpful functions, like state tracking within
@@ -245,6 +318,9 @@ class NodeStateTracker(object):
   # TODO(mdan): Document all extra features.
 
   def __init__(self, ctx):
+    # [FUNCTION DOC]
+    # Stores the Context object (ctx) and creates the empty scoped-state container. Also sets
+    # two unused position counters to zero. Subclasses must call this. Returns nothing.
     """Initialize the transformer.
 
     Subclasses should call this.
@@ -264,18 +340,34 @@ class NodeStateTracker(object):
     self.state = _State()
 
   def debug_print(self, node):
+    # [FUNCTION DOC]
+    # HELPER: debugging aid. Prints a formatted dump of the tree to standard output (only when
+    # Python is not running with optimizations) and returns the node unchanged, so it can be
+    # wrapped around a return value.
     """Helper method useful for debugging. Prints the AST."""
     if __debug__:
       print(pretty_printer.fmt(node))
     return node
 
   def debug_print_src(self, node):
+    # [FUNCTION DOC]
+    # HELPER: debugging aid. Prints the node converted back to source code to standard output
+    # (only when not running with optimizations) and returns the node unchanged.
     """Helper method useful for debugging. Prints the AST as code."""
     if __debug__:
       print(parser.unparse(node))
     return node
 
   def visit_block(self, nodes, before_visit=None, after_visit=None):
+    # [FUNCTION DOC]
+    # Visits each statement of a block in order with the transformer's visit method and collects
+    # the results into a new list. nodes is an iterable of nodes (nothing returns nothing).
+    # before_visit (optional callback with no arguments) is called before each item.
+    # after_visit (optional callback taking the replacement node and returning a pair of new
+    # node and new destination list) is called after each non-empty replacement; a non-null
+    # destination redirects all following results to that list. Replacements may be single
+    # nodes or lists/tuples (flattened); empty results are dropped. Returns the results list,
+    # excluding nodes relocated by the callback.
     """A more powerful version of generic_visit for statement blocks.
 
     An example of a block is the body of an if statement.
@@ -354,6 +446,12 @@ class NodeStateTracker(object):
 
 # TODO(mdan): Rename to PythonCodeTransformer.
 class Base(NodeStateTracker, gast.NodeTransformer):
+  # [CLASS DOC]
+  # Base class for converters that rewrite a tree into another tree. Combines the state tracking
+  # helpers with the node transformer, and overrides visit to: validate that the input is a
+  # node, skip nodes flagged to skip processing, track the current origin in the context,
+  # collapse expression wrappers around replaced assignments, and give replacement nodes the
+  # origin info of the node they replaced. Instances are built with a Context.
   """Base class for general-purpose Python-to-Python code transformation.
 
   This is an extension of ast.NodeTransformer that provides the additional
@@ -361,6 +459,10 @@ class Base(NodeStateTracker, gast.NodeTransformer):
   """
 
   def create_assignment(self, target, expression):
+    # [FUNCTION DOC]
+    # Builds an assignment of expression to target from a template. target and expression are
+    # AST nodes, names or qualified names as accepted by the template replace function. Returns
+    # the list of nodes produced by that function.
     template = """
       target = expression
     """
@@ -368,6 +470,15 @@ class Base(NodeStateTracker, gast.NodeTransformer):
 
   # TODO(mdan): Remove.
   def apply_to_single_assignments(self, targets, values, apply_fn):
+    # [FUNCTION DOC]
+    # Breaks a possibly unpacking assignment into individual (target, value) pairs and calls
+    # apply_fn(target, value) for each; returns nothing. targets is a node or list/tuple of
+    # nodes; values is the assigned node; apply_fn is a two-argument callback. Tuple/list
+    # targets are recursed element-wise: if values is a tuple/list, the matching element is
+    # used (an index error if shorter), otherwise a subscript of values by position is
+    # synthesized. Other targets are passed through as they are.
+    # KNOWN ISSUE: the synthesized subscript uses a store context and a plain integer index
+    # rather than a constant node, which looks inconsistent for a value being read.
     """Applies a function to each individual assignment.
 
     This function can process a possibly-unpacked (e.g. a, b = c, d) assignment.
@@ -415,6 +526,15 @@ class Base(NodeStateTracker, gast.NodeTransformer):
         apply_fn(target, values)
 
   def visit(self, node):
+    # [FUNCTION DOC]
+    # Visits one node, wrapping the standard dispatch. Raises ValueError if node is not a tree
+    # node (e.g. a list; use the block visitor). Returns the node unchanged if it is flagged to
+    # skip processing. Otherwise sets the context's current origin from the node's origin
+    # annotation (restored afterwards, even on error), dispatches, and then: if an expression
+    # statement's value was replaced by a list, tuple or assignment, returns that replacement in
+    # place of the wrapper; and any result differing from the input that lacks origin info
+    # inherits the replaced node's origin (or the parent's). Returns the result, which may be a
+    # node, a list, or nothing.
     if not isinstance(node, gast.AST):
       # This is not that uncommon a mistake: various node bodies are lists, for
       # example, posing a land mine for transformers that need to recursively
@@ -472,6 +592,11 @@ class Base(NodeStateTracker, gast.NodeTransformer):
 
 
 class CodeGenerator(NodeStateTracker, gast.NodeVisitor):
+  # [CLASS DOC]
+  # Base class for generators that turn a tree into text. Holds an output buffer (read via
+  # code_buffer, appended via emit) and a source map from output ranges to origin info. Subclasses
+  # supply per-node handlers that emit text. The visit override tracks origin info and records
+  # the map entries.
   """Base class for general-purpose Python-to-string code transformation.
 
   Similar to Base, but outputs arbitrary strings instead of a Python AST.
@@ -501,19 +626,35 @@ class CodeGenerator(NodeStateTracker, gast.NodeVisitor):
   """
 
   def __init__(self, ctx):
+    # [FUNCTION DOC]
+    # Initializes the base tracker with the Context, then creates an empty output text buffer and
+    # an empty source map (mapping from output position pairs to origin info).
     super(CodeGenerator, self).__init__(ctx)
 
     self._output_code = ''
     self.source_map = {}
 
   def emit(self, code):
+    # [FUNCTION DOC]
+    # Appends the given text to the output buffer. Returns nothing.
     self._output_code += code
 
   @property
   def code_buffer(self):
+    # [FUNCTION DOC]
+    # Property returning all text emitted so far.
     return self._output_code
 
   def visit(self, node):
+    # [FUNCTION DOC]
+    # Visits one node and records origin info for the text it produced. Returns nothing at all
+    # for nodes flagged to skip processing. Otherwise sets the context's current origin from the
+    # node (restored afterwards, even on error), dispatches to the handler, and, if the buffer
+    # length changed, stores the node's (or inherited) origin in the source map keyed by the
+    # before and after buffer lengths. Returns the handler's result.
+    # KNOWN ISSUE: the key is stored as (length before, length after) but the change test uses
+    # the before minus the after difference, which is never positive-meaningful as a range check
+    # (it is nonzero whenever text was emitted, so it works only incidentally).
     if anno.hasanno(node, anno.Basic.SKIP_PROCESSING):
       return
 
