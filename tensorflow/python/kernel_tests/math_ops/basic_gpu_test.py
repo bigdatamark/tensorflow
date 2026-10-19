@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test module for basic element-wise math ops on a GPU device: binary ops compared with CPU
+# results, unary ops compared with numpy, broadcast-gradient arguments and division gradients,
+# and a multi-threaded multi-session GPU consistency test. No import-time side effects; running
+# as a script starts the test runner.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,8 +38,18 @@ from tensorflow.python.platform import test
 
 
 class GPUBinaryOpsTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case comparing binary element-wise math ops (add, subtract, multiply, divide, floor
+  # divide, power) computed on the GPU against the same ops on the CPU, for float32 and float64,
+  # with and without broadcasting.
 
   def _compareGPU(self, x, y, np_func, tf_func):
+    # [FUNCTION DOC]
+    # HELPER: shared comparator for the binary-op tests.
+    # KNOWN ISSUE: the np_func parameter is accepted but never used; the comparison is between
+    # the CPU and GPU results of the TensorFlow function, not against numpy.
+    # Converts x and y to tensors, applies tf_func in a default (GPU-capable) session and again
+    # in a CPU-only session, evaluates both and asserts the results are close. Returns nothing.
     with self.cached_session():
       inx = ops.convert_to_tensor(x)
       iny = ops.convert_to_tensor(y)
@@ -50,6 +65,10 @@ class GPUBinaryOpsTest(test.TestCase):
     self.assertAllClose(tf_cpu, tf_gpu)
 
   def testFloatBasic(self):
+    # [FUNCTION DOC]
+    # Compares CPU and GPU for add, subtract, multiply, true divide, floor divide and power on
+    # same-shaped float32 arrays of shape one by three by five (second operand offset by 0.1 for
+    # the division cases to avoid dividing by zero).
     x = np.linspace(-5, 20, 15).reshape(1, 3, 5).astype(np.float32)  # pylint: disable=too-many-function-args
     y = np.linspace(20, -5, 15).reshape(1, 3, 5).astype(np.float32)  # pylint: disable=too-many-function-args
     self._compareGPU(x, y, np.add, math_ops.add)
@@ -60,6 +79,9 @@ class GPUBinaryOpsTest(test.TestCase):
     self._compareGPU(x, y, np.power, math_ops.pow)
 
   def testFloatWithBCast(self):
+    # [FUNCTION DOC]
+    # Compares CPU and GPU for add, subtract, multiply and true divide on float32 operands of
+    # shapes three by five and two by three by five, exercising broadcasting.
     x = np.linspace(-5, 20, 15).reshape(3, 5).astype(np.float32)
     y = np.linspace(20, -5, 30).reshape(2, 3, 5).astype(np.float32)  # pylint: disable=too-many-function-args
     self._compareGPU(x, y, np.add, math_ops.add)
@@ -68,6 +90,9 @@ class GPUBinaryOpsTest(test.TestCase):
     self._compareGPU(x, y + 0.1, np.true_divide, math_ops.truediv)
 
   def testDoubleBasic(self):
+    # [FUNCTION DOC]
+    # Same-shape float64 CPU versus GPU comparison for add, subtract, multiply and true divide.
+    # Unlike the float32 test, floor divide and power are not covered.
     x = np.linspace(-5, 20, 15).reshape(1, 3, 5).astype(np.float64)  # pylint: disable=too-many-function-args
     y = np.linspace(20, -5, 15).reshape(1, 3, 5).astype(np.float64)  # pylint: disable=too-many-function-args
     self._compareGPU(x, y, np.add, math_ops.add)
@@ -76,6 +101,9 @@ class GPUBinaryOpsTest(test.TestCase):
     self._compareGPU(x, y + 0.1, np.true_divide, math_ops.truediv)
 
   def testDoubleWithBCast(self):
+    # [FUNCTION DOC]
+    # Broadcasting float64 CPU versus GPU comparison (three by five with two by three by five)
+    # for add, subtract, multiply and true divide.
     x = np.linspace(-5, 20, 15).reshape(3, 5).astype(np.float64)
     y = np.linspace(20, -5, 30).reshape(2, 3, 5).astype(np.float64)  # pylint: disable=too-many-function-args
     self._compareGPU(x, y, np.add, math_ops.add)
@@ -85,8 +113,15 @@ class GPUBinaryOpsTest(test.TestCase):
 
 
 class MathBuiltinUnaryTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case verifying that unary math ops (trig, hyperbolic, exp/log, rounding, sqrt, etc.)
+  # run on the GPU produce results matching numpy, plus a floor-divide check.
 
   def _compare(self, x, np_func, tf_func, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: applies the numpy function to x for the expected value, applies the TensorFlow
+    # function to a tensor made from x inside a session (on GPU if use_gpu is true), and asserts
+    # the results are close. Returns nothing. The session handle variable is unused.
     np_out = np_func(x)
     with self.cached_session(use_gpu=use_gpu) as sess:
       inx = ops.convert_to_tensor(x)
@@ -95,12 +130,23 @@ class MathBuiltinUnaryTest(test.TestCase):
     self.assertAllClose(np_out, tf_out)
 
   def _inv(self, x):
+    # [FUNCTION DOC]
+    # HELPER: numpy-side reciprocal used to build the reference for reciprocal square root.
+    # Returns one divided by x element-wise.
     return 1.0 / x
 
   def _rsqrt(self, x):
+    # [FUNCTION DOC]
+    # HELPER: numpy-side reference for reciprocal square root; returns the reciprocal of the
+    # element-wise square root of x.
     return self._inv(np.sqrt(x))
 
   def _testDtype(self, dtype, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: builds a small array of the given numpy dtype with values from minus three
+    # quarters to one half, plus a copy shifted up by two for ops needing inputs above one
+    # (inverse hyperbolic cosine), and compares about twenty-two unary ops against numpy via the
+    # comparison helper, on GPU when use_gpu is true. Returns nothing.
     data = (np.arange(-3, 3) / 4.).reshape([1, 3, 2]).astype(dtype)
     data_gt_1 = data + 2 # for x > 1
     self._compare(data, np.abs, math_ops.abs, use_gpu)
@@ -127,10 +173,16 @@ class MathBuiltinUnaryTest(test.TestCase):
     self._compare(data, np.arctanh, math_ops.atanh, use_gpu)
 
   def testTypes(self):
+    # [FUNCTION DOC]
+    # Runs the unary-op comparison on the GPU for float32 only (the loop covers a single type).
     for dtype in [np.float32]:
       self._testDtype(dtype, use_gpu=True)
 
   def testFloorDivide(self):
+    # [FUNCTION DOC]
+    # Builds two identical float32 arrays, divides one by the other plus 0.1 using the division
+    # operator, takes the floor with the floor op, and asserts the result is close to numpy's
+    # floor divide.
     x = (1 + np.linspace(0, 5, np.prod([1, 3, 2]))).astype(np.float32).reshape(
         [1, 3, 2])
     y = (1 + np.linspace(0, 5, np.prod([1, 3, 2]))).astype(np.float32).reshape(
@@ -149,11 +201,20 @@ class MathBuiltinUnaryTest(test.TestCase):
 
 
 class BroadcastSimpleTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for broadcast-gradient reduction indices and for gradients and GPU results of
+  # division ops under broadcasting-compatible shapes. Holds a per-dtype gradient tolerance.
 
   def _GetGradientArgs(self, xs, ys):
+    # [FUNCTION DOC]
+    # HELPER: evaluates the broadcast gradient args op for two shapes (lists of dimension sizes)
+    # and returns the pair of reduction-index arrays for the first and second operand.
     return self.evaluate(broadcast_gradient_args(xs, ys))
 
   def testBroadcast(self):
+    # [FUNCTION DOC]
+    # Asks for gradient reduction indices for shapes two by three by five and one; asserts the
+    # first has none and the second reduces over all three axes.
     r0, r1 = self._GetGradientArgs([2, 3, 5], [1])
     self.assertAllEqual(r0, [])
     self.assertAllEqual(r1, [0, 1, 2])
@@ -161,6 +222,11 @@ class BroadcastSimpleTest(test.TestCase):
   _GRAD_TOL = {dtypes.float32: 1e-3}
 
   def _compareGpu(self, x, y, np_func, tf_func):
+    # [FUNCTION DOC]
+    # HELPER: computes the expected answer with the numpy function, evaluates the TensorFlow
+    # function on tensors made from x and y in a default session, and asserts the values are
+    # close and the static shape matches. Returns nothing. A TODO notes the gradient checker
+    # does not yet work on GPU.
     np_ans = np_func(x, y)
     with self.cached_session():
       inx = ops.convert_to_tensor(x)
@@ -172,15 +238,26 @@ class BroadcastSimpleTest(test.TestCase):
     # TODO(zhifengc/ke): make gradient checker work on GPU.
 
   def testGradient(self):
+    # [FUNCTION DOC]
+    # Numerically checks the gradient of true division (scaled by 1.1) with respect to each
+    # operand, using the v2 gradient checker, asserting the max error stays below the float32
+    # tolerance. Then compares true divide and floor divide results against numpy via the GPU
+    # comparison helper.
     x1 = (1 + np.linspace(0, 5, np.prod([1, 3, 2]))).astype(np.float32).reshape(
         [1, 3, 2])
     x2 = (1 + np.linspace(0, 5, np.prod([1, 3, 2]))).astype(np.float32).reshape(
         [1, 3, 2])
 
     def div_x1(x1):
+      # [FUNCTION DOC]
+      # HELPER: function of the first operand used by the gradient checker; divides it by the
+      # enclosing second operand and scales by 1.1 cast to the input dtype.
       return math_ops.truediv(x1, x2) * math_ops.cast(1.1, dtype=x1.dtype)
 
     def div_x2(x2):
+      # [FUNCTION DOC]
+      # HELPER: function of the second operand used by the gradient checker; divides the
+      # enclosing first operand by it and scales by 1.1 cast to the input dtype.
       return math_ops.truediv(x1, x2) * math_ops.cast(1.1, dtype=x2.dtype)
 
     with self.cached_session():
@@ -197,9 +274,19 @@ class BroadcastSimpleTest(test.TestCase):
 
 
 class GpuMultiSessionMemoryTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case checking that several graph-mode sessions running concurrently in threads on the
+  # same GPU produce identical numerical results (no memory corruption between sessions).
   """Tests concurrent sessions executing on the same GPU."""
 
   def _run_session(self, session, results):
+    # [FUNCTION DOC]
+    # HELPER: thread body for the concurrency test. Using the given session (entered as a
+    # context), creates a variable and two random matrices pinned to the first GPU, builds a
+    # chain of multiplications and a transpose product, initializes variables, and runs the
+    # final op up to 500 times. Adds the first element of each result to the given set and stops
+    # early once the set holds more than one distinct value. Mutates the results set; returns
+    # nothing. Sets the global random seed to 1 inside the thread.
     n_iterations = 500
     with session as s:
       data = variables.Variable(1.0)
@@ -222,6 +309,11 @@ class GpuMultiSessionMemoryTest(test_util.TensorFlowTestCase):
 
   @test_util.run_v1_only('b/126596827 needs graph mode in multiple threads')
   def testConcurrentSessions(self):
+    # [FUNCTION DOC]
+    # Graph-mode only test (skipped otherwise, bug reference about multi-threaded graph mode).
+    # Starts four threads, each with its own graph and GPU session and its own result set, runs
+    # the session helper in each, joins them, and asserts the union of all observed values has
+    # exactly one element, i.e. every session got the same number.
     n_threads = 4
     threads = []
     results = []
