@@ -1,3 +1,18 @@
+# [MODULE DOC]
+# Utilities for converting between Python/numpy values and TensorProto messages, and for statically
+# evaluating graph tensors. Exposes make_tensor_proto (values to proto), MakeNdarray (proto to numpy),
+# ShapeEquals, constant_value / constant_value_as_shape (best-effort static evaluation of symbolic
+# tensors, with an internal per-op-type evaluator), is_tf_type (public name is_tensor) and
+# try_evaluate_constant. Also holds per-dtype helpers that append numpy data to the typed value fields
+# of a TensorProto, in a fast (compiled extension) or slow (pure Python) variant, and a table mapping
+# numpy dtypes to the right append function, plus validation helpers that check Python values against
+# a target dtype.
+# Import-time side effects: tries to import the compiled fast_tensor_util extension and records
+# availability in a module flag; builds the dtype-to-append-function table (fast or slow variant);
+# registers public functions for export via the TensorFlow export decorator.
+# KNOWN ISSUE: when the fast extension is missing, the fallback append table has no entries for the
+# fnuz and b11 float8 types even though slow append functions exist for them, so small (single
+# element) arrays of those dtypes fail with an unsupported-element-type error.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -44,16 +59,29 @@ except ImportError:
 
 
 def ExtractBitsFromFloat16(x):
+  # [FUNCTION DOC]
+  # HELPER: converts a float16 value into the raw bits used by the slow proto-append path.
+  # Converts one value to a 16-bit float, reinterprets its bits as an unsigned 16-bit integer and
+  # returns it as a Python integer. Input is any value convertible to float16. No side effects.
   return numpy_compat.np_asarray(x, np.float16).view(np.uint16).item()
 
 
 def SlowAppendFloat16ArrayToTensorProto(tensor_proto, proto_values):
+  # [FUNCTION DOC]
+  # HELPER: pure-Python fallback used when filling a tensor proto from float16 data.
+  # Extends the proto's half-precision value field with the raw 16-bit pattern of each element of
+  # the given iterable of values. Mutates the proto; returns nothing.
   tensor_proto.half_val.extend(
       [ExtractBitsFromFloat16(x) for x in proto_values]
   )
 
 
 def _MediumAppendFloat16ArrayToTensorProto(tensor_proto, proto_values):
+  # [FUNCTION DOC]
+  # HELPER: fast-path appender for float16 data used when the compiled extension is available.
+  # Converts the values to a float16 numpy array, views it as unsigned 16-bit integers (the compiled
+  # appender does not accept float16 directly) and hands it to the extension, which fills the proto's
+  # half-precision field. Mutates the proto; returns nothing.
   # TODO: Remove the conversion if cython supports np.float16_t
   fast_tensor_util.AppendFloat16ArrayToTensorProto(
       tensor_proto,
@@ -61,23 +89,39 @@ def _MediumAppendFloat16ArrayToTensorProto(tensor_proto, proto_values):
 
 
 def ExtractBitsFromBFloat16(x):
+  # [FUNCTION DOC]
+  # HELPER: converts a bfloat16 value into raw bits for the slow proto-append path.
+  # Converts one value to bfloat16, reinterprets its bits as an unsigned 16-bit integer and returns
+  # it as a Python integer. No side effects.
   return numpy_compat.np_asarray(
       x, dtype=dtypes.bfloat16.as_numpy_dtype).view(np.uint16).item()
 
 
 def SlowAppendBFloat16ArrayToTensorProto(tensor_proto, proto_values):
+  # [FUNCTION DOC]
+  # HELPER: pure-Python fallback for filling a tensor proto from bfloat16 data.
+  # Extends the proto's half-precision value field with the raw 16-bit pattern of each value.
+  # Mutates the proto; returns nothing.
   tensor_proto.half_val.extend(
       [ExtractBitsFromBFloat16(x) for x in proto_values]
   )
 
 
 def FastAppendBFloat16ArrayToTensorProto(tensor_proto, proto_values):
+  # [FUNCTION DOC]
+  # HELPER: fast-path appender for bfloat16 data (requires the compiled extension).
+  # Converts values to a bfloat16 array, views the bits as unsigned 16-bit integers and passes them
+  # to the extension's bfloat16 appender. Mutates the proto; returns nothing.
   fast_tensor_util.AppendBFloat16ArrayToTensorProto(
       tensor_proto, numpy_compat.np_asarray(
           proto_values, dtype=dtypes.bfloat16.as_numpy_dtype).view(np.uint16))
 
 
 def SlowAppendFloat8e5m2ArrayToTensorProto(tensor_proto, proto_values):
+  # [FUNCTION DOC]
+  # HELPER: pure-Python fallback for filling a tensor proto from float8 (5-bit exponent, 2-bit
+  # mantissa) data. Converts values to that dtype, views them as bytes and appends the raw bytes to
+  # the proto's float8 byte-string field. Mutates the proto; returns nothing.
   tensor_proto.float8_val += (
       numpy_compat.np_asarray(
           proto_values, dtype=dtypes.float8_e5m2.as_numpy_dtype)
@@ -87,6 +131,10 @@ def SlowAppendFloat8e5m2ArrayToTensorProto(tensor_proto, proto_values):
 
 
 def FastAppendFloat8e5m2ArrayToTensorProto(tensor_proto, proto_values):
+  # [FUNCTION DOC]
+  # HELPER: fast-path appender for float8 e5m2 data. Converts values to the dtype, views the bytes
+  # as unsigned 8-bit integers and calls the shared compiled float8 appender. Mutates the proto;
+  # returns nothing.
   fast_tensor_util.AppendFloat8ArrayToTensorProto(
       tensor_proto,
       numpy_compat.np_asarray(
@@ -94,6 +142,9 @@ def FastAppendFloat8e5m2ArrayToTensorProto(tensor_proto, proto_values):
 
 
 def SlowAppendFloat8e4m3fnArrayToTensorProto(tensor_proto, proto_values):
+  # [FUNCTION DOC]
+  # HELPER: pure-Python fallback for float8 e4m3fn data. Converts values to that dtype and appends
+  # their raw bytes to the proto's float8 byte-string field. Mutates the proto; returns nothing.
   tensor_proto.float8_val += (
       numpy_compat.np_asarray(
           proto_values, dtype=dtypes.float8_e4m3fn.as_numpy_dtype)
@@ -103,6 +154,10 @@ def SlowAppendFloat8e4m3fnArrayToTensorProto(tensor_proto, proto_values):
 
 
 def FastAppendFloat8e4m3fnArrayToTensorProto(tensor_proto, proto_values):
+  # [FUNCTION DOC]
+  # HELPER: fast-path appender for float8 e4m3fn data. Converts values to the dtype, views the bytes
+  # as unsigned 8-bit integers and calls the compiled float8 appender. Mutates the proto; returns
+  # nothing.
   fast_tensor_util.AppendFloat8ArrayToTensorProto(
       tensor_proto,
       numpy_compat.np_asarray(
@@ -111,6 +166,11 @@ def FastAppendFloat8e4m3fnArrayToTensorProto(tensor_proto, proto_values):
 
 
 def SlowAppendFloat8e4m3fnuzArrayToTensorProto(tensor_proto, proto_values):
+  # [FUNCTION DOC]
+  # HELPER: pure-Python fallback appender for float8 e4m3fnuz data.
+  # KNOWN ISSUE: never registered in the slow-path dtype table, so it is unused.
+  # Converts values to that dtype and appends
+  # the raw bytes to the proto's float8 byte-string field. Mutates the proto; returns nothing.
   tensor_proto.float8_val += (
       numpy_compat.np_asarray(
           proto_values, dtype=dtypes.float8_e4m3fnuz.as_numpy_dtype
@@ -121,6 +181,10 @@ def SlowAppendFloat8e4m3fnuzArrayToTensorProto(tensor_proto, proto_values):
 
 
 def FastAppendFloat8e4m3fnuzArrayToTensorProto(tensor_proto, proto_values):
+  # [FUNCTION DOC]
+  # HELPER: fast-path appender for float8 e4m3fnuz data. Converts values to the dtype, views bytes
+  # as unsigned 8-bit integers and calls the compiled float8 appender. Mutates the proto; returns
+  # nothing.
   fast_tensor_util.AppendFloat8ArrayToTensorProto(
       tensor_proto,
       numpy_compat.np_asarray(
@@ -130,6 +194,11 @@ def FastAppendFloat8e4m3fnuzArrayToTensorProto(tensor_proto, proto_values):
 
 
 def SlowAppendFloat8e4m3b11fnuzArrayToTensorProto(tensor_proto, proto_values):
+  # [FUNCTION DOC]
+  # HELPER: pure-Python fallback appender for float8 e4m3b11fnuz data.
+  # KNOWN ISSUE: never registered in the slow-path dtype table, so it is unused.
+  # Converts values to that dtype and
+  # appends the raw bytes to the proto's float8 byte-string field. Mutates the proto; returns nothing.
   tensor_proto.float8_val += (
       numpy_compat.np_asarray(
           proto_values, dtype=dtypes.float8_e4m3b11fnuz.as_numpy_dtype
@@ -140,6 +209,10 @@ def SlowAppendFloat8e4m3b11fnuzArrayToTensorProto(tensor_proto, proto_values):
 
 
 def FastAppendFloat8e4m3b11fnuzArrayToTensorProto(tensor_proto, proto_values):
+  # [FUNCTION DOC]
+  # HELPER: fast-path appender for float8 e4m3b11fnuz data. Converts values to the dtype, views bytes
+  # as unsigned 8-bit integers and calls the compiled float8 appender. Mutates the proto; returns
+  # nothing.
   fast_tensor_util.AppendFloat8ArrayToTensorProto(
       tensor_proto,
       numpy_compat.np_asarray(
@@ -149,6 +222,11 @@ def FastAppendFloat8e4m3b11fnuzArrayToTensorProto(tensor_proto, proto_values):
 
 
 def SlowAppendFloat8e5m2fnuzArrayToTensorProto(tensor_proto, proto_values):
+  # [FUNCTION DOC]
+  # HELPER: pure-Python fallback appender for float8 e5m2fnuz data.
+  # KNOWN ISSUE: never registered in the slow-path dtype table, so it is unused.
+  # Converts values to that dtype and appends
+  # the raw bytes to the proto's float8 byte-string field. Mutates the proto; returns nothing.
   tensor_proto.float8_val += (
       numpy_compat.np_asarray(
           proto_values, dtype=dtypes.float8_e5m2fnuz.as_numpy_dtype
@@ -159,6 +237,10 @@ def SlowAppendFloat8e5m2fnuzArrayToTensorProto(tensor_proto, proto_values):
 
 
 def FastAppendFloat8e5m2fnuzArrayToTensorProto(tensor_proto, proto_values):
+  # [FUNCTION DOC]
+  # HELPER: fast-path appender for float8 e5m2fnuz data. Converts values to the dtype, views bytes
+  # as unsigned 8-bit integers and calls the compiled float8 appender. Mutates the proto; returns
+  # nothing.
   fast_tensor_util.AppendFloat8ArrayToTensorProto(
       tensor_proto,
       numpy_compat.np_asarray(
@@ -168,6 +250,10 @@ def FastAppendFloat8e5m2fnuzArrayToTensorProto(tensor_proto, proto_values):
 
 
 def SlowAppendFloat4e2m1fnArrayToTensorProto(tensor_proto, proto_values):
+  # [FUNCTION DOC]
+  # HELPER: pure-Python fallback for 4-bit float (e2m1fn) data. Converts values to that dtype and
+  # appends their raw bytes to the proto's float8 byte-string field (one byte per element). Mutates
+  # the proto; returns nothing.
   tensor_proto.float8_val += (
       numpy_compat.np_asarray(
           proto_values, dtype=dtypes.float4_e2m1fn.as_numpy_dtype)
@@ -177,6 +263,10 @@ def SlowAppendFloat4e2m1fnArrayToTensorProto(tensor_proto, proto_values):
 
 
 def FastAppendFloat4e2m1fnArrayToTensorProto(tensor_proto, proto_values):
+  # [FUNCTION DOC]
+  # HELPER: fast-path appender for 4-bit float (e2m1fn) data. Converts values to the dtype, views
+  # bytes as unsigned 8-bit integers and reuses the compiled float8 appender (which the inline note
+  # says needs a matching native binding). Mutates the proto; returns nothing.
   # Note: This requires a corresponding C++ binding in
   # fast_tensor_util.AppendFloat8ArrayToTensorProto
   fast_tensor_util.AppendFloat8ArrayToTensorProto(
@@ -188,6 +278,11 @@ def FastAppendFloat4e2m1fnArrayToTensorProto(tensor_proto, proto_values):
 
 
 def SlowAppendInt4ArrayToTensorProto(tensor_proto, proto_values):
+  # [FUNCTION DOC]
+  # HELPER: appender for signed 4-bit integer data (used by both fast and slow tables).
+  # Converts values to the 4-bit dtype, widens each to a signed 8-bit integer (the bit layout of the
+  # narrow type is implementation-defined) and extends the proto's integer value field with them.
+  # Mutates the proto; returns nothing.
   # The actual bit representation of int4 as a bit-field is
   # implementation-defined, so we need to explicitly cast each
   # value to an int for packing.
@@ -197,6 +292,10 @@ def SlowAppendInt4ArrayToTensorProto(tensor_proto, proto_values):
 
 
 def SlowAppendUInt4ArrayToTensorProto(tensor_proto, proto_values):
+  # [FUNCTION DOC]
+  # HELPER: appender for unsigned 4-bit integer data (used by both fast and slow tables).
+  # Converts values to the unsigned 4-bit dtype, casts to signed 8-bit integers and extends the
+  # proto's integer value field. Mutates the proto; returns nothing.
   # The actual bit representation of int4 as a bit-field is
   # implementation-defined, so we need to explicitly cast each
   # value to an int for packing.
@@ -206,6 +305,10 @@ def SlowAppendUInt4ArrayToTensorProto(tensor_proto, proto_values):
 
 
 def SlowAppendInt2ArrayToTensorProto(tensor_proto, proto_values):
+  # [FUNCTION DOC]
+  # HELPER: appender for signed 2-bit integer data. Converts values to the 2-bit dtype, casts each to
+  # a signed 8-bit integer and extends the proto's integer value field. Mutates the proto; returns
+  # nothing.
   # The actual bit representation of int2 as a bit-field is
   # implementation-defined, so we need to explicitly cast each
   # value to an int for packing.
@@ -215,6 +318,10 @@ def SlowAppendInt2ArrayToTensorProto(tensor_proto, proto_values):
 
 
 def SlowAppendUInt2ArrayToTensorProto(tensor_proto, proto_values):
+  # [FUNCTION DOC]
+  # HELPER: appender for unsigned 2-bit integer data. Converts values to the unsigned 2-bit dtype,
+  # casts each to a signed 8-bit integer and extends the proto's integer value field. Mutates the
+  # proto; returns nothing.
   # The actual bit representation of int2 as a bit-field is
   # implementation-defined, so we need to explicitly cast each
   # value to an int for packing.
@@ -280,38 +387,75 @@ if _FAST_TENSOR_UTIL_AVAILABLE:
 else:
 
   def SlowAppendFloat32ArrayToTensorProto(tensor_proto, proto_values):
+    # [FUNCTION DOC]
+    # HELPER: fallback (defined only without the compiled extension) that extends the proto's float
+    # value field with the Python number of each numpy element. Mutates the proto; returns nothing.
     tensor_proto.float_val.extend([x.item() for x in proto_values])
 
   def SlowAppendFloat64ArrayToTensorProto(tensor_proto, proto_values):
+    # [FUNCTION DOC]
+    # HELPER: fallback (only without the compiled extension) that extends the proto's double value
+    # field with the Python number of each numpy element. Mutates the proto; returns nothing.
     tensor_proto.double_val.extend([x.item() for x in proto_values])
 
   def SlowAppendIntArrayToTensorProto(tensor_proto, proto_values):
+    # [FUNCTION DOC]
+    # HELPER: fallback (only without the compiled extension) for 8/16/32-bit integer data; extends the
+    # proto's integer value field with each element as a Python number. Mutates the proto.
     tensor_proto.int_val.extend([x.item() for x in proto_values])
 
   def SlowAppendInt64ArrayToTensorProto(tensor_proto, proto_values):
+    # [FUNCTION DOC]
+    # HELPER: fallback (only without the compiled extension) that extends the proto's 64-bit integer
+    # field with each element as a Python number. Mutates the proto; returns nothing.
     tensor_proto.int64_val.extend([x.item() for x in proto_values])
 
   def SlowAppendQIntArrayToTensorProto(tensor_proto, proto_values):
+    # [FUNCTION DOC]
+    # HELPER: fallback (only without the compiled extension) for quantized integer data. Each element
+    # is a one-field record; its first field is appended to the proto's integer value field. Mutates
+    # the proto; returns nothing.
     tensor_proto.int_val.extend([x.item()[0] for x in proto_values])
 
   def SlowAppendUInt32ArrayToTensorProto(tensor_proto, proto_values):
+    # [FUNCTION DOC]
+    # HELPER: fallback (only without the compiled extension) that extends the proto's unsigned 32-bit
+    # field with each element as a Python number. Mutates the proto; returns nothing.
     tensor_proto.uint32_val.extend([x.item() for x in proto_values])
 
   def SlowAppendUInt64ArrayToTensorProto(tensor_proto, proto_values):
+    # [FUNCTION DOC]
+    # HELPER: fallback (only without the compiled extension) that extends the proto's unsigned 64-bit
+    # field with each element as a Python number. Mutates the proto; returns nothing.
     tensor_proto.uint64_val.extend([x.item() for x in proto_values])
 
   def SlowAppendComplex64ArrayToTensorProto(tensor_proto, proto_values):
+    # [FUNCTION DOC]
+    # HELPER: fallback (only without the compiled extension) for complex64 data. Appends the real and
+    # imaginary part of each element, interleaved, to the proto's single-precision complex field.
+    # Mutates the proto; returns nothing.
     tensor_proto.scomplex_val.extend(
         [v.item() for x in proto_values for v in [x.real, x.imag]])
 
   def SlowAppendComplex128ArrayToTensorProto(tensor_proto, proto_values):
+    # [FUNCTION DOC]
+    # HELPER: fallback (only without the compiled extension) for complex128 data. Appends real and
+    # imaginary parts of each element, interleaved, to the proto's double-precision complex field.
+    # Mutates the proto; returns nothing.
     tensor_proto.dcomplex_val.extend(
         [v.item() for x in proto_values for v in [x.real, x.imag]])
 
   def SlowAppendObjectArrayToTensorProto(tensor_proto, proto_values):
+    # [FUNCTION DOC]
+    # HELPER: fallback (only without the compiled extension) for string/object data. Converts each
+    # element to bytes (text is encoded) and extends the proto's string value field. May raise a type
+    # error if an element cannot be converted. Mutates the proto; returns nothing.
     tensor_proto.string_val.extend([compat.as_bytes(x) for x in proto_values])
 
   def SlowAppendBoolArrayToTensorProto(tensor_proto, proto_values):
+    # [FUNCTION DOC]
+    # HELPER: fallback (only without the compiled extension) that extends the proto's boolean value
+    # field with each element as a Python bool. Mutates the proto; returns nothing.
     tensor_proto.bool_val.extend([x.item() for x in proto_values])
 
   _NP_TO_APPEND_FN = {
@@ -351,6 +495,11 @@ else:
 
 
 def GetFromNumpyDTypeDict(dtype_dict, dtype):
+  # [FUNCTION DOC]
+  # HELPER: dtype lookup for the append-function table.
+  # Scans the mapping from numpy dtypes to values linearly and returns the value whose key compares
+  # equal to the requested dtype, or nothing if none matches. A plain dictionary lookup is not used
+  # because (per the inline note) it would always miss for these keys. No side effects.
   # NOTE: dtype_dict.get(dtype) always returns None.
   for key, val in dtype_dict.items():
     if key == dtype:
@@ -359,6 +508,11 @@ def GetFromNumpyDTypeDict(dtype_dict, dtype):
 
 
 def GetNumpyAppendFn(dtype):
+  # [FUNCTION DOC]
+  # HELPER: selects the function used to copy numpy data into a TensorProto value field.
+  # Input is a numpy dtype. Any bytes or text dtype (variable length) maps to the object appender
+  # (fast or slow variant depending on extension availability); otherwise the module table is
+  # consulted. Returns the append function, or nothing if the dtype is unsupported. No side effects.
   # numpy dtype for strings are variable length. We can not compare
   # dtype with a single constant (np.string does not exist) to decide
   # dtype is a "string" type. We need to compare the dtype.type to be
@@ -372,6 +526,11 @@ def GetNumpyAppendFn(dtype):
 
 
 def TensorShapeProtoToList(shape):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it converts a TensorShape, but it expects a shape proto message
+  # (it reads the dimension list of the message), not a TensorShape object.
+  # Returns a list with the size of each dimension of the given shape proto (unknown dimensions
+  # appear as their stored size, normally negative one). No side effects.
   """Convert a TensorShape to a list.
 
   Args:
@@ -384,6 +543,11 @@ def TensorShapeProtoToList(shape):
 
 
 def _GetDenseDimensions(list_of_lists):
+  # [FUNCTION DOC]
+  # HELPER: shape inference for make_tensor_proto.
+  # Recursively infers dimensions of nested lists/tuples by taking the length at each level and
+  # descending into the first element. Non-sequence input gives an empty list; an empty sequence
+  # gives a single zero. Does not verify raggedness. Returns a list of integers.
   """Returns the inferred dense dimensions of a list of lists."""
   if not isinstance(list_of_lists, (list, tuple)):
     return []
@@ -394,6 +558,10 @@ def _GetDenseDimensions(list_of_lists):
 
 
 def _FlattenToStrings(nested_strings):
+  # [FUNCTION DOC]
+  # HELPER: flattening of nested lists/tuples of strings for make_tensor_proto.
+  # Generator that yields every leaf element of arbitrarily nested lists or tuples in order; a
+  # non-sequence input yields itself once.
   if isinstance(nested_strings, (list, tuple)):
     for inner in nested_strings:
       for flattened_string in _FlattenToStrings(inner):
@@ -432,12 +600,19 @@ _TENSOR_CONTENT_TYPES = frozenset([
 
 # pylint: disable=invalid-name
 def _check_failed(v):
+  # [FUNCTION DOC]
+  # HELPER: signals a value-type mismatch in the dtype checkers.
+  # Always raises a value error carrying the offending value (callers convert it to a type error).
   # NB. none of the _check_* functions could raise a ValueError, so
   # it is safe to use here.
   raise ValueError(v)
 
 
 def _check_quantized(values):
+  # [FUNCTION DOC]
+  # HELPER: validator for quantized dtypes. Values must be nested lists/tuples whose innermost
+  # level is a tuple of integers (nest is not used because leaves are tuples). Raises a value error
+  # via the failure helper for non-sequences or non-integer leaves. Returns nothing.
   # Cannot rely on `nest` because the leaves are tuples.
   if not isinstance(values, (list, tuple)):
     _check_failed(values)
@@ -448,7 +623,15 @@ def _check_quantized(values):
 
 
 def _generate_isinstance_check(expected_types):
+  # [FUNCTION DOC]
+  # HELPER: factory for the per-dtype validators.
+  # Takes a type or tuple of types and returns a checking function. The returned function flattens
+  # its input and raises a value error (via the failure helper) for any leaf that is neither an
+  # instance of those types nor a numpy array whose element type is a subclass of them.
   def inner(values):
+    # [FUNCTION DOC]
+    # HELPER: the validator returned by the checker factory. Flattens the given nested values and
+    # raises a value error for the first leaf that is not an acceptable type; returns nothing.
     for v in nest.flatten(values):
       if not (isinstance(v, expected_types) or
               (isinstance(v, np.ndarray) and
@@ -466,6 +649,9 @@ _check_bool = _generate_isinstance_check(bool)
 
 
 def _check_not_tensor(values):
+  # [FUNCTION DOC]
+  # HELPER: validator used when no dtype is given. Raises a value error (through the failure
+  # helper) for any symbolic tensor leaf found in the flattened values; returns nothing.
   _ = [_check_failed(v) for v in nest.flatten(values)
        if isinstance(v, core.Symbol)]
 # pylint: enable=invalid-name
@@ -495,6 +681,12 @@ _TF_TO_IS_OK = {
 
 
 def _AssertCompatible(values, dtype):
+  # [FUNCTION DOC]
+  # HELPER: type validation step of make_tensor_proto.
+  # Picks a validator for the dtype (exact table entry, else by integer/floating/complex/quantized
+  # category, else the no-tensor check; with no dtype it forbids symbolic tensors) and runs it on the
+  # values. Raises a type error describing the expected dtype and the offending element and its
+  # type, or a message that a tensor was found when no dtype was given. Returns nothing.
   if dtype is None:
     fn = _check_not_tensor
   else:
@@ -525,6 +717,11 @@ def _AssertCompatible(values, dtype):
 
 
 def _is_array_like(obj):  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # HELPER: array detection for make_tensor_proto.
+  # Returns false for symbolic tensors (which define the array hook only to report an error) and for
+  # byte strings; true for objects exposing the array hook or array interface dictionary, or that
+  # support the buffer (memory view) protocol. No side effects.
   """Check if a given object is array-like."""
   if isinstance(obj, core.Symbol) and not isinstance(obj, core.Value):  # pylint: disable=protected-access
     # Tensor implements __array__ only so it can inform the user that it is not
@@ -548,6 +745,21 @@ def _is_array_like(obj):  # pylint: disable=invalid-name
 @tf_export("make_tensor_proto")
 def make_tensor_proto(values, dtype=None, shape=None, verify_shape=False,
                       allow_broadcast=False):
+  # [FUNCTION DOC]
+  # Builds a TensorProto message from a Python scalar, list, numpy array or numpy scalar.
+  # Inputs: values (data; a TensorProto is returned unchanged, ignoring dtype and shape); dtype
+  # (optional; anything convertible to a TensorFlow dtype; inferred from values if absent, with
+  # 64-bit floats narrowed to 32-bit and 64-bit integers narrowed to 32-bit when lossless);
+  # shape (optional list of integers; if given, values may have fewer elements and are padded by
+  # repeating the last element, but not more); verify_shape (require exact shape match);
+  # allow_broadcast (permit scalars or length-one vectors to broadcast to shape; cannot be combined
+  # with verify_shape).
+  # Output: the proto, using packed tensor content bytes for plain numeric dtypes with more than one
+  # element, otherwise the dtype-specific value fields (strings are flattened to bytes).
+  # Raises: value error if both flags are set, values is nothing, values are ragged, too many
+  # elements are given, or content exceeds 2 gigabytes; type error for incompatible element types,
+  # dtype/value mismatch, shape mismatch, unconvertible strings or unsupported element type.
+  # No other side effects.
   """Create a TensorProto.
 
   In TensorFlow 2.0, representing tensors as protos should no longer be a
@@ -755,6 +967,16 @@ def make_tensor_proto(values, dtype=None, shape=None, verify_shape=False,
 
 @tf_export("make_ndarray")
 def MakeNdarray(tensor):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the float8 branch only handles the e5m2, e4m3fn and 4-bit e2m1fn types; protos of the
+  # fnuz / b11 float8 dtypes without packed content raise the unsupported-type error.
+  # Converts a TensorProto to a numpy array of matching dtype and shape.
+  # Input: a tensor proto. If packed content bytes exist they are copied and reshaped. Otherwise the
+  # typed value field for the dtype is read; strings are padded by repeating the last value (or an
+  # empty string), half-precision types reinterpret stored bits, complex values are paired from
+  # interleaved reals. A short value list is padded by repeating its last element; empty values give
+  # zeros.
+  # Raises a type error for unsupported dtypes. No side effects.
   """Create a numpy ndarray from a tensor.
 
   Create a numpy ndarray with the same shape and data as the tensor.
@@ -860,6 +1082,12 @@ def MakeNdarray(tensor):
 
 
 def ShapeEquals(tensor_proto, shape):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the shape may be a TensorShape, but a TensorShape object is
+  # rejected with a type error; only a shape proto, list or tuple is accepted.
+  # Checks whether a tensor proto has the given shape. Compares the number of dimensions and each
+  # dimension size. Inputs: a tensor proto and a shape (shape proto, list or tuple). Returns a
+  # boolean. Raises a type error if the proto is not a tensor proto or the shape is of another kind.
   """Returns True if "tensor_proto" has the given "shape".
 
   Args:
@@ -888,6 +1116,15 @@ def ShapeEquals(tensor_proto, shape):
 
 
 def _ConstantValue(tensor, partial):
+  # [FUNCTION DOC]
+  # HELPER: per-operation static evaluator behind constant_value.
+  # KNOWN ISSUE: only the pack, unpack, split and pass-through branches forward the partial flag.
+  # Inputs: a symbolic tensor and a boolean saying whether partially evaluated results (with
+  # nothing for unknown elements) are acceptable. Dispatches on the op type: constants, shape, size,
+  # rank, range, cast, concatenation, pack, unpack, split, fill, equality comparisons and
+  # pass-through ops (identity, stop gradient, numeric checks) are evaluated recursively; any other
+  # op, or any unevaluable input, yields nothing. Pack and unpack are only handled for axis zero.
+  # Raises a type error if the argument is not a symbolic tensor. Returns a numpy array or nothing.
   # TODO(touts): Support Variables?
   if not isinstance(tensor, core.Symbol):
     raise TypeError(f"{tensor!r} must be a Tensor, but got {type(tensor)}.")
@@ -1023,6 +1260,15 @@ def _ConstantValue(tensor, partial):
 
 @tf_export("get_static_value")
 def constant_value(tensor, partial=False):  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it raises a type error for a non-tensor argument, but non-tensor
+  # inputs are returned unchanged and the internal type error cannot be reached.
+  # Returns the statically known value of a tensor as a numpy array, or nothing if not cheaply
+  # computable. Eager tensors return their numpy value (nothing if the tensor cannot be resolved,
+  # for example parallel tensors); non-tensors are returned as is; non-symbolic tensor-like objects
+  # give nothing; symbolic tensors go through the internal evaluator. Input partial permits
+  # partially evaluated results. Side effect: when a value is found, the tensor's graph is told to
+  # prevent feeding that tensor, so later feeds cannot invalidate the constant.
   """Returns the constant value of the given tensor, if efficiently calculable.
 
   This function attempts to partially evaluate the given tensor, and
@@ -1100,6 +1346,15 @@ def constant_value(tensor, partial=False):  # pylint: disable=invalid-name
 
 
 def constant_value_as_shape(tensor):  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # Interprets a rank-0 or rank-1 integer tensor as a possibly partial shape.
+  # Eager tensors become a shape (negative one means unknown dimension). A rank-0 tensor must be
+  # statically negative one (giving unknown shape), otherwise a value error is raised. Otherwise
+  # the op type decides: cast, shape, pack, concatenation and strided slice are evaluated
+  # recursively (strided slice only for simple masks; errors in slicing are swallowed), a placeholder
+  # inside a function graph resolves through its external capture, and the fallback merges an unknown
+  # shape of the right length with any constant value. Returns a TensorShape. May call constant_value
+  # and so can mark tensors as unfeedable. An assertion fails if a pack has nonzero axis.
   """A version of `constant_value()` that returns a `TensorShape`.
 
   This version should be used when a constant tensor value is
@@ -1244,8 +1499,14 @@ def constant_value_as_shape(tensor):  # pylint: disable=invalid-name
 
 @typing.runtime_checkable
 class IsTensorLike(Protocol):
+  # [CLASS DOC]
+  # Runtime-checkable protocol: any object with an is_tensor_like method counts as an instance.
+  # Used as one of the tensor-like classes recognized by is_tf_type. Holds no state.
 
   def is_tensor_like(self):  # pylint: disable=invalid-name
+    # [FUNCTION DOC]
+    # Protocol method stub with an empty body; implementers declare themselves tensor-like by
+    # providing it. Takes no arguments, returns nothing, no side effects.
     pass
 
 
@@ -1255,6 +1516,11 @@ tf_type_classes = (internal.NativeObject, core.Tensor, IsTensorLike)
 # TODO(mdan): Deprecate in favor of more static-friendly types.
 @tf_export("is_tensor")
 def is_tf_type(x):  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # Reports whether an object is a TensorFlow-native type (tensors, sparse/ragged tensors and
+  # other native objects, or objects implementing the tensor-like protocol). Objects whose type name
+  # indicates a wrapt object proxy or a tracking dictionary wrapper are explicitly rejected. Input:
+  # any object. Returns a boolean. No side effects.
   """Checks whether `x` is a TF-native type that can be passed to many TF ops.
 
   Use `is_tensor` to differentiate types that can ingested by TensorFlow ops
@@ -1295,6 +1561,10 @@ is_tensor = is_tf_type
 
 
 def try_evaluate_constant(tensor):  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # Attempts to evaluate a symbolic tensor as a constant using the native graph engine. Locks the
+  # tensor's underlying graph handle for the duration and calls the native evaluator on the tensor's
+  # output. Input: a symbolic tensor. Returns a numpy array, or nothing if evaluation fails.
   """Evaluates a symbolic tensor as a constant.
 
   Args:

@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Unit tests for the tensor module: name sanitization for specs, the TensorSpec type (construction,
+# compatibility, representation, conversion from tensors, pickling, tracing types, placeholders,
+# casting, flattening, serialization) and BoundedTensorSpec (bounds validation, read-only bounds,
+# equality, conversion, pickling, serialization). Runs under the TensorFlow test framework via
+# the standard test main entry point. No import-time side effects beyond imports.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,8 +41,14 @@ from tensorflow.python.platform import googletest
 
 
 class SpecNameSanizationTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering the spec-name sanitization helper in the tensor module. No fixtures.
 
   def test_sanitization(self):
+    # [FUNCTION DOC]
+    # Checks that sanitizing a spec name lower-cases it, replaces characters that are invalid in
+    # names with underscores, prefixes names that start with a digit or underscore with a fixed
+    # tensor prefix, and maps the empty string to the word unknown. Asserts exact outputs for each.
     self.assertEqual(tensor.sanitize_spec_name("normal"), "normal")
     self.assertEqual(
         tensor.sanitize_spec_name("123nums"), "tensor_123nums")
@@ -52,24 +64,42 @@ class SpecNameSanizationTest(test_util.TensorFlowTestCase):
 
 
 class TensorSpecTest(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case (also parameterized) covering the TensorSpec type: construction defaults, shape and
+  # dtype handling, compatibility checks, repr, factories, pickling, tracing-type relations,
+  # placeholder creation, casting and flattening. Uses the default graph or eager mode of the
+  # TensorFlow test framework.
 
   def testDefaultDType(self):
+    # [FUNCTION DOC]
+    # Verifies a spec built with only a shape gets the 32-bit float dtype by default.
     desc = tensor.TensorSpec([1])
     self.assertEqual(desc.dtype, dtypes.float32)
 
   def testAcceptsNumpyDType(self):
+    # [FUNCTION DOC]
+    # Verifies a numpy dtype passed to the constructor is converted to the matching TensorFlow dtype.
     desc = tensor.TensorSpec([1], np.float32)
     self.assertEqual(desc.dtype, dtypes.float32)
 
   def testAcceptsTensorShape(self):
+    # [FUNCTION DOC]
+    # Verifies a shape object (not just a list) is accepted and preserved as the spec shape.
     desc = tensor.TensorSpec(tensor_shape.TensorShape([1]), dtypes.float32)
     self.assertEqual(desc.shape, tensor_shape.TensorShape([1]))
 
   def testUnknownShape(self):
+    # [FUNCTION DOC]
+    # Verifies a nothing/null shape yields a spec whose shape is the unknown-rank shape.
     desc = tensor.TensorSpec(shape=None, dtype=dtypes.float32)
     self.assertEqual(desc.shape, tensor_shape.TensorShape(None))
 
   def testShapeCompatibility(self):
+    # [FUNCTION DOC]
+    # Builds, inside a fresh graph, placeholders of unknown, partial, full and rank-3 shapes and
+    # checks the compatibility relation of specs with unknown, partial, full and rank-3 shapes
+    # against each: unknown shapes match everything, partial matches same-rank matching dims, full
+    # matches only equal or unknown shapes, and differing ranks are incompatible.
     # This test needs a placeholder which means we need to construct a graph.
     with ops.Graph().as_default():
       unknown = array_ops.placeholder(dtypes.int64)
@@ -102,6 +132,9 @@ class TensorSpecTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       self.assertTrue(desc_rank3.is_compatible_with(rank3))
 
   def testTypeCompatibility(self):
+    # [FUNCTION DOC]
+    # Verifies a float spec is compatible with a float tensor of the same shape but not with an
+    # integer tensor of that shape.
     floats = constant_op.constant(1, dtype=dtypes.float32, shape=[10, 10])
     ints = constant_op.constant(1, dtype=dtypes.int32, shape=[10, 10])
     desc = tensor.TensorSpec(shape=(10, 10), dtype=dtypes.float32)
@@ -109,6 +142,9 @@ class TensorSpecTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertFalse(desc.is_compatible_with(ints))
 
   def testName(self):
+    # [FUNCTION DOC]
+    # Verifies the spec keeps arbitrary name strings (including ones not valid as tensor names,
+    # such as a lone underscore) unchanged.
     # Note: "_" isn't a valid tensor name, but it is a valid python symbol
     # name; and tf.function constructs TensorSpecs using function argument
     # names.
@@ -117,6 +153,9 @@ class TensorSpecTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       self.assertEqual(desc.name, name)
 
   def testRepr(self):
+    # [FUNCTION DOC]
+    # Checks the textual representation of named and unnamed specs, including that unknown
+    # dimensions print as a none marker under v2 shape behavior and as a question mark otherwise.
     desc1 = tensor.TensorSpec([1], dtypes.float32, name="beep")
     self.assertEqual(
         repr(desc1), "TensorSpec(shape=(1,), dtype=tf.float32, name='beep')")
@@ -129,11 +168,16 @@ class TensorSpecTest(test_util.TensorFlowTestCase, parameterized.TestCase):
           repr(desc2), "TensorSpec(shape=(1, ?), dtype=tf.int32, name=None)")
 
   def testFromTensorSpec(self):
+    # [FUNCTION DOC]
+    # Verifies copying a spec with the from-spec factory yields an equal spec.
     spec_1 = tensor.TensorSpec((1, 2), dtypes.int32)
     spec_2 = tensor.TensorSpec.from_spec(spec_1)
     self.assertEqual(spec_1, spec_2)
 
   def testFromTensor(self):
+    # [FUNCTION DOC]
+    # Builds a spec from a scalar integer constant and checks dtype and empty shape; the name is
+    # only asserted (as the constant op name) when not executing eagerly.
     zero = constant_op.constant(0)
     spec = tensor.TensorSpec.from_tensor(zero)
     self.assertEqual(spec.dtype, dtypes.int32)
@@ -143,6 +187,9 @@ class TensorSpecTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       self.assertEqual(spec.name, "Const")
 
   def testFromPlaceholder(self):
+    # [FUNCTION DOC]
+    # In a fresh graph, builds specs from an unknown-shape and a partially known placeholder and
+    # checks dtype, shape (unknown and unknown-by-one) and that the placeholder names are kept.
     # This test needs a placeholder which means we need to construct a graph.
     with ops.Graph().as_default():
       unknown = array_ops.placeholder(dtypes.int64, name="unknown")
@@ -159,6 +206,9 @@ class TensorSpecTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       self.assertEqual(spec_2.name, "partial")
 
   def testFromBoundedTensorSpec(self):
+    # [FUNCTION DOC]
+    # Converts a bounded spec to a plain spec with the from-spec factory and checks shape, dtype
+    # and name are carried over.
     bounded_spec = tensor.BoundedTensorSpec((1, 2), dtypes.int32, 0, 1)
     spec = tensor.TensorSpec.from_spec(bounded_spec)
     self.assertEqual(bounded_spec.shape, spec.shape)
@@ -166,11 +216,17 @@ class TensorSpecTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqual(bounded_spec.name, spec.name)
 
   def testPickleSerialization(self):
+    # [FUNCTION DOC]
+    # Pickles and unpickles a named spec and asserts the result equals the original.
     desc = tensor.TensorSpec([1, 5], dtypes.float32, "test")
     self.assertEqual(pickle.loads(pickle.dumps(desc)), desc)
 
   @test_util.deprecated_graph_mode_only
   def testTypeSpecFromValue(self):
+    # [FUNCTION DOC]
+    # Graph-mode-only test. Checks the generic type-spec-from-value helper returns the expected
+    # int32 vector spec for both a numpy array and a constant tensor, and that doing so adds no
+    # operations to the graph.
     g = ops.Graph()
     with g.as_default():
       v1 = np.array([1, 2, 3], np.int32)
@@ -186,6 +242,9 @@ class TensorSpecTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       self.assertLen(g.get_operations(), len(ops_before))
 
   def testEqualTypes(self):
+    # [FUNCTION DOC]
+    # Creates two identical specs' tracing types and asserts they are equal and subtypes of each
+    # other.
     signature_context = trace_type.InternalTracingContext()
     type_1 = tensor.TensorSpec(
         tensor_shape.TensorShape([1, 2, 3]), dtypes.float32,
@@ -200,6 +259,9 @@ class TensorSpecTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertTrue(type_1.is_subtype_of(type_2))
 
   def testDtypeMismatch(self):
+    # [FUNCTION DOC]
+    # Asserts tracing types of specs differing only in dtype are unequal and neither is a subtype
+    # of the other.
     signature_context = trace_type.InternalTracingContext()
     type_1 = tensor.TensorSpec(
         tensor_shape.TensorShape([1, 2, 3]), dtypes.float32,
@@ -212,6 +274,8 @@ class TensorSpecTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertFalse(type_1.is_subtype_of(type_2))
 
   def testSubtypeOfShapeless(self):
+    # [FUNCTION DOC]
+    # Asserts a fully known shape tracing type is a subtype of the unknown-rank one, not vice versa.
     signature_context = trace_type.InternalTracingContext()
     type_1 = tensor.TensorSpec(
         tensor_shape.TensorShape(None), dtypes.float32,
@@ -224,6 +288,9 @@ class TensorSpecTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertTrue(type_2.is_subtype_of(type_1))
 
   def testSubtypeOfDimlessShape(self):
+    # [FUNCTION DOC]
+    # Asserts a fully known shape tracing type is a subtype of the same-rank all-unknown-dimension
+    # one, not vice versa.
     signature_context = trace_type.InternalTracingContext()
     type_1 = tensor.TensorSpec(
         tensor_shape.TensorShape([None, None, None]), dtypes.float32,
@@ -236,6 +303,9 @@ class TensorSpecTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertTrue(type_2.is_subtype_of(type_1))
 
   def testSubtypeOfNamedSpec(self):
+    # [FUNCTION DOC]
+    # Asserts a spec without a name is a subtype of a named spec with the same shape and dtype,
+    # while the named one is not a subtype of the unnamed one and the two are unequal.
     named = tensor.TensorSpec(
         tensor_shape.TensorShape([1, 2, 3]), dtypes.float32,
         "a_name")
@@ -247,10 +317,14 @@ class TensorSpecTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertTrue(not_named.is_subtype_of(named))
 
   def testFlatTensorSpecs(self):
+    # [FUNCTION DOC]
+    # Checks the internal flat tensor spec list of a spec is a list holding just that spec.
     spec = tensor.TensorSpec([1], np.float32)
     self.assertEqual(spec._flat_tensor_specs, [spec])
 
   def testFullTypesForFlatTensors(self):
+    # [FUNCTION DOC]
+    # Checks the full-type helper returns one unset full-type entry per flat tensor spec.
     spec = tensor.TensorSpec([1], np.float32)
     full_type_list = fulltypes_for_flat_tensors(spec)
     expect = [full_type_pb2.FullTypeDef(type_id=full_type_pb2.TFT_UNSET)]
@@ -258,6 +332,9 @@ class TensorSpecTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqual(expect, full_type_list)
 
   def testSerialization(self):
+    # [FUNCTION DOC]
+    # Serializes and deserializes named and nameless specs through the trace-type utilities and
+    # asserts the round trip returns equal specs.
     nameless = tensor.TensorSpec([1], np.float32)
     named = tensor.TensorSpec([1, 2, 3], np.float32, name="some_name")
     self.assertEqual(nameless,
@@ -265,6 +342,9 @@ class TensorSpecTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqual(named, trace_type.deserialize(trace_type.serialize(named)))
 
   def testPlaceholderWithName(self):
+    # [FUNCTION DOC]
+    # Creates a placeholder from a named spec using a placeholder context on the default graph and
+    # checks its name gets the zero output suffix and its dtype and shape match the spec.
     placeholder_context = trace_type.InternalPlaceholderContext(
         ops.get_default_graph())
     spec = tensor.TensorSpec([1], np.float32, name="test")
@@ -274,6 +354,9 @@ class TensorSpecTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqual(placeholder.shape, spec.shape)
 
   def testMultiplePlaceholdersWithNames(self):
+    # [FUNCTION DOC]
+    # Creates placeholders from three named specs (including an unknown-shape one) in one context
+    # and checks each keeps its own name with suffix, dtype and shape.
     placeholder_context = trace_type.InternalPlaceholderContext(
         ops.get_default_graph())
     spec1 = tensor.TensorSpec([1, 2], np.float32, name="test1")
@@ -293,6 +376,9 @@ class TensorSpecTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqual(placeholder3.shape, spec3.shape)
 
   def testPlaceholderWithoutName(self):
+    # [FUNCTION DOC]
+    # Creates a placeholder from an unnamed spec and checks it gets the default placeholder name,
+    # with matching dtype and shape.
     placeholder_context = trace_type.InternalPlaceholderContext(
         ops.get_default_graph())
     spec = tensor.TensorSpec([1], np.float32)
@@ -302,6 +388,9 @@ class TensorSpecTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqual(placeholder.shape, spec.shape)
 
   def testMultiplePlaceholdersWithoutNames(self):
+    # [FUNCTION DOC]
+    # Creates placeholders from three unnamed specs in one context and checks default names are
+    # uniquified with increasing numeric suffixes, and dtypes and shapes match.
     placeholder_context = trace_type.InternalPlaceholderContext(
         ops.get_default_graph())
     spec1 = tensor.TensorSpec([1, 2], np.float32)
@@ -321,6 +410,9 @@ class TensorSpecTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqual(placeholder3.shape, spec3.shape)
 
   def testGraphPlaceholderWithValidName(self):
+    # [FUNCTION DOC]
+    # Calls the internal graph placeholder builder with a valid name and checks the resulting
+    # placeholder uses that name and matches the spec dtype and shape.
     spec = tensor.TensorSpec((2, 3), dtypes.float32, name="test")
     placeholder = spec._graph_placeholder(ops.get_default_graph(), spec.name)
     self.assertEqual(placeholder.name, f"{spec.name}:0")
@@ -328,6 +420,9 @@ class TensorSpecTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqual(placeholder.shape, spec.shape)
 
   def testGraphPlaceholderWithInvalidName(self):
+    # [FUNCTION DOC]
+    # Calls the internal graph placeholder builder with an invalid name and checks it falls back
+    # to the default placeholder name while matching dtype and shape.
     spec = tensor.TensorSpec((1, 2), dtypes.int32, name="a%!")
     placeholder = spec._graph_placeholder(ops.get_default_graph(), spec.name)
     self.assertEqual(placeholder.name, "Placeholder:0")
@@ -335,12 +430,18 @@ class TensorSpecTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqual(placeholder.shape, spec.shape)
 
   def testCastPythinPrimitives(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the method name misspells Python as Pythin.
+    # Casts a Python integer with a float scalar spec and asserts the result has the spec dtype.
     spec = tensor.TensorSpec([], dtypes.float32)
     ctx = trace_type.InternalCastContext()
     value = spec.cast(1, ctx)
     self.assertEqual(value.dtype, spec.dtype)
 
   def testCastTensor(self):
+    # [FUNCTION DOC]
+    # Asserts casting an int32 tensor with a float32 spec raises a type error (no implicit tensor
+    # dtype conversion).
     spec = tensor.TensorSpec([], dtypes.float32)
     ctx = trace_type.InternalCastContext()
     # cast does not support cast int tensor to float tensor
@@ -348,6 +449,8 @@ class TensorSpecTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       _ = spec.cast(constant_op.constant(1, dtype=dtypes.int32), ctx)
 
   def testCastAssert(self):
+    # [FUNCTION DOC]
+    # Asserts casting a list value with a scalar float spec raises a type error.
     spec = tensor.TensorSpec([], dtypes.float32)
     ctx = trace_type.InternalCastContext()
     with self.assertRaises(TypeError):
@@ -384,6 +487,10 @@ class TensorSpecTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       ),
   )
   def testFlatten(self, structure):
+    # [FUNCTION DOC]
+    # Parameterized over a nested list, tuple and dict of named specs. Builds a legacy-signature
+    # trace type from the structure, flattens it and asserts the result is the three specs a, b, c
+    # in order.
     generated_type = trace_type.from_value(
         structure, trace_type.InternalTracingContext(is_legacy_signature=True)
     )
@@ -399,16 +506,28 @@ class TensorSpecTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
 
 class BoundedTensorSpecTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering BoundedTensorSpec: bound validation, numpy bound attributes, equality,
+  # conversion, pickling and serialization.
 
   def testInvalidMinimum(self):
+    # [FUNCTION DOC]
+    # Asserts a minimum whose shape is incompatible with the spec shape raises a value error
+    # mentioning incompatibility.
     with self.assertRaisesRegex(ValueError, "not compatible"):
       tensor.BoundedTensorSpec((3, 5), dtypes.uint8, (0, 0, 0), (1, 1))
 
   def testInvalidMaximum(self):
+    # [FUNCTION DOC]
+    # Asserts a maximum whose shape is incompatible with the spec shape raises a value error
+    # mentioning incompatibility.
     with self.assertRaisesRegex(ValueError, "not compatible"):
       tensor.BoundedTensorSpec((3, 5), dtypes.uint8, 0, (1, 1, 1))
 
   def testMinimumMaximumAttributes(self):
+    # [FUNCTION DOC]
+    # Checks minimum and maximum are numpy arrays converted to the spec dtype, with the scalar
+    # minimum kept scalar and the maximum a vector.
     spec = tensor.BoundedTensorSpec((1, 2, 3), dtypes.float32, 0,
                                     (5, 5, 5))
     self.assertEqual(type(spec.minimum), np.ndarray)
@@ -417,6 +536,8 @@ class BoundedTensorSpecTest(test_util.TensorFlowTestCase):
     self.assertAllEqual(spec.maximum, np.array([5, 5, 5], dtype=np.float32))
 
   def testNotWriteableNP(self):
+    # [FUNCTION DOC]
+    # Asserts writing into the minimum or maximum arrays raises a value error about read-only data.
     spec = tensor.BoundedTensorSpec((1, 2, 3), dtypes.float32, 0,
                                     (5, 5, 5))
     with self.assertRaisesRegex(ValueError, "read-only"):
@@ -425,6 +546,8 @@ class BoundedTensorSpecTest(test_util.TensorFlowTestCase):
       spec.maximum[0] = 100
 
   def testReuseSpec(self):
+    # [FUNCTION DOC]
+    # Rebuilds a spec from another's shape, dtype and bounds and asserts equality.
     spec_1 = tensor.BoundedTensorSpec((1, 2),
                                       dtypes.int32,
                                       minimum=0,
@@ -434,6 +557,9 @@ class BoundedTensorSpecTest(test_util.TensorFlowTestCase):
     self.assertEqual(spec_1, spec_2)
 
   def testScalarBounds(self):
+    # [FUNCTION DOC]
+    # With scalar shape and scalar bounds, checks bounds are numpy arrays comparing equal to the
+    # given numbers and that they can be fed back into the constructor without error.
     spec = tensor.BoundedTensorSpec((),
                                     dtypes.float32,
                                     minimum=0.0,
@@ -451,6 +577,8 @@ class BoundedTensorSpecTest(test_util.TensorFlowTestCase):
                                  spec.maximum)
 
   def testFromBoundedTensorSpec(self):
+    # [FUNCTION DOC]
+    # Copies a bounded spec with the bounded from-spec factory and asserts the copy is equal.
     spec_1 = tensor.BoundedTensorSpec((1, 2),
                                       dtypes.int32,
                                       minimum=0,
@@ -459,6 +587,9 @@ class BoundedTensorSpecTest(test_util.TensorFlowTestCase):
     self.assertEqual(spec_1, spec_2)
 
   def testEquality(self):
+    # [FUNCTION DOC]
+    # Checks equality semantics: bounds equal after rounding to dtype or after broadcasting a
+    # scalar to a vector are equal, while differing bounds make specs unequal; symmetric checks.
     spec_1_1 = tensor.BoundedTensorSpec((1, 2, 3), dtypes.float32, 0,
                                         (5, 5, 5))
     spec_1_2 = tensor.BoundedTensorSpec(
@@ -489,6 +620,9 @@ class BoundedTensorSpecTest(test_util.TensorFlowTestCase):
     self.assertNotEqual(spec_2_2, spec_3_1)
 
   def testFromTensorSpec(self):
+    # [FUNCTION DOC]
+    # Converts a plain spec to a bounded spec and checks shape, dtype, name carry over and bounds
+    # equal the dtype minimum and maximum.
     spec = tensor.TensorSpec((1, 2), dtypes.int32)
     bounded_spec = tensor.BoundedTensorSpec.from_spec(spec)
     self.assertEqual(spec.shape, bounded_spec.shape)
@@ -498,10 +632,15 @@ class BoundedTensorSpecTest(test_util.TensorFlowTestCase):
     self.assertEqual(spec.name, bounded_spec.name)
 
   def testPickleSerialization(self):
+    # [FUNCTION DOC]
+    # Pickles and unpickles a named bounded spec and asserts the result equals the original.
     desc = tensor.BoundedTensorSpec([1, 5], dtypes.float32, -1, 1, "test")
     self.assertEqual(pickle.loads(pickle.dumps(desc)), desc)
 
   def testSerialization(self):
+    # [FUNCTION DOC]
+    # Serializes and deserializes named and nameless bounded specs through the trace-type
+    # utilities and asserts the round trip returns equal specs.
     nameless = tensor.BoundedTensorSpec([1], np.float32, 0, 1)
     named = tensor.BoundedTensorSpec([1, 2, 3],
                                      np.float32,
