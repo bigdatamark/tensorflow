@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Defines the public preemption watcher class, a lightweight utility for TPU training on the
+# internal platform: it starts a background thread that waits for a preemption message in the
+# coordination service and stores it so the training program can decide to reconnect instead of
+# fully restarting. Also defines two usage monitoring counters (watcher initialized, preemption
+# handled) and the shared preemption key name. Import-time side effects: creates the counters and
+# registers the class in the public API. Uses the platform detection from the sibling utility
+# module.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -43,6 +51,12 @@ _PREEMPTION_KEY = "TF_DEFAULT_PREEMPTION_NOTICE_KEY"
 
 @tf_export("distribute.experimental.PreemptionWatcher", v1=[])
 class PreemptionWatcher:
+  # [CLASS DOC]
+  # Watches for a preemption notice and keeps it. State: the detected platform and the
+  # preemption message (nothing until a preemption is seen). On internal TPU, creation starts a
+  # daemon thread blocking on the coordination service key; on other platforms it only logs a
+  # warning and stays inert. Exposes the message as a read-only property and a method to wait
+  # until workers exit. Registered in the public API.
   """Watch preemption signal and store it.
 
   Notice: Currently only support Borg TPU environment with TPUClusterResolver.
@@ -91,6 +105,11 @@ class PreemptionWatcher:
   """
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor, no parameters. Sets the message to nothing and detects the platform. If it is
+    # not internal TPU, logs a warning (unsupported environment). Otherwise increments the
+    # initialization counter and starts a daemon thread running the key-watching method. Must be
+    # created after connecting to the cluster. Returns nothing.
     # TODO(b/254321514): Integrate with GPU and cloud enviornmenmt.
     self._preemption_message = None
     self._platform = detect_platform()
@@ -104,10 +123,18 @@ class PreemptionWatcher:
 
   @property
   def preemption_message(self):
+    # [FUNCTION DOC]
+    # Read-only property: returns the stored preemption message, or nothing if no preemption has
+    # been observed yet.
     """Returns the preemption message."""
     return self._preemption_message
 
   def _watch_preemption_key(self):
+    # [FUNCTION DOC]
+    # HELPER: body of the background watcher thread. Blocks until the preemption key has a value
+    # in the coordination service, increments the preemption-handled counter, logs, and stores
+    # the message in the instance. Returns nothing. Any error from the blocking call ends the
+    # thread silently with the message left unset.
     logging.info("Watching preemption signal.")
     message = context.context().get_config_key_value(_PREEMPTION_KEY)
     _preemption_handling_counter.get_cell().increase_by(1)
@@ -115,6 +142,12 @@ class PreemptionWatcher:
     self._preemption_message = message
 
   def block_until_worker_exit(self):
+    # [FUNCTION DOC]
+    # Blocks the caller until the workers have gone away; a no-op on non-TPU platforms. Asks the
+    # coordination service for a key that is never set, which blocks until workers exit and then
+    # fails. Internal errors are re-raised unless their message says the coordination service is
+    # not enabled; aborted, cancelled and unavailable errors are treated as the workers having
+    # exited. In handled cases logs and returns nothing.
     """Block coordinator until workers exit.
 
     In some rare cases, another error could be raised during the

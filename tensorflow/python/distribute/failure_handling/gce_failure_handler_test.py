@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# Integration tests for the preemption checkpoint handler in its Google Cloud configuration.
+# The tests mock platform detection to report a Google Cloud GPU and replace the maintenance
+# event watcher with a fake that randomly (or on every poll) reports a termination notice. A
+# small training loop with a counter variable is run for several epochs under mirrored, one
+# device, local multi-worker mirrored and (multi-process) multi-worker mirrored strategies; the
+# worker exits with the cloud restart code when a notice is handled, is restarted, and must
+# resume from the saved checkpoint and finish. Also contains helpers to build checkpoint
+# managers and wait for processes to exit, and registers a pickling helper for the test class
+# when the optional serialization library is installed. Run as a normal test main.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -66,11 +76,21 @@ MAX_WAIT_TIME = 30
 
 
 def _is_oss():
+  # [FUNCTION DOC]
+  # HELPER: tells tests which remote-call transport to use. Returns true when the program was
+  # started through the open-source build tool (its name appears in the first command-line
+  # argument), false otherwise.
   """Returns whether the test is run under OSS."""
   return len(sys.argv) >= 1 and 'bazel' in sys.argv[0]
 
 
 def _make_checkpoint_manager(checkpoint, checkpoint_dir, cluster_resolver):
+  # [FUNCTION DOC]
+  # HELPER: builds a checkpoint manager the way the handler would. Inputs: a checkpoint object,
+  # the checkpoint directory, and a cluster resolver (may be nothing). For no cluster, an empty
+  # cluster, or the chief, the manager uses the directory itself; for non-chief workers it uses
+  # the handler's per-worker temporary directory. Keeps at most one checkpoint. Returns the
+  # manager.
 
   if not cluster_resolver or not cluster_resolver.cluster_spec().as_dict() or (
       multi_worker_util.is_chief(
@@ -88,6 +108,15 @@ def _make_checkpoint_manager(checkpoint, checkpoint_dir, cluster_resolver):
 
 
 def raise_if_not_all_exit(grace_period, mpr):
+  # [FUNCTION DOC]
+  # HELPER: waits for the cluster's worker processes to exit, for tests.
+  # KNOWN ISSUE: the final timeout check compares the waiting time with the larger of grace
+  # period plus five and forty, which does not match the loop's limit (grace period plus fifteen
+  # or thirty), so the error is raised only in some timeout cases and may never be raised.
+  # Polls once per second until none of the four worker processes exist, up to the larger of the
+  # grace period plus fifteen seconds and thirty seconds. Inputs: the grace period in seconds and
+  # the multi-process runner. Returns nothing; raises a runtime error when the equality check
+  # described above holds.
   """Wait for all cluster to exit with a time out."""
   waiting_time = 0
   exit_process_count = 0
@@ -108,6 +137,11 @@ def raise_if_not_all_exit(grace_period, mpr):
 
 
 class GceFailureHandlingTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized integration tests of the preemption checkpoint handler on a mocked Google
+  # Cloud GPU. Shared fixture: the worker function that creates the strategy, a trivial model
+  # with a counter variable, the handler, and a training loop; tests start it directly or in a
+  # multi-process cluster, restart it after a simulated termination and check completion.
   """Integration test for PreemptionCheckpointHandler."""
 
   def worker_fn(
@@ -123,7 +157,25 @@ class GceFailureHandlingTest(test.TestCase, parameterized.TestCase):
       termination_config=failure_handling.TerminationConfig(grace_period=0),
       api_wrapping_train=True,
   ):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the restarted-event and finished-event parameters default to nothing but are
+    # used unconditionally, so callers must always supply them; the default termination config is
+    # one shared object created at definition time.
+    # KNOWN ISSUE: the handler for a name-resolution failure reads a message attribute that
+    # URL errors do not have, so that branch would itself raise an attribute error.
+    # Body executed by each worker (in-process or in a spawned process). Inputs: checkpoint
+    # directory, cluster spec, input kind (plain checkpoint or checkpoint manager), strategy
+    # name (mirrored, one device, or multi-worker), the maintenance event, finished event,
+    # a flag for sending a notice on every poll, the restarted event, a termination config
+    # (default: zero grace period) and a flag choosing between wrapping each step in the run
+    # method or calling the save-if-preempted method. Mocks the cloud watcher and platform
+    # detection, builds the model and handler, and if restarted and unfinished asserts that the
+    # expected checkpoints exist (largest number 1, or 2 with a grace period, or equal to total run
+    # calls for the other API). Trains for the remaining epochs, marks training finished, asserts
+    # the counter equals replicas times epochs times steps, then asserts the watcher threads
+    # stop after the destructor is invoked. Returns nothing; may exit with the restart code.
     if strategy_option == 'MS':
+
       strategy = mirrored_strategy.MirroredStrategy()
     elif strategy_option == 'OneDevice':
       if config.list_physical_devices('GPU'):
@@ -134,6 +186,11 @@ class GceFailureHandlingTest(test.TestCase, parameterized.TestCase):
       strategy = collective_all_reduce_strategy.CollectiveAllReduceStrategy()
 
     def mock_termination_watcher_function_gce(*args, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: fake termination watcher replacing the cloud one. Ignores arguments. In normal
+      # mode sleeps a second and, if no notice has been issued yet, with roughly one in eleven
+      # chance sets the maintenance event and reports a notice. In frequent mode reports a notice
+      # on every call until the event is set. Otherwise reports no notice.
       del args, kwargs
       if not frequent_send:
         time.sleep(1)
@@ -155,8 +212,14 @@ class GceFailureHandlingTest(test.TestCase, parameterized.TestCase):
             lambda: failure_handling_util.PlatformDevice.GCE_GPU):
 
       class Model(module.Module):
+        # [CLASS DOC]
+        # HELPER: minimal module holding a summed, write-synchronized counter variable and a
+        # no-argument traced call returning its value, used as the checkpointed model.
 
         def __init__(self):
+          # [FUNCTION DOC]
+          # Creates the counter variable starting at zero, synchronized on write with sum
+          # aggregation. Returns nothing.
           self.v = variables_lib.Variable(
               0.,
               synchronization=variables_lib.VariableSynchronization.ON_WRITE,
@@ -164,6 +227,8 @@ class GceFailureHandlingTest(test.TestCase, parameterized.TestCase):
 
         @def_function.function(input_signature=[])
         def __call__(self):
+          # [FUNCTION DOC]
+          # Traced function with no inputs; returns the current value of the counter variable.
           return self.v.read_value()
 
       with strategy.scope():
@@ -181,9 +246,15 @@ class GceFailureHandlingTest(test.TestCase, parameterized.TestCase):
                 checkpoint_dir, termination_config))
 
       def distributed_train_step(current_epoch, current_step):
+        # [FUNCTION DOC]
+        # HELPER: one training step. Runs a traced step on every replica that adds one to the
+        # counter, and logs when the last step of the epoch finishes. Inputs: current epoch and
+        # current step numbers (integers). Returns nothing.
 
         @def_function.function
         def train_step():
+          # [FUNCTION DOC]
+          # Per-replica traced step: adds one to the counter variable. Returns nothing.
           model.v.assign_add(constant_op.constant(1.))
 
         strategy.run(train_step)
@@ -289,6 +360,13 @@ class GceFailureHandlingTest(test.TestCase, parameterized.TestCase):
       )
   )
   def test_basic_run(self, input_arg, strategy_option):
+    # [FUNCTION DOC]
+    # Scenario: basic preemption and restart for every combination of input kind (checkpoint or
+    # manager) and strategy. For the multi-process case starts four workers, waits for all to
+    # exit, and if training did not finish restarts them and joins; otherwise runs the worker
+    # body in-process, catches the system exit and asserts its code is the cloud restart code
+    # 143, and if a notice was issued without finishing asserts an exit happened and reruns.
+    # Asserts that training finished in the end.
     if _is_oss():
       rpc_layer = 'grpc'
     else:
@@ -372,8 +450,17 @@ class GceFailureHandlingTest(test.TestCase, parameterized.TestCase):
   def test_multiple_workers_preempted_consecutively(self, grace_period,
                                                     input_arg, strategy_option,
                                                     api_wrapping_train):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: unlike the other tests, there is no final assertion that training finished,
+    # and the chief flag is assigned twice.
+    # Scenario: notices are sent on every poll (frequent mode) with grace period zero or eleven
+    # seconds, both input kinds, all strategies and both save APIs. Multi-process: start,
+    # wait for exit, force the event, restart all workers, join and assert finished. In-process:
+    # run, catch the system exit asserting code 143, and if a notice was issued assert an exit
+    # occurred and rerun the worker once.
 
     checkpoint_dir = os.path.join(self.get_temp_dir(), 'fh_ckpt/')
+ = os.path.join(self.get_temp_dir(), 'fh_ckpt/')
     if _is_oss():
       rpc_layer = 'grpc'
     else:
@@ -465,8 +552,17 @@ class GceFailureHandlingTest(test.TestCase, parameterized.TestCase):
           api_wrapping_train=[True, False]))
   def test_grace_period_continue_training(self, input_arg, strategy_option,
                                           api_wrapping_train):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the multi-process branch is dead code because the strategy name it compares
+    # with is not one of the parameterized values (which use a longer name), so every case,
+    # including the multi-worker one, runs in-process.
+    # Scenario: a grace period of eleven seconds so training continues after the notice and a
+    # second checkpoint is taken. In-process: run the worker, catch the system exit asserting
+    # code 143, and if a notice was issued assert an exit occurred, rerun the worker and assert
+    # training finished. The unreachable branch would start a cluster and restart workers.
     checkpoint_dir = os.path.join(self.get_temp_dir(), 'fh_ckpt/')
     grace_period = 11
+
     if _is_oss():
       rpc_layer = 'grpc'
     else:
@@ -556,7 +652,15 @@ class GceFailureHandlingTest(test.TestCase, parameterized.TestCase):
 
 @_REGISTER_DECORATOR(GceFailureHandlingTest)
 def _save_test_case(pickler, obj):
+  # [FUNCTION DOC]
+  # HELPER: custom serialization hook (registered only when the optional library exists; a
+  # pass-through otherwise) so the test case can be sent to spawned processes. Reconstructs the
+  # test case as a fresh instance instead of copying state. Inputs: the pickler and the object.
+  # Returns the pickler's reduce result.
   def reconstruct(*args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: factory used on deserialization. Ignores all arguments and returns a new instance
+    # of the test case class.
     del args, kwargs
     return GceFailureHandlingTest()
 

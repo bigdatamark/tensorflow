@@ -1,3 +1,17 @@
+# [MODULE DOC]
+# Implements the preemption and failure handling machinery for synchronous multi-worker training.
+# Exposes the public termination configuration class (customization of how termination is
+# detected, how the program exits, and how long the grace period is), several platform-specific
+# subclasses of it (Google Cloud GPU and CPU, Borg, Borg TPU), a helper that fills in
+# platform defaults, and the preemption checkpoint handler, which coordinates all workers in a
+# cluster so that they save a checkpoint at an agreed step after any one of them receives a
+# termination notice. Workers communicate through the coordination service using a handful of
+# well-known configuration keys defined at module level, and two background daemon threads
+# (one watching the local termination signal, one watching for the cluster-wide step key) plus
+# the main training thread cooperate through events.
+# A module-level alias keeps an older handler name pointing to the new handler class.
+# Import-time side effects: registers the two public classes in the public API namespace.
+# Depends on the platform detection helpers in the sibling failure handling utility module.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -62,6 +76,12 @@ PREEMPTION_KEY = 'TF_DEFAULT_PREEMPTION_NOTICE_KEY'
 
 # TODO(wxinyi): add type annotations.
 def _non_chief_checkpoint_dir(checkpoint_dir, task_id):
+  # [FUNCTION DOC]
+  # HELPER: gives non-chief workers a private checkpoint location for the preemption handler.
+  # Takes the checkpoint directory path (text) and the worker's task id (integer or text).
+  # Builds a sibling directory of the checkpoint directory named after the task id with a
+  # temporary-worker prefix, creates it (and any missing parents) on the file system, and
+  # returns the path of the checkpoint base name inside it. Side effect: directory creation.
   """Returns a directory for non-chief worker to save checkpoint."""
   dirpath = os.path.dirname(checkpoint_dir)
   base = os.path.basename(checkpoint_dir)
@@ -73,6 +93,11 @@ def _non_chief_checkpoint_dir(checkpoint_dir, task_id):
 
 @tf_export('distribute.experimental.TerminationConfig', v1=[])
 class TerminationConfig(object):
+  # [CLASS DOC]
+  # Plain holder for the three platform-dependent customizations used by the preemption
+  # checkpoint handler: a termination watcher callback, an exit callback, a grace period, plus
+  # an optional custom save callback. Stores them as public attributes with no validation.
+  # Registered in the public API. Subclasses below fill in per-platform defaults.
   """Customization of `PreemptionCheckpointHandler` for various platforms.
 
   A `TerminationConfig` can be created and passed to a
@@ -144,6 +169,12 @@ class TerminationConfig(object):
                exit_fn=None,
                grace_period=None,
                save_fn=None):
+    # [FUNCTION DOC]
+    # Constructor. All four parameters are optional and default to nothing: the termination
+    # watcher callback (returns true when a termination notice is available, must not block),
+    # the exit callback (run after the checkpoint is saved), the grace period (number of seconds
+    # between notice and actual termination) and a custom save callback. Each value is stored
+    # unchanged as an attribute of the same name. Returns nothing; no validation is done.
     """Creates a `TerminationConfig` object.
 
     Args:
@@ -176,6 +207,10 @@ class TerminationConfig(object):
 # TODO(wxinyi): add some tests for TerminationConfig.
 # TODO(wxinyi): configure the exit function based on device type (GPU or TPU).
 class GcpGpuTerminationConfig(TerminationConfig):
+  # [CLASS DOC]
+  # Termination configuration with defaults for a Google Cloud GPU virtual machine: watches the
+  # cloud maintenance event, exits with the cloud-specific restart code, and uses the cloud
+  # default grace period. Created by the environment-completion helper from a user config.
   """Configurations for GCP GPU VM."""
 
   def __init__(  # pylint: disable=super-init-not-called
@@ -185,7 +220,14 @@ class GcpGpuTerminationConfig(TerminationConfig):
       grace_period=None,
       save_fn=None,
   ):
+    # [FUNCTION DOC]
+    # Constructor (deliberately does not call the parent constructor). Optional parameters: the
+    # watcher callback, exit callback, grace period and save callback. Missing watcher and exit
+    # callbacks default to the Google Cloud ones from the utility module; a missing grace period
+    # (nothing; an explicit zero is kept) defaults to the Google Cloud grace period constant. The
+    # save callback is stored as given. Returns nothing.
     self.termination_watcher_fn = (
+
         termination_watcher_fn
         or failure_handling_util.termination_watcher_function_gce
     )
@@ -197,6 +239,10 @@ class GcpGpuTerminationConfig(TerminationConfig):
 
 
 class GcpCpuTerminationConfig(TerminationConfig):
+  # [CLASS DOC]
+  # Termination configuration with defaults for a Google Cloud CPU virtual machine: watches the
+  # cloud maintenance event, exits with the cloud restart code, and by default uses no grace
+  # period (save and exit immediately). Created by the environment-completion helper.
   """Configurations for GCP CPU VM."""
 
   def __init__(  # pylint: disable=super-init-not-called
@@ -205,13 +251,23 @@ class GcpCpuTerminationConfig(TerminationConfig):
       exit_fn=None,
       grace_period=None,
       save_fn=None):
+    # [FUNCTION DOC]
+    # Constructor (does not call the parent constructor). Optional parameters: watcher callback,
+    # exit callback, grace period, save callback. A missing watcher or exit callback defaults to
+    # the Google Cloud ones from the utility module; a missing or zero grace period becomes zero
+    # (so any user-supplied falsy value is treated as zero). Save callback stored as given.
     self.termination_watcher_fn = termination_watcher_fn or failure_handling_util.termination_watcher_function_gce
+
     self.exit_fn = exit_fn or failure_handling_util.gce_exit_fn
     self.grace_period = grace_period or 0
     self.save_fn = save_fn
 
 
 class BorgTerminationConfig(TerminationConfig):
+  # [CLASS DOC]
+  # Termination configuration with defaults for Borg and also used as the fallback for any
+  # unrecognized platform: no default watcher (so the handler falls back to the termination
+  # signal), exit with a fixed restart code, and no grace period.
   """Configurations for Borg."""
 
   def __init__(  # pylint: disable=super-init-not-called
@@ -220,14 +276,25 @@ class BorgTerminationConfig(TerminationConfig):
       exit_fn=None,
       grace_period=None,
       save_fn=None):
+    # [FUNCTION DOC]
+    # Constructor (does not call the parent constructor). Optional parameters: watcher callback
+    # (kept as given, possibly nothing), exit callback (defaults to a callback that exits the
+    # process with status code 42), grace period (missing or zero becomes zero) and save
+    # callback. Returns nothing.
     self.termination_watcher_fn = termination_watcher_fn
     default_exit_fn = lambda: sys.exit(42)
+
     self.exit_fn = exit_fn or default_exit_fn
     self.grace_period = grace_period or 0
     self.save_fn = save_fn
 
 
 class BorgTPUTerminationConfig(TerminationConfig):
+  # [CLASS DOC]
+  # KNOWN ISSUE: the docstring says only "Configurations for Borg"; this class is specifically
+  # the Borg TPU variant, whose default exit callback is the TPU one from the utility module.
+  # Termination configuration with defaults for TPU on Borg: no default watcher, the TPU exit
+  # callback, and no grace period.
   """Configurations for Borg."""
 
   def __init__(  # pylint: disable=super-init-not-called
@@ -236,13 +303,25 @@ class BorgTPUTerminationConfig(TerminationConfig):
       exit_fn=None,
       grace_period=None,
       save_fn=None):
+    # [FUNCTION DOC]
+    # Constructor (does not call the parent constructor). Optional parameters: watcher callback
+    # (kept as given), exit callback (defaults to the TPU exit callback from the utility module),
+    # grace period (missing or zero becomes zero) and save callback. Returns nothing.
     self.termination_watcher_fn = termination_watcher_fn
     self.exit_fn = exit_fn or failure_handling_util.default_tpu_exit_fn
+
     self.grace_period = grace_period or 0
     self.save_fn = save_fn
 
 
 def _complete_config_for_environment(platform_device, termination_config):
+  # [FUNCTION DOC]
+  # HELPER: picks the platform-specific termination configuration for the preemption handler.
+  # Inputs: the detected platform and device kind, and an optional user termination config (if
+  # nothing is given, an empty default config is used). Returns a new config object of the
+  # subclass matching the platform: Google Cloud GPU, Google Cloud CPU, internal TPU, and for
+  # every other platform (including Google Cloud TPU) the Borg-style config. The user's four
+  # fields are passed to the subclass, which fills in defaults for missing ones.
   """Complete un-filled fields of TerminationConfig based on platform."""
   if not termination_config:
     termination_config = TerminationConfig()
@@ -335,6 +414,17 @@ def _complete_config_for_environment(platform_device, termination_config):
 # it will restore the checkpoint.
 @tf_export('distribute.experimental.PreemptionCheckpointHandler', v1=[])
 class PreemptionCheckpointHandler(object):
+  # [CLASS DOC]
+  # Per-worker coordinator for saving checkpoints on preemption in synchronous multi-worker or
+  # TPU training. Each worker creates one instance; instances talk through the coordination
+  # service. State: cluster resolver, checkpoint or checkpoint manager and directory, the
+  # completed termination config (watcher, exit, grace period, save callbacks), the detected
+  # platform, a run counter, an estimated per-run time, events for "own termination signal
+  # received" and "checkpoint step agreed", a grace-period countdown flag, and two daemon watcher
+  # threads (local signal poller and cluster-wide step key watcher). On creation it restores the
+  # latest checkpoint if any. The training loop calls the run method (or the watch scope and save
+  # method for TPU) so the handler can checkpoint at an agreed step and then exit via the exit
+  # callback. The destructor stops the threads. Registered in the public API.
   # pylint: disable=line-too-long
   """Preemption and error handler for synchronous training.
 
@@ -459,6 +549,21 @@ class PreemptionCheckpointHandler(object):
                checkpoint_or_checkpoint_manager,
                checkpoint_dir=None,
                termination_config=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the invalid-argument error is constructed with a single message argument,
+    # but that error type normally also needs an operation node definition and an operation, so
+    # raising it here would itself fail with a wrong-arguments error instead of the intended one.
+    # KNOWN ISSUE: the not-implemented message for parameter server strategy is built from two
+    # string pieces with no space between them, so it reads "supportusage".
+    # Constructor. Parameters: cluster resolver (describes the cluster; may be nothing for local
+    # training), a checkpoint or checkpoint manager, an optional checkpoint directory (required,
+    # else an invalid-argument error is intended, when a plain checkpoint is passed) and an
+    # optional termination config. Detects the platform, completes the config with platform
+    # defaults, and then: on Google Cloud TPU or CPU only logs a warning and stays in local mode
+    # doing nothing else; on internal TPU initializes the TPU strategy variant; otherwise rejects
+    # clusters having a parameter server job (not-implemented error) and initializes the mirrored
+    # or multi-worker variant (restoring the latest checkpoint and starting watcher threads).
+    # Returns nothing; logs on completion.
     """Creates the `PreemptionCheckpointHandler`.
 
     Args:
@@ -538,6 +643,11 @@ class PreemptionCheckpointHandler(object):
     logging.info('PreemptionCheckpointHandler initialized or restored.')
 
   def _initialize_for_tpu_strategy(self):
+    # [FUNCTION DOC]
+    # HELPER: constructor support for TPU strategy usage.
+    # Marks this process as chief, creates no watcher threads (preemption is detected by a
+    # dedicated check operation instead), creates the checkpoint managers, restores the latest
+    # checkpoint or initializes, and sets the run counter to zero. Returns nothing.
     """Makes configurations for using the handler with TPUStrategy."""
     self._is_chief = True
     self._poll_termination_signal_thread = None
@@ -547,6 +657,17 @@ class PreemptionCheckpointHandler(object):
     self._run_counter = 0
 
   def _initialize_for_mirrored_and_multi_worker_mirrored(self):
+    # [FUNCTION DOC]
+    # HELPER: constructor support for single-machine and multi-worker mirrored strategies.
+    # Decides local mode (empty cluster spec: single worker, chief, no coordination service) or
+    # cluster mode (worker id within the cluster and chief flag from the cluster resolver).
+    # Creates the checkpointed run-count variable, creates the checkpoint managers, attaches the
+    # variable to the checkpoints if not already present, restores the latest checkpoint, and
+    # initializes the countdown flag, run-time estimate, run counter (restored from the
+    # variable) and the two events. Increments a usage counter metric. In cluster mode starts the
+    # daemon thread watching the step-to-save key. Finally starts either polling with the
+    # configured watcher callback, or installing a handler for the termination signal.
+    # Returns nothing.
     """Makes configurations and start watchers for MS, MWMS, or OneDevice."""
     if (
         not self._cluster_resolver
@@ -645,6 +766,13 @@ class PreemptionCheckpointHandler(object):
       self._start_watching_for_signal()
 
   def _maybe_create_checkpoint_manager(self):
+    # [FUNCTION DOC]
+    # HELPER: sets up the read and write checkpoint managers for the handler.
+    # If the user passed a checkpoint manager, it is used for both reading and writing and the
+    # handler remembers it did not make the manager. Otherwise it creates a reading manager in
+    # the checkpoint directory keeping one checkpoint; the chief writes with that same manager,
+    # while non-chief workers write with a second manager in a per-worker temporary directory.
+    # Returns nothing; may create directories.
     """Create CheckpointManager(s) if a checkpoint is passed else take it."""
     if isinstance(self._checkpoint_or_checkpoint_manager,
                   checkpoint_management.CheckpointManager):
@@ -671,10 +799,18 @@ class PreemptionCheckpointHandler(object):
                 max_to_keep=1))
 
   def _start_watching_for_signal(self):
+    # [FUNCTION DOC]
+    # HELPER: fallback termination detection when no watcher callback is configured.
+    # Logs and installs the handler method as the process-wide handler for the termination
+    # signal (global side effect; only valid from the main thread). Returns nothing.
     logging.info('Start watcher for local signal.')
     signal.signal(signal.SIGTERM, self._sigterm_handler_fn)
 
   def _start_polling_for_termination_signal(self):
+    # [FUNCTION DOC]
+    # HELPER: starts the local termination watcher.
+    # Creates a stop event and a named daemon thread running the polling method, logs, and
+    # starts the thread. Returns nothing.
     self._poll_termination_signal_thread_should_stop = threading.Event()
     self._poll_termination_signal_thread = threading.Thread(
         target=self._poll_termination_signal,
@@ -684,6 +820,12 @@ class PreemptionCheckpointHandler(object):
     self._poll_termination_signal_thread.start()
 
   def _poll_termination_signal(self):
+    # [FUNCTION DOC]
+    # HELPER: body of the local watcher thread.
+    # Loops once per second calling the configured watcher callback; returns without action if
+    # the stop event is set or the final grace-period countdown has begun; when the callback
+    # reports a notice, leaves the loop and tries to claim the earliest preemption. Returns
+    # nothing.
     """Poll maintenance notice and notify peers if receiving one."""
     while True:
       if self._poll_termination_signal_thread_should_stop.is_set(
@@ -696,6 +838,12 @@ class PreemptionCheckpointHandler(object):
     self._maybe_set_received_own_sigterm()
 
   def _maybe_set_received_own_sigterm(self):
+    # [FUNCTION DOC]
+    # HELPER: records that this worker received a termination notice, if it is the first.
+    # In local mode just records the time and sets the own-signal event. Otherwise tries to
+    # publish this worker's id under the shared preemption key in the coordination service; on
+    # success records the time and sets the event; if the key already exists (another worker got
+    # there first) logs and leaves the decision to that worker. Returns nothing.
     """Claim earliest preemption if no one else has done it before."""
     if self._local_mode:
       logging.info('Member %s has received termination notice.',
@@ -729,6 +877,10 @@ class PreemptionCheckpointHandler(object):
       return
 
   def _stop_poll_termination_signal_thread(self):
+    # [FUNCTION DOC]
+    # HELPER: shuts down the local termination watcher thread if one exists.
+    # Sets its stop event, waits for the thread to finish, clears the reference and logs. Safe
+    # if the attribute was never set. Blocks until the thread ends. Returns nothing.
     if getattr(self, '_poll_termination_signal_thread', None):
       self._poll_termination_signal_thread_should_stop.set()
       self._poll_termination_signal_thread.join()
@@ -737,6 +889,13 @@ class PreemptionCheckpointHandler(object):
       logging.info("Shut down watcher for one's own termination signal")
 
   def _stop_cluster_wise_termination_watcher_thread(self):
+    # [FUNCTION DOC]
+    # HELPER: shuts down the thread watching for the cluster-wide step-to-save key.
+    # Because that thread blocks waiting for a key, this uploads a stop value under both the
+    # initial and the final run-count keys in the coordination service, ignoring already-exists
+    # and unavailable errors (and logging and ignoring any other error), then always waits for
+    # the thread to finish, clears the reference and logs. Safe if no thread exists. Returns
+    # nothing.
     """Stop the thread that is _watch_step_to_save_key."""
     if getattr(self, '_cluster_wise_termination_watcher_thread', None):
       try:
@@ -771,6 +930,10 @@ class PreemptionCheckpointHandler(object):
         logging.info('Shut down watcher for peer\'s termination signal.')
 
   def __del__(self):
+    # [FUNCTION DOC]
+    # Destructor: stops the cluster-wide watcher thread and the local watcher thread. Not
+    # guaranteed to run at any particular time, which is why the threads are daemon threads.
+    # Returns nothing.
     self._stop_cluster_wise_termination_watcher_thread()
     self._stop_poll_termination_signal_thread()
 
@@ -779,6 +942,10 @@ class PreemptionCheckpointHandler(object):
               'Track steps using a tf.Variable saved in checkpoint instead.')
   @doc_controls.do_not_generate_docs
   def total_run_calls(self):
+    # [FUNCTION DOC]
+    # Deprecated read-only property returning the number of calls to the run method, including
+    # those before a restart (restored from the checkpoint). Raises a not-implemented error on
+    # internal TPU, where users must track steps themselves. Otherwise returns the run counter.
     """Returns the number of times `PreemptionCheckpointHandler.run` is called.
 
     DEPRECATED: user should track total steps themselves, as this API provides
@@ -806,6 +973,13 @@ class PreemptionCheckpointHandler(object):
           distributed_train_function,
           *args,
           **kwargs):
+    # [FUNCTION DOC]
+    # Runs one training call with preemption and error handling. Inputs: the distributed
+    # training function plus positional and keyword arguments forwarded to it. Dispatches by
+    # platform: internal TPU uses the TPU variant; Google Cloud TPU or CPU just calls the
+    # function with no handling; everything else uses the multi-worker mirrored variant.
+    # Returns the training function's result. Errors from the function propagate (and are
+    # reported to the cluster in the mirrored variant).
     """Runs a training function with error and preemption handling.
 
     This function handles the preemption signal from any peer in the cluster by
@@ -895,6 +1069,10 @@ class PreemptionCheckpointHandler(object):
       )
 
   def _run_for_tpu(self, distributed_train_function, *args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: run implementation for TPU strategy. Issues the preemption check operation (which
+    # flags a received preemption) and then calls the training function with the given
+    # arguments, returning its result.
     """PreemptionCheckpointHandler.run implementation for TPUStrategy."""
     gen_check_preemption_op.check_preemption(preemption_key=PREEMPTION_KEY)
     return distributed_train_function(*args, **kwargs)
@@ -902,6 +1080,12 @@ class PreemptionCheckpointHandler(object):
   def _run_for_multi_worker_mirrored(
       self, distributed_train_function, *args, **kwargs
   ):
+    # [FUNCTION DOC]
+    # HELPER: run implementation for multi-worker mirrored strategy. Checks for preemption
+    # and possibly checkpoints (and exits), times the training call, increments the run counter
+    # and updates the running average of run time. On a TensorFlow operation error, in cluster
+    # mode reports the error code and message to the cluster (ignoring failures of that report),
+    # then re-raises. Returns the training function's result.
     """PreemptionCheckpointHandler.run implementation for MWMS."""
     try:
       self._check_preemption_and_maybe_checkpoint()
@@ -928,6 +1112,14 @@ class PreemptionCheckpointHandler(object):
   # converted to public documentation.
   # pylint: disable=line-too-long
   def save_checkpoint_if_preempted(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Alternative to the run method: saves a checkpoint if a preemption signal is available.
+    # Positional and keyword arguments are forwarded to the checkpoint save. On internal TPU,
+    # performs the preemption check inside an async scope; on a preemption (aborted) error it
+    # clears the error, saves, and calls the exit callback; other aborted errors are re-raised.
+    # On Google Cloud TPU or CPU does nothing. Elsewhere checks for preemption and maybe
+    # checkpoints, increments the run counter and resets the run-time estimate to zero.
+    # Returns nothing.
     """Saves a checkpoint if a preemption signal has been made available.
 
     This is an alternative API for `PreemptionCheckpointHandler.run` and
@@ -998,6 +1190,12 @@ class PreemptionCheckpointHandler(object):
 
   @tf_contextlib.contextmanager
   def watch_preemption_scope(self):
+    # [FUNCTION DOC]
+    # Context manager (yields nothing) for TPU strategy training. On internal TPU, runs the body
+    # in an async scope; on a preemption (aborted) error clears it, saves a checkpoint and calls
+    # the exit callback; other aborted errors are re-raised. On other platforms runs the body
+    # and, on a TensorFlow operation error in cluster mode, reports it to the cluster (ignoring
+    # failures of the report) and re-raises.
     """Syncs error and maybe save checkpoint for usage with TPUStrategy.
 
     Note: Usage with `tf.distribute.MultiWorkerMirroredStrategy` does not need
@@ -1056,6 +1254,15 @@ class PreemptionCheckpointHandler(object):
         raise
 
   def _save_checkpoint(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: writes the preemption checkpoint.
+    # KNOWN ISSUE: the docstring says it saves and exits the program, but it never exits; the
+    # callers invoke the exit callback afterwards.
+    # Arguments are forwarded to the save. Increments a usage metric, and on non-TPU platforms
+    # stores the current total run count in the checkpointed variable. Saves inside a preemption
+    # save context using the custom save callback if configured, otherwise the write checkpoint
+    # manager. Records the elapsed time in the checkpoint time attribute and logs. Returns
+    # nothing.
     """Saves the checkpoint and exit program."""
     distribute_lib.distribution_strategy_input_api_counter.get_cell(
         self._platform_device.name,
@@ -1080,6 +1287,18 @@ class PreemptionCheckpointHandler(object):
     self._checkpoint_time = end_time - start_time
 
   def _check_preemption_and_maybe_checkpoint(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: per-step preemption protocol run before each training step.
+    # Arguments are forwarded to the save. On internal TPU only issues the preemption check
+    # operation. Otherwise picks the initial or final run-count key depending on the countdown
+    # flag. If the agreed-checkpoint-step event is set and the agreed step equals the run
+    # counter: saves, and if it is time to exit stops both watcher threads, removes the
+    # non-chief temporary directory when the API made the manager, and calls the exit callback;
+    # otherwise starts the grace-period countdown and clears the event. Else if this worker got
+    # its own termination signal: during countdown returns unless the target time has passed;
+    # picks the next step as the save step; in local mode sets it directly, in cluster mode
+    # publishes it to the coordination service and waits for every worker's acknowledgement;
+    # then sets up the countdown if there is a grace period. Returns nothing.
     """Checkpoint if any worker has received a preemption signal.
 
     This function handles preemption signal reported by any worker in the
@@ -1179,6 +1398,10 @@ class PreemptionCheckpointHandler(object):
       self._setup_countdown_if_has_grace_period_and_not_already_counting_down()
 
   def _time_to_exit(self):
+    # [FUNCTION DOC]
+    # HELPER: decides whether to exit after a checkpoint. Returns true when there is no positive
+    # grace period or when the final grace-period countdown is already in progress; false when
+    # a first checkpoint was just taken and training should continue through the grace period.
     """Return whether to exit: exit if no grace period or grace period ends."""
     # we should directly exit in either of the two cases:
     # 1. if no grace period is provided;
@@ -1202,6 +1425,11 @@ class PreemptionCheckpointHandler(object):
     return (self._grace_period <= 0) or self._final_checkpoint_countdown
 
   def _setup_countdown_if_has_grace_period_and_not_already_counting_down(self):
+    # [FUNCTION DOC]
+    # HELPER: computes when the final checkpoint must be taken. Only when the grace period is
+    # positive and the countdown has not begun: sets the target termination time to the time the
+    # own signal was received plus the grace period, minus a safety margin of three times twice
+    # the estimated run time. Otherwise does nothing. Returns nothing.
     """Set up at the beginning of a countdown period for long grace period."""
     if self._grace_period > 0 and not self._final_checkpoint_countdown:
       # A factor to provide more buffer / inaccuracy.
@@ -1215,11 +1443,21 @@ class PreemptionCheckpointHandler(object):
           buffer_factor * self._estimated_run_time * 2)
 
   def _sigterm_handler_fn(self, signum, frame):
+    # [FUNCTION DOC]
+    # HELPER: process termination signal handler. Ignores the signal number and stack frame
+    # arguments and tries to claim the earliest preemption for this worker. Returns nothing.
     """Upload the to-be-preempted worker's id to coordination service."""
     del signum, frame
     self._maybe_set_received_own_sigterm()
 
   def _watch_step_to_save_key(self):
+    # [FUNCTION DOC]
+    # HELPER: body of the cluster-wide watcher thread (all workers run it).
+    # Blocks until the initial step-to-save key appears in the coordination service. Unless it
+    # holds the stop value, stores the step, sets the checkpoint-step event, and publishes this
+    # worker's acknowledgement key. With a positive grace period it then blocks for the final
+    # step key; unless that is the stop value, acknowledges it, sets the event again and stores
+    # the final step. Returns nothing.
     """Watch out for step-to-save config key and acknowledge.
 
     All workers, including the one to be preempted, execute this function to get
