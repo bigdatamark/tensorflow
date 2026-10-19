@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# Test module for the Toeplitz linear operator in the linalg package. Defines one test class
+# derived from the shared square linear-operator test base class, which builds a Toeplitz
+# operator from random first-column and first-row vectors and compares it with a dense matrix
+# built by the scientific-computing library's Toeplitz constructor, with relaxed tolerances and
+# some generic tests skipped (solve-related ones, Cholesky, condition number, inverse). Also
+# tests argument validation, gradient tape safety (including explicit checks for the diagonal
+# part and trace) and variable conversion. Defines a module-level alias for the private
+# complex-conversion helper of the operator module (not used in this file). Requires the
+# scientific-computing library at import time. When run as a script it registers the generated
+# base-class tests and starts the test runner.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,16 +48,36 @@ _to_complex = linear_operator_toeplitz._to_complex
 @test_util.run_all_in_graph_and_eager_modes
 class LinearOperatorToeplitzTest(
     linear_operator_test_util.SquareLinearOperatorDerivedClassTest):
+  # [CLASS DOC]
+  # Test case for the Toeplitz linear operator. Inherits generic square-operator checks from the
+  # shared base class, relaxes tolerances for all four float and complex dtypes, skips the
+  # Cholesky, condition number, inverse and solve tests (solve is not specialized yet), supplies
+  # the shapes to test and the operator/matrix factory, and adds tests for validation, tape
+  # safety and variable conversion. Runs in graph and eager modes.
   """Most tests done in the base class LinearOperatorDerivedClassTest."""
 
   @contextlib.contextmanager
   def _constrain_devices_and_set_default(self, sess, use_gpu, force_gpu):
+    # [FUNCTION DOC]
+    # HELPER: device-selection context manager used by the test framework's session handling.
+    # KNOWN ISSUE: the docstring claims the FFT operation mapping is overwritten for testing, but
+    # the body only delegates to the parent test case's implementation with the same arguments
+    # and yields its session; no mapping is overwritten.
+    # Context manager (generator). Inputs: sess (session), use_gpu and force_gpu (booleans).
+    # Enters the parent test-case context for constraining devices and setting the default
+    # session, and yields the session it provides; the context is left when the caller's block
+    # ends.
     """We overwrite the FFT operation mapping for testing."""
     with test.TestCase._constrain_devices_and_set_default(
         self, sess, use_gpu, force_gpu) as sess:
       yield sess
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Test fixture setup: relaxes the absolute and relative comparison tolerances stored by the
+    # base class: 1e-4 for float32 and complex64, 1e-9 for float64 and complex128, until
+    # specialized solve and determinant routines exist (see the to-do). Does not touch the
+    # TensorFloat-32 setting. Returns nothing.
     # TODO(srvasude): Lower these tolerances once specialized solve and
     # determinants are implemented.
     self._atol[dtypes.float32] = 1e-4
@@ -60,6 +91,11 @@ class LinearOperatorToeplitzTest(
 
   @staticmethod
   def skip_these_tests():
+    # [FUNCTION DOC]
+    # Hook for the base test class: returns the names of generated tests to skip: Cholesky,
+    # condition number, inverse, solve and solve with broadcasting. Solve is skipped because it
+    # currently exercises the generic base-class implementation, which could be more stable (see
+    # the to-do about enabling these once solve is specialized).
     # Skip solve tests, as these could have better stability
     # (currently exercises the base class).
     # TODO(srvasude): Enable these when solve is implemented.
@@ -67,6 +103,9 @@ class LinearOperatorToeplitzTest(
 
   @staticmethod
   def operator_shapes_infos():
+    # [FUNCTION DOC]
+    # Hook for the base test class: returns the list of operator shape descriptions to test, all
+    # square: 1 by 1, batched 1 by 6 by 6, batched 3 by 4 by 4 and 2 by 1 by 3 by 3.
     shape_info = linear_operator_test_util.OperatorShapesInfo
     # non-batch operators (n, n) and batch operators.
     return [
@@ -79,6 +118,22 @@ class LinearOperatorToeplitzTest(
   def operator_and_matrix(
       self, build_info, dtype, use_placeholder,
       ensure_self_adjoint_and_pd=False):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: in the self-adjoint positive-definite branch the decreasing sequence from ten
+    # to one assigned to the row is immediately overwritten by the random column (the row is set
+    # equal to the column), so that sequence is dead code, and the resulting symmetric Toeplitz
+    # matrix built from random positive values is not guaranteed to be positive definite despite
+    # the comment citing the decreasing-sequence result.
+    # Factory hook used by the base class. Inputs: build_info (its shape is the full
+    # batch-plus-matrix shape), dtype, use_placeholder (feed row and column through placeholders
+    # of unknown shape) and ensure_self_adjoint_and_pd (make row equal to column so the matrix is
+    # symmetric, and flag the operator self-adjoint and positive definite). Draws random column
+    # and row vectors with entries between 1 and 5 (using the global numpy random state, so
+    # unseeded here), forces their first entries to match (required for a valid Toeplitz matrix),
+    # casts them to the dtype, and builds the Toeplitz operator. The dense reference is built
+    # by flattening batch dimensions, creating each matrix with the scientific library's Toeplitz
+    # function from the column and row, and reshaping back and casting to the dtype. Returns
+    # (operator, dense matrix).
     shape = list(build_info.shape)
     row = np.random.uniform(low=1., high=5., size=shape[:-1])
     col = np.random.uniform(low=1., high=5., size=shape[:-1])
@@ -126,6 +181,10 @@ class LinearOperatorToeplitzTest(
     return operator, matrix
 
   def test_scalar_row_col_raises(self):
+    # [FUNCTION DOC]
+    # Test: constructing the Toeplitz operator with a scalar for the row, the column or both
+    # raises a value error saying the argument must have at least 1 dimension. Three cases:
+    # scalar column and row, vector column with scalar row, scalar column with vector row.
     with self.assertRaisesRegex(ValueError, "must have at least 1 dimension"):
       linear_operator_toeplitz.LinearOperatorToeplitz(1., 1.)
 
@@ -136,6 +195,12 @@ class LinearOperatorToeplitzTest(
       linear_operator_toeplitz.LinearOperatorToeplitz(1., [1.])
 
   def test_tape_safe(self):
+    # [FUNCTION DOC]
+    # Test: builds a self-adjoint, positive-definite 1 by 1 Toeplitz operator from two trainable
+    # variables (column and row) and runs the shared gradient-tape safety check, skipping the
+    # diagonal part and trace checks because they depend only on the column. Those two are then
+    # tested explicitly: under a gradient tape, the gradient of the diagonal part and of the
+    # trace with respect to the column variable must not be nothing.
     col = variables_module.Variable([1.])
     row = variables_module.Variable([1.])
     operator = linear_operator_toeplitz.LinearOperatorToeplitz(
@@ -155,6 +220,10 @@ class LinearOperatorToeplitzTest(
       self.assertIsNotNone(tape.gradient(operator.trace(), col))
 
   def test_convert_variables_to_tensors(self):
+    # [FUNCTION DOC]
+    # Test: builds a self-adjoint, positive-definite Toeplitz operator from two variables,
+    # initializes all of the operator's variables in a session and runs the shared check that
+    # converting the operator's variables to tensors yields an equivalent operator.
     col = variables_module.Variable([1.])
     row = variables_module.Variable([1.])
     operator = linear_operator_toeplitz.LinearOperatorToeplitz(
