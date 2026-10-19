@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Defines the legacy Keras (v2 optimizer API) Adamax optimizer, a variant of Adam based on the
+# infinity norm of the gradients. It builds on the generic optimizer base class in the
+# optimizer_v2 package and uses fused training kernels for dense updates. Import has no side
+# effects beyond defining the class.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,6 +32,12 @@ from tensorflow.python.ops import math_ops
 
 
 class Adamax(optimizer_v2.OptimizerV2):
+  # [CLASS DOC]
+  # Adamax optimizer: keeps a first moment estimate and an exponentially weighted infinity norm
+  # per variable (two slots, m and v) and scales the step by the bias-corrected learning rate.
+  # Dense gradients use a fused kernel; sparse gradients only update the rows present in the
+  # gradient. Holds hyperparameters learning rate, decay, beta_1, beta_2 and an epsilon constant.
+  # Created by user code and driven by the base class minimize / apply-gradients flow.
   """Optimizer that implements the Adamax algorithm.
 
   It is a variant of Adam based on the infinity norm.
@@ -92,6 +103,13 @@ class Adamax(optimizer_v2.OptimizerV2):
                epsilon=1e-7,
                name='Adamax',
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructs the optimizer. Inputs: learning_rate (number, tensor or schedule, default
+    # 0.001; the legacy keyword "lr" in the extra keyword arguments takes precedence), beta_1
+    # (first moment decay, default 0.9), beta_2 (infinity norm decay, default 0.999), epsilon
+    # (stability constant, default 1e-7; a false-like value falls back to the backend default),
+    # name (default "Adamax") and extra keyword arguments such as clipnorm and clipvalue
+    # forwarded to the base class. Registers hyperparameters and stores epsilon. Returns nothing.
     super(Adamax, self).__init__(name, **kwargs)
     self._set_hyper('learning_rate', kwargs.get('lr', learning_rate))
     self._set_hyper('decay', self._initial_decay)
@@ -100,6 +118,10 @@ class Adamax(optimizer_v2.OptimizerV2):
     self.epsilon = epsilon or backend_config.epsilon()
 
   def _create_slots(self, var_list):
+    # [FUNCTION DOC]
+    # HELPER: slot setup hook called by the optimizer base class. Creates a first moment slot
+    # for every variable in var_list, then a second moment (infinity norm) slot for each, in
+    # separate loops to keep the v1 ordering. Returns nothing; creates slot variables.
     # Separate for-loops to respect the ordering of slot variables from v1.
     for var in var_list:
       self.add_slot(var, 'm')  # Create slots for the first moments.
@@ -107,6 +129,12 @@ class Adamax(optimizer_v2.OptimizerV2):
       self.add_slot(var, 'v')  # Create slots for the second moments.
 
   def _prepare_local(self, var_device, var_dtype, apply_state):
+    # [FUNCTION DOC]
+    # HELPER: per-device, per-dtype coefficient precomputation. Calls the base implementation,
+    # then computes the 1-based step, beta values, beta_1 power, the negated bias-corrected
+    # learning rate, epsilon tensor, one-minus-beta_1 and a zero integer constant (used as the
+    # gather axis), merging them into the apply_state entry keyed by (device, dtype). Returns
+    # nothing; mutates apply_state.
     super(Adamax, self)._prepare_local(var_device, var_dtype, apply_state)
 
     local_step = math_ops.cast(self.iterations + 1, var_dtype)
@@ -130,6 +158,11 @@ class Adamax(optimizer_v2.OptimizerV2):
     )
 
   def _resource_apply_dense(self, grad, var, apply_state=None):
+    # [FUNCTION DOC]
+    # HELPER: dense update step called by the optimizer base class. Inputs: grad (dense
+    # gradient), var (resource variable), apply_state (optional coefficient mapping; a
+    # fallback is computed if missing). Runs the fused Adamax kernel on the variable and its m
+    # and v slots, honoring the locking setting. Returns the update operation.
     var_device, var_dtype = var.device, var.dtype.base_dtype
     coefficients = ((apply_state or {}).get((var_device, var_dtype))
                     or self._fallback_apply_state(var_device, var_dtype))
@@ -149,6 +182,13 @@ class Adamax(optimizer_v2.OptimizerV2):
         use_locking=self._use_locking)
 
   def _resource_apply_sparse(self, grad, var, indices, apply_state=None):
+    # [FUNCTION DOC]
+    # HELPER: sparse update step called by the optimizer base class. Inputs: grad (gradient
+    # row values), var (variable), indices (rows the values belong to), apply_state (optional
+    # coefficient mapping). Gathers the affected rows of m and v, computes the new first moment
+    # and the new infinity norm (maximum of decayed value and absolute gradient) for those rows
+    # only, writes them back by scatter update, then scatter-adds the scaled step to the
+    # variable. Unused rows are untouched. Returns a grouped operation of the three updates.
     var_device, var_dtype = var.device, var.dtype.base_dtype
     coefficients = ((apply_state or {}).get((var_device, var_dtype))
                     or self._fallback_apply_state(var_device, var_dtype))
@@ -176,6 +216,9 @@ class Adamax(optimizer_v2.OptimizerV2):
     return control_flow_ops.group(*[var_update, m_t, v_t])
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a serializable mapping of the base configuration extended with the current
+    # learning rate, decay, beta_1, beta_2 and epsilon. No side effects.
     config = super(Adamax, self).get_config()
     config.update({
         'learning_rate': self._serialize_hyperparameter('learning_rate'),

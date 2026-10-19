@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Learning rate schedules for the legacy Keras optimizers. Defines the abstract base class
+# LearningRateSchedule plus concrete schedules (exponential, piecewise constant, polynomial,
+# inverse time, cosine, cosine with restarts, linear cosine and noisy linear cosine decay). Each
+# schedule is a callable object mapping the current training step to a learning rate tensor, and
+# is configurable and serializable through its configuration mapping. The module also exposes
+# serialize and deserialize helpers that convert schedules to and from configuration mappings
+# using the Keras generic serialization utilities. Import has no side effects beyond definitions.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,6 +38,13 @@ from tensorflow.python.util import nest
 
 
 class LearningRateSchedule(object):
+  # [CLASS DOC]
+  # KNOWN ISSUE: the abstract-method markers have no effect because the class does not use the
+  # abstract base class metaclass, so subclasses lacking the overrides can still be instantiated;
+  # the error only appears when the methods are called.
+  # Base class of all learning rate schedules. A schedule is a callable taking the current step
+  # and returning a learning rate; it should also provide a configuration mapping and can be
+  # rebuilt from one. Subclasses override the call and get-config methods.
   """The learning rate schedule base class.
 
   You can use a learning rate schedule to modulate how the learning rate
@@ -74,14 +89,24 @@ class LearningRateSchedule(object):
 
   @abc.abstractmethod
   def __call__(self, step):
+    # [FUNCTION DOC]
+    # Abstract hook: subclasses compute the learning rate for the given step (scalar integer
+    # tensor or number). This base version always raises a not-implemented error.
     raise NotImplementedError("Learning rate schedule must override __call__")
 
   @abc.abstractmethod
   def get_config(self):
+    # [FUNCTION DOC]
+    # Abstract hook: subclasses return a serializable mapping of their constructor arguments.
+    # This base version always raises a not-implemented error.
     raise NotImplementedError("Learning rate schedule must override get_config")
 
   @classmethod
   def from_config(cls, config):
+    # [FUNCTION DOC]
+    # Class-level factory. Input: config, a mapping of constructor argument names to values (as
+    # produced by the get-config method). Returns a new instance of the calling class built by
+    # passing the mapping as keyword arguments; unknown keys make the constructor raise.
     """Instantiates a `LearningRateSchedule` from its config.
 
     Args:
@@ -94,6 +119,11 @@ class LearningRateSchedule(object):
 
 
 class ExponentialDecay(LearningRateSchedule):
+  # [CLASS DOC]
+  # Schedule that multiplies the initial learning rate by the decay rate raised to the power of
+  # step divided by decay steps (rounded down when staircase is enabled). Stores the initial
+  # rate, decay steps, decay rate, staircase flag and name. Used by passing an instance as an
+  # optimizer learning rate.
   """A LearningRateSchedule that uses an exponential decay schedule.
 
   When training a model, it is often useful to lower the learning rate as
@@ -151,6 +181,11 @@ class ExponentialDecay(LearningRateSchedule):
       decay_rate,
       staircase=False,
       name=None):
+    # [FUNCTION DOC]
+    # Stores the schedule parameters without validation. Inputs: initial_learning_rate (number
+    # or float tensor), decay_steps (positive number or integer tensor), decay_rate (number or
+    # float tensor), staircase (boolean, default false) and name (optional string). Returns
+    # nothing.
     """Applies exponential decay to the learning rate.
 
     Args:
@@ -173,6 +208,12 @@ class ExponentialDecay(LearningRateSchedule):
     self.name = name
 
   def __call__(self, step):
+    # [FUNCTION DOC]
+    # Computes the decayed learning rate for the given step (number or tensor). Converts the
+    # initial rate to a tensor, casts the other values to its dtype, divides step by decay
+    # steps (rounding down when staircase is set) and returns initial rate times decay rate to
+    # that power, as a scalar tensor of the initial rate's dtype. Creates operations in a name
+    # scope; no other side effects.
     with ops.name_scope_v2(self.name or "ExponentialDecay") as name:
       initial_learning_rate = (
           tensor_conversion.convert_to_tensor_v2_with_dispatch(
@@ -191,6 +232,9 @@ class ExponentialDecay(LearningRateSchedule):
           initial_learning_rate, math_ops.pow(decay_rate, p), name=name)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with the initial learning rate, decay steps, decay rate, staircase flag
+    # and name, suitable for rebuilding the schedule.
     return {
         "initial_learning_rate": self.initial_learning_rate,
         "decay_steps": self.decay_steps,
@@ -201,6 +245,9 @@ class ExponentialDecay(LearningRateSchedule):
 
 
 class PiecewiseConstantDecay(LearningRateSchedule):
+  # [CLASS DOC]
+  # Schedule returning one of several constant values depending on which interval, defined by
+  # increasing step boundaries, the current step falls in. Stores boundaries, values and name.
   """A LearningRateSchedule that uses a piecewise constant decay schedule.
 
   The function returns a 1-arg callable to compute the piecewise constant
@@ -242,6 +289,11 @@ class PiecewiseConstantDecay(LearningRateSchedule):
       boundaries,
       values,
       name=None):
+    # [FUNCTION DOC]
+    # Inputs: boundaries (list of numbers or tensors, increasing, same type as the step), values
+    # (list with exactly one more element than boundaries) and name (optional string). Raises a
+    # value error when the lengths do not match. Strict increase of boundaries is not checked.
+    # Stores the three values and returns nothing.
     """Piecewise constant from boundaries and interval values.
 
     Args:
@@ -269,6 +321,13 @@ class PiecewiseConstantDecay(LearningRateSchedule):
     self.name = name
 
   def __call__(self, step):
+    # [FUNCTION DOC]
+    # Returns the value for the interval containing step. Converts boundaries and values to
+    # tensors, converts the step, casts boundaries to the step dtype when it differs, then builds
+    # a mutually exclusive case selection: the first value when step is at most the first
+    # boundary, the last value when step is above the last boundary, and middle values for the
+    # half-open intervals between consecutive boundaries. Returns a tensor; no other side effects.
+    # Note the lambdas of the interval predicates bind each value at creation time.
     with ops.name_scope_v2(self.name or "PiecewiseConstant"):
       boundaries = nest.map_structure(
           tensor_conversion.convert_to_tensor_v2_with_dispatch,
@@ -298,6 +357,9 @@ class PiecewiseConstantDecay(LearningRateSchedule):
       return control_flow_case.case(pred_fn_pairs, default, exclusive=True)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with the boundaries, values and name, suitable for rebuilding the
+    # schedule.
     return {
         "boundaries": self.boundaries,
         "values": self.values,
@@ -306,6 +368,11 @@ class PiecewiseConstantDecay(LearningRateSchedule):
 
 
 class PolynomialDecay(LearningRateSchedule):
+  # [CLASS DOC]
+  # Schedule that moves from an initial learning rate to an end learning rate over a number of
+  # steps following a polynomial of configurable power, optionally cycling (restarting with a
+  # longer period) once the steps are exhausted. Stores initial rate, decay steps, end rate,
+  # power, cycle flag and name.
   """A LearningRateSchedule that uses a polynomial decay schedule.
 
   It is commonly observed that a monotonically decreasing learning rate, whose
@@ -384,6 +451,11 @@ class PolynomialDecay(LearningRateSchedule):
       power=1.0,
       cycle=False,
       name=None):
+    # [FUNCTION DOC]
+    # Stores the schedule parameters without validation. Inputs: initial_learning_rate (number
+    # or float tensor), decay_steps (positive number or integer tensor), end_learning_rate
+    # (default 0.0001), power (default 1.0, i.e. linear), cycle (boolean, default false) and
+    # name (optional string). Returns nothing.
     """Applies a polynomial decay to the learning rate.
 
     Args:
@@ -409,6 +481,12 @@ class PolynomialDecay(LearningRateSchedule):
     self.name = name
 
   def __call__(self, step):
+    # [FUNCTION DOC]
+    # Computes the learning rate for the given step. All values are cast to the dtype of the
+    # initial rate. With cycle enabled the decay length is scaled to the first multiple of decay
+    # steps at or above the step (a multiplier of one at step zero); otherwise the step is capped
+    # at decay steps. Returns end rate plus (initial minus end) times (one minus step fraction)
+    # raised to the power, as a scalar tensor. No side effects beyond creating operations.
     with ops.name_scope_v2(self.name or "PolynomialDecay") as name:
       initial_learning_rate = (
           tensor_conversion.convert_to_tensor_v2_with_dispatch(
@@ -441,6 +519,9 @@ class PolynomialDecay(LearningRateSchedule):
           name=name)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with the initial rate, decay steps, end rate, power, cycle flag and name,
+    # suitable for rebuilding the schedule.
     return {
         "initial_learning_rate": self.initial_learning_rate,
         "decay_steps": self.decay_steps,
@@ -452,6 +533,10 @@ class PolynomialDecay(LearningRateSchedule):
 
 
 class InverseTimeDecay(LearningRateSchedule):
+  # [CLASS DOC]
+  # Schedule that divides the initial learning rate by one plus decay rate times step over decay
+  # steps (rounded down when staircase is enabled). Stores initial rate, decay steps, decay rate,
+  # staircase flag and name.
   """A LearningRateSchedule that uses an inverse time decay schedule.
 
   When training a model, it is often useful to lower the learning rate as
@@ -510,6 +595,10 @@ class InverseTimeDecay(LearningRateSchedule):
       decay_rate,
       staircase=False,
       name=None):
+    # [FUNCTION DOC]
+    # Stores the schedule parameters without validation. Inputs: initial_learning_rate (number or
+    # float tensor), decay_steps (how often to apply decay), decay_rate (number), staircase
+    # (boolean, default false) and name (optional string). Returns nothing.
     """Applies inverse time decay to the initial learning rate.
 
     Args:
@@ -531,6 +620,11 @@ class InverseTimeDecay(LearningRateSchedule):
     self.name = name
 
   def __call__(self, step):
+    # [FUNCTION DOC]
+    # Computes the learning rate for the given step: casts values to the initial rate's dtype,
+    # divides step by decay steps (rounded down when staircase is set), and returns the initial
+    # rate divided by one plus decay rate times that quotient, as a scalar tensor. No side
+    # effects beyond creating operations.
     with ops.name_scope_v2(self.name or "InverseTimeDecay") as name:
       initial_learning_rate = (
           tensor_conversion.convert_to_tensor_v2_with_dispatch(
@@ -550,6 +644,9 @@ class InverseTimeDecay(LearningRateSchedule):
       return math_ops.divide(initial_learning_rate, denom, name=name)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with the initial rate, decay steps, decay rate, staircase flag and name,
+    # suitable for rebuilding the schedule.
     return {
         "initial_learning_rate": self.initial_learning_rate,
         "decay_steps": self.decay_steps,
@@ -560,6 +657,10 @@ class InverseTimeDecay(LearningRateSchedule):
 
 
 class CosineDecay(LearningRateSchedule):
+  # [CLASS DOC]
+  # Schedule that decays the learning rate along half a cosine wave from the initial rate down
+  # to alpha times the initial rate over decay steps, staying at that floor afterwards. Stores
+  # initial rate, decay steps, alpha and name.
   """A LearningRateSchedule that uses a cosine decay schedule.
 
   See [Loshchilov & Hutter, ICLR2016](https://arxiv.org/abs/1608.03983),
@@ -608,6 +709,10 @@ class CosineDecay(LearningRateSchedule):
       decay_steps,
       alpha=0.0,
       name=None):
+    # [FUNCTION DOC]
+    # Stores the schedule parameters without validation. Inputs: initial_learning_rate (number
+    # or float tensor), decay_steps (number of steps to decay over), alpha (minimum rate as a
+    # fraction of the initial rate, default 0.0) and name (optional string). Returns nothing.
     """Applies cosine decay to the learning rate.
 
     Args:
@@ -627,6 +732,11 @@ class CosineDecay(LearningRateSchedule):
     self.name = name
 
   def __call__(self, step):
+    # [FUNCTION DOC]
+    # Computes the learning rate for the given step: caps the step at decay steps, computes the
+    # completed fraction, a cosine factor of one half times one plus cosine of pi times that
+    # fraction, mixes it with alpha, and returns the initial rate times the result as a scalar
+    # tensor. No side effects beyond creating operations.
     with ops.name_scope_v2(self.name or "CosineDecay"):
       initial_learning_rate = (
           tensor_conversion.convert_to_tensor_v2_with_dispatch(
@@ -646,6 +756,9 @@ class CosineDecay(LearningRateSchedule):
       return math_ops.multiply(initial_learning_rate, decayed)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with the initial rate, decay steps, alpha and name, suitable for
+    # rebuilding the schedule.
     return {
         "initial_learning_rate": self.initial_learning_rate,
         "decay_steps": self.decay_steps,
@@ -655,6 +768,10 @@ class CosineDecay(LearningRateSchedule):
 
 
 class CosineDecayRestarts(LearningRateSchedule):
+  # [CLASS DOC]
+  # Cosine decay schedule with warm restarts: after the first period of first_decay_steps, each
+  # new period is t_mul times longer and starts from m_mul times the previous peak rate. Stores
+  # initial rate, first decay steps, the multipliers (privately), alpha and name.
   """A LearningRateSchedule that uses a cosine decay schedule with restarts.
 
   See [Loshchilov & Hutter, ICLR2016](https://arxiv.org/abs/1608.03983),
@@ -703,6 +820,12 @@ class CosineDecayRestarts(LearningRateSchedule):
       m_mul=1.0,
       alpha=0.0,
       name=None):
+    # [FUNCTION DOC]
+    # Stores the schedule parameters without validation. Inputs: initial_learning_rate (number
+    # or float tensor), first_decay_steps (length of the first period), t_mul (period growth
+    # factor, default 2.0), m_mul (peak rate factor per restart, default 1.0), alpha (minimum
+    # rate fraction, default 0.0) and name (optional string; the default operation name is
+    # "SGDRDecay"). Returns nothing.
     """Applies cosine decay with restarts to the learning rate.
 
     Args:
@@ -728,6 +851,13 @@ class CosineDecayRestarts(LearningRateSchedule):
     self.name = name
 
   def __call__(self, step):
+    # [FUNCTION DOC]
+    # Computes the learning rate for the given step. Divides step by first decay steps, then
+    # determines the restart index and the fraction completed within the current period (using
+    # plain floor when t_mul equals one, or a geometric-series formula otherwise, selected with
+    # a conditional operation). Applies a cosine factor scaled by m_mul to the power of the
+    # restart index, mixes with alpha, and returns the initial rate times the result as a scalar
+    # tensor. No side effects beyond creating operations.
     with ops.name_scope_v2(self.name or "SGDRDecay") as name:
       initial_learning_rate = (
           tensor_conversion.convert_to_tensor_v2_with_dispatch(
@@ -744,6 +874,13 @@ class CosineDecayRestarts(LearningRateSchedule):
       completed_fraction = global_step_recomp / first_decay_steps
 
       def compute_step(completed_fraction, geometric=False):
+        # [FUNCTION DOC]
+        # HELPER: branch body for the conditional in the enclosing call method. Inputs:
+        # completed_fraction (tensor, step divided by first decay steps) and geometric (boolean).
+        # In geometric mode (period growth factor not one) finds the restart index with a
+        # logarithm and the sum of the geometric series of earlier periods, and rescales the
+        # fraction into the current period; otherwise the index is the integer part and the
+        # fraction is the remainder. Returns a pair: restart index and fraction within period.
         """Helper for `cond` operation."""
         if geometric:
           i_restart = math_ops.floor(
@@ -772,6 +909,9 @@ class CosineDecayRestarts(LearningRateSchedule):
       return math_ops.multiply(initial_learning_rate, decayed, name=name)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with the initial rate, first decay steps, t_mul, m_mul, alpha and name,
+    # suitable for rebuilding the schedule.
     return {
         "initial_learning_rate": self.initial_learning_rate,
         "first_decay_steps": self.first_decay_steps,
@@ -784,6 +924,10 @@ class CosineDecayRestarts(LearningRateSchedule):
 
 # Note: this code is still used by V1 APIs.
 class LinearCosineDecay(LearningRateSchedule):
+  # [CLASS DOC]
+  # Schedule combining a linear decay with a cosine oscillation (number of periods configurable),
+  # offset by alpha and beta. Mainly kept for the v1 API. Stores initial rate, decay steps,
+  # number of periods, alpha, beta and name.
   """A LearningRateSchedule that uses a linear cosine decay schedule.
 
   See [Bello et al., ICML2017] Neural Optimizer Search with RL.
@@ -844,6 +988,10 @@ class LinearCosineDecay(LearningRateSchedule):
       alpha=0.0,
       beta=0.001,
       name=None):
+    # [FUNCTION DOC]
+    # Stores the schedule parameters without validation. Inputs: initial_learning_rate (number
+    # or float tensor), decay_steps (steps to decay over), num_periods (default 0.5), alpha
+    # (default 0.0), beta (default 0.001) and name (optional string). Returns nothing.
     """Applies linear cosine decay to the learning rate.
 
     Args:
@@ -868,6 +1016,11 @@ class LinearCosineDecay(LearningRateSchedule):
     self.name = name
 
   def __call__(self, step):
+    # [FUNCTION DOC]
+    # Computes the learning rate for the given step: caps the step at decay steps, forms the
+    # linear decay fraction and a cosine factor over the configured number of periods, combines
+    # them as (alpha plus linear) times cosine plus beta, and returns the initial rate times the
+    # result as a scalar tensor. No side effects beyond creating operations.
     with ops.name_scope_v2(self.name or "LinearCosineDecay") as name:
       initial_learning_rate = (
           tensor_conversion.convert_to_tensor_v2_with_dispatch(
@@ -893,6 +1046,9 @@ class LinearCosineDecay(LearningRateSchedule):
                                name=name)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with the initial rate, decay steps, number of periods, alpha, beta and
+    # name, suitable for rebuilding the schedule.
     return {
         "initial_learning_rate": self.initial_learning_rate,
         "decay_steps": self.decay_steps,
@@ -905,6 +1061,12 @@ class LinearCosineDecay(LearningRateSchedule):
 
 # Note: this code is still used by V1 APIs.
 class NoisyLinearCosineDecay(LearningRateSchedule):
+  # [CLASS DOC]
+  # Like the linear cosine schedule, but adds zero-centered gaussian noise to the linear part
+  # whose variance decays with the step. Mainly kept for the v1 API. Stores initial rate, decay
+  # steps, initial variance, variance decay, number of periods, alpha, beta and name. Evaluating
+  # it is random.
+  # KNOWN ISSUE: the docstring formula shows an unbalanced parenthesis in the linear decay line.
   """A LearningRateSchedule that uses a noisy linear cosine decay schedule.
 
   See [Bello et al., ICML2017] Neural Optimizer Search with RL.
@@ -969,6 +1131,11 @@ class NoisyLinearCosineDecay(LearningRateSchedule):
       alpha=0.0,
       beta=0.001,
       name=None):
+    # [FUNCTION DOC]
+    # Stores the schedule parameters without validation. Inputs: initial_learning_rate (number
+    # or float tensor), decay_steps, initial_variance (default 1.0) and variance_decay (default
+    # 0.55) for the noise, num_periods (default 0.5), alpha (default 0.0), beta (default 0.001)
+    # and name (optional string). Returns nothing.
     """Applies noisy linear cosine decay to the learning rate.
 
     Args:
@@ -997,6 +1164,13 @@ class NoisyLinearCosineDecay(LearningRateSchedule):
     self.name = name
 
   def __call__(self, step):
+    # [FUNCTION DOC]
+    # Computes the learning rate for the given step. Caps the step at decay steps, computes the
+    # linear decay fraction, draws gaussian noise (shape of that fraction) whose standard
+    # deviation comes from the initial variance divided by one plus step to the variance decay,
+    # adds it to the linear part, applies the cosine factor, alpha and beta as in the plain
+    # linear cosine schedule, and returns the initial rate times the result. Side effect: uses
+    # the random number generator, so repeated calls give different values.
     with ops.name_scope_v2(self.name or "NoisyLinearCosineDecay") as name:
       initial_learning_rate = (
           tensor_conversion.convert_to_tensor_v2_with_dispatch(
@@ -1032,6 +1206,9 @@ class NoisyLinearCosineDecay(LearningRateSchedule):
           initial_learning_rate, noisy_linear_cosine_decayed, name=name)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with the initial rate, decay steps, initial variance, variance decay,
+    # number of periods, alpha, beta and name, suitable for rebuilding the schedule.
     return {
         "initial_learning_rate": self.initial_learning_rate,
         "decay_steps": self.decay_steps,
@@ -1045,10 +1222,20 @@ class NoisyLinearCosineDecay(LearningRateSchedule):
 
 
 def serialize(learning_rate_schedule):
+  # [FUNCTION DOC]
+  # Converts a learning rate schedule object into a serializable mapping (class name plus its
+  # configuration) using the Keras generic serialization utility. Input: the schedule object.
+  # Returns the mapping.
   return generic_utils.serialize_keras_object(learning_rate_schedule)
 
 
 def deserialize(config, custom_objects=None):
+  # [FUNCTION DOC]
+  # Rebuilds a learning rate schedule from a serialized mapping. Inputs: config (mapping with a
+  # class name and configuration) and custom_objects (optional mapping from names to user
+  # classes consulted first). Looks up classes among this module's names, so only the built-in
+  # schedules and custom objects resolve; the generic utility raises a value error for unknown
+  # names. Returns the new schedule object.
   return generic_utils.deserialize_keras_object(
       config,
       module_objects=globals(),
