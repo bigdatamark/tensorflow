@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Tests for eager execution on XLA-backed devices (CPU/GPU/TPU depending on the test target).
+# Defines four test classes: basic eager ops, eager execution of compiled functions, tensors that
+# would be heavily padded on TPU, and multi-TPU placement. No import-time side effects; when run
+# as a script it enables eager execution with device placement logging and starts the test runner.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -43,8 +48,13 @@ from tensorflow.python.training import adam
 
 
 class EagerTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # Tests eager-mode ops (constants, gradients, variables, shapes, optimizers) placed on the XLA
+  # test device via the test scope. Inherits from the XLA test base class.
 
   def testBasic(self):
+    # [FUNCTION DOC]
+    # Multiplies two constants eagerly on the test device and asserts the product is 15.
     with self.test_scope():
       three = constant_op.constant(3)
       five = constant_op.constant(5)
@@ -52,6 +62,9 @@ class EagerTest(xla_test.XLATestCase):
       self.assertAllEqual(15, product)
 
   def testGradientTape(self):
+    # [FUNCTION DOC]
+    # Uses a persistent gradient tape to differentiate a sum-plus-product of two watched constants
+    # (1.0 and 10.0); asserts the partial derivatives are 11.0 and 2.0.
     with self.test_scope():
 
       x = constant_op.constant(1.0)
@@ -67,6 +80,8 @@ class EagerTest(xla_test.XLATestCase):
     self.assertEqual(2.0, da_dy.numpy())
 
   def testExecuteListOutputLen0(self):
+    # [FUNCTION DOC]
+    # Unstacks an empty tensor along axis 0 and asserts the result is an empty list.
     with self.test_scope():
       empty = constant_op.constant([], dtype=dtypes.float32)
       result = array_ops_stack.unstack(empty, 0)
@@ -74,6 +89,8 @@ class EagerTest(xla_test.XLATestCase):
       self.assertEqual(0, len(result))
 
   def testExecuteListOutputLen1(self):
+    # [FUNCTION DOC]
+    # Splits a 2x3 tensor into one piece along axis 1; asserts a list of length one equal to input.
     with self.test_scope():
       split_dim = constant_op.constant(1)
       value = constant_op.constant([[0., 1., 2.], [3., 4., 5.]])
@@ -83,6 +100,8 @@ class EagerTest(xla_test.XLATestCase):
       self.assertAllEqual([[0, 1, 2], [3, 4, 5]], result[0])
 
   def testExecuteListOutputLen3(self):
+    # [FUNCTION DOC]
+    # Splits a 2x3 tensor into three pieces along axis 1; asserts three columns of two elements.
     with self.test_scope():
       split_dim = constant_op.constant(1)
       value = constant_op.constant([[0., 1., 2.], [3., 4., 5.]])
@@ -94,6 +113,8 @@ class EagerTest(xla_test.XLATestCase):
       self.assertAllEqual([[2], [5]], result[2])
 
   def testBasicGraph(self):
+    # [FUNCTION DOC]
+    # Runs a multiplication eagerly and then again in graph mode inside a session; both must give 15.
     # Run some ops eagerly
     with self.test_scope():
       three = constant_op.constant(3)
@@ -110,6 +131,9 @@ class EagerTest(xla_test.XLATestCase):
         self.assertAllEqual(15, self.evaluate(product))
 
   def testDegenerateSlices(self):
+    # [FUNCTION DOC]
+    # Slices a 3x2x3 tensor with degenerate (empty, reversed or negative-stride) ranges and asserts
+    # results match the equivalent numpy slices.
     with self.test_scope():
       npt = np.arange(1, 19, dtype=np.float32).reshape(3, 2, 3)
       t = constant_op.constant(npt)
@@ -121,10 +145,15 @@ class EagerTest(xla_test.XLATestCase):
       self.assertAllEqual(npt[-1:0, 2:2, 2:3:-1], t[-1:0, 2:2, 2:3:-1])
 
   def testIdentity(self):
+    # [FUNCTION DOC]
+    # Asserts the identity op returns its scalar input unchanged.
     with self.test_scope():
       self.assertAllEqual(2, array_ops.identity(2))
 
   def testRandomOps(self):
+    # [FUNCTION DOC]
+    # Draws a 2x2 uniform random tensor and asserts its two rows are not all equal (a sanity check
+    # that the generator produces varying values).
     with self.test_scope():
       tensor = gen_random_ops.random_uniform((2, 2), dtypes.float32)
       row0 = tensor[0].numpy()
@@ -133,18 +162,25 @@ class EagerTest(xla_test.XLATestCase):
       self.assertFalse((row0 == row1).all())
 
   def testIdentityOnVariable(self):
+    # [FUNCTION DOC]
+    # Applies identity to a boolean resource variable and asserts the value read back is True.
     with self.test_scope():
       v = resource_variable_ops.ResourceVariable(True)
       i = array_ops.identity(v)
     self.assertAllEqual(True, i.numpy())
 
   def testAssignAddVariable(self):
+    # [FUNCTION DOC]
+    # Creates a variable of 1.0, adds 2.0 in place, and asserts it holds 3.0.
     with self.test_scope():
       v = resource_variable_ops.ResourceVariable(1.0)
       v.assign_add(2.0)
     self.assertEqual(3.0, v.numpy())
 
   def testReadAssignRead(self):
+    # [FUNCTION DOC]
+    # Reads a variable, increments it, reads again; asserts the first read stays 1.0 (not aliased to
+    # the update) and the second is 3.0.
     with self.test_scope():
       v = resource_variable_ops.ResourceVariable(1.0)
       val1 = v.read_value()
@@ -154,7 +190,13 @@ class EagerTest(xla_test.XLATestCase):
     self.assertEqual(3.0, val2.numpy())
 
   def testGradient(self):
+    # [FUNCTION DOC]
+    # Computes the gradient function of an identity function with an upstream gradient of 2.0 and
+    # asserts the gradient is 2.0.
     def f(x):
+      # [FUNCTION DOC]
+      # HELPER: identity function used as the differentiated function in testGradient.
+      # Returns its input unchanged.
       return x
 
     with self.test_scope():
@@ -162,10 +204,14 @@ class EagerTest(xla_test.XLATestCase):
       self.assertAllEqual(2., grad_fn(1., dy=2.)[0])
 
   def testVariableGradient(self):
+    # [FUNCTION DOC]
+    # Computes the implicit gradient of the square of a variable (1.0) and asserts it equals 2.0.
     with self.test_scope():
       v0 = resource_variable_ops.ResourceVariable(1.0)
 
       def f():
+        # [FUNCTION DOC]
+        # HELPER: function differentiated in testVariableGradient; returns the variable squared.
         x = v0 * v0
         return x
 
@@ -173,6 +219,9 @@ class EagerTest(xla_test.XLATestCase):
     self.assertEqual(2., grads[0][0].numpy())
 
   def testMultipleVariableReads(self):
+    # [FUNCTION DOC]
+    # Creates a large (about 128 MiB) variable and reads it 100 times. Only checks no out-of-memory
+    # occurs, which would indicate each read copies the underlying memory. No assertions.
     # This test makes sure consecutive variable reads don't copy
     # the underlying memory.
     with self.test_scope():
@@ -192,11 +241,18 @@ class EagerTest(xla_test.XLATestCase):
   # are distincts from tf2xla kernels.
 
   def testShape(self):
+    # [FUNCTION DOC]
+    # Verifies the shape op, for both directly constructed constants and device-produced tensors of
+    # ranks 0 to 3, returns the expected shapes.
     def const(value):
+      # [FUNCTION DOC]
+      # HELPER: returns the shape (as numpy) of a constant built from the given value.
       return array_ops.shape(
           constant_op.constant(value)).numpy()
 
     def ones(value):
+      # [FUNCTION DOC]
+      # HELPER: returns the shape (as numpy) of a ones tensor created with the given shape.
       return array_ops.shape(
           array_ops.ones(value)).numpy()
 
@@ -219,6 +275,9 @@ class EagerTest(xla_test.XLATestCase):
       self.assertAllEqual([2, 1, 2], ones([2, 1, 2]))
 
   def testShapeN(self):
+    # [FUNCTION DOC]
+    # Verifies shape_n over several tensors, both constants and device-computed, returns the
+    # expected shapes (scalar, vector of 3, 2x2).
     with self.test_scope():
       # Shapes of directly constructed tensors
       shapes = array_ops.shape_n([
@@ -239,6 +298,8 @@ class EagerTest(xla_test.XLATestCase):
           [x.numpy().tolist() for x in shapes])
 
   def testSize(self):
+    # [FUNCTION DOC]
+    # Asserts the size op returns 1, 3 and 4 for a scalar, a 3-vector and a 2x2 matrix.
     with self.test_scope():
       self.assertEqual(
           1, array_ops.size(constant_op.constant(1.0)).numpy())
@@ -249,6 +310,8 @@ class EagerTest(xla_test.XLATestCase):
               constant_op.constant([[1.0, 2.0], [3.0, 4.0]])).numpy())
 
   def testRank(self):
+    # [FUNCTION DOC]
+    # Asserts the rank op returns 0, 1 and 2 for a scalar, a 3-vector and a 2x2 matrix.
     with self.test_scope():
       self.assertEqual(
           0, array_ops.rank(constant_op.constant(1.0)).numpy())
@@ -259,6 +322,9 @@ class EagerTest(xla_test.XLATestCase):
               constant_op.constant([[1.0, 2.0], [3.0, 4.0]])).numpy())
 
   def testAdam(self):
+    # [FUNCTION DOC]
+    # Minimizes the square of a variable (10.0) with one step of Adam (rate 0.1) and asserts the
+    # result is about 9.9 to three decimal places.
     with self.test_scope():
       optimizer = adam.AdamOptimizer(0.1)
       x = resource_variable_ops.ResourceVariable(10.0)
@@ -269,6 +335,10 @@ class EagerTest(xla_test.XLATestCase):
       self.assertAlmostEqual(9.9, x.numpy(), places=3)
 
   def testAdamSparse(self):
+    # [FUNCTION DOC]
+    # Applies Adam to a sparse (indexed-slices) gradient from an embedding lookup; the embedding
+    # variable lives on CPU because sparse updates are unsupported on TPU. Then adds ones to the
+    # variable and asserts the updated values (row 1 is 1.9 after the step, others 2.0).
     with ops.device('/cpu:0'):
       # Create 2-D embedding for 3 objects on CPU because sparse/sliced updates
       # are not implemented on TPU.
@@ -297,8 +367,14 @@ class EagerTest(xla_test.XLATestCase):
 
 
 class EagerFunctionTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # Tests eager execution of compiled functions (function-decorated callables) on the XLA test
+  # device: variables, gradient tapes, nesting, control flow and device placement.
 
   def testBasic(self):
+    # [FUNCTION DOC]
+    # Wraps matmul in a function, calls it with transpose of the first argument, and asserts the
+    # product of [[1,2],[3,4]] with itself transposed.
     with self.test_scope():
       matmul = def_function.function(math_ops.matmul)
       t = constant_op.constant([[1.0, 2.0], [3.0, 4.0]])
@@ -306,6 +382,9 @@ class EagerFunctionTest(xla_test.XLATestCase):
       self.assertAllEqual(sq.numpy().reshape(-1), [10, 14, 14, 20])
 
   def testConv(self):
+    # [FUNCTION DOC]
+    # Skipped on GPU (the random normal kernel is slow there). Builds a convolution plus max pooling
+    # model in a function and asserts a 4x4 ones input yields a single value 4.
     if 'GPU' in self.device:
       # TODO(b/32333178)
       self.skipTest('Current implementation of RandomStandardNormal kernel '
@@ -320,6 +399,8 @@ class EagerFunctionTest(xla_test.XLATestCase):
       pool = pooling.MaxPooling2D(2, 2, data_format=data_format)
 
       def model(x):
+        # [FUNCTION DOC]
+        # HELPER: applies the convolution then the pooling layer to the input.
         x = conv(x)
         return pool(x)
       model = def_function.function(model)
@@ -329,28 +410,39 @@ class EagerFunctionTest(xla_test.XLATestCase):
       self.assertAllEqual(y.numpy(), [[[[4.]]]])
 
   def testReadVariable(self):
+    # [FUNCTION DOC]
+    # Reads a captured variable inside a function and asserts the value 1.0.
     with self.test_scope():
       v = resource_variable_ops.ResourceVariable(1.0)
 
       @def_function.function
       def f():
+        # [FUNCTION DOC]
+        # HELPER: function body that returns the current value of the captured variable.
         return v.read_value()
 
       var = f()
       self.assertEqual(1.0, var.numpy())
 
   def testResourceVariableNoInlineReadWrite(self):
+    # [FUNCTION DOC]
+    # Calls non-inlined functions that both read and write captured variables several times; asserts
+    # the combined result 145 and final written variable 15.
     with self.test_scope():
       v = resource_variable_ops.ResourceVariable(1.0)
       w = resource_variable_ops.ResourceVariable(0.0)
 
       @def_function.function(experimental_attributes={'_noinline': True})
       def g(x):
+        # [FUNCTION DOC]
+        # HELPER: adds x to a variable w and returns the other variable plus x times w.
         w.assign(w.read_value() + x)
         return v.read_value() + x * w.read_value()
 
       @def_function.function(experimental_attributes={'_noinline': True})
       def f():
+        # [FUNCTION DOC]
+        # HELPER: sums the results of five calls to the inner function with arguments 1 to 5.
         return g(1.0) + g(2.0) + g(3.0) + g(4.0) + g(5.0)
 
       # 1 + 1*1 + 1 + 2*3 + 1 + 3*6 + 1 + 4*10 + 1 + 5*15
@@ -358,29 +450,41 @@ class EagerFunctionTest(xla_test.XLATestCase):
       self.assertEqual(15.0, w.read_value().numpy())
 
   def testResourceVariableNoInlineReadOnly(self):
+    # [FUNCTION DOC]
+    # Non-inlined functions that only read a variable (10.0); calling five times sums to 50.
     with self.test_scope():
       v = resource_variable_ops.ResourceVariable(10.0)
 
       @def_function.function(experimental_attributes={'_noinline': True})
       def g():
+        # [FUNCTION DOC]
+        # HELPER: returns the value of the captured variable.
         return v.read_value()
 
       @def_function.function(experimental_attributes={'_noinline': True})
       def f():
+        # [FUNCTION DOC]
+        # HELPER: sums five calls to the read-only inner function.
         return g() + g() + g() + g() + g()
 
       self.assertEqual(50.0, f().numpy())
 
   def testResourceVariableNoInlineWriteOnly(self):
+    # [FUNCTION DOC]
+    # Non-inlined functions that only write a variable; after writing 1 through 5, asserts it is 5.
     with self.test_scope():
       v = resource_variable_ops.ResourceVariable(0.0)
 
       @def_function.function(experimental_attributes={'_noinline': True})
       def g(x):
+        # [FUNCTION DOC]
+        # HELPER: assigns x to the captured variable; returns nothing.
         v.assign(x)
 
       @def_function.function(experimental_attributes={'_noinline': True})
       def f():
+        # [FUNCTION DOC]
+        # HELPER: calls the writer function with 1.0 through 5.0; returns nothing.
         g(1.0)
         g(2.0)
         g(3.0)
@@ -391,10 +495,14 @@ class EagerFunctionTest(xla_test.XLATestCase):
       self.assertEqual(5.0, v.read_value().numpy())
 
   def testUpdateVariable(self):
+    # [FUNCTION DOC]
+    # A function takes a variable argument, increments it, and returns it; asserts the result is 2.0.
     with self.test_scope():
       v = resource_variable_ops.ResourceVariable(1.0)
 
       def f(v):
+        # [FUNCTION DOC]
+        # HELPER: adds 1.0 to the given variable in place and returns the variable.
         v.assign_add(1.0)
         return v
 
@@ -404,10 +512,15 @@ class EagerFunctionTest(xla_test.XLATestCase):
       self.assertEqual(2.0, var.numpy())
 
   def testReturnResourceHandle(self):
+    # [FUNCTION DOC]
+    # A function returns a variable's resource handle; asserts reading the handle gives the
+    # variable's value.
     with self.test_scope():
       v = resource_variable_ops.ResourceVariable([[1.0, 2.0], [3.0, 4.0]])
 
       def f(v):
+        # [FUNCTION DOC]
+        # HELPER: returns the resource handle of the given variable.
         return v.handle
 
       f = def_function.function(f)
@@ -417,11 +530,17 @@ class EagerFunctionTest(xla_test.XLATestCase):
                               handle, dtypes.float32).numpy())
 
   def testReturnMultipleResourceHandles(self):
+    # [FUNCTION DOC]
+    # A function returns two handles plus computed values (3 times a variable, sum of variables);
+    # asserts the handles read back correctly and the values are 3.75 and 3.25.
     with self.test_scope():
       v1 = resource_variable_ops.ResourceVariable(1.25)
       v2 = resource_variable_ops.ResourceVariable(2.0)
 
       def f(v):
+        # [FUNCTION DOC]
+        # HELPER: returns a 4-tuple: the argument's handle, three times the argument, the captured
+        # variable's handle, and the sum of the argument and the captured variable.
         return v.handle, 3.0 * v, v2.handle, v + v2
 
       f = def_function.function(f)
@@ -436,6 +555,9 @@ class EagerFunctionTest(xla_test.XLATestCase):
       self.assertEqual(3.25, variable_sum.numpy())
 
   def testAllArgumentKinds(self):
+    # [FUNCTION DOC]
+    # Calls a function mixing compile-time constants, regular tensors and resource variables in
+    # shuffled argument order, including a constant also used in addition; asserts all four outputs.
     """Test a complex function that takes different argument kinds.
 
     tf2xla machinery that translates, compiles, and runs defuns
@@ -449,6 +571,9 @@ class EagerFunctionTest(xla_test.XLATestCase):
     """
     with self.test_scope():
       def foo(c1, r1, v1, c2, v2, r2):
+        # [FUNCTION DOC]
+        # HELPER: computes a sum of constant and tensor, a cast constant plus variable, a slice of
+        # a variable, and a product of tensor and variable; returns the four results.
         # c1 and c2 are compile-time constants
         # r1 and r2 are regular tensors
         # v1 and v2 are resource variables
@@ -477,11 +602,16 @@ class EagerFunctionTest(xla_test.XLATestCase):
       self.assertAllEqual([[20., 40.], [90., 120.]], d.numpy())
 
   def testDefunInGradientTape(self):
+    # [FUNCTION DOC]
+    # Differentiates a function (variable squared times input) with respect to the variable under
+    # a tape outside the function; asserts value 75 and gradient 30.
     with self.test_scope():
       v0 = resource_variable_ops.ResourceVariable(5.0)
 
       @def_function.function
       def f(x):
+        # [FUNCTION DOC]
+        # HELPER: returns the captured variable squared times x.
         x = v0 * v0 * x
         return x
 
@@ -494,11 +624,16 @@ class EagerFunctionTest(xla_test.XLATestCase):
     self.assertEqual(30, dy.numpy())
 
   def testGradientTapeInDefun(self):
+    # [FUNCTION DOC]
+    # Computes a gradient with a tape created inside a function; asserts it equals 1.0.
     with self.test_scope():
       v0 = resource_variable_ops.ResourceVariable(5.0)
 
       @def_function.function
       def f():
+        # [FUNCTION DOC]
+        # HELPER: builds a tape inside the function and returns the gradient of variable times a
+        # constant with respect to the variable.
         x = constant_op.constant(1.0)
         with backprop.GradientTape() as tape:
           y = v0 * x
@@ -509,10 +644,15 @@ class EagerFunctionTest(xla_test.XLATestCase):
       self.assertEqual(1.0, dy.numpy())
 
   def testSliceInDefun(self):
+    # [FUNCTION DOC]
+    # Strided slicing with a tensor index inside a function, with gradient w.r.t. the input;
+    # asserts the slice is ones of shape 1x2x4 and the gradient has shape 2x3x4.
     with self.test_scope():
 
       @def_function.function
       def f(x, y):
+        # [FUNCTION DOC]
+        # HELPER: returns the slice of x with every second row on axis 0 and starting at y on axis 1.
         return x[0::2, y:, ...]
 
       x = array_ops.ones([2, 3, 4], dtype=dtypes.float32)
@@ -527,14 +667,20 @@ class EagerFunctionTest(xla_test.XLATestCase):
       self.assertAllEqual((2, 3, 4), dz.shape.as_list())
 
   def testNestedDefun(self):
+    # [FUNCTION DOC]
+    # Calls a function that calls another; asserts 2x+1 on [2,3,4] gives [5,7,9].
     with self.test_scope():
 
       @def_function.function
       def times_two(x):
+        # [FUNCTION DOC]
+        # HELPER: returns twice the input.
         return 2. * x
 
       @def_function.function
       def two_x_plus_1(x):
+        # [FUNCTION DOC]
+        # HELPER: returns the doubling function applied to x, plus one.
         return times_two(x) + 1.
 
       x = constant_op.constant([2., 3., 4.])
@@ -542,16 +688,22 @@ class EagerFunctionTest(xla_test.XLATestCase):
       self.assertAllEqual([5., 7., 9.], y.numpy())
 
   def testNestedDefunWithVariable(self):
+    # [FUNCTION DOC]
+    # Nested functions that both use a captured variable (5.0); asserts the result 75 for input 3.
     with self.test_scope():
       v0 = resource_variable_ops.ResourceVariable(5.0)
 
       @def_function.function
       def g(x):
+        # [FUNCTION DOC]
+        # HELPER: inner function; multiplies x by the captured variable.
         x = v0 * x
         return x
 
       @def_function.function
       def f(x):
+        # [FUNCTION DOC]
+        # HELPER: outer function; multiplies x by the variable and then calls the inner function.
         x = g(v0 * x)
         return x
 
@@ -561,16 +713,22 @@ class EagerFunctionTest(xla_test.XLATestCase):
     self.assertEqual(75.0, y.numpy())
 
   def testNestedDefunInGradientTape(self):
+    # [FUNCTION DOC]
+    # Same nested-function setup, differentiated under a tape; asserts value 75 and gradient 30.
     with self.test_scope():
       v0 = resource_variable_ops.ResourceVariable(5.0)
 
       @def_function.function
       def g(x):
+        # [FUNCTION DOC]
+        # HELPER: inner function; multiplies x by the captured variable.
         x = v0 * x
         return x
 
       @def_function.function
       def f(x):
+        # [FUNCTION DOC]
+        # HELPER: outer function; multiplies x by the variable and calls the inner function.
         x = g(v0 * x)
         return x
 
@@ -583,17 +741,24 @@ class EagerFunctionTest(xla_test.XLATestCase):
     self.assertEqual(30, dy.numpy())
 
   def testNestedDefunInGradientTapeDifferentVars(self):
+    # [FUNCTION DOC]
+    # Nested functions using two different variables under a persistent tape; asserts value 45 and
+    # gradients 9 and 15 for the two variables.
     with self.test_scope():
       v0 = resource_variable_ops.ResourceVariable(5.0)
       v1 = resource_variable_ops.ResourceVariable(3.0)
 
       @def_function.function
       def g(x):
+        # [FUNCTION DOC]
+        # HELPER: inner function; multiplies x by the second variable.
         x = v1 * x
         return x
 
       @def_function.function
       def f(x):
+        # [FUNCTION DOC]
+        # HELPER: outer function; multiplies x by the first variable and calls the inner function.
         x = g(v0 * x)
         return x
 
@@ -608,9 +773,13 @@ class EagerFunctionTest(xla_test.XLATestCase):
     self.assertEqual(15, dy_v1.numpy())
 
   def testWhileInDefun(self):
+    # [FUNCTION DOC]
+    # Runs an explicit while loop inside a function incrementing from 3.0 until 13.0; asserts 13.0.
     with self.test_scope():
       @def_function.function
       def f(start):
+        # [FUNCTION DOC]
+        # HELPER: loops adding 1.0 while the value is below 13.0; returns the loop result.
         c = lambda x: math_ops.less(x, 13.0)
         b = lambda x: math_ops.add(x, 1.0)
         return while_loop.while_loop(c, b, [start])
@@ -619,9 +788,13 @@ class EagerFunctionTest(xla_test.XLATestCase):
     self.assertEqual(13.0, y.numpy())
 
   def testAutoGraphWhileInDefun(self):
+    # [FUNCTION DOC]
+    # Same as the while test but with an ordinary Python-style loop converted by autograph.
     with self.test_scope():
       @def_function.function
       def f(start):
+        # [FUNCTION DOC]
+        # HELPER: increments the start value by 1.0 while it is below 13.0 and returns it.
         x = start
         while x < 13.0:
           x += 1.0
@@ -631,9 +804,14 @@ class EagerFunctionTest(xla_test.XLATestCase):
     self.assertEqual(13.0, y.numpy())
 
   def testCondInDefun(self):
+    # [FUNCTION DOC]
+    # Conditional inside a function using the cond op; asserts adding or subtracting 1 from 10.
+    # gives 11 and 9 depending on the predicate.
     with self.test_scope():
       @def_function.function
       def f(pred, value):
+        # [FUNCTION DOC]
+        # HELPER: returns value plus 1.0 if pred is true, otherwise value minus 1.0.
         fn1 = lambda: math_ops.add(value, 1.0)
         fn2 = lambda: math_ops.subtract(value, 1.0)
         return cond.cond(pred, fn1, fn2)
@@ -644,9 +822,13 @@ class EagerFunctionTest(xla_test.XLATestCase):
     self.assertEqual(9.0, minus_one.numpy())
 
   def testAutoGraphCondInDefun(self):
+    # [FUNCTION DOC]
+    # Same as the cond test but using an ordinary conditional converted by autograph.
     with self.test_scope():
       @def_function.function
       def f(pred, value):
+        # [FUNCTION DOC]
+        # HELPER: returns value plus 1.0 if pred is true, otherwise value minus 1.0.
         if pred:
           return value + 1.0
         else:
@@ -658,12 +840,17 @@ class EagerFunctionTest(xla_test.XLATestCase):
     self.assertEqual(9.0, minus_one.numpy())
 
   def testScanInDefun(self):
+    # [FUNCTION DOC]
+    # Runs a cumulative scan (multiplication with initial value 2.0) over 1..6 inside a function;
+    # asserts the results [2, 4, 12, 48, 240, 1440].
     with self.test_scope():
       elems = constant_op.constant([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], name='data')
       v = constant_op.constant(2.0, name='v')
 
       @def_function.function
       def f(y):
+        # [FUNCTION DOC]
+        # HELPER: scans the multiply function over y with the captured initializer.
         # pylint: disable=unnecessary-lambda
         return functional_ops.scan(
             lambda a, x: math_ops.multiply(a, x), y, initializer=v)
@@ -673,8 +860,13 @@ class EagerFunctionTest(xla_test.XLATestCase):
       self.assertAllEqual([2., 4., 12., 48., 240., 1440.], self.evaluate(r))
 
   def testFeedDeviceMemoryToOpExpectingHostMemory(self):
+    # [FUNCTION DOC]
+    # Passes a device-resident int64 tensor as the dims argument of a fill op (which expects host
+    # memory); asserts the result is four 3s.
     @def_function.function
     def f(dims, value):
+      # [FUNCTION DOC]
+      # HELPER: returns a tensor of shape dims filled with value.
       return array_ops.fill(dims, value)
 
     with self.test_scope():
@@ -684,8 +876,14 @@ class EagerFunctionTest(xla_test.XLATestCase):
     self.assertAllEqual([3, 3, 3, 3], y)
 
   def testRequestNotToCompile(self):
+    # [FUNCTION DOC]
+    # Compares a fully compiled function with one marked not to compile (op-by-op). The function
+    # computes a product on CPU; in the compiled case both outputs sit on the test device, in the
+    # op-by-op case the second output sits on CPU. Device checks happen only in eager mode.
     with self.test_scope():
       def f(x):
+        # [FUNCTION DOC]
+        # HELPER: returns x and twice x, the latter computed under an explicit CPU device scope.
         with ops.device('device:CPU:0'):
           y = 2.0 * x
         return x, y
@@ -717,6 +915,9 @@ class EagerFunctionTest(xla_test.XLATestCase):
 
 
 class ExcessivePaddingTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # Tests eager execution with tensors that TPU would flatten to avoid excessive padding; the
+  # behavior must be transparent on every backend.
   """Test that eager execution works with TPU flattened tensors.
 
   Tensors that would normally be excessively padded when written
@@ -729,6 +930,8 @@ class ExcessivePaddingTest(xla_test.XLATestCase):
   """
 
   def testFromConstant(self):
+    # [FUNCTION DOC]
+    # Reduces a constant of shape 100x2x1 along axis 1; asserts 100 rows of 12.0.
     with self.test_scope():
       # Create constant of shape [100, 2, 1]. This tensor would be
       # excessively padded on TPU.
@@ -739,16 +942,22 @@ class ExcessivePaddingTest(xla_test.XLATestCase):
       self.assertAllEqual(100 * [[12.0]], reduced)
 
   def testFromOperation(self):
+    # [FUNCTION DOC]
+    # Reduces a ones tensor of shape 3x100x2x2 over axes 0, 2 and 3; asserts 100 values of 12.0.
     with self.test_scope():
       tensor = array_ops.ones([3, 100, 2, 2])
       reduced = math_ops.reduce_sum(tensor, axis=[0, 2, 3])
       self.assertAllEqual(100 * [12.0], reduced)
 
   def testAsFunctionInput(self):
+    # [FUNCTION DOC]
+    # Passes a padded-prone tensor into a function that sums axis 2; asserts 100 values of 12.0.
     with self.test_scope():
 
       @def_function.function
       def f(x):
+        # [FUNCTION DOC]
+        # HELPER: sums x along axis 2.
         return math_ops.reduce_sum(x, axis=2)
 
       tensor = constant_op.constant(100 * [[[10.0, 2.0]]])
@@ -756,10 +965,14 @@ class ExcessivePaddingTest(xla_test.XLATestCase):
       self.assertAllEqual(100 * [[12.0]], reduced)
 
   def testAsFunctionOutput(self):
+    # [FUNCTION DOC]
+    # A function returns a large constant scaled by 3; sums over axis 2 outside and asserts 36.0.
     with self.test_scope():
 
       @def_function.function
       def f(x):
+        # [FUNCTION DOC]
+        # HELPER: multiplies x by a constant of shape 100x1x2.
         return x * constant_op.constant(100 * [[[10.0, 2.0]]])
 
       y = f(3)
@@ -768,14 +981,22 @@ class ExcessivePaddingTest(xla_test.XLATestCase):
 
 
 def multiple_tpus():
+  # [FUNCTION DOC]
+  # HELPER: tells whether more than one TPU device is available to the eager context.
+  # Returns true if the context lists more than one device whose name contains the TPU marker.
   devices = context.context().devices()
   return len([d for d in devices if 'device:TPU:' in d]) > 1
 
 
 class MultiDeviceTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # Tests eager execution spread across more than one TPU core.
   """Test running TPU computation on more than one core."""
 
   def testBasic(self):
+    # [FUNCTION DOC]
+    # Skipped unless multiple TPUs exist. Computes 10 on TPU 0 and 6 on TPU 1, then adds them
+    # (copying across devices) and asserts 16.
     if not multiple_tpus():
       self.skipTest('MultiDeviceTest requires multiple TPU devices.')
 

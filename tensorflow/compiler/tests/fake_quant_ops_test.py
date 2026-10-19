@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Tests for the fake quantization ops on XLA devices: the min/max arguments form, the min/max
+# variables form (range given as scalar tensors) and the per-channel form, each as a forward op
+# and as a gradient op (six test classes). Each case feeds points around the nudged quantization
+# grid (below range, at limits, between steps, beyond range) for 7 or 8 bits, wide or narrow
+# range, and compares to hand-computed values. No import-time side effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,61 +27,118 @@ from tensorflow.python.platform import googletest
 
 
 class FakeQuantWithMinMaxArgsTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # Tests the fake quantization op with range given as attributes (min and max arguments).
+  # Every test case delegates to a shared helper that builds the inputs around the grid.
   """Test cases for FakeQuantWithMinMaxArgs operation."""
 
   # 8 bits, wide range.
   def testOp_with8BitsNoScalingNoNudging(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 8-bit wide range, no scaling or nudging (range 0 to 255).
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(0.0, 255.0, 8, False, 0.0, 255.0, 1.0)
 
   def testOp_with8BitsScalingAndNudgingDown(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 8-bit wide range, lower bound is nudged down to the grid.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(0.5, 128.0, 8, False, 0.0, 127.5, 0.5)
 
   def testOp_with8BitsScalingAndNudgingUp(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 8-bit wide range, range entirely negative, nudged up.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(-128.0, -0.5, 8, False, -127.5, 0.0, 0.5)
 
   def testOp_with8BitsScalingAndNudgingBetween(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 8-bit wide range, range spanning zero (nudged between).
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(-0.1, 127.4, 8, False, 0.0, 127.5, 0.5)
 
   # 8 bits, narrow range.
   def testOp_with8BitsNarrowRangeNoScalingNoNudging(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 8-bit narrow range, no scaling or nudging.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(0.0, 254.0, 8, True, 0.0, 254.0, 1.0)
 
   def testOp_with8BitsNarrowRangeScalingAndNudgingDown(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 8-bit narrow range, nudged down.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(0.1, 127.1, 8, True, 0.0, 127.0, 0.5)
 
   def testOp_with8BitsNarrowRangeScalingAndNudgingUp(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 8-bit narrow range, nudged up.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(-127.1, -0.1, 8, True, -127.0, 0.0, 0.5)
 
   def testOp_with8BitsNarrowRangeScalingAndNudgingBetween(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 8-bit narrow range, range spanning zero.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(-0.1, 126.9, 8, True, 0.0, 127.0, 0.5)
 
   # 7 bits, wide range.
   def testOp_with7BitsNoScalingNoNudging(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 7-bit wide range, no scaling or nudging.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(0.0, 127.0, 7, False, 0.0, 127.0, 1.0)
 
   def testOp_with7BitsScalingAndNudgingDown(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 7-bit wide range, nudged down.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(0.5, 64.0, 7, False, 0.0, 63.5, 0.5)
 
   def testOp_with7BitsScalingAndNudgingUp(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 7-bit wide range, nudged up.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(-64.0, -0.5, 7, False, -63.5, 0.0, 0.5)
 
   def testOp_with7BitsScalingAndNudgingBetween(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 7-bit wide range, range spanning zero.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(-0.1, 63.4, 7, False, 0.0, 63.5, 0.5)
 
   # 7 bits, narrow range.
   def testOp_with7BitsNarrowRangeNoScalingNoNudging(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 7-bit narrow range, no scaling or nudging.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(0.0, 126.0, 7, True, 0.0, 126.0, 1.0)
 
   def testOp_with7BitsNarrowRangeScalingAndNudgingDown(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 7-bit narrow range, nudged down.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(0.1, 63.1, 7, True, 0.0, 63.0, 0.5)
 
   def testOp_with7BitsNarrowRangeScalingAndNudgingUp(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 7-bit narrow range, nudged up.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(-63.1, -0.1, 7, True, -63.0, 0.0, 0.5)
 
   def testOp_with7BitsNarrowRangeScalingAndNudgingBetween(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 7-bit narrow range, range spanning zero.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(-0.1, 62.9, 7, True, 0.0, 63.0, 0.5)
 
   def _TestOp(self, input_min, input_max, num_bits, narrow_range,
+    # [FUNCTION DOC]
+    # HELPER: shared by all test cases of this class.
+    # Takes the requested range limits, bit width, narrow-range flag and the expected nudged limits
+    # and step. Builds 11 inputs around the grid (a step below the lower limit up to a step above
+    # the upper limit) and the expected clamped/rounded outputs, runs the op with the range given
+    # as attributes in the test scope, and asserts the output matches within type tolerances.
               expected_nudged_input_min, expected_nudged_input_max,
               expected_step):
     inputs = np.array(
@@ -119,61 +182,117 @@ class FakeQuantWithMinMaxArgsTest(xla_test.XLATestCase):
 
 
 class FakeQuantWithMinMaxArgsGradientTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # Tests the gradient of the fake quantization op with range given as attributes.
+  # Every test case delegates to a shared helper that builds the inputs around the grid.
   """Test cases for FakeQuantWithMinMaxArgsGradient operation."""
 
   # 8 bits, wide range.
   def testOp_with8BitsNoScalingNoNudging(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 8-bit wide range, no scaling or nudging (range 0 to 255).
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(0.0, 255.0, 8, False, 0.0, 255.0, 1.0)
 
   def testOp_with8BitsScalingAndNudgingDown(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 8-bit wide range, lower bound is nudged down to the grid.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(0.5, 128.0, 8, False, 0.0, 127.5, 0.5)
 
   def testOp_with8BitsScalingAndNudgingUp(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 8-bit wide range, range entirely negative, nudged up.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(-128.0, -0.5, 8, False, -127.5, 0.0, 0.5)
 
   def testOp_with8BitsScalingAndNudgingBetween(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 8-bit wide range, range spanning zero (nudged between).
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(-0.1, 127.4, 8, False, 0.0, 127.5, 0.5)
 
   # 8 bits, narrow range.
   def testOp_with8BitsNarrowRangeNoScalingNoNudging(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 8-bit narrow range, no scaling or nudging.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(0.0, 254.0, 8, True, 0.0, 254.0, 1.0)
 
   def testOp_with8BitsNarrowRangeScalingAndNudgingDown(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 8-bit narrow range, nudged down.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(0.1, 127.1, 8, True, 0.0, 127.0, 0.5)
 
   def testOp_with8BitsNarrowRangeScalingAndNudgingUp(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 8-bit narrow range, nudged up.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(-127.1, -0.1, 8, True, -127.0, 0.0, 0.5)
 
   def testOp_with8BitsNarrowRangeScalingAndNudgingBetween(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 8-bit narrow range, range spanning zero.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(-0.1, 126.9, 8, True, 0.0, 127.0, 0.5)
 
   # 7 bits, wide range.
   def testOp_with7BitsNoScalingNoNudging(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 7-bit wide range, no scaling or nudging.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(0.0, 127.0, 7, False, 0.0, 127.0, 1.0)
 
   def testOp_with7BitsScalingAndNudgingDown(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 7-bit wide range, nudged down.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(0.5, 64.0, 7, False, 0.0, 63.5, 0.5)
 
   def testOp_with7BitsScalingAndNudgingUp(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 7-bit wide range, nudged up.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(-64.0, -0.5, 7, False, -63.5, 0.0, 0.5)
 
   def testOp_with7BitsScalingAndNudgingBetween(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 7-bit wide range, range spanning zero.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(-0.1, 63.4, 7, False, 0.0, 63.5, 0.5)
 
   # 7 bits, narrow range.
   def testOp_with7BitsNarrowRangeNoScalingNoNudging(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 7-bit narrow range, no scaling or nudging.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(0.0, 126.0, 7, True, 0.0, 126.0, 1.0)
 
   def testOp_with7BitsNarrowRangeScalingAndNudgingDown(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 7-bit narrow range, nudged down.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(0.1, 63.1, 7, True, 0.0, 63.0, 0.5)
 
   def testOp_with7BitsNarrowRangeScalingAndNudgingUp(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 7-bit narrow range, nudged up.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(-63.1, -0.1, 7, True, -63.0, 0.0, 0.5)
 
   def testOp_with7BitsNarrowRangeScalingAndNudgingBetween(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 7-bit narrow range, range spanning zero.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(-0.1, 62.9, 7, True, 0.0, 63.0, 0.5)
 
   def _TestOp(self, input_min, input_max, num_bits, narrow_range,
+    # [FUNCTION DOC]
+    # HELPER: shared by all test cases of this class.
+    # Same input points as the forward test, with incoming gradients 1 to 11. Runs the gradient op
+    # (range as attributes) and asserts the input gradient passes through only for inputs inside
+    # the nudged range (zero outside, e.g. 3 to 9 inside).
               expected_nudged_input_min, expected_nudged_input_max,
               expected_step):
     inputs = np.array(
@@ -220,61 +339,116 @@ class FakeQuantWithMinMaxArgsGradientTest(xla_test.XLATestCase):
 
 
 class FakeQuantWithMinMaxVarsTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # Tests the fake quantization op with range given as scalar tensors (variables form).
+  # Every test case delegates to a shared helper that builds the inputs around the grid.
   """Test cases for FakeQuantWithMinMaxVars operation."""
 
   # 8 bits, wide range.
   def testOp_with8BitsNoScalingNoNudging(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 8-bit wide range, no scaling or nudging (range 0 to 255).
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(0.0, 255.0, 8, False, 0.0, 255.0, 1.0)
 
   def testOp_with8BitsScalingAndNudgingDown(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 8-bit wide range, lower bound is nudged down to the grid.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(0.5, 128.0, 8, False, 0.0, 127.5, 0.5)
 
   def testOp_with8BitsScalingAndNudgingUp(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 8-bit wide range, range entirely negative, nudged up.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(-128.0, -0.5, 8, False, -127.5, 0.0, 0.5)
 
   def testOp_with8BitsScalingAndNudgingBetween(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 8-bit wide range, range spanning zero (nudged between).
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(-0.1, 127.4, 8, False, 0.0, 127.5, 0.5)
 
   # 8 bits, narrow range.
   def testOp_with8BitsNarrowRangeNoScalingNoNudging(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 8-bit narrow range, no scaling or nudging.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(0.0, 254.0, 8, True, 0.0, 254.0, 1.0)
 
   def testOp_with8BitsNarrowRangeScalingAndNudgingDown(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 8-bit narrow range, nudged down.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(0.1, 127.1, 8, True, 0.0, 127.0, 0.5)
 
   def testOp_with8BitsNarrowRangeScalingAndNudgingUp(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 8-bit narrow range, nudged up.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(-127.1, -0.1, 8, True, -127.0, 0.0, 0.5)
 
   def testOp_with8BitsNarrowRangeScalingAndNudgingBetween(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 8-bit narrow range, range spanning zero.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(-0.1, 126.9, 8, True, 0.0, 127.0, 0.5)
 
   # 7 bits, wide range.
   def testOp_with7BitsNoScalingNoNudging(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 7-bit wide range, no scaling or nudging.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(0.0, 127.0, 7, False, 0.0, 127.0, 1.0)
 
   def testOp_with7BitsScalingAndNudgingDown(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 7-bit wide range, nudged down.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(0.5, 64.0, 7, False, 0.0, 63.5, 0.5)
 
   def testOp_with7BitsScalingAndNudgingUp(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 7-bit wide range, nudged up.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(-64.0, -0.5, 7, False, -63.5, 0.0, 0.5)
 
   def testOp_with7BitsScalingAndNudgingBetween(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 7-bit wide range, range spanning zero.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(-0.1, 63.4, 7, False, 0.0, 63.5, 0.5)
 
   # 7 bits, narrow range.
   def testOp_with7BitsNarrowRangeNoScalingNoNudging(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 7-bit narrow range, no scaling or nudging.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(0.0, 126.0, 7, True, 0.0, 126.0, 1.0)
 
   def testOp_with7BitsNarrowRangeScalingAndNudgingDown(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 7-bit narrow range, nudged down.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(0.1, 63.1, 7, True, 0.0, 63.0, 0.5)
 
   def testOp_with7BitsNarrowRangeScalingAndNudgingUp(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 7-bit narrow range, nudged up.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(-63.1, -0.1, 7, True, -63.0, 0.0, 0.5)
 
   def testOp_with7BitsNarrowRangeScalingAndNudgingBetween(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 7-bit narrow range, range spanning zero.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(-0.1, 62.9, 7, True, 0.0, 63.0, 0.5)
 
   def _TestOp(self, input_min, input_max, num_bits, narrow_range,
+    # [FUNCTION DOC]
+    # HELPER: shared by all test cases of this class.
+    # Same as the attribute form but min and max are scalar placeholders fed at run time.
+    # Asserts the output matches the expected clamped/rounded values.
               expected_nudged_input_min, expected_nudged_input_max,
               expected_step):
     inputs = np.array(
@@ -325,61 +499,117 @@ class FakeQuantWithMinMaxVarsTest(xla_test.XLATestCase):
 
 
 class FakeQuantWithMinMaxVarsGradientTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # Tests the gradient of the variables-form fake quantization op, including gradients for min and max.
+  # Every test case delegates to a shared helper that builds the inputs around the grid.
   """Test cases for FakeQuantWithMinMaxVarsGradient operation."""
 
   # 8 bits, wide range.
   def testOp_with8BitsNoScalingNoNudging(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 8-bit wide range, no scaling or nudging (range 0 to 255).
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(0.0, 255.0, 8, False, 0.0, 255.0, 1.0)
 
   def testOp_with8BitsScalingAndNudgingDown(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 8-bit wide range, lower bound is nudged down to the grid.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(0.5, 128.0, 8, False, 0.0, 127.5, 0.5)
 
   def testOp_with8BitsScalingAndNudgingUp(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 8-bit wide range, range entirely negative, nudged up.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(-128.0, -0.5, 8, False, -127.5, 0.0, 0.5)
 
   def testOp_with8BitsScalingAndNudgingBetween(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 8-bit wide range, range spanning zero (nudged between).
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(-0.1, 127.4, 8, False, 0.0, 127.5, 0.5)
 
   # 8 bits, narrow range.
   def testOp_with8BitsNarrowRangeNoScalingNoNudging(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 8-bit narrow range, no scaling or nudging.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(0.0, 254.0, 8, True, 0.0, 254.0, 1.0)
 
   def testOp_with8BitsNarrowRangeScalingAndNudgingDown(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 8-bit narrow range, nudged down.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(0.1, 127.1, 8, True, 0.0, 127.0, 0.5)
 
   def testOp_with8BitsNarrowRangeScalingAndNudgingUp(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 8-bit narrow range, nudged up.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(-127.1, -0.1, 8, True, -127.0, 0.0, 0.5)
 
   def testOp_with8BitsNarrowRangeScalingAndNudgingBetween(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 8-bit narrow range, range spanning zero.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(-0.1, 126.9, 8, True, 0.0, 127.0, 0.5)
 
   # 7 bits, wide range.
   def testOp_with7BitsNoScalingNoNudging(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 7-bit wide range, no scaling or nudging.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(0.0, 127.0, 7, False, 0.0, 127.0, 1.0)
 
   def testOp_with7BitsScalingAndNudgingDown(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 7-bit wide range, nudged down.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(0.5, 64.0, 7, False, 0.0, 63.5, 0.5)
 
   def testOp_with7BitsScalingAndNudgingUp(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 7-bit wide range, nudged up.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(-64.0, -0.5, 7, False, -63.5, 0.0, 0.5)
 
   def testOp_with7BitsScalingAndNudgingBetween(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 7-bit wide range, range spanning zero.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(-0.1, 63.4, 7, False, 0.0, 63.5, 0.5)
 
   # 7 bits, narrow range.
   def testOp_with7BitsNarrowRangeNoScalingNoNudging(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 7-bit narrow range, no scaling or nudging.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(0.0, 126.0, 7, True, 0.0, 126.0, 1.0)
 
   def testOp_with7BitsNarrowRangeScalingAndNudgingDown(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 7-bit narrow range, nudged down.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(0.1, 63.1, 7, True, 0.0, 63.0, 0.5)
 
   def testOp_with7BitsNarrowRangeScalingAndNudgingUp(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 7-bit narrow range, nudged up.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(-63.1, -0.1, 7, True, -63.0, 0.0, 0.5)
 
   def testOp_with7BitsNarrowRangeScalingAndNudgingBetween(self):
+    # [FUNCTION DOC]
+    # Runs the shared check for 7-bit narrow range, range spanning zero.
+    # Passes range limits, bit width, narrow-range flag and the expected nudged limits and step.
     self._TestOp(-0.1, 62.9, 7, True, 0.0, 63.0, 0.5)
 
   def _TestOp(self, input_min, input_max, num_bits, narrow_range,
+    # [FUNCTION DOC]
+    # HELPER: shared by all test cases of this class.
+    # Runs the variables-form gradient op with gradients 1 to 11 and asserts the input gradient
+    # (zero outside the range, 3 to 9 inside), the min gradient (sum of the gradients below the
+    # range, 3) and the max gradient (sum of those above, 21).
               expected_nudged_input_min, expected_nudged_input_max,
               expected_step):
     inputs = np.array(
@@ -445,10 +675,16 @@ class FakeQuantWithMinMaxVarsGradientTest(xla_test.XLATestCase):
 
 
 class FakeQuantWithMinMaxVarsPerChannelTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # Tests the per-channel fake quantization op with one range per channel.
+  # Four test cases (7 or 8 bits, wide or narrow range) call a shared helper with per-channel lists.
   """Test cases for FakeQuantWithMinMaxVarsPerChannel operation."""
 
   # 8 bits, wide range.
   def testOp_with8Bits(self):
+    # [FUNCTION DOC]
+    # Runs the shared per-channel check for 8-bit wide range with four channels.
+    # Passes lists of range limits and expected nudged limits and steps, one entry per channel.
     self._TestOp(
         [0.0, 0.5, -128.0, -0.1],
         [255.0, 128.0, -0.5, 127.4],
@@ -460,6 +696,9 @@ class FakeQuantWithMinMaxVarsPerChannelTest(xla_test.XLATestCase):
 
   # 8 bits, narrow range.
   def testOp_with8BitsNarrowRange(self):
+    # [FUNCTION DOC]
+    # Runs the shared per-channel check for 8-bit narrow range with four channels.
+    # Passes lists of range limits and expected nudged limits and steps, one entry per channel.
     self._TestOp(
         [0.0, 0.1, -127.1, -0.1],
         [254.0, 127.1, -0.1, 126.9],
@@ -471,6 +710,9 @@ class FakeQuantWithMinMaxVarsPerChannelTest(xla_test.XLATestCase):
 
   # 7 bits, wide range.
   def testOp_with7Bits(self):
+    # [FUNCTION DOC]
+    # Runs the shared per-channel check for 7-bit wide range with four channels.
+    # Passes lists of range limits and expected nudged limits and steps, one entry per channel.
     self._TestOp(
         [0.0, 0.5, -64.0, -0.1],
         [127.0, 64.0, -0.5, 63.4],
@@ -482,6 +724,9 @@ class FakeQuantWithMinMaxVarsPerChannelTest(xla_test.XLATestCase):
 
   # 7 bits, narrow range.
   def testOp_with7BitsNarrowRange(self):
+    # [FUNCTION DOC]
+    # Runs the shared per-channel check for 7-bit narrow range with four channels.
+    # Passes lists of range limits and expected nudged limits and steps, one entry per channel.
     self._TestOp(
         [0.0, 0.1, -63.1, -0.1],
         [126.0, 63.1, -0.1, 62.9],
@@ -492,6 +737,12 @@ class FakeQuantWithMinMaxVarsPerChannelTest(xla_test.XLATestCase):
         [1.0, 0.5, 0.5, 0.5])
 
   def _TestOp(self, input_mins, input_maxs, num_bits, narrow_range,
+    # [FUNCTION DOC]
+    # HELPER: shared by all test cases of this class.
+    # Takes per-channel lists of range minimums and maximums, bit width, narrow-range flag and
+    # per-channel expected nudged limits and steps. Builds 11 inputs per channel around the grid,
+    # transposes to put channels last, runs the per-channel op in the test scope and asserts the
+    # output matches the expected values within type tolerances.
               expected_nudged_input_mins, expected_nudged_input_maxs,
               expected_steps):
     num_channels = len(input_mins)
@@ -552,10 +803,16 @@ class FakeQuantWithMinMaxVarsPerChannelTest(xla_test.XLATestCase):
 
 
 class FakeQuantWithMinMaxVarsPerChannelGradientTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # Tests the gradient of the per-channel fake quantization op, including gradients for min and max.
+  # Four test cases (7 or 8 bits, wide or narrow range) call a shared helper with per-channel lists.
   """Test cases for FakeQuantWithMinMaxVarsPerChannelGradient operation."""
 
   # 8 bits, wide range.
   def testOp_with8Bits(self):
+    # [FUNCTION DOC]
+    # Runs the shared per-channel check for 8-bit wide range with four channels.
+    # Passes lists of range limits and expected nudged limits and steps, one entry per channel.
     self._TestOp(
         [0.0, 0.5, -128.0, -0.1],
         [255.0, 128.0, -0.5, 127.4],
@@ -567,6 +824,9 @@ class FakeQuantWithMinMaxVarsPerChannelGradientTest(xla_test.XLATestCase):
 
   # 8 bits, narrow range.
   def testOp_with8BitsNarrowRange(self):
+    # [FUNCTION DOC]
+    # Runs the shared per-channel check for 8-bit narrow range with four channels.
+    # Passes lists of range limits and expected nudged limits and steps, one entry per channel.
     self._TestOp(
         [0.0, 0.1, -127.1, -0.1],
         [254.0, 127.1, -0.1, 126.9],
@@ -578,6 +838,9 @@ class FakeQuantWithMinMaxVarsPerChannelGradientTest(xla_test.XLATestCase):
 
   # 7 bits, wide range.
   def testOp_with7Bits(self):
+    # [FUNCTION DOC]
+    # Runs the shared per-channel check for 7-bit wide range with four channels.
+    # Passes lists of range limits and expected nudged limits and steps, one entry per channel.
     self._TestOp(
         [0.0, 0.5, -64.0, -0.1],
         [127.0, 64.0, -0.5, 63.4],
@@ -589,6 +852,9 @@ class FakeQuantWithMinMaxVarsPerChannelGradientTest(xla_test.XLATestCase):
 
   # 7 bits, narrow range.
   def testOp_with7BitsNarrowRange(self):
+    # [FUNCTION DOC]
+    # Runs the shared per-channel check for 7-bit narrow range with four channels.
+    # Passes lists of range limits and expected nudged limits and steps, one entry per channel.
     self._TestOp(
         [0.0, 0.1, -63.1, -0.1],
         [126.0, 63.1, -0.1, 62.9],
@@ -599,6 +865,11 @@ class FakeQuantWithMinMaxVarsPerChannelGradientTest(xla_test.XLATestCase):
         [1.0, 0.5, 0.5, 0.5])
 
   def _TestOp(self, input_mins, input_maxs, num_bits, narrow_range,
+    # [FUNCTION DOC]
+    # HELPER: shared by all test cases of this class.
+    # Same per-channel inputs, with per-channel gradients 1 to 11. Runs the per-channel gradient op
+    # and asserts the input gradient (zero outside range, 3 to 9 inside), the per-channel min
+    # gradient (3) and max gradient (21).
               expected_nudged_input_mins, expected_nudged_input_maxs,
               expected_steps):
     num_channels = len(input_mins)
