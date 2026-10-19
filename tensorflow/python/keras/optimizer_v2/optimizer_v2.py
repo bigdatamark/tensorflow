@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# Defines OptimizerV2, the base class of the legacy Keras (version 2) optimizers in this package,
+# together with small internal helpers: summing duplicate sparse-gradient rows, a no-op context
+# manager, a name-scope helper that only acts in graph or function mode, slot-key helpers, and a
+# RestoredOptimizer placeholder used when loading saved models. OptimizerV2 manages hyperparameters
+# (as plain values, callables, schedules or variables), slot variables, gradient clipping and
+# transformation, aggregation across replicas under a distribution strategy, checkpoint tracking
+# and weight get/set. Concrete optimizers subclass it and implement the dense and sparse update
+# hooks and the configuration export.
+# Import-time side effect: registers the restored-optimizer type with the saved-model revival
+# registry so that deprecated optimizer objects can be revived as RestoredOptimizer.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -59,6 +70,11 @@ _DEFAULT_VALID_DTYPES = frozenset([
 
 
 def _deduplicate_indexed_slices(values, indices):
+  # [FUNCTION DOC]
+  # HELPER: sparse-gradient preprocessing for the sparse update path of OptimizerV2.
+  # Takes a tensor of values (rank at least one) and a one-dimensional integer tensor of row
+  # indices that may repeat. Returns a pair: the values summed per distinct index, and the list
+  # of distinct indices. Raises nothing itself; no side effects.
   """Sums `values` associated with any non-unique `indices`.
 
   Args:
@@ -79,18 +95,34 @@ def _deduplicate_indexed_slices(values, indices):
 
 
 class NullContextmanager(object):
+  # [CLASS DOC]
+  # HELPER: stand-in context manager used where a name scope is not wanted (eager execution).
+  # Accepts any constructor arguments, does nothing on entry or exit, and never suppresses
+  # exceptions.
 
   def __init__(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Accepts and ignores any positional and keyword arguments; stores nothing.
     pass
 
   def __enter__(self):
+    # [FUNCTION DOC]
+    # Entering the context does nothing and yields nothing/null value.
     pass
 
   def __exit__(self, type_arg, value_arg, traceback_arg):
+    # [FUNCTION DOC]
+    # Exiting does nothing; the exception information arguments are ignored. Always returns
+    # false so any exception raised inside the context propagates.
     return False  # False values do not suppress exceptions
 
 
 def name_scope_only_in_function_or_graph(name):
+  # [FUNCTION DOC]
+  # HELPER: name-scoping glue for the distributed apply path of OptimizerV2.
+  # Input: a scope name. Returns a legacy-style name scope context manager when not executing
+  # eagerly (graph or function building), otherwise returns the no-op context manager so eager
+  # runs are not scoped. No exceptions or side effects beyond the returned object.
   """Internal-only entry point for `name_scope*`.
 
   Enters a compat.v1.name_scope only when in a function or graph,
@@ -109,6 +141,18 @@ def name_scope_only_in_function_or_graph(name):
 
 
 class OptimizerV2(trackable.Trackable):
+  # [CLASS DOC]
+  # Base class of all legacy Keras optimizers. Holds: a name, a mapping of hyperparameters (plain
+  # numbers, callables, tensors, schedules or non-trainable variables once created), slot
+  # variables keyed per primary variable and slot name, an ordered list of all optimizer weights,
+  # an iteration counter variable, initial learning-rate decay, optional gradient clipping
+  # settings, a gradient aggregator and a list of gradient transformers, the distribution
+  # strategy active at construction, and deferred checkpoint slot restorations.
+  # Usage: subclasses call the base constructor, register hyperparameters, create slots, and
+  # implement the dense and sparse resource update methods and the config export; users call
+  # minimize or apply_gradients. Overrides attribute access so hyperparameters can be read and
+  # written like attributes (with a legacy alias for the learning rate). Implements the
+  # trackable interface for checkpoint save and restore of slots.
   """Base class for Keras optimizers.
 
   You should not use this class directly, but instead instantiate one of its
@@ -311,6 +355,18 @@ class OptimizerV2(trackable.Trackable):
                gradient_aggregator=None,
                gradient_transformers=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says only a value error is raised for invalid arguments, but an
+    # unrecognised keyword argument raises a type error (negative values give a value error).
+    # Constructor. Inputs: name (a falsy name is replaced by a unique snake-case class name),
+    # optional gradient aggregator (default sums across devices), optional list of gradient
+    # transformers (default empty), and keyword arguments restricted to clipnorm, clipvalue,
+    # global_clipnorm, lr (deprecated, emits a warning) and decay. Each given keyword value must
+    # be non-negative or null. Raises a type error for unknown keywords, a value error for
+    # negative values or negative decay, and a value error if both clipnorm and global_clipnorm
+    # are set (or if a clipping option is set together with gradient transformers).
+    # Side effects: initialises hyperparameter, slot and weight containers, records the active
+    # distribution strategy, and sets the clipping properties (which build clipping functions).
     """Create a new Optimizer.
 
     This must be called by the constructors of subclasses.
@@ -414,16 +470,25 @@ class OptimizerV2(trackable.Trackable):
 
   @property
   def clipnorm(self):
+    # [FUNCTION DOC]
+    # Property getter: returns the per-gradient norm clipping limit, or null if not set.
     """`float` or `None`. If set, clips gradients to a maximum norm."""
     return self._clipnorm
 
   @property
   def global_clipnorm(self):
+    # [FUNCTION DOC]
+    # Property getter: returns the global norm clipping limit (applied across all gradients
+    # together), or null if not set.
     """`float` or `None`. If set, clips gradients to a maximum norm."""
     return self._global_clipnorm
 
   @clipnorm.setter
   def clipnorm(self, val):
+    # [FUNCTION DOC]
+    # Property setter for the per-gradient norm clipping limit (a number or null to disable).
+    # Raises a value error if a non-null value is given while gradient transformers exist.
+    # Side effect: stores the value and rebuilds the internal clipping function from it.
     if val is not None and self.gradient_transformers:
       raise ValueError("`clipnorm` cannot be set when `gradient_transformers` "
                        "is set. Instead, use the `gradient_transformers` to "
@@ -434,6 +499,11 @@ class OptimizerV2(trackable.Trackable):
 
   @global_clipnorm.setter
   def global_clipnorm(self, val):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the error message names clipnorm instead of global_clipnorm (copy-paste).
+    # Property setter for the global norm clipping limit (a number or null to disable).
+    # Raises a value error if a non-null value is given while gradient transformers exist.
+    # Side effect: stores the value and rebuilds the internal global-clipping function.
     if val is not None and self.gradient_transformers:
       raise ValueError("`clipnorm` cannot be set when `gradient_transformers` "
                        "is set. Instead, use the `gradient_transformers` to "
@@ -444,11 +514,17 @@ class OptimizerV2(trackable.Trackable):
 
   @property
   def clipvalue(self):
+    # [FUNCTION DOC]
+    # Property getter: returns the per-element gradient value clipping limit, or null if unset.
     """`float` or `None`. If set, clips gradients to a maximum value."""
     return self._clipvalue
 
   @clipvalue.setter
   def clipvalue(self, val):
+    # [FUNCTION DOC]
+    # Property setter for the value clipping limit (a number or null to disable).
+    # Raises a value error if a non-null value is given while gradient transformers exist.
+    # Side effect: stores the value and rebuilds the internal value-clipping function.
     if val is not None and self.gradient_transformers:
       raise ValueError("`clipvalue` cannot be set when `gradient_transformers` "
                        "is set. Instead, use the `gradient_transformers` to "
@@ -458,19 +534,33 @@ class OptimizerV2(trackable.Trackable):
         self._clipvalue)
 
   def _transform_loss(self, loss):
+    # [FUNCTION DOC]
+    # HELPER: overridable hook used while computing gradients in minimize. Receives the loss and
+    # by default returns it unchanged.
     """Called in `.minimize` to transform loss before computing gradients."""
     return loss
 
   def _get_gradients(self, tape, loss, var_list, grad_loss=None):
+    # [FUNCTION DOC]
+    # HELPER: overridable hook for gradient computation in minimize. Uses the given gradient tape
+    # to differentiate the loss with respect to the variable list (optional upstream gradient
+    # grad_loss). Returns a list of (gradient, variable) pairs; gradients may be null.
     """Called in `minimize` to compute gradients from loss."""
     grads = tape.gradient(loss, var_list, grad_loss)
     return list(zip(grads, var_list))
 
   def _transform_unaggregated_gradients(self, grads_and_vars):
+    # [FUNCTION DOC]
+    # HELPER: overridable hook run in apply_gradients before cross-replica aggregation. Receives
+    # the list of (gradient, variable) pairs and by default returns it unchanged.
     """Called in `apply_gradients` before gradient aggregation."""
     return grads_and_vars
 
   def _aggregate_gradients(self, grads_and_vars):
+    # [FUNCTION DOC]
+    # HELPER: aggregation step of apply_gradients. Passes the list of (gradient, variable) pairs
+    # to the configured gradient aggregator and returns the aggregated list of pairs.
+    # May be overridden by user subclasses, so its interface must stay stable.
     """Called in `apply_gradients` to aggregate gradients across devices.
 
     Note that user subclasses may override this, so the interface should not be
@@ -486,6 +576,10 @@ class OptimizerV2(trackable.Trackable):
     return self.gradient_aggregator(grads_and_vars)
 
   def _transform_gradients(self, grads_and_vars):
+    # [FUNCTION DOC]
+    # HELPER: post-aggregation step of apply_gradients. Applies, in order, value clipping, per-
+    # gradient norm clipping and global norm clipping when each is set, then every user gradient
+    # transformer in sequence. Input and output: list of (gradient, variable) pairs.
     """Called in `apply_gradients` after aggregation."""
     if self._clipvalue is not None:
       grads_and_vars = self._clipvalue_fn(grads_and_vars)
@@ -499,6 +593,13 @@ class OptimizerV2(trackable.Trackable):
     return grads_and_vars
 
   def minimize(self, loss, var_list, grad_loss=None, name=None, tape=None):
+    # [FUNCTION DOC]
+    # Public entry point to run one optimisation step. Inputs: loss (a callable taking no
+    # arguments, or a tensor in which case the tape must be given), variable list (or callable
+    # returning it), optional upstream gradient, optional operation name, optional gradient tape.
+    # Computes gradients, then applies them. Returns the update operation (the iteration counter
+    # is incremented). Errors from gradient computation (value error when a tensor loss has no
+    # tape) and from applying gradients propagate. Side effects: updates variables and slots.
     """Minimize `loss` by updating `var_list`.
 
     This method simply computes gradient using `tf.GradientTape` and calls
@@ -534,6 +635,13 @@ class OptimizerV2(trackable.Trackable):
     return self.apply_gradients(grads_and_vars, name=name)
 
   def _compute_gradients(self, loss, var_list, grad_loss=None, tape=None):
+    # [FUNCTION DOC]
+    # HELPER: gradient half of minimize. Inputs as for minimize. If the loss is a callable it is
+    # evaluated under the tape (watching the variables, or evaluating the variable-list callable
+    # after the loss), otherwise the supplied tape is used. Applies the loss transform hook,
+    # flattens the variable list, computes gradients under a name scope, and checks that
+    # variables with gradients have supported types. Returns a list of (gradient, variable) pairs.
+    # Raises a value error if a tensor loss is given without a tape, or on unsupported types.
     """Compute gradients of `loss` for the variables in `var_list`.
 
     This is the first part of `minimize()`.  It returns a list
@@ -594,6 +702,19 @@ class OptimizerV2(trackable.Trackable):
                       grads_and_vars,
                       name=None,
                       experimental_aggregate_gradients=True):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring lists a value error when no variable has gradients, but an empty
+    # gradient list is handled by returning a no-op; any such error comes from the filter helper.
+    # Applies gradients to variables. Inputs: list of (gradient, variable) pairs, optional
+    # operation name, and a flag (default true) controlling whether gradients are summed across
+    # replicas. Pairs with null gradients are filtered out. Creates all optimizer weights
+    # (iterations, hyperparameters, slots) outside any function. If nothing remains, returns a
+    # no-op. Raises a runtime error when called in a cross-replica context, and a not-implemented
+    # error when aggregation is disabled under parameter-server or central-storage strategies.
+    # Otherwise prepares per-device state, optionally transforms and aggregates, transforms
+    # gradients (clipping, transformers) and applies the updates, directly or via a merge call
+    # depending on the strategy. Returns the operation that updates variables and increments the
+    # iteration counter. Side effects: updates variables, slots and the iteration counter.
     """Apply gradients to variables.
 
     This is the second part of `minimize()`. It returns an `Operation` that
@@ -679,9 +800,23 @@ class OptimizerV2(trackable.Trackable):
             })
 
   def _distributed_apply(self, distribution, grads_and_vars, name, apply_state):
+    # [FUNCTION DOC]
+    # HELPER: second half of apply_gradients. Inputs: the distribution strategy, list of
+    # (gradient, variable) pairs, optional name, and the per-device coefficient mapping. For each
+    # pair, colocated with the variable, runs the update through the strategy (one update op per
+    # replica in cross-replica context, one op otherwise), under update name scopes in graph
+    # mode. Then increments the iteration counter, after the updates in graph or symbolic mode.
+    # Returns the iteration increment operation (or value when eager).
     """`apply_gradients` using a `DistributionStrategy`."""
 
     def apply_grad_to_update_var(var, grad):
+      # [FUNCTION DOC]
+      # HELPER: per-variable update callback passed to the strategy. Raises a not-implemented
+      # error if the variable is actually a plain tensor. For sparse gradients, raises a runtime
+      # error if the variable has a constraint, else applies the update with duplicate indices
+      # summed. For dense gradients applies the dense update; if the variable has a constraint,
+      # assigns the constrained value after the update. Passes the coefficient mapping only to
+      # update methods that accept it. Returns the update operation.
       """Apply gradient to variable."""
       if isinstance(var, tensor.Tensor):
         raise NotImplementedError("Trying to update a Tensor ", var)
@@ -739,6 +874,10 @@ class OptimizerV2(trackable.Trackable):
       return self._iterations.assign_add(1)
 
   def get_gradients(self, loss, params):
+    # [FUNCTION DOC]
+    # Legacy v1 graph-mode gradient computation. Inputs: loss tensor and variables (flattened).
+    # Differentiates the loss in the backend graph under a gradients name scope and returns the
+    # list of gradient tensors. Raises a value error if any gradient is null.
     """Returns gradients of `loss` with respect to `params`.
 
     Should be used only in legacy v1 graph mode.
@@ -768,6 +907,11 @@ class OptimizerV2(trackable.Trackable):
     return grads
 
   def get_updates(self, loss, params):
+    # [FUNCTION DOC]
+    # Legacy Keras API with no docstring. Computes gradients with the legacy gradient method,
+    # checks variable types, and returns a one-element list holding the apply-gradients
+    # operation. Raises a value error for null gradients or unsupported types. Updates variables
+    # when the returned operation runs.
     grads = self.get_gradients(loss, params)
     grads_and_vars = list(zip(grads, params))
     self._assert_valid_dtypes([
@@ -777,6 +921,13 @@ class OptimizerV2(trackable.Trackable):
     return [self.apply_gradients(grads_and_vars)]
 
   def _set_hyper(self, name, value):
+    # [FUNCTION DOC]
+    # HELPER: registers or updates a hyperparameter for subclasses. Inputs: name and value (a
+    # number, tensor, callable, schedule or trackable). Trackable values are tracked as
+    # dependencies. A new name is stored directly. For an existing name the stored entry is
+    # replaced when the previous value is callable, tensor, plain number or schedule, or when the
+    # new value is a schedule; otherwise the existing variable is assigned the new value via the
+    # backend. No return value.
     """set hyper `name` to value. value can be callable, tensor, numeric."""
     if isinstance(value, trackable.Trackable):
       self._track_trackable(value, name, overwrite=True)
@@ -794,6 +945,10 @@ class OptimizerV2(trackable.Trackable):
         backend.set_value(self._hyper[name], value)
 
   def _get_hyper(self, name, dtype=None):
+    # [FUNCTION DOC]
+    # HELPER: reads a hyperparameter. Creates hyperparameter variables first if not yet created.
+    # Learning rate schedules are returned as is; callables are called; the value is cast to the
+    # given dtype if provided. Raises a key error for unknown names.
     if not self._hypers_created:
       self._create_hypers()
     value = self._hyper[name]
@@ -807,9 +962,16 @@ class OptimizerV2(trackable.Trackable):
       return value
 
   def _create_slots(self, var_list):
+    # [FUNCTION DOC]
+    # HELPER: hook for subclasses to create slot variables for the given variables. The base
+    # implementation does nothing.
     pass
 
   def _create_all_weights(self, var_list):
+    # [FUNCTION DOC]
+    # HELPER: ensures all optimizer state exists. Touches the iteration counter (creating it),
+    # creates hyperparameter variables, then creates slots for the given variables. Side effect:
+    # appends new variables to the optimizer weights list. Returns nothing.
     """Creates all weights, including iterations, hyperparameters and slot vars.
 
     This will add newly created variables to `optimizer.weights`.
@@ -827,6 +989,12 @@ class OptimizerV2(trackable.Trackable):
     self._create_slots(var_list)
 
   def __getattribute__(self, name):
+    # [FUNCTION DOC]
+    # Attribute lookup that falls back to hyperparameters. Normal lookup is tried first; on
+    # failure, the legacy name for learning rate is mapped to the learning rate hyperparameter
+    # and, if the name is a stored hyperparameter, its current value is returned. Otherwise the
+    # original attribute error is re-raised (also immediately when the hyperparameter container
+    # itself is missing, to avoid infinite recursion).
     """Overridden to support hyperparameter access."""
     try:
       return super(OptimizerV2, self).__getattribute__(name)
@@ -842,6 +1010,9 @@ class OptimizerV2(trackable.Trackable):
       raise e
 
   def __dir__(self):
+    # [FUNCTION DOC]
+    # Returns the list of attribute names: the normal ones plus all hyperparameter names, and the
+    # legacy short learning-rate name when a learning rate hyperparameter exists.
     result = set(super(OptimizerV2, self).__dir__())
     if "_hyper" in result:
       result |= self._hyper.keys()
@@ -850,6 +1021,10 @@ class OptimizerV2(trackable.Trackable):
     return list(result)
 
   def __setattr__(self, name, value):
+    # [FUNCTION DOC]
+    # Attribute assignment that routes hyperparameter names to the hyperparameter setter (the
+    # legacy learning-rate alias is mapped to the learning rate); every other name is stored as a
+    # normal attribute.
     """Override setattr to support dynamic hyperparameter setting."""
     # Backwards compatibility with Keras optimizers.
     if name == "lr":
@@ -860,10 +1035,21 @@ class OptimizerV2(trackable.Trackable):
       super(OptimizerV2, self).__setattr__(name, value)
 
   def get_slot_names(self):
+    # [FUNCTION DOC]
+    # Returns the internal list of slot names registered so far (the live list, not a copy).
     """A list of names for this optimizer's slots."""
     return self._slot_names
 
   def add_slot(self, var, slot_name, initializer="zeros", shape=None):
+    # [FUNCTION DOC]
+    # Creates (once) a non-trainable slot variable tied to a primary variable. Inputs: the
+    # variable, slot name, initializer (name, callable or explicit initial value; default zeros)
+    # and optional shape (defaults to the variable's shape, unless a checkpoint-restoring
+    # initializer is used). Registers the slot name, builds the variable under the optimizer's
+    # strategy scope, colocated with the primary variable, tracks it in the backend, applies any
+    # deferred checkpoint restoration and appends it to the weights. If the slot already exists it
+    # is returned unchanged. Raises a value error if the variable was created under a different
+    # distribution strategy scope. Returns the slot variable.
     """Add a new slot variable for `var`.
 
     A slot variable is an additional variable associated with `var` to train.
@@ -924,11 +1110,19 @@ class OptimizerV2(trackable.Trackable):
     return weight
 
   def get_slot(self, var, slot_name):
+    # [FUNCTION DOC]
+    # Returns the slot variable with the given name for a primary variable. Raises a key error if
+    # the variable has no slots or the slot does not exist.
     var_key = _var_key(var)
     slot_dict = self._slots[var_key]
     return slot_dict[slot_name]
 
   def _prepare(self, var_list):
+    # [FUNCTION DOC]
+    # HELPER: builds the per-step coefficient mapping used by update methods. Collects the
+    # distinct (device, base dtype) pairs of the variables (all replica devices for distributed
+    # variables), and for each creates an empty entry then calls the local preparation hook under
+    # that device. Returns the mapping keyed by device and dtype.
     keys = set()
     for var in var_list:
       if isinstance(var, ds_values.DistributedValues):
@@ -948,17 +1142,29 @@ class OptimizerV2(trackable.Trackable):
     return apply_state
 
   def _prepare_local(self, var_device, var_dtype, apply_state):
+    # [FUNCTION DOC]
+    # HELPER: per-device, per-dtype preparation hook for subclasses to extend. The base version
+    # stores the decayed learning rate tensor under a learning-rate entry of the mapping, if a
+    # learning rate hyperparameter exists. Mutates the given mapping; returns nothing.
     if "learning_rate" in self._hyper:
       lr_t = array_ops.identity(self._decayed_lr(var_dtype))
       apply_state[(var_device, var_dtype)]["lr_t"] = lr_t
 
   def _fallback_apply_state(self, var_device, var_dtype):
+    # [FUNCTION DOC]
+    # HELPER: builds a one-entry coefficient mapping on demand for subclasses whose update methods
+    # were not given the shared mapping. Returns the coefficient dictionary for the device and dtype.
     """Compatibility for subclasses that don't pass apply_state through."""
     apply_state = {(var_device, var_dtype): {}}
     self._prepare_local(var_device, var_dtype, apply_state)
     return apply_state[(var_device, var_dtype)]
 
   def _create_hypers(self):
+    # [FUNCTION DOC]
+    # HELPER: turns plain numeric hyperparameters into scalar non-trainable variables (initialised
+    # from the number, first-replica aggregation), in sorted name order, under the strategy scope.
+    # Tensors, variables and callables (including schedules) are left as they are. Does nothing
+    # if already done; afterwards marks hyperparameters as created.
     if self._hypers_created:
       return
     with self._distribution_strategy_scope():
@@ -981,6 +1187,10 @@ class OptimizerV2(trackable.Trackable):
 
   @property
   def iterations(self):
+    # [FUNCTION DOC]
+    # Property getter: returns the 64-bit integer step counter variable, creating it lazily
+    # (non-trainable, first-replica aggregation, under the strategy scope) and appending it to the
+    # weights on first access.
     """Variable. The number of training steps this Optimizer has run."""
     if self._iterations is None:
       with self._distribution_strategy_scope():
@@ -995,6 +1205,9 @@ class OptimizerV2(trackable.Trackable):
 
   @iterations.setter
   def iterations(self, variable):
+    # [FUNCTION DOC]
+    # Property setter: installs a given variable as the step counter and appends it to the
+    # weights. Raises a runtime error if a counter already exists.
     if self._iterations is not None:
       raise RuntimeError("Cannot set `iterations` to a new Variable after "
                          "the Optimizer weights have been created")
@@ -1002,6 +1215,11 @@ class OptimizerV2(trackable.Trackable):
     self._weights.append(self._iterations)
 
   def _decayed_lr(self, var_dtype):
+    # [FUNCTION DOC]
+    # HELPER: computes the effective learning rate tensor in the given dtype. Evaluates a
+    # learning rate schedule at the current iteration if the rate is one, then, if the legacy
+    # initial decay is positive, divides by one plus decay times the iteration count.
+    # Returns the learning rate tensor.
     """Get decayed learning rate as a Tensor with dtype=var_dtype."""
     lr_t = self._get_hyper("learning_rate", var_dtype)
     if isinstance(lr_t, learning_rate_schedule.LearningRateSchedule):
@@ -1015,6 +1233,12 @@ class OptimizerV2(trackable.Trackable):
 
   @abc.abstractmethod
   def get_config(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it returns a dictionary only; the abstract method actually
+    # has a body that returns name and clipping settings, which subclasses build upon.
+    # Abstract method with a usable base implementation that subclasses extend. Returns a
+    # serializable mapping with the optimizer name, plus clipnorm, clipvalue and global_clipnorm
+    # when each is set. No side effects.
     """Returns the config of the optimizer.
 
     An optimizer config is a Python dictionary (serializable)
@@ -1036,6 +1260,11 @@ class OptimizerV2(trackable.Trackable):
 
   @classmethod
   def from_config(cls, config, custom_objects=None):
+    # [FUNCTION DOC]
+    # Class method that creates an optimizer from a configuration mapping. The legacy lr key is
+    # renamed to learning rate, and a serialized learning rate schedule (a mapping) is rebuilt
+    # using the optional custom objects mapping. Mutates the given configuration. Returns a new
+    # instance built from the configuration; constructor errors propagate.
     """Creates an optimizer from its config.
 
     This method is the reverse of `get_config`,
@@ -1060,6 +1289,10 @@ class OptimizerV2(trackable.Trackable):
     return cls(**config)
 
   def _serialize_hyperparameter(self, hyperparameter_name):
+    # [FUNCTION DOC]
+    # HELPER: for get_config. Returns a serializable form of the named hyperparameter: a
+    # serialized schedule, the result of calling a callable, the numeric value read from a tensor
+    # or variable, or the plain value. Raises a key error for unknown names.
     """Serialize a hyperparameter that can be a float, callable, or Tensor."""
     value = self._hyper[hyperparameter_name]
     if isinstance(value, learning_rate_schedule.LearningRateSchedule):
@@ -1071,15 +1304,22 @@ class OptimizerV2(trackable.Trackable):
     return value
 
   def variables(self):
+    # [FUNCTION DOC]
+    # Returns the live list of all optimizer variables in creation order (same list as weights).
     """Returns variables of this Optimizer based on the order created."""
     return self._weights
 
   @property
   def weights(self):
+    # [FUNCTION DOC]
+    # Property: returns the live list of all optimizer variables in creation order.
     """Returns variables of this Optimizer based on the order created."""
     return self._weights
 
   def get_weights(self):
+    # [FUNCTION DOC]
+    # Reads the current values of all optimizer variables (iteration counter first, then state in
+    # creation order) and returns them as a list of numpy arrays. No side effects.
     """Returns the current weights of the optimizer.
 
     The weights of an optimizer are its state (ie, variables).
@@ -1110,6 +1350,11 @@ class OptimizerV2(trackable.Trackable):
 
   # TODO(tanzheny): Maybe share this logic with base_layer.
   def set_weights(self, weights):
+    # [FUNCTION DOC]
+    # Assigns values to the optimizer variables from a list of numpy arrays in creation order.
+    # Raises a value error if the list length differs from the number of variables or if any
+    # array shape differs from its variable's shape. Does nothing when the optimizer has no
+    # variables (after the length check). Side effect: overwrites variable values.
     """Set the weights of the optimizer.
 
     The weights of an optimizer are its state (ie, variables).
@@ -1164,6 +1409,14 @@ class OptimizerV2(trackable.Trackable):
                  trainable=None,
                  synchronization=tf_variables.VariableSynchronization.AUTO,
                  aggregation=tf_variables.VariableAggregation.NONE):
+    # [FUNCTION DOC]
+    # Creates and tracks a variable owned by the optimizer. Inputs: name, shape, optional dtype
+    # (default 32-bit float), initializer (name, callable or value; default zeros), trainable flag
+    # (default: trainable, except forced off for on-read synchronization), synchronization mode
+    # and aggregation mode. Raises a value error if on-read synchronization is combined with an
+    # explicit trainable request. Builds a resource variable via the checkpoint-tracking custom
+    # getter (overwriting an existing dependency of the same name), registers it with the backend
+    # and returns it. Does not add it to the weights list itself.
 
     if dtype is None:
       dtype = dtypes.float32
@@ -1199,6 +1452,10 @@ class OptimizerV2(trackable.Trackable):
     return variable
 
   def _init_set_name(self, name, zero_based=True):
+    # [FUNCTION DOC]
+    # HELPER: sets the optimizer name. A non-empty name is used as given; otherwise a unique name
+    # is generated from the snake-case class name via the backend (counting from zero when the
+    # zero-based flag, default true, is set). Stores the result; returns nothing.
     if not name:
       self._name = backend.unique_object_name(
           generic_utils.to_snake_case(self.__class__.__name__),
@@ -1207,6 +1464,9 @@ class OptimizerV2(trackable.Trackable):
       self._name = name
 
   def _assert_valid_dtypes(self, tensors):
+    # [FUNCTION DOC]
+    # HELPER: validation. Checks each tensor's base type against the allowed type set; raises a
+    # value error naming the first offending tensor and the allowed types. Returns nothing.
     """Asserts tensors are all valid types (see `_valid_dtypes`).
 
     Args:
@@ -1223,6 +1483,9 @@ class OptimizerV2(trackable.Trackable):
                          (dtype, t.name, [v for v in valid_dtypes]))
 
   def _valid_dtypes(self):
+    # [FUNCTION DOC]
+    # HELPER: returns the set of allowed tensor types (half, bfloat, single and double float and
+    # the two complex types). Subclasses may override to allow others.
     """Valid types for loss, variables and gradients.
 
     Subclasses should override to allow other float types.
@@ -1233,10 +1496,16 @@ class OptimizerV2(trackable.Trackable):
     return _DEFAULT_VALID_DTYPES
 
   def _call_if_callable(self, param):
+    # [FUNCTION DOC]
+    # HELPER: returns the result of calling the parameter if it is callable, else the parameter.
     """Call the function if param is callable."""
     return param() if callable(param) else param
 
   def _resource_apply_dense(self, grad, handle, apply_state):
+    # [FUNCTION DOC]
+    # Abstract hook that subclasses implement: apply a dense gradient tensor to the resource
+    # variable referred to by the handle, using the shared coefficient mapping. Should return the
+    # update operation. The base version always raises a not-implemented error.
     """Add ops to apply dense gradients to the variable `handle`.
 
     Args:
@@ -1252,6 +1521,11 @@ class OptimizerV2(trackable.Trackable):
 
   def _resource_apply_sparse_duplicate_indices(self, grad, handle, indices,
                                                **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: sparse update entry point. Inputs: gradient rows, resource handle, row indices that
+    # may repeat, and optional keyword arguments (such as the coefficient mapping). Sums rows with
+    # equal indices, then forwards the summed gradient, handle, unique indices and keyword
+    # arguments to the sparse update hook. Returns that hook's update operation.
     """Add ops to apply sparse gradients to `handle`, with repeated indices.
 
     Optimizers which override this method must deal with repeated indices. See
@@ -1279,6 +1553,10 @@ class OptimizerV2(trackable.Trackable):
                                        **kwargs)
 
   def _resource_apply_sparse(self, grad, handle, indices, apply_state):
+    # [FUNCTION DOC]
+    # Abstract hook that subclasses implement: apply a sparse gradient (rows for unique indices)
+    # to the resource variable referred to by the handle. Should return the update operation.
+    # The base version always raises a not-implemented error.
     """Add ops to apply sparse gradients to the variable `handle`.
 
     Similar to `_apply_sparse`, the `indices` argument to this method has been
@@ -1300,6 +1578,9 @@ class OptimizerV2(trackable.Trackable):
     raise NotImplementedError("Must be implemented in subclasses.")
 
   def _resource_scatter_add(self, x, i, v):
+    # [FUNCTION DOC]
+    # HELPER: adds the update values to the rows of resource variable x at indices i, in place,
+    # and returns the variable's value read after the scatter-add completes.
     with ops.control_dependencies([
         gen_resource_variable_ops.ResourceScatterAdd(
             resource=x.handle, indices=i, updates=v)
@@ -1307,6 +1588,9 @@ class OptimizerV2(trackable.Trackable):
       return x.value()
 
   def _resource_scatter_update(self, x, i, v):
+    # [FUNCTION DOC]
+    # HELPER: overwrites the rows of resource variable x at indices i with values v, in place,
+    # and returns the variable's value read after the update completes.
     with ops.control_dependencies(
         [gen_resource_variable_ops.ResourceScatterUpdate(
             resource=x.handle, indices=i, updates=v)]):
@@ -1315,11 +1599,17 @@ class OptimizerV2(trackable.Trackable):
   @property
   @layer_utils.cached_per_instance
   def _dense_apply_args(self):
+    # [FUNCTION DOC]
+    # HELPER: cached property returning the argument names of the (possibly overridden) dense
+    # update method, used to decide whether to pass the coefficient mapping.
     return tf_inspect.getfullargspec(self._resource_apply_dense).args
 
   @property
   @layer_utils.cached_per_instance
   def _sparse_apply_args(self):
+    # [FUNCTION DOC]
+    # HELPER: cached property returning the argument names of the (possibly overridden) sparse
+    # update method, used to decide whether to pass the coefficient mapping.
     return tf_inspect.getfullargspec(self._resource_apply_sparse).args
 
   # ---------------
@@ -1327,6 +1617,10 @@ class OptimizerV2(trackable.Trackable):
   # ---------------
 
   def _restore_slot_variable(self, slot_name, variable, slot_variable):
+    # [FUNCTION DOC]
+    # HELPER: trackable (checkpoint) glue. Pops any deferred restoration positions recorded for
+    # this slot name and primary variable, orders them with the highest restore id first, and
+    # restores each into the newly created slot variable. Mutates the deferred restoration store.
     """Restore a newly created slot variable's value."""
     variable_key = _var_key(variable)
     deferred_restorations = self._deferred_slot_restorations.get(
@@ -1340,6 +1634,14 @@ class OptimizerV2(trackable.Trackable):
 
   def _create_or_restore_slot_variable(
       self, slot_variable_position, slot_name, variable):
+    # [FUNCTION DOC]
+    # HELPER: trackable (checkpoint) glue called when a variable with a saved slot is created or
+    # restored. Inputs: checkpoint position of the slot, slot name, primary variable. If the slot
+    # does not exist, execution is eager, the saved slot is a simple variable and no variable
+    # creator scope blocks it (or a distribution strategy is set), creates the slot with a
+    # restoring initializer. Then restores into the slot if one exists; otherwise defers the
+    # restoration until the slot is created. Side effects: may create a slot, mutates the
+    # deferred restoration store.
     """Restore a slot variable's value, possibly creating it.
 
     Called when a variable which has an associated slot variable is created or
@@ -1408,6 +1710,12 @@ class OptimizerV2(trackable.Trackable):
 
   @contextlib.contextmanager
   def _distribution_strategy_scope(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring claims it returns the strategy, but it is a context manager
+    # that yields the strategy scope (or nothing) and returns nothing.
+    # HELPER: context manager. If the optimizer was created under a distribution strategy and no
+    # strategy is active now, enters that strategy's scope for the duration; otherwise does
+    # nothing. Used around variable creation.
     """Returns the `tf.distribute.Strategy` this optimizer was created under."""
     if self._distribution_strategy and not distribute_lib.has_strategy():
       with self._distribution_strategy.scope():
@@ -1417,6 +1725,9 @@ class OptimizerV2(trackable.Trackable):
 
 
 def _var_key(var):
+  # [FUNCTION DOC]
+  # HELPER: slot lookup key for a variable. Uses the primary variable of a distributed variable
+  # if there is one, then returns the shared name in graph mode or the unique id in eager mode.
   """Key for representing a primary variable, for looking up slots.
 
   In graph mode the name is derived from the var shared name.
@@ -1440,6 +1751,8 @@ def _var_key(var):
 
 
 def _get_slot_key_from_var(var, slot_name):
+  # [FUNCTION DOC]
+  # HELPER: returns a string key made of the variable's lookup key, a slash and the slot name.
   """Get the slot key for the variable: var_name/slot_name."""
 
   name = _var_key(var)
@@ -1447,6 +1760,10 @@ def _get_slot_key_from_var(var, slot_name):
 
 
 class RestoredOptimizer(OptimizerV2):
+  # [CLASS DOC]
+  # HELPER: placeholder optimizer created when an optimizer is revived from a saved model. It only
+  # holds restored slot variables and hyperparameters for checkpoint compatibility and cannot
+  # be used for training or configuration export. Registered with the revival registry below.
   """A non-functional Optimizer implementation for checkpoint compatibility.
 
   Holds slot variables and hyperparameters when an optimizer is restored from a
@@ -1458,10 +1775,16 @@ class RestoredOptimizer(OptimizerV2):
   # methods.
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor with no inputs: initialises the base optimizer with a fixed name and marks
+    # hyperparameters as already created so none are created later.
     super(RestoredOptimizer, self).__init__("RestoredOptimizer")
     self._hypers_created = True
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Not supported: always raises a not-implemented error explaining that restoring functional
+    # optimizers from saved models is unavailable.
     # TODO(allenl): Save and restore the Optimizer's config
     raise NotImplementedError(
         "Restoring functional Optimizers from SavedModels is not currently "

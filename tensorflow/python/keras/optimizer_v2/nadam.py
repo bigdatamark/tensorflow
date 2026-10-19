@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Implements the Nadam optimizer (Adam with Nesterov momentum) on top of the base optimizer
+# class of this package. Exposes a single class, Nadam. Has no import-time side effects beyond
+# imports. Not a helper module.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,6 +32,14 @@ from tensorflow.python.ops import variables as tf_variables
 
 
 class Nadam(optimizer_v2.OptimizerV2):
+  # [CLASS DOC]
+  # Optimizer implementing Nadam: Adam moment estimates combined with Nesterov momentum using a
+  # decaying momentum schedule. Holds hyperparameters (learning rate, decay, beta_1, beta_2),
+  # epsilon, and a scalar non-trainable momentum-cache variable (the running product of the
+  # momentum schedule), plus per-variable slots for first (m) and second (v) moments.
+  # Subclasses the base optimizer and overrides slot creation, per-device coefficient
+  # preparation, dense and sparse update rules and configuration export. Aggregated gradients
+  # are supported.
   r"""Optimizer that implements the NAdam algorithm.
   Much like Adam is essentially RMSprop with momentum, Nadam is Adam with
   Nesterov momentum.
@@ -67,6 +79,14 @@ class Nadam(optimizer_v2.OptimizerV2):
                epsilon=1e-7,
                name='Nadam',
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructs the optimizer. Inputs: learning rate (default 0.001), beta_1 (0.9), beta_2
+    # (0.999), epsilon (1e-7; a null/zero value falls back to the backend default epsilon), name
+    # (default "Nadam") and extra keyword arguments (clipnorm, clipvalue, legacy lr alias, and
+    # the legacy schedule decay argument which is mapped to the decay setting, default 0.004).
+    # Raises a value error if the learning rate is a learning rate schedule object.
+    # Side effects: registers hyperparameters with the base class and sets the momentum cache
+    # to unset until slots are created.
     # Backwards compatibility with keras NAdam optimizer.
     kwargs['decay'] = kwargs.pop('schedule_decay', 0.004)
     learning_rate = kwargs.get('lr', learning_rate)
@@ -84,6 +104,12 @@ class Nadam(optimizer_v2.OptimizerV2):
     self._m_cache = None
 
   def _create_slots(self, var_list):
+    # [FUNCTION DOC]
+    # HELPER: slot setup hook called by the base optimizer before applying gradients.
+    # Creates, once, the scalar non-trainable momentum cache weight (initialised to one, using
+    # the dtype of the first variable, aggregated from the first replica only) and appends it to
+    # the optimizer weights. Then creates a first-moment slot and a second-moment slot for every
+    # variable in the given list (in two separate passes to keep legacy ordering).
     var_dtype = var_list[0].dtype.base_dtype
     if self._m_cache is None:
       self._m_cache = self.add_weight(
@@ -103,6 +129,15 @@ class Nadam(optimizer_v2.OptimizerV2):
       self.add_slot(var, 'v')
 
   def _prepare_local(self, var_device, var_dtype, apply_state):
+    # [FUNCTION DOC]
+    # HELPER: computes per-device, per-dtype update coefficients for Nadam.
+    # Reads learning rate, beta_1 and beta_2, computes the current and next momentum values from
+    # a 0.96-based decay over the step count, updates the momentum cache (running product of the
+    # momentum schedule) when the dtype matches the cache dtype, and stores a mapping of
+    # coefficients (rate, negated rate, epsilon, betas and their complements, momentum terms,
+    # schedule complements, bias-correction denominator) into the apply-state mapping under the
+    # device and dtype key. Mutates the apply-state argument; returns nothing.
+    # Side effect: assigns to the momentum cache variable.
     lr_t = array_ops.identity(self._get_hyper('learning_rate', var_dtype))
     beta_1_t = array_ops.identity(self._get_hyper('beta_1', var_dtype))
     beta_2_t = array_ops.identity(self._get_hyper('beta_2', var_dtype))
@@ -141,11 +176,21 @@ class Nadam(optimizer_v2.OptimizerV2):
     )
 
   def _prepare(self, var_list):
+    # [FUNCTION DOC]
+    # HELPER: pre-update hook. Snapshots the current momentum cache value into an attribute so
+    # all variables in this step use the same value, then delegates to the base class and
+    # returns its result. Input: the list of variables being updated.
     # Get the value of the momentum cache before starting to apply gradients.
     self._m_cache_read = array_ops.identity(self._m_cache)
     return super(Nadam, self)._prepare(var_list)
 
   def _resource_apply_dense(self, grad, var, apply_state=None):
+    # [FUNCTION DOC]
+    # Dense Nadam update for one resource variable. Inputs: gradient tensor, the variable, and an
+    # optional mapping of precomputed coefficients per device and dtype (computed on demand if
+    # missing). Updates the first and second moment slots, forms the bias-corrected Nesterov
+    # step and assigns the new variable value. Returns the update operation.
+    # Side effects: assigns to the m slot, v slot and the variable.
     var_device, var_dtype = var.device, var.dtype.base_dtype
     coefficients = ((apply_state or {}).get((var_device, var_dtype))
                     or self._fallback_apply_state(var_device, var_dtype))
@@ -169,6 +214,14 @@ class Nadam(optimizer_v2.OptimizerV2):
     return state_ops.assign(var, var_t, use_locking=self._use_locking).op
 
   def _resource_apply_sparse(self, grad, var, indices, apply_state=None):
+    # [FUNCTION DOC]
+    # Sparse Nadam update for one resource variable. Inputs: gradient values, the variable, the
+    # row indices the gradient applies to, and an optional coefficient mapping (computed on
+    # demand if missing). Decays the whole m and v slots, scatter-adds the scaled gradient terms
+    # at the indices (ordered with control dependencies), gathers the touched slices, and
+    # scatter-adds the Nesterov step into the variable. Returns a grouped operation of the
+    # variable update, the step term and the second-moment update.
+    # Side effects: modifies m, v and the variable in place.
     var_device, var_dtype = var.device, var.dtype.base_dtype
     coefficients = ((apply_state or {}).get((var_device, var_dtype))
                     or self._fallback_apply_state(var_device, var_dtype))
@@ -209,6 +262,10 @@ class Nadam(optimizer_v2.OptimizerV2):
     return control_flow_ops.group(*[var_update, m_t_bar, v_t])
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a serializable configuration mapping: the base class configuration extended with
+    # the current learning rate, decay, beta_1 and beta_2 values (serialized hyperparameters) and
+    # epsilon. No side effects.
     config = super(Nadam, self).get_config()
     config.update({
         'learning_rate': self._serialize_hyperparameter('learning_rate'),

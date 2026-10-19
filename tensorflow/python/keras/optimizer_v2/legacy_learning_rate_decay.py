@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Legacy (TF1-style) learning rate decay functions exported under the v1 "train" namespace.
+# Each function is a thin wrapper that builds the matching class from the learning rate schedule
+# module (exponential, piecewise constant, polynomial, natural exponential, inverse time, cosine,
+# cosine with restarts, linear cosine, noisy linear cosine) and applies it to a global step.
+# In graph mode the wrappers return the decayed learning rate tensor; in eager mode they return a
+# callable (a partial application of the schedule to the step) so the rate is re-evaluated on
+# each call. The only import-time side effect is registration of the public v1 API names via
+# the export decorator.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,6 +41,12 @@ def exponential_decay(learning_rate,
                       decay_rate,
                       staircase=False,
                       name=None):
+  # [FUNCTION DOC]
+  # Builds an exponential-decay schedule from the initial learning rate, decay steps and decay
+  # rate (optionally stepwise via the staircase flag, default false; optional operation name).
+  # In graph mode returns the decayed learning rate tensor evaluated at the global step; in eager
+  # mode returns a callable that evaluates the schedule at the given step each time it is called.
+  # No exceptions are raised here; argument validation is left to the schedule class.
   """Applies exponential decay to the learning rate.
 
   When training a model, it is often recommended to lower the learning rate as
@@ -103,6 +118,15 @@ def exponential_decay(learning_rate,
 
 @tf_export(v1=["train.piecewise_constant_decay", "train.piecewise_constant"])
 def piecewise_constant(x, boundaries, values, name=None):
+  # [FUNCTION DOC]
+  # Builds a piecewise-constant learning rate from a scalar step value x, a list of increasing
+  # boundaries and a list of values (one more than boundaries); optional operation name.
+  # Boundaries and values are flattened and converted to tensors. Boundaries whose type is 32-bit
+  # integer are promoted to 64-bit when x is 64-bit integer; any other mismatch between a
+  # boundary type and x raises a value error, as does a value whose type differs from the first
+  # value. Returns the tensor in graph mode, or a callable bound to x in eager mode.
+  # KNOWN ISSUE: the docstring says a value-error is raised when the number of elements does not
+  # match, but this wrapper never checks lengths itself; that is left to the schedule class.
   """Piecewise constant from boundaries and interval values.
 
   Example: use a learning rate that's 1.0 for the first 100001 steps, 0.5
@@ -190,6 +214,12 @@ def polynomial_decay(learning_rate,
                      power=1.0,
                      cycle=False,
                      name=None):
+  # [FUNCTION DOC]
+  # Builds a polynomial-decay schedule that moves the learning rate from its initial value to the
+  # end learning rate (default 0.0001) over the decay steps, with a given power (default 1.0,
+  # linear) and an optional cycle flag (default false) that restarts the decay. Optional name.
+  # Graph mode: returns the decayed rate tensor at the global step. Eager mode: returns a
+  # callable bound to the global step. Raises nothing itself.
   """Applies a polynomial decay to the learning rate.
 
   It is commonly observed that a monotonically decreasing learning rate, whose
@@ -290,6 +320,12 @@ def natural_exp_decay(learning_rate,
                       decay_rate,
                       staircase=False,
                       name=None):
+  # [FUNCTION DOC]
+  # Natural exponential decay: converts the decay rate into a per-period multiplier equal to e
+  # raised to the negative decay rate, then builds an exponential-decay schedule with it
+  # (optionally stepwise via the staircase flag, default false; optional name).
+  # Graph mode returns the decayed rate tensor at the global step; eager mode returns a callable
+  # bound to the global step. Creates a small op for the exponent computation.
   """Applies natural exponential decay to the initial learning rate.
 
   When training a model, it is often recommended to lower the learning rate as
@@ -378,6 +414,11 @@ def inverse_time_decay(learning_rate,
                        decay_rate,
                        staircase=False,
                        name=None):
+  # [FUNCTION DOC]
+  # Builds an inverse-time decay schedule from the initial learning rate, decay steps and decay
+  # rate (optionally stepwise via the staircase flag, default false; optional name).
+  # Graph mode returns the decayed rate tensor at the global step; eager mode returns a callable
+  # bound to the global step. Raises nothing itself.
   """Applies inverse time decay to the initial learning rate.
 
   When training a model, it is often recommended to lower the learning rate as
@@ -456,6 +497,11 @@ def inverse_time_decay(learning_rate,
 
 @tf_export(v1=["train.cosine_decay"])
 def cosine_decay(learning_rate, global_step, decay_steps, alpha=0.0, name=None):
+  # [FUNCTION DOC]
+  # Builds a cosine-decay schedule that decays the learning rate over the decay steps down to a
+  # minimum fraction alpha (default 0.0) of the initial rate; optional name.
+  # Graph mode returns the decayed rate tensor at the global step; eager mode returns a callable
+  # bound to the global step. Raises nothing itself.
   """Applies cosine decay to the learning rate.
 
   When training a model, it is often recommended to lower the learning rate as
@@ -525,6 +571,12 @@ def cosine_decay_restarts(learning_rate,
                           m_mul=1.0,
                           alpha=0.0,
                           name=None):
+  # [FUNCTION DOC]
+  # Builds a cosine-decay-with-restarts schedule. Inputs: initial rate, global step, number of
+  # steps in the first decay period, period multiplier t_mul (default 2.0), initial-rate
+  # multiplier m_mul applied at each restart (default 1.0), minimum fraction alpha (default 0.0)
+  # and an optional name. Graph mode returns the decayed rate tensor at the global step; eager
+  # mode returns a callable bound to the global step. Raises nothing itself.
   """Applies cosine decay with restarts to the learning rate.
 
   When training a model, it is often recommended to lower the learning rate as
@@ -602,6 +654,11 @@ def linear_cosine_decay(learning_rate,
                         alpha=0.0,
                         beta=0.001,
                         name=None):
+  # [FUNCTION DOC]
+  # Builds a linear-cosine-decay schedule. Inputs: initial rate, global step, decay steps, number
+  # of periods of the cosine part (default 0.5), alpha (default 0.0) and beta (default 0.001)
+  # which set the minimum learning rate offsets, and an optional name. Graph mode returns the
+  # decayed rate tensor at the global step; eager mode returns a callable bound to the step.
   """Applies linear cosine decay to the learning rate.
 
   Note that linear cosine decay is more aggressive than cosine decay and
@@ -689,6 +746,13 @@ def noisy_linear_cosine_decay(learning_rate,
                               alpha=0.0,
                               beta=0.001,
                               name=None):
+  # [FUNCTION DOC]
+  # Builds a noisy-linear-cosine-decay schedule: like the linear cosine decay but with random
+  # noise whose initial variance (default 1.0) decays at variance_decay (default 0.55). Other
+  # inputs: initial rate, global step, decay steps, num_periods (default 0.5), alpha (default
+  # 0.0), beta (default 0.001), optional name. Graph mode returns the decayed rate tensor at the
+  # global step; eager mode returns a callable bound to the step. The noise is random at
+  # evaluation time, so results are not deterministic.
   """Applies noisy linear cosine decay to the learning rate.
 
   Note that linear cosine decay is more aggressive than cosine decay and
