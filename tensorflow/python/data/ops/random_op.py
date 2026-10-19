@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Implementation module for the dataset random transformation: a source dataset producing an
+# endless stream of pseudorandom 64-bit integers. Exposes a private factory function and a
+# dataset source class, used by the main dataset module. No import-time side effects.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +33,10 @@ def _random(  # pylint: disable=unused-private-name
     seed=None,
     rerandomize_each_iteration=None,
     name=None):
+  # [FUNCTION DOC]
+  # HELPER: factory used by the public dataset random method.
+  # Inputs: seed (optional integer), rerandomize_each_iteration (optional boolean; reshuffle
+  # the random sequence every epoch), name (optional string). Returns a new random dataset.
   """See `Dataset.random()` for details."""
   return _RandomDataset(
       seed=seed,
@@ -37,9 +45,19 @@ def _random(  # pylint: disable=unused-private-name
 
 
 class _RandomDataset(dataset_ops.DatasetSource):
+  # [CLASS DOC]
+  # Source dataset yielding pseudorandom scalar 64-bit integers. Holds the two derived seeds,
+  # the rerandomize flag and the name. Created by the random factory function.
   """A `Dataset` of pseudorandom values."""
 
   def __init__(self, seed=None, rerandomize_each_iteration=None, name=None):
+    # [FUNCTION DOC]
+    # Inputs: seed (optional integer; combined with the global seed into two seeds),
+    # rerandomize_each_iteration (optional boolean), name (optional string).
+    # When rerandomizing is requested, uses the second-version random op with a dummy seed
+    # generator; in the legacy graph mode (TF 1) it first emits a warning that this option only
+    # works for repeat-based epochs. Otherwise uses the plain random op. Calls the parent
+    # constructor with the resulting variant tensor.
     """A `Dataset` of pseudorandom values."""
     self._seed, self._seed2 = random_seed.get_seed(seed)
     self._rerandomize = rerandomize_each_iteration
@@ -61,4 +79,6 @@ class _RandomDataset(dataset_ops.DatasetSource):
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Property returning the element spec: a scalar tensor spec of 64-bit integer type.
     return tensor_spec.TensorSpec([], dtypes.int64)

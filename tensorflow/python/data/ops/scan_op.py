@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# KNOWN ISSUE: the module docstring says it implements shuffle, but the module implements scan.
+# Implementation module for the dataset scan transformation: a stateful transformation applying a
+# function to each element together with a running state, producing outputs and a new state.
+# Exposes a private factory function and a dataset class. No import-time side effects.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,11 +32,21 @@ def _scan(input_dataset,
           scan_func,
           use_default_device=None,
           name=None):
+  # [FUNCTION DOC]
+  # HELPER: factory used by the public dataset scan method.
+  # Inputs: input_dataset, initial_state (nested structure of values), scan_func (callback taking
+  # state and element, returning new state and output), use_default_device (optional boolean),
+  # name (optional). Returns a new scan dataset.
   return _ScanDataset(
       input_dataset, initial_state, scan_func, use_default_device, name=name)
 
 
 class _ScanDataset(dataset_ops.UnaryDataset):
+  # [CLASS DOC]
+  # Unary dataset that threads a state through the input: for each element it calls the scan
+  # function with the state and element, yielding the output and carrying the new state. Holds the
+  # initial state, the state structure (with shapes weakened to a fixed point), the wrapped scan
+  # function and the output element spec.
   """A dataset that scans a function across its input."""
 
   def __init__(self,
@@ -40,6 +55,16 @@ class _ScanDataset(dataset_ops.UnaryDataset):
                scan_func,
                use_default_device=None,
                name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the output classes are stored on the instance and then immediately extracted
+    # again into a local variable; the instance attribute assignment is redundant.
+    # Inputs: input_dataset, initial_state, scan_func, use_default_device (optional boolean; only
+    # passed to the op when not nothing), name (optional).
+    # Normalizes the initial state, then repeatedly traces the scan function until the state
+    # shapes reach a fixed point (shapes are weakened to the most specific compatible shape each
+    # round). Raises a type error if the function does not return a pair, or if the new state's
+    # classes or dtypes differ from the initial state. Registers the traced function in the default
+    # graph, creates the scan op and calls the parent constructor.
     """See `scan()` for details."""
     self._input_dataset = input_dataset
     self._initial_state = structure.normalize_element(initial_state)
@@ -150,11 +175,17 @@ class _ScanDataset(dataset_ops.UnaryDataset):
     super().__init__(input_dataset, variant_tensor)
 
   def _functions(self):
+    # [FUNCTION DOC]
+    # Returns a list holding the wrapped scan function, used for function tracking.
     return [self._scan_func]
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Property returning the output element spec derived from the scan function.
     return self._element_spec
 
   def _transformation_name(self):
+    # [FUNCTION DOC]
+    # Returns the display name of this transformation used in error messages.
     return "Dataset.scan()"

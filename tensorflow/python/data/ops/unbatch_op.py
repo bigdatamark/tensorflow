@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Implementation module for the dataset unbatch transformation: splits each batched element into
+# its individual rows. Exposes a private factory function and a dataset class used by the main
+# dataset module. No import-time side effects beyond imports.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,15 +25,26 @@ from tensorflow.python.ops import gen_experimental_dataset_ops as ged_ops
 
 
 def _unbatch(input_dataset, name=None):  # pylint: disable=unused-private-name
+  # [FUNCTION DOC]
+  # HELPER: factory used by the public dataset unbatch method.
+  # Inputs: input_dataset, name (optional). Converts the input to dense form (for example sparse
+  # or ragged components) and returns a new unbatch dataset over it.
   """See `Dataset.unbatch()` for details."""
   normalized_dataset = dataset_ops.normalize_to_dense(input_dataset)
   return _UnbatchDataset(normalized_dataset, name=name)
 
 
 class _UnbatchDataset(dataset_ops.UnaryDataset):
+  # [CLASS DOC]
+  # Unary dataset that splits each input element into multiple elements along the leading
+  # dimension. Holds the input, the unbatched element structure and the name.
   """A dataset that splits the elements of its input into multiple elements."""
 
   def __init__(self, input_dataset, name=None):
+    # [FUNCTION DOC]
+    # Inputs: input_dataset (dense form), name (optional). Raises a value error if any component
+    # is a scalar or if leading dimensions of components cannot be merged. Computes the unbatched
+    # element structure, creates the unbatch op and calls the parent constructor.
     """See `unbatch()` for more details."""
     flat_shapes = input_dataset._flat_shapes  # pylint: disable=protected-access
     if any(s.ndims == 0 for s in flat_shapes):
@@ -55,4 +70,6 @@ class _UnbatchDataset(dataset_ops.UnaryDataset):
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Property returning the unbatched element structure computed at construction.
     return self._structure

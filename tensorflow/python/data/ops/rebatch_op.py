@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Implementation module for the dataset rebatch transformation: regroups the elements of an
+# already batched dataset into new batch sizes. Exposes a private factory function and a dataset
+# class used by the main dataset module. No import-time side effects beyond imports.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,10 +31,18 @@ from tensorflow.python.util import numpy_compat
 
 
 def _rebatch(input_dataset, batch_size, drop_remainder=False, name=None):
+  # [FUNCTION DOC]
+  # HELPER: factory used by the public dataset rebatch method.
+  # Inputs: input_dataset (batched dataset), batch_size (integer or list of integers), drop_remainder
+  # (boolean, default false), name (optional string). Returns a new rebatch dataset.
   return _RebatchDataset(input_dataset, batch_size, drop_remainder, name)
 
 
 class _RebatchDataset(dataset_ops.UnaryDataset):
+  # [CLASS DOC]
+  # Unary dataset regrouping batched input elements into new batch sizes (cycling through a list
+  # of sizes), equivalent to unbatching then batching. Holds the input dataset, batch sizes and
+  # drop-remainder tensors, name and the new element spec with a static batch dimension when known.
   """A `Dataset` that rebatches elements from its input into new batch sizes.
 
   `_RebatchDataset(input_dataset, batch_sizes)` is functionally equivalent to
@@ -44,6 +56,14 @@ class _RebatchDataset(dataset_ops.UnaryDataset):
                batch_sizes,
                drop_remainder=False,
                name=None):
+    # [FUNCTION DOC]
+    # Inputs: input_dataset (batched dataset), batch_sizes (integer or vector of integers),
+    # drop_remainder (boolean, default false), name (optional string).
+    # Converts parameters to tensors, computes the static batch dimension (may raise a value
+    # error), derives the new element spec by unbatching and rebatching each component spec,
+    # normalizes the input to dense form (the auto-shard rewrite relies on this ordering, so it
+    # must stay in sync with the C++ optimizer), creates the rebatch op and calls the parent
+    # constructor.
     """See `Dataset.rebatch` for details."""
     self._input_dataset = input_dataset
     self._batch_sizes = ops.convert_to_tensor(
@@ -72,6 +92,12 @@ class _RebatchDataset(dataset_ops.UnaryDataset):
     super().__init__(input_dataset, variant_tensor)
 
   def _compute_static_batch_dim(self):
+    # [FUNCTION DOC]
+    # HELPER: used by the constructor to compute the static output batch dimension.
+    # Returns an integer when the batch sizes are a compile-time constant scalar (or a vector of
+    # identical values) and no partial batches can form; returns nothing when unknown or variable.
+    # Raises a value error when the batch sizes have rank greater than one (and via the partial
+    # batch check for invalid inputs).
     """Computes the static batch dimension of a dataset if it can be determined.
 
     Given the RebatchDataset parameters, determines the batch dimension of this
@@ -109,11 +135,21 @@ class _RebatchDataset(dataset_ops.UnaryDataset):
     return new_batch_dim
 
   def _may_form_partial_batches(self, desired_batch_size):
+    # [FUNCTION DOC]
+    # HELPER: used when computing the static batch dimension.
+    # Input: desired_batch_size (integer). Returns false when remainders are dropped. Otherwise
+    # inspects the leading dimension of each input component: returns true when none is known, and
+    # otherwise whether the known input batch size is not divisible by the desired size.
+    # Raises a value error when input elements are scalars or known input batch dimensions differ.
     """Returns whether this dataset may form partial batches."""
     if tensor_util.constant_value(self._drop_remainder):
       return False
 
     def get_batch_dim(type_spec):
+      # [FUNCTION DOC]
+      # HELPER: nested helper returning the leading dimension size of a component spec, or nothing
+      # when the spec has no legacy shape, the shape is not a tensor shape, or its rank is unknown.
+      # Raises a value error if the shape is a scalar.
       try:
         shape = type_spec._to_legacy_output_shapes()  # pylint: disable=protected-access
       except NotImplementedError:
@@ -149,4 +185,6 @@ class _RebatchDataset(dataset_ops.UnaryDataset):
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Property returning the element spec computed at construction (inputs rebatched).
     return self._element_spec

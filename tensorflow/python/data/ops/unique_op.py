@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Implementation module for the dataset unique transformation: yields each distinct element once.
+# Exposes a private factory function and a dataset class used by the main dataset module. No
+# import-time side effects beyond imports.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,13 +25,24 @@ from tensorflow.python.ops import gen_experimental_dataset_ops
 
 
 def _unique(input_dataset, name):  # pylint: disable=unused-private-name
+  # [FUNCTION DOC]
+  # HELPER: factory used by the public dataset unique method.
+  # Inputs: input_dataset, name (string or nothing; required positional). Returns a new unique
+  # dataset.
   return _UniqueDataset(input_dataset, name)
 
 
 class _UniqueDataset(dataset_ops.UnaryUnchangedStructureDataset):
+  # [CLASS DOC]
+  # Dataset yielding each distinct element of its input once. Only 32-bit integer, 64-bit integer
+  # and string components are supported. Element structure unchanged. Holds the input and name.
   """A dataset containing the unique elements of an input dataset."""
 
   def __init__(self, input_dataset, name=None):
+    # [FUNCTION DOC]
+    # Inputs: input_dataset, name (optional). Raises a type error if any component has a type
+    # other than 32-bit integer, 64-bit integer or string. Creates the unique op and calls the
+    # parent constructor.
     """See `tf.data.Dataset.unique` for details."""
     self._input_dataset = input_dataset
     for ty in nest.flatten(dataset_ops.get_legacy_output_types(input_dataset)):

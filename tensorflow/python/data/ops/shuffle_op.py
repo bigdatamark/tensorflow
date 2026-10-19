@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Implementation module for the dataset shuffle transformation: randomly shuffles input elements
+# using a buffer. Exposes a private factory function and a dataset class used by the main
+# dataset module. No import-time side effects beyond imports.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,11 +33,20 @@ def _shuffle(  # pylint: disable=unused-private-name
     reshuffle_each_iteration=True,
     name=None,
 ):
+  # [FUNCTION DOC]
+  # HELPER: factory used by the public dataset shuffle method.
+  # Inputs: input_dataset, buffer_size (number of elements buffered), seed (optional integer),
+  # reshuffle_each_iteration (boolean, default true), name (optional). Returns a new shuffle
+  # dataset.
   return _ShuffleDataset(
       input_dataset, buffer_size, seed, reshuffle_each_iteration, name=name)
 
 
 class _ShuffleDataset(dataset_ops.UnaryUnchangedStructureDataset):
+  # [CLASS DOC]
+  # Dataset that randomly shuffles the elements of its input using a fixed-size buffer. Element
+  # structure unchanged. Holds the input, buffer size tensor, two derived seeds, the reshuffle
+  # flag and the name.
   """A `Dataset` that randomly shuffles the elements of its input."""
 
   def __init__(
@@ -44,6 +57,12 @@ class _ShuffleDataset(dataset_ops.UnaryUnchangedStructureDataset):
       reshuffle_each_iteration=True,
       name=None,
   ):
+    # [FUNCTION DOC]
+    # Inputs: input_dataset, buffer_size (integer or tensor), seed (optional integer, combined with
+    # the global seed into two seeds), reshuffle_each_iteration (boolean, default true), name.
+    # When TF2 behavior is enabled and running eagerly or inside a function, uses the third-version
+    # shuffle op with a dummy seed generator; otherwise uses the plain shuffle op. Calls the
+    # parent constructor with the result.
     """See `Dataset.shuffle()` for details."""
     self._input_dataset = input_dataset
     self._buffer_size = ops.convert_to_tensor(

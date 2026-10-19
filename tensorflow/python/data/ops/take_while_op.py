@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Implementation module for the dataset take-while transformation: yields input elements until a
+# predicate first returns false. Exposes a private factory function and a dataset class used by
+# the main dataset module. No import-time side effects beyond imports.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,14 +26,26 @@ from tensorflow.python.ops import gen_experimental_dataset_ops as ged_ops
 
 
 def _take_while(input_dataset, predicate, name=None):  # pylint: disable=unused-private-name
+  # [FUNCTION DOC]
+  # HELPER: factory used by the public dataset take-while method.
+  # Inputs: input_dataset, predicate (callback returning a boolean scalar tensor), name
+  # (optional). Returns a new take-while dataset.
   """See `Dataset.take_while()` for details."""
   return _TakeWhileDataset(input_dataset, predicate, name=name)
 
 
 class _TakeWhileDataset(dataset_ops.UnaryUnchangedStructureDataset):
+  # [CLASS DOC]
+  # Dataset that stops iteration the first time the predicate returns false. Element structure
+  # unchanged. Holds the input, the wrapped predicate function and the name.
   """A dataset that stops iteration when `predicate` returns false."""
 
   def __init__(self, input_dataset, predicate, name=None):
+    # [FUNCTION DOC]
+    # Inputs: input_dataset, predicate (callback applied to each element), name (optional).
+    # Wraps the predicate using the input's structure; raises a value error if it does not return
+    # a boolean scalar tensor (the message lacks a space before the reported type). Creates the
+    # take-while op and calls the parent constructor.
     """See `take_while()` for details."""
 
     self._input_dataset = input_dataset
@@ -52,7 +68,11 @@ class _TakeWhileDataset(dataset_ops.UnaryUnchangedStructureDataset):
     super().__init__(input_dataset, variant_tensor)
 
   def _functions(self):
+    # [FUNCTION DOC]
+    # Returns a list holding the wrapped predicate, used for function tracking.
     return [self._predicate]
 
   def _transformation_name(self):
+    # [FUNCTION DOC]
+    # Returns the display name of this transformation used in error messages.
     return "Dataset.take_while()"

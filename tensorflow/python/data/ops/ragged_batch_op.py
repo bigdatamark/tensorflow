@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Implementation module for the dataset ragged batch transformation. It converts dense tensor
+# elements with unknown dimensions into ragged tensors and then batches them, so that elements
+# of varying shape can be combined. Used by the main dataset module for the public ragged batch
+# method. No import-time side effects beyond imports.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,11 +31,21 @@ def _ragged_batch(input_dataset,
                   drop_remainder=False,
                   row_splits_dtype=dtypes.int64,
                   name=None):
+  # [FUNCTION DOC]
+  # HELPER: factory used by the public dataset ragged batch method.
+  # Inputs: input_dataset (dataset to batch), batch_size (number of elements per batch),
+  # drop_remainder (boolean, default false; drop a final smaller batch), row_splits_dtype (integer
+  # type for row splits of new ragged tensors, default 64-bit), name (optional string).
+  # Wraps the input in a dense-to-ragged dataset, then batches it, and returns the batched dataset.
   ragged_dataset = _DenseToRaggedDataset(input_dataset, row_splits_dtype, name)
   return ragged_dataset.batch(batch_size, drop_remainder)
 
 
 class _DenseToRaggedDataset(dataset_ops.UnaryDataset):
+  # [CLASS DOC]
+  # Unary dataset that re-encodes tensor elements having partially unknown shape as ragged
+  # tensors (variant-encoded), leaving fully defined or non-tensor elements as they are. Holds
+  # the new element structure, the mapped dataset that does the conversion, and the name.
   """A `Dataset` that encodes dense inputs as ragged (w/ ragged_rank=0).
 
   In particular:
@@ -42,6 +57,12 @@ class _DenseToRaggedDataset(dataset_ops.UnaryDataset):
   """
 
   def __init__(self, input_dataset, row_splits_dtype, name=None):
+    # [FUNCTION DOC]
+    # Computes the new element structure (ragged specs for tensor specs with unknown dimensions)
+    # and maps the input dataset with a function that converts values to variant-encoded ragged
+    # tensors. Inputs: input_dataset, row_splits_dtype (integer type for new row splits), name
+    # (optional string). Tuple elements are repacked so the map function receives them unpacked.
+    # Stores state on the instance and calls the parent constructor with the mapped variant.
     """Constructs a new _DenseToRaggedDataset.
 
     Args:
@@ -54,6 +75,11 @@ class _DenseToRaggedDataset(dataset_ops.UnaryDataset):
     # Replace each TensorSpec in the input dataset's structure with a
     # corresponding RaggedTensorSpec.
     def to_ragged_spec(spec):
+      # [FUNCTION DOC]
+      # HELPER: nested helper of the constructor computing the new element structure.
+      # Given a spec, returns it unchanged unless it is a tensor spec of known rank whose shape is
+      # not fully defined; in that case returns a ragged tensor spec whose ragged rank is the
+      # index of the last unknown dimension, using the row splits dtype of the enclosing scope.
       """Returns the new spec based on RaggedTensors."""
       if (not isinstance(spec, tensor.TensorSpec) or
           spec.shape.rank is None or
@@ -78,6 +104,11 @@ class _DenseToRaggedDataset(dataset_ops.UnaryDataset):
     # a RaggedTensorSpec, this variant-encoded tensor will be decoded with
     # RaggedTensorSpec._from_tensor_list.
     def to_ragged_variant(value):
+      # [FUNCTION DOC]
+      # HELPER: nested helper of the constructor used as the map function body.
+      # Returns the value unchanged unless it is a tensor of known rank with a not fully defined
+      # shape. Otherwise computes the ragged spec, converts the tensor to a ragged tensor when the
+      # ragged rank is positive, and returns the spec's variant-encoded single-tensor form.
       """Re-encode Tensors as RaggedTensors."""
       if (not isinstance(value, tensor.Tensor) or
           value.shape.rank is None or
@@ -103,4 +134,7 @@ class _DenseToRaggedDataset(dataset_ops.UnaryDataset):
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Property returning the element structure (nested specs) computed at construction, where
+    # partially unknown tensors are described as ragged tensor specs.
     return self._structure

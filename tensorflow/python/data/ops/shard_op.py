@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Implementation module for the dataset shard transformation: keeps only every n-th element of
+# the input starting at a given index. Exposes a private factory function and a dataset class used
+# by the main dataset module. No import-time side effects beyond imports.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,14 +25,26 @@ from tensorflow.python.ops import gen_dataset_ops
 
 
 def _shard(input_dataset, num_shards, index, name):  # pylint: disable=unused-private-name
+  # [FUNCTION DOC]
+  # HELPER: factory used by the public dataset shard method.
+  # Inputs: input_dataset, num_shards (total number of shards), index (which shard to keep),
+  # name (string or nothing). Returns a new shard dataset.
   """See `Dataset.shard()` for details."""
   return _ShardDataset(input_dataset, num_shards, index, name)
 
 
 class _ShardDataset(dataset_ops.UnaryUnchangedStructureDataset):
+  # [CLASS DOC]
+  # Dataset yielding only the elements of its input whose position modulo the number of shards
+  # equals the shard index. Element structure unchanged. Holds the input, the shard count and
+  # index tensors and the name.
   """A `Dataset` for sharding its input."""
 
   def __init__(self, input_dataset, num_shards, index, name):
+    # [FUNCTION DOC]
+    # Inputs: input_dataset, num_shards and index (integers or tensors, converted to 64-bit
+    # integer tensors), name (string or nothing). Creates the shard op and calls the parent
+    # constructor. Argument validation is left to the op.
     """See `Dataset.shard()` for details."""
     self._input_dataset = input_dataset
     self._num_shards = ops.convert_to_tensor(

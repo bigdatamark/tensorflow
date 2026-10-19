@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Implementation module for the dataset sample-from-datasets transformation: builds a dataset
+# that interleaves elements of several input datasets, choosing the source of each element at
+# random according to given weights (or uniformly). It builds a selector dataset of random
+# choices and delegates to the directed interleave implementation. No import-time side effects.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,9 +36,25 @@ def _sample_from_datasets(datasets,  # pylint: disable=unused-private-name
                           seed=None,
                           stop_on_empty_dataset=False,
                           rerandomize_each_iteration=None):
+  # [FUNCTION DOC]
+  # HELPER: implementation behind the public sample-from-datasets method.
+  # Inputs: datasets (non-empty list of datasets), weights (optional: nothing for uniform choice,
+  # a list or tensor of floating-point weights with one per dataset, or a dataset yielding weight
+  # vectors), seed (optional integer), stop_on_empty_dataset (boolean, default false; stop when a
+  # selected input is exhausted), rerandomize_each_iteration (optional boolean for the random
+  # selector stream).
+  # Raises a value error for empty datasets, a weights shape or length mismatch, and a type error
+  # when weights are not 32- or 64-bit floating point. For list weights, datasets with zero weight
+  # are dropped (if all are zero, a single empty dataset is used). When only one dataset remains
+  # and weights are not a dataset, it is returned directly. Otherwise a selector dataset of random
+  # indices drawn from log-probabilities is built and a directed interleave dataset is returned.
   """See `Dataset.sample_from_datasets()` for details."""
 
   def _skip_datasets_with_zero_weight(datasets, weights):
+    # [FUNCTION DOC]
+    # HELPER: nested helper filtering out datasets whose weight is not positive. Returns paired
+    # sequences of the remaining datasets and weights; if none remain, returns a single empty
+    # dataset (first dataset limited to zero elements) with weight one.
     datasets_and_weights = [(dataset, weight)
                             for (dataset, weight) in zip(datasets, weights)
                             if weight > 0]
@@ -82,6 +103,10 @@ def _sample_from_datasets(datasets,  # pylint: disable=unused-private-name
       return datasets[0]
 
     def select_dataset_constant_logits(seed):
+      # [FUNCTION DOC]
+      # HELPER: nested map callback. Given a pair of random seed values, draws one index from the
+      # fixed log-probabilities of the enclosing scope using a stateless multinomial op and
+      # returns it as a scalar.
       return array_ops.squeeze(
           gen_stateless_random_ops.stateless_multinomial(
               logits, 1, seed=seed),
@@ -103,6 +128,9 @@ def _sample_from_datasets(datasets,  # pylint: disable=unused-private-name
     logits_ds = weights.map(lambda *p: math_ops.log(p, name="logits"))
 
     def select_dataset_varying_logits(logits, seed):
+      # [FUNCTION DOC]
+      # HELPER: nested map callback. Given log-probabilities for this step and a pair of random
+      # seed values, draws one index with a stateless multinomial op and returns it as a scalar.
       return array_ops.squeeze(
           gen_stateless_random_ops.stateless_multinomial(
               logits, 1, seed=seed),

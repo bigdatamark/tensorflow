@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Python wrappers for reader datasets: text line, TFRecord and fixed-length record datasets, in
+# TF2 and legacy TF1 adapter variants, plus a legacy parallel interleave dataset and helpers that
+# validate filenames and build per-file readers. Exported to the public data API through export
+# decorators. Import-time side effects: chooses the default public class names depending on
+# whether TF2 behavior is enabled and registers a callback so they are rebound when TF2 behavior
+# is toggled later.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -40,11 +47,24 @@ _DEFAULT_TF_RECORD_BUFFER_SIZE_BYTES = -1
 
 
 def _normalise_fspath(path):
+  # [FUNCTION DOC]
+  # HELPER: path normalizer used when building filename datasets.
+  # Input: path, any value. If it is a path-like object (supports the file system path protocol)
+  # it is converted to a plain string; any other value is returned unchanged.
   """Convert pathlib-like objects to str (__fspath__ compatibility, PEP 519)."""
   return os.fspath(path) if isinstance(path, os.PathLike) else path
 
 
 def _create_or_validate_filenames_dataset(filenames, name=None):
+  # [FUNCTION DOC]
+  # HELPER: shared by all reader dataset constructors to normalize their filenames argument.
+  # Inputs: filenames (a dataset of string scalars, or a string, list or tensor convertible to
+  # string tensor, possibly containing path-like objects), name (optional operation name).
+  # If a dataset is given it is validated: its element type must be string and its element shape
+  # must be compatible with a scalar; otherwise a type error is raised. Other inputs have path-like
+  # objects converted to strings, are converted to a string tensor (type error if the dtype is
+  # not string), flattened to one dimension and turned into a tensor-slice dataset flagged as
+  # holding files. Returns the filenames dataset.
   """Creates (or validates) a dataset of filenames.
 
   Args:
@@ -86,6 +106,15 @@ def _create_dataset_reader(dataset_creator,
                            filenames,
                            num_parallel_reads=None,
                            name=None):
+  # [FUNCTION DOC]
+  # HELPER: shared by the text, TFRecord and fixed-length record dataset constructors.
+  # Inputs: dataset_creator (callback taking one filename tensor and returning a dataset),
+  # filenames (dataset of filenames), num_parallel_reads (optional; nothing means sequential,
+  # the autotune sentinel means autotuned parallelism, any other number is the cycle length),
+  # name (optional operation name).
+  # Returns a dataset reading all files: sequential flat-map when no parallelism is requested,
+  # an autotuned interleave for the autotune sentinel, otherwise a legacy parallel interleave
+  # dataset with block length one, non-sloppy ordering and default buffering.
   """Creates a dataset that reads the given files using the given reader.
 
   Args:
@@ -100,6 +129,9 @@ def _create_dataset_reader(dataset_creator,
   """
 
   def read_one_file(filename):
+    # [FUNCTION DOC]
+    # HELPER: nested mapping callback. Converts the given filename to a string tensor and returns
+    # the dataset produced by the enclosing dataset creator callback for that file.
     filename = ops.convert_to_tensor(filename, dtypes.string, name="filename")
     return dataset_creator(filename)
 
@@ -121,6 +153,9 @@ def _create_dataset_reader(dataset_creator,
 
 
 def _get_type(value):
+  # [FUNCTION DOC]
+  # HELPER: produces readable type names for error messages.
+  # Returns the value type of a type specification, or the ordinary type of any other value.
   """Returns the type of `value` if it is a TypeSpec."""
 
   if isinstance(value, type_spec.TypeSpec):
@@ -130,6 +165,10 @@ def _get_type(value):
 
 
 class _TextLineDataset(dataset_ops.DatasetSource):
+  # [CLASS DOC]
+  # HELPER: single-file-level text line source used by the public text line dataset classes.
+  # Dataset of lines read from the given filenames tensor; each element is a scalar string.
+  # Holds filenames, compression type and buffer size tensors.
   """A `Dataset` comprising records from one or more text files."""
 
   def __init__(self,
@@ -137,6 +176,12 @@ class _TextLineDataset(dataset_ops.DatasetSource):
                compression_type=None,
                buffer_size=None,
                name=None):
+    # [FUNCTION DOC]
+    # Inputs: filenames (string tensor of one or more names), compression_type (optional string
+    # scalar: empty for none, ZLIB or GZIP; default empty), buffer_size (optional integer byte
+    # count; default 256 kilobytes), name (optional operation name).
+    # Converts the optional parameters to tensors with defaults and creates the text line op, then
+    # calls the parent constructor.
     """Creates a `TextLineDataset`.
 
     Args:
@@ -169,11 +214,18 @@ class _TextLineDataset(dataset_ops.DatasetSource):
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Property returning the element spec: a scalar string tensor spec (one line per element).
     return tensor_spec.TensorSpec([], dtypes.string)
 
 
 @tf_export("data.TextLineDataset", v1=[])
 class TextLineDatasetV2(dataset_ops.DatasetSource):
+  # [CLASS DOC]
+  # Public dataset (exported under the TF2 data API) whose elements are the lines of one or more
+  # text files, with newline characters stripped. Holds the filenames dataset, compression type,
+  # buffer size and an internal implementation dataset that does the actual (optionally parallel)
+  # reading.
   r"""Creates a `Dataset` comprising lines from one or more text files.
 
   The `tf.data.TextLineDataset` loads text from text files and creates a dataset
@@ -214,6 +266,14 @@ class TextLineDatasetV2(dataset_ops.DatasetSource):
                buffer_size=None,
                num_parallel_reads=None,
                name=None):
+    # [FUNCTION DOC]
+    # Inputs: filenames (dataset of strings, string tensor, or list of strings/paths),
+    # compression_type (optional: empty, ZLIB or GZIP), buffer_size (optional byte count),
+    # num_parallel_reads (optional number of files read in parallel; nothing means sequential),
+    # name (optional operation name).
+    # Validates or builds the filenames dataset (type error for non-string filenames), builds the
+    # internal reader dataset using a callback that creates the single-file text line dataset, and
+    # calls the parent constructor with its variant tensor.
     r"""Creates a `TextLineDataset`.
 
     The elements of the dataset will be the lines of the input files, using
@@ -243,6 +303,9 @@ class TextLineDatasetV2(dataset_ops.DatasetSource):
     self._buffer_size = buffer_size
 
     def creator_fn(filename):
+      # [FUNCTION DOC]
+      # HELPER: nested callback. Returns a single-file text line dataset for the given filename
+      # using the compression type, buffer size and name of the enclosing constructor.
       return _TextLineDataset(
           filename, compression_type, buffer_size, name=name)
 
@@ -254,11 +317,16 @@ class TextLineDatasetV2(dataset_ops.DatasetSource):
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Property returning the element spec: a scalar string tensor spec.
     return tensor_spec.TensorSpec([], dtypes.string)
 
 
 @tf_export(v1=["data.TextLineDataset"])
 class TextLineDatasetV1(dataset_ops.DatasetV1Adapter):
+  # [CLASS DOC]
+  # Legacy (TF1 API) adapter that wraps the TF2 text line dataset and exposes it through the
+  # version-1 dataset interface. Forwards the filenames attribute to the wrapped dataset.
   """A `Dataset` comprising lines from one or more text files."""
 
   def __init__(self,
@@ -267,6 +335,9 @@ class TextLineDatasetV1(dataset_ops.DatasetV1Adapter):
                buffer_size=None,
                num_parallel_reads=None,
                name=None):
+    # [FUNCTION DOC]
+    # Takes the same arguments as the TF2 text line dataset (filenames, compression type, buffer
+    # size, number of parallel reads, name), builds that dataset and wraps it in the adapter.
     wrapped = TextLineDatasetV2(filenames, compression_type, buffer_size,
                                 num_parallel_reads, name)
     super(TextLineDatasetV1, self).__init__(wrapped)
@@ -275,14 +346,22 @@ class TextLineDatasetV1(dataset_ops.DatasetV1Adapter):
 
   @property
   def _filenames(self):
+    # [FUNCTION DOC]
+    # HELPER: property forwarding to the filenames dataset of the wrapped TF2 dataset.
     return self._dataset._filenames  # pylint: disable=protected-access
 
   @_filenames.setter
   def _filenames(self, value):
+    # [FUNCTION DOC]
+    # HELPER: setter replacing the filenames dataset stored on the wrapped TF2 dataset.
     self._dataset._filenames = value  # pylint: disable=protected-access
 
 
 class _TFRecordDataset(dataset_ops.DatasetSource):
+  # [CLASS DOC]
+  # HELPER: low-level source used by the public TFRecord dataset classes. Dataset of raw
+  # serialized records (scalar strings) from the given filenames tensor. Holds filenames,
+  # compression type and buffer size tensors.
   """A `Dataset` comprising records from one or more TFRecord files."""
 
   def __init__(self,
@@ -290,6 +369,12 @@ class _TFRecordDataset(dataset_ops.DatasetSource):
                compression_type=None,
                buffer_size=None,
                name=None):
+    # [FUNCTION DOC]
+    # Inputs: filenames (string tensor), compression_type (optional: empty, ZLIB or GZIP),
+    # buffer_size (optional byte count; default is a sentinel meaning the kernel chooses),
+    # name (optional operation name).
+    # Converts optional parameters to tensors, creates the TFRecord op and calls the parent
+    # constructor.
     """Creates a `TFRecordDataset`.
 
     Args:
@@ -319,10 +404,17 @@ class _TFRecordDataset(dataset_ops.DatasetSource):
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Property returning the element spec: a scalar string tensor spec holding one record.
     return tensor_spec.TensorSpec([], dtypes.string)
 
 
 class ParallelInterleaveDataset(dataset_ops.UnaryDataset):
+  # [CLASS DOC]
+  # Legacy parallel interleave dataset: maps a function (returning datasets) over the input
+  # elements and interleaves the results with the given cycle length. Used here for reading
+  # several files in parallel with a fixed number of readers. Holds the wrapped map function,
+  # element spec, cycle and block lengths, buffer settings and the determinism setting.
   """A `Dataset` that maps a function over its input and flattens the result."""
 
   def __init__(self,
@@ -334,6 +426,14 @@ class ParallelInterleaveDataset(dataset_ops.UnaryDataset):
                buffer_output_elements,
                prefetch_input_elements,
                name=None):
+    # [FUNCTION DOC]
+    # Inputs: input_dataset, map_func (callback mapping an element to a dataset), cycle_length
+    # (number of inputs processed concurrently), block_length (consecutive elements taken from
+    # each), sloppy (true allows nondeterministic order, false forces determinism, nothing uses the
+    # default), buffer_output_elements and prefetch_input_elements (optional; default to twice the
+    # block length and twice the cycle length), name (optional).
+    # Wraps the map function; raises a type error when it does not return a dataset. Creates the
+    # legacy parallel interleave op and calls the parent constructor.
     """See `tf.data.experimental.parallel_interleave()` for details."""
     self._input_dataset = input_dataset
     self._map_func = structured_function.StructuredFunctionWrapper(
@@ -377,18 +477,28 @@ class ParallelInterleaveDataset(dataset_ops.UnaryDataset):
                                                     variant_tensor)
 
   def _functions(self):
+    # [FUNCTION DOC]
+    # Returns a list holding the wrapped map function, used for function tracking.
     return [self._map_func]
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Property returning the element spec of the datasets produced by the map function.
     return self._element_spec
 
   def _transformation_name(self):
+    # [FUNCTION DOC]
+    # Returns the display name of this transformation used in error messages.
     return "tf.data.experimental.parallel_interleave()"
 
 
 @tf_export("data.TFRecordDataset", v1=[])
 class TFRecordDatasetV2(dataset_ops.DatasetV2):
+  # [CLASS DOC]
+  # Public dataset (TF2 data API) whose elements are the raw serialized records of one or more
+  # TFRecord files. Holds the filenames dataset, compression type, buffer size, parallel read
+  # count and an internal implementation dataset doing the reading.
   """A `Dataset` comprising records from one or more TFRecord files.
 
   This dataset loads TFRecords from the files as bytes, exactly as they were
@@ -438,6 +548,13 @@ class TFRecordDatasetV2(dataset_ops.DatasetV2):
                buffer_size=None,
                num_parallel_reads=None,
                name=None):
+    # [FUNCTION DOC]
+    # Inputs: filenames (string tensor, list, or dataset of string scalars), compression_type
+    # (optional: empty, ZLIB or GZIP), buffer_size (optional byte count), num_parallel_reads
+    # (optional number of files read in parallel; nothing means sequential), name (optional).
+    # Validates or builds the filenames dataset (type error for non-string filenames), builds the
+    # internal reader dataset with a callback creating single-file TFRecord datasets, and calls
+    # the parent constructor.
     """Creates a `TFRecordDataset` to read one or more TFRecord files.
 
     Each element of the dataset will contain a single TFRecord.
@@ -471,6 +588,9 @@ class TFRecordDatasetV2(dataset_ops.DatasetV2):
     self._num_parallel_reads = num_parallel_reads
 
     def creator_fn(filename):
+      # [FUNCTION DOC]
+      # HELPER: nested callback returning a single-file TFRecord dataset for the given filename,
+      # using the compression type, buffer size and name of the enclosing constructor.
       return _TFRecordDataset(
           filename, compression_type, buffer_size, name=name)
 
@@ -480,15 +600,22 @@ class TFRecordDatasetV2(dataset_ops.DatasetV2):
     super(TFRecordDatasetV2, self).__init__(variant_tensor)
 
   def _inputs(self):
+    # [FUNCTION DOC]
+    # Returns the input datasets of the internal implementation dataset (graph traversal helper).
     return self._impl._inputs()  # pylint: disable=protected-access
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Property returning the element spec: a scalar string tensor spec holding one record.
     return tensor_spec.TensorSpec([], dtypes.string)
 
 
 @tf_export(v1=["data.TFRecordDataset"])
 class TFRecordDatasetV1(dataset_ops.DatasetV1Adapter):
+  # [CLASS DOC]
+  # Legacy (TF1 API) adapter wrapping the TF2 TFRecord dataset behind the version-1 dataset
+  # interface. Forwards the filenames attribute to the wrapped dataset.
   """A `Dataset` comprising records from one or more TFRecord files."""
 
   def __init__(self,
@@ -497,6 +624,9 @@ class TFRecordDatasetV1(dataset_ops.DatasetV1Adapter):
                buffer_size=None,
                num_parallel_reads=None,
                name=None):
+    # [FUNCTION DOC]
+    # Takes the same arguments as the TF2 TFRecord dataset, builds that dataset and wraps it in
+    # the version-1 adapter.
     wrapped = TFRecordDatasetV2(
         filenames, compression_type, buffer_size, num_parallel_reads, name=name)
     super(TFRecordDatasetV1, self).__init__(wrapped)
@@ -505,14 +635,22 @@ class TFRecordDatasetV1(dataset_ops.DatasetV1Adapter):
 
   @property
   def _filenames(self):
+    # [FUNCTION DOC]
+    # HELPER: property forwarding to the filenames dataset of the wrapped TF2 dataset.
     return self._dataset._filenames  # pylint: disable=protected-access
 
   @_filenames.setter
   def _filenames(self, value):
+    # [FUNCTION DOC]
+    # HELPER: setter replacing the filenames dataset stored on the wrapped TF2 dataset.
     self._dataset._filenames = value  # pylint: disable=protected-access
 
 
 class _FixedLengthRecordDataset(dataset_ops.DatasetSource):
+  # [CLASS DOC]
+  # HELPER: low-level source used by the public fixed-length record dataset classes. Dataset of
+  # fixed-size binary records (scalar strings) from the given filenames tensor, skipping optional
+  # header and footer bytes per file. Holds the corresponding tensors.
   """A `Dataset` of fixed-length records from one or more binary files."""
 
   def __init__(self,
@@ -523,6 +661,13 @@ class _FixedLengthRecordDataset(dataset_ops.DatasetSource):
                buffer_size=None,
                compression_type=None,
                name=None):
+    # [FUNCTION DOC]
+    # Inputs: filenames (string tensor), record_bytes (required record size in bytes),
+    # header_bytes and footer_bytes (optional byte counts skipped at file start and end),
+    # buffer_size (optional read buffer bytes; default 256 kilobytes), compression_type (optional:
+    # empty, ZLIB or GZIP), name (optional).
+    # Converts parameters to tensors, creates the fixed-length record op and calls the parent
+    # constructor.
     """Creates a `FixedLengthRecordDataset`.
 
     Args:
@@ -567,11 +712,18 @@ class _FixedLengthRecordDataset(dataset_ops.DatasetSource):
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Property returning the element spec: a scalar string tensor spec holding one record.
     return tensor_spec.TensorSpec([], dtypes.string)
 
 
 @tf_export("data.FixedLengthRecordDataset", v1=[])
 class FixedLengthRecordDatasetV2(dataset_ops.DatasetSource):
+  # [CLASS DOC]
+  # Public dataset (TF2 data API) of fixed-length binary records from one or more files, each
+  # optionally having a fixed-size header and footer that are skipped. Holds the filenames
+  # dataset, record, header and footer sizes, buffer size, compression type and an internal
+  # implementation dataset doing the reading.
   """A `Dataset` of fixed-length records from one or more binary files.
 
   The `tf.data.FixedLengthRecordDataset` reads fixed length records from binary
@@ -614,6 +766,14 @@ class FixedLengthRecordDatasetV2(dataset_ops.DatasetSource):
                compression_type=None,
                num_parallel_reads=None,
                name=None):
+    # [FUNCTION DOC]
+    # Inputs: filenames (string tensor, list, or dataset of string scalars), record_bytes
+    # (required record size in bytes), header_bytes, footer_bytes (optional bytes skipped per
+    # file), buffer_size (optional), compression_type (optional), num_parallel_reads (optional
+    # number of files read in parallel; nothing means sequential), name (optional).
+    # Validates or builds the filenames dataset (type error for non-string filenames), builds the
+    # internal reader dataset using a callback creating single-file datasets, and calls the parent
+    # constructor.
     """Creates a `FixedLengthRecordDataset`.
 
     Args:
@@ -647,6 +807,10 @@ class FixedLengthRecordDatasetV2(dataset_ops.DatasetSource):
     self._compression_type = compression_type
 
     def creator_fn(filename):
+      # [FUNCTION DOC]
+      # HELPER: nested callback returning a single-file fixed-length record dataset for the given
+      # filename, using the record, header, footer, buffer, compression settings and name of the
+      # enclosing constructor.
       return _FixedLengthRecordDataset(
           filename,
           record_bytes,
@@ -663,11 +827,16 @@ class FixedLengthRecordDatasetV2(dataset_ops.DatasetSource):
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Property returning the element spec: a scalar string tensor spec holding one record.
     return tensor_spec.TensorSpec([], dtypes.string)
 
 
 @tf_export(v1=["data.FixedLengthRecordDataset"])
 class FixedLengthRecordDatasetV1(dataset_ops.DatasetV1Adapter):
+  # [CLASS DOC]
+  # Legacy (TF1 API) adapter wrapping the TF2 fixed-length record dataset behind the version-1
+  # dataset interface. Forwards the filenames attribute to the wrapped dataset.
   """A `Dataset` of fixed-length records from one or more binary files."""
 
   def __init__(self,
@@ -679,6 +848,9 @@ class FixedLengthRecordDatasetV1(dataset_ops.DatasetV1Adapter):
                compression_type=None,
                num_parallel_reads=None,
                name=None):
+    # [FUNCTION DOC]
+    # Takes the same arguments as the TF2 fixed-length record dataset, builds that dataset and
+    # wraps it in the version-1 adapter.
     wrapped = FixedLengthRecordDatasetV2(
         filenames,
         record_bytes,
@@ -694,10 +866,14 @@ class FixedLengthRecordDatasetV1(dataset_ops.DatasetV1Adapter):
 
   @property
   def _filenames(self):
+    # [FUNCTION DOC]
+    # HELPER: property forwarding to the filenames dataset of the wrapped TF2 dataset.
     return self._dataset._filenames  # pylint: disable=protected-access
 
   @_filenames.setter
   def _filenames(self, value):
+    # [FUNCTION DOC]
+    # HELPER: setter replacing the filenames dataset stored on the wrapped TF2 dataset.
     self._dataset._filenames = value  # pylint: disable=protected-access
 
 
@@ -712,6 +888,10 @@ else:
 
 
 def _tf2_callback():
+  # [FUNCTION DOC]
+  # HELPER: callback registered with the v2 compatibility layer. Rebinds the module-level public
+  # names for the fixed-length record, TFRecord and text line datasets to the TF2 classes when
+  # TF2 behavior is enabled, otherwise to the version-1 adapter classes. Mutates module globals.
   global FixedLengthRecordDataset, TFRecordDataset, TextLineDataset
   if tf2.enabled():
     FixedLengthRecordDataset = FixedLengthRecordDatasetV2

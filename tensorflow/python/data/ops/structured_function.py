@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: shared infrastructure for the tf.data transformation modules.
+# Utilities for managing user-defined functions in tf.data: a wrapper class that traces a Python
+# function over nested input structures into a concrete graph function (with autograph, optional
+# legacy function mode and debug-mode eager execution), and two small predicates deciding whether
+# function arguments or results must be unpacked from or packed into tuples. Import-time side
+# effects: none beyond imports.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,6 +39,10 @@ from tensorflow.python.util import variable_utils
 
 
 def _should_pack(arg):
+  # [FUNCTION DOC]
+  # HELPER: used by the function wrapper for results of user functions.
+  # Returns true when the argument is a list, meaning the result should be converted to a tuple
+  # so that it is not stacked into one tensor. Otherwise returns false.
   """Determines whether the caller needs to pack the argument in a tuple.
 
   If user-defined function returns a list of tensors, `nest.flatten()` and
@@ -53,6 +64,10 @@ def _should_pack(arg):
 
 
 def _should_unpack(arg):
+  # [FUNCTION DOC]
+  # HELPER: used by the function wrapper and several transformations.
+  # Returns true only when the argument is exactly a tuple (subclasses such as named tuples do not
+  # count), meaning its components should be passed to the function as separate arguments.
   """Determines whether the caller needs to unpack the argument from a tuple.
 
   Args:
@@ -65,6 +80,13 @@ def _should_unpack(arg):
 
 
 class StructuredFunctionWrapper():
+  # [CLASS DOC]
+  # Wraps a user function taking and returning nested structures so it can be traced into a graph
+  # function operating on flat lists of tensors, as needed by tf.data ops. At construction it
+  # determines the input structure, traces the function (via a legacy definition mechanism, an
+  # eager-executing wrapper in debug mode, or a regular traced function), records the output
+  # structure, and optionally registers the function in the default graph. Exposes the output
+  # structure, legacy class/shape/type views of it, and the traced function.
   """A function wrapper that supports structured arguments and return values."""
 
   def __init__(self,
@@ -78,6 +100,20 @@ class StructuredFunctionWrapper():
                add_to_graph=True,
                use_legacy_function=False,
                defun_kwargs=None):
+    # [FUNCTION DOC]
+    # Inputs: func (callback from nested structure to nested structure), transformation_name
+    # (string used in error messages and to derive the traced function name), dataset (optional;
+    # its element spec gives the input structure), input_classes, input_shapes, input_types
+    # (optional legacy description of the input structure, all required together if used),
+    # input_structure (optional structure spec), add_to_graph (boolean, default true; register the
+    # function in the default graph when one exists and not executing eagerly), use_legacy_function
+    # (boolean, default false), defun_kwargs (optional mapping of attributes for tracing; mutated
+    # by adding function name and data-function marker entries).
+    # Raises a value error when the combination of input description arguments is invalid, and a
+    # type error (from the tracing helper) when the function returns an unsupported value.
+    # Side effects: traces the function and may add it to the default graph; warns when functions
+    # are configured to run eagerly (which does not apply here), or when an outer graph seed may be
+    # used by the function. Legacy functions are always added to the graph.
     """Creates a new `StructuredFunctionWrapper` for the given function.
 
     Args:
@@ -153,6 +189,12 @@ class StructuredFunctionWrapper():
     ag_ctx = autograph_ctx.control_status_ctx()
 
     def wrapper_helper(*args):
+      # [FUNCTION DOC]
+      # HELPER: nested adapter run while tracing. Takes the flat tensor arguments, rebuilds the
+      # nested input structure, calls the user function (autograph-converted according to the
+      # context captured at construction), converts variables in the result to tensors, converts a
+      # list result to a tuple, records the output structure on the wrapper and returns the result.
+      # Raises a type error when the result has an unsupported type.
       """Wrapper for passing nested structures to and from tf.data functions."""
       nested_args = structure.from_compatible_tensor_list(
           self._input_structure, args)
@@ -171,18 +213,33 @@ class StructuredFunctionWrapper():
       return ret
 
     def trace_legacy_function(defun_kwargs):
+      # [FUNCTION DOC]
+      # HELPER: nested tracer for the legacy mode. Defines a legacy graph function over the flat
+      # input tensor types with the given attributes and returns a factory (no-argument callable)
+      # that yields it.
 
       @function.Defun(*structure.get_flat_tensor_types(self._input_structure),
                       **defun_kwargs)
       def wrapped_fn(*args):
+        # [FUNCTION DOC]
+        # HELPER: body of the legacy graph function. Runs the adapter and returns the result as a
+        # flat list of tensors.
         ret = wrapper_helper(*args)
         return structure.to_tensor_list(self._output_structure, ret)
 
       return lambda: wrapped_fn
 
     def trace_py_function(defun_kwargs):
+      # [FUNCTION DOC]
+      # HELPER: nested tracer for debug mode. First traces a throwaway function (without autograph)
+      # just to discover the output structure, then returns the concrete-function getter of a
+      # function that calls the user function through an eager Python function op so that it runs
+      # eagerly. Removes the function name entry from the given attributes mapping.
       # First we trace the function to infer the output structure.
       def unused(*args):  # pylint: disable=missing-docstring,unused-variable
+        # [FUNCTION DOC]
+        # HELPER: throwaway function traced only to infer the output structure. Runs the adapter
+        # and returns the result as a list of tensors.
         ret = wrapper_helper(*args)
         ret = structure.to_tensor_list(self._output_structure, ret)
         return [ops.convert_to_tensor(t) for t in ret]
@@ -201,6 +258,10 @@ class StructuredFunctionWrapper():
       _ = tf_function.get_concrete_function()
 
       def py_function_wrapper(*args):
+        # [FUNCTION DOC]
+        # HELPER: eagerly executed callback. Rebuilds the nested inputs from flat tensors, calls the
+        # user function directly, converts a list result to a tuple, and returns the result as a
+        # list of tensors according to the recorded output structure.
         nested_args = structure.from_compatible_tensor_list(
             self._input_structure, args)
         if not _should_unpack(nested_args):
@@ -219,6 +280,9 @@ class StructuredFunctionWrapper():
           autograph=False,
           experimental_attributes=defun_kwargs)
       def wrapped_fn(*args):  # pylint: disable=missing-docstring
+        # [FUNCTION DOC]
+        # HELPER: traced function body in debug mode; invokes the eager Python function op with the
+        # callback and the flat output tensor types and returns its outputs.
         return script_ops.eager_py_func(
             py_function_wrapper, args,
             structure.get_flat_tensor_types(self._output_structure))
@@ -226,8 +290,14 @@ class StructuredFunctionWrapper():
       return wrapped_fn.get_concrete_function
 
     def trace_tf_function(defun_kwargs):
+      # [FUNCTION DOC]
+      # HELPER: nested tracer for the default mode. Creates a traced function with a fixed input
+      # signature (autograph disabled at this level) from the adapter and returns its
+      # concrete-function getter. Removes the function name entry from the attributes mapping.
       # Note: wrapper_helper will apply autograph based on context.
       def wrapped_fn(*args):  # pylint: disable=missing-docstring
+        # [FUNCTION DOC]
+        # HELPER: traced body; runs the adapter and returns the result as a list of tensors.
         ret = wrapper_helper(*args)
         ret = structure.to_tensor_list(self._output_structure, ret)
         return [ops.convert_to_tensor(t) for t in ret]
@@ -284,26 +354,38 @@ class StructuredFunctionWrapper():
 
   @property
   def output_structure(self):
+    # [FUNCTION DOC]
+    # Property returning the nested type specification of the function's output, recorded during
+    # tracing.
     return self._output_structure
 
   @property
   def output_classes(self):
+    # [FUNCTION DOC]
+    # Property returning the legacy view of the output structure: a nested structure of the Python
+    # classes of each output component.
     return nest.map_structure(
         lambda component_spec: component_spec._to_legacy_output_classes(),  # pylint: disable=protected-access
         self._output_structure)
 
   @property
   def output_shapes(self):
+    # [FUNCTION DOC]
+    # Property returning the legacy view of the output structure: nested tensor shapes.
     return nest.map_structure(
         lambda component_spec: component_spec._to_legacy_output_shapes(),  # pylint: disable=protected-access
         self._output_structure)
 
   @property
   def output_types(self):
+    # [FUNCTION DOC]
+    # Property returning the legacy view of the output structure: nested element data types.
     return nest.map_structure(
         lambda component_spec: component_spec._to_legacy_output_types(),  # pylint: disable=protected-access
         self._output_structure)
 
   @property
   def function(self):
+    # [FUNCTION DOC]
+    # Property returning the traced concrete graph function produced at construction.
     return self._function

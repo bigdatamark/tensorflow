@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Implementation module for the dataset snapshot transformation: persists processed elements to
+# disk on first run and reads them back on later runs. Exposes a private factory function and a
+# dataset class used by the main dataset module. No import-time side effects beyond imports.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +33,15 @@ def _snapshot(input_dataset,  # pylint: disable=unused-private-name
               reader_func=None,
               shard_func=None,
               name=None):
+  # [FUNCTION DOC]
+  # HELPER: implementation behind the public dataset snapshot method.
+  # Inputs: input_dataset, path (directory), compression (string, default automatic),
+  # reader_func (optional callback combining the datasets of shards), shard_func (optional
+  # callback mapping an element to a shard index), name (optional).
+  # When no shard function is given, the input is enumerated and shards are chosen by index modulo
+  # the CPU count of the machine running this code (which may differ from the executing machine);
+  # a projection step drops the index afterwards. Returns the snapshot dataset (mapped to remove
+  # the index when applicable).
   """See `Dataset.snapshot()` for details."""
 
   project_func = None
@@ -57,6 +70,10 @@ def _snapshot(input_dataset,  # pylint: disable=unused-private-name
 
 
 class _SnapshotDataset(dataset_ops.UnaryUnchangedStructureDataset):
+  # [CLASS DOC]
+  # Dataset that saves its input to a path on first use and re-reads the saved data later.
+  # Element structure unchanged. Holds the input, path, compression, and wrapped reader and shard
+  # functions.
   """A dataset that allows saving and re-use of already processed data."""
 
   def __init__(self,
@@ -68,6 +85,16 @@ class _SnapshotDataset(dataset_ops.UnaryUnchangedStructureDataset):
                pending_snapshot_expiry_seconds=None,
                use_legacy_function=False,
                name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the error message says the shard function must return a 64-bit integer, but a
+    # 32-bit integer scalar is also accepted.
+    # Inputs: input_dataset, path, shard_func (callback returning an integer scalar), compression
+    # (optional), reader_func (optional; default interleaves shard datasets with CPU-count cycle
+    # length and autotuned parallelism), pending_snapshot_expiry_seconds (accepted but unused),
+    # use_legacy_function (boolean, default false), name (optional).
+    # Wraps the reader and shard functions. Raises a type error if the shard function does not
+    # return a 32- or 64-bit integer scalar. Creates the second-version snapshot op and calls the
+    # parent constructor.
 
     if reader_func is None:
       reader_func = lambda datasets: datasets.interleave(  # pylint:disable=g-long-lambda
@@ -113,7 +140,11 @@ class _SnapshotDataset(dataset_ops.UnaryUnchangedStructureDataset):
     super().__init__(input_dataset, variant_tensor)
 
   def _functions(self):
+    # [FUNCTION DOC]
+    # Returns a list of the wrapped reader function and shard function, for function tracking.
     return [self._reader_func, self._shard_func]
 
   def _transformation_name(self):
+    # [FUNCTION DOC]
+    # Returns the display name of this transformation used in error messages.
     return "Dataset.snapshot()"

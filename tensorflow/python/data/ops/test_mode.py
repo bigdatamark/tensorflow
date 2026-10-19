@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: test support module for tf.data.
+# Holds a module-level boolean flag, off by default, that unit tests can turn on to enable test
+# mode, letting other tf.data code choose custom defaults for features and experiments. Exposes
+# the flag and a function to set it. No import-time side effects beyond defining the flag.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,5 +33,8 @@ TEST_MODE = False
 
 
 def toggle_test_mode(test_mode):
+  # [FUNCTION DOC]
+  # HELPER: test utility. Input: test_mode (boolean). Sets the module-level test mode flag to the
+  # given value (it sets rather than toggles despite the name). Returns nothing.
   global TEST_MODE
   TEST_MODE = test_mode
