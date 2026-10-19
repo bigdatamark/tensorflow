@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Unit tests for the Dirichlet distribution in the distributions package of TensorFlow ops.
+# Covers static and dynamic shapes, the concentration property, density validation, density values
+# and broadcasting, finiteness on the simplex boundary, mean, covariance (closed form and from
+# samples), mode (including NaN handling), entropy, sampling and its full reparameterization, and
+# the registered Dirichlet-to-Dirichlet KL divergence.
+# Defines a helper for optional scipy imports and one test class; scipy-based comparisons are
+# skipped when scipy is missing. Import-time side effect: imports scipy.special and scipy.stats
+# if available, logging a warning for each one that is missing. Running as a script runs the tests.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +38,11 @@ from tensorflow.python.platform import tf_logging
 
 
 def try_import(name):  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # HELPER: optional-dependency loader used to obtain scipy.special and scipy.stats for the tests.
+  # Imports the module named by the single string argument. On an import error, logs a warning with
+  # the module name and error text and returns nothing (null); otherwise returns the module.
+  # No other side effects.
   module = None
   try:
     module = importlib.import_module(name)
@@ -43,8 +57,16 @@ stats = try_import("scipy.stats")
 
 @test_util.run_all_in_graph_and_eager_modes
 class DirichletTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the Dirichlet distribution, decorated so that every test method runs in both graph
+  # and eager modes. No shared fixtures; each test builds distributions from numpy or Python
+  # concentration values and compares with hand-computed or scipy.stats reference values.
 
   def testSimpleShapes(self):
+    # [FUNCTION DOC]
+    # Scenario: a random concentration vector of length three.
+    # Expected: the event shape tensor evaluates to three, the batch shape is empty, and the static
+    # shapes agree.
     alpha = np.random.rand(3)
     dist = dirichlet_lib.Dirichlet(alpha)
     self.assertEqual(3, self.evaluate(dist.event_shape_tensor()))
@@ -53,6 +75,9 @@ class DirichletTest(test.TestCase):
     self.assertEqual(tensor_shape.TensorShape([]), dist.batch_shape)
 
   def testComplexShapes(self):
+    # [FUNCTION DOC]
+    # Scenario: a random concentration of shape 3x2x2.
+    # Expected: event shape two and batch shape 3x2, both as evaluated tensors and static shapes.
     alpha = np.random.rand(3, 2, 2)
     dist = dirichlet_lib.Dirichlet(alpha)
     self.assertEqual(2, self.evaluate(dist.event_shape_tensor()))
@@ -61,12 +86,20 @@ class DirichletTest(test.TestCase):
     self.assertEqual(tensor_shape.TensorShape([3, 2]), dist.batch_shape)
 
   def testConcentrationProperty(self):
+    # [FUNCTION DOC]
+    # Scenario: a concentration of shape 1x3.
+    # Expected: the concentration property has static shape 1x3 and evaluates to the supplied values.
     alpha = [[1., 2, 3]]
     dist = dirichlet_lib.Dirichlet(alpha)
     self.assertEqual([1, 3], dist.concentration.get_shape())
     self.assertAllClose(alpha, self.evaluate(dist.concentration))
 
   def testPdfXProper(self):
+    # [FUNCTION DOC]
+    # Scenario: validation on, concentration 1,2,3.
+    # Expected: points on the simplex evaluate without error; points with non-positive entries raise an
+    # op error saying samples must be positive; a point whose entries do not sum to one raises an op
+    # error saying the last dimension must sum to one.
     alpha = [[1., 2, 3]]
     dist = dirichlet_lib.Dirichlet(alpha, validate_args=True)
     self.evaluate(dist.prob([.1, .3, .6]))
@@ -80,6 +113,12 @@ class DirichletTest(test.TestCase):
       self.evaluate(dist.prob([.1, .2, .8]))
 
   def testLogPdfOnBoundaryIsFiniteWhenAlphaIsOne(self):
+    # [FUNCTION DOC]
+    # Scenario: a 10x10 concentration matrix of threes with ones on the diagonal and points that are
+    # zero exactly where the concentration is one; then a single concentration vector of all ones with
+    # the same points.
+    # Expected: all log-densities are finite, because a zero coordinate is allowed when its
+    # concentration is exactly one.
     # Test concentration = 1. for each dimension.
     concentration = 3 * np.ones((10, 10)).astype(np.float32)
     concentration[range(10), range(10)] = 1.
@@ -97,6 +136,9 @@ class DirichletTest(test.TestCase):
         np.ones_like(log_prob, dtype=np.bool_), np.isfinite(log_prob))
 
   def testPdfZeroBatches(self):
+    # [FUNCTION DOC]
+    # Scenario: concentration (1,2) at the point (0.5,0.5).
+    # Expected: density 1 with empty static shape.
     alpha = [1., 2]
     x = [.5, .5]
     dist = dirichlet_lib.Dirichlet(alpha)
@@ -105,6 +147,9 @@ class DirichletTest(test.TestCase):
     self.assertEqual((), pdf.get_shape())
 
   def testPdfZeroBatchesNontrivialX(self):
+    # [FUNCTION DOC]
+    # Scenario: concentration (1,2) at the point (0.3,0.7).
+    # Expected: density 7/5 with empty static shape.
     alpha = [1., 2]
     x = [.3, .7]
     dist = dirichlet_lib.Dirichlet(alpha)
@@ -113,6 +158,11 @@ class DirichletTest(test.TestCase):
     self.assertEqual((), pdf.get_shape())
 
   def testPdfUniformZeroBatches(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the static shape is compared with the integer two in parentheses rather than a
+    # one-element tuple, so the assertion is looser than it appears.
+    # Scenario: concentration of all ones (uniform on the simplex) with two points.
+    # Expected: both densities equal two and the static shape has size two.
     # Corresponds to a uniform distribution
     alpha = [1., 1, 1]
     x = [[.2, .5, .3], [.3, .4, .3]]
@@ -122,6 +172,11 @@ class DirichletTest(test.TestCase):
     self.assertEqual((2), pdf.get_shape())
 
   def testPdfAlphaStretchedInBroadcastWhenSameRank(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the static shape is compared with the integer two in parentheses rather than a
+    # one-element tuple, so the assertion is looser than it appears.
+    # Scenario: concentration of shape 1x2 and points of shape 2x2.
+    # Expected: the concentration broadcasts over the points; densities are 1 and 7/5.
     alpha = [[1., 2]]
     x = [[.5, .5], [.3, .7]]
     dist = dirichlet_lib.Dirichlet(alpha)
@@ -130,6 +185,11 @@ class DirichletTest(test.TestCase):
     self.assertEqual((2), pdf.get_shape())
 
   def testPdfAlphaStretchedInBroadcastWhenLowerRank(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the static shape is compared with the integer two in parentheses rather than a
+    # one-element tuple, so the assertion is looser than it appears.
+    # Scenario: a rank-1 concentration and points of shape 2x2.
+    # Expected: densities 1 and 8/5, static shape of size two.
     alpha = [1., 2]
     x = [[.5, .5], [.2, .8]]
     pdf = dirichlet_lib.Dirichlet(alpha).prob(x)
@@ -137,6 +197,11 @@ class DirichletTest(test.TestCase):
     self.assertEqual((2), pdf.get_shape())
 
   def testPdfXStretchedInBroadcastWhenSameRank(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the static shape is compared with the integer two in parentheses rather than a
+    # one-element tuple, so the assertion is looser than it appears.
+    # Scenario: concentration of shape 2x2 and a single point of shape 1x2.
+    # Expected: the point broadcasts over the batch; densities 1 and 3/2.
     alpha = [[1., 2], [2., 3]]
     x = [[.5, .5]]
     pdf = dirichlet_lib.Dirichlet(alpha).prob(x)
@@ -144,6 +209,11 @@ class DirichletTest(test.TestCase):
     self.assertEqual((2), pdf.get_shape())
 
   def testPdfXStretchedInBroadcastWhenLowerRank(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the static shape is compared with the integer two in parentheses rather than a
+    # one-element tuple, so the assertion is looser than it appears.
+    # Scenario: concentration of shape 2x2 and a rank-1 point.
+    # Expected: densities 1 and 3/2, static shape of size two.
     alpha = [[1., 2], [2., 3]]
     x = [.5, .5]
     pdf = dirichlet_lib.Dirichlet(alpha).prob(x)
@@ -151,6 +221,10 @@ class DirichletTest(test.TestCase):
     self.assertEqual((2), pdf.get_shape())
 
   def testMean(self):
+    # [FUNCTION DOC]
+    # Scenario: concentration of length three.
+    # Expected: the mean has static shape three; if scipy is available it matches the scipy mean.
+    # Returns early without the value check when scipy is missing.
     alpha = [1., 2, 3]
     dirichlet = dirichlet_lib.Dirichlet(concentration=alpha)
     self.assertEqual(dirichlet.mean().get_shape(), [3])
@@ -160,6 +234,12 @@ class DirichletTest(test.TestCase):
     self.assertAllClose(self.evaluate(dirichlet.mean()), expected_mean)
 
   def testCovarianceFromSampling(self):
+    # [FUNCTION DOC]
+    # Scenario: a batch of two concentration vectors (the second with a tiny entry); 250000 seeded
+    # samples.
+    # Action: computes sample mean, covariance, variance and standard deviation by hand, evaluates them
+    # together with the analytic ones from the distribution.
+    # Expected: sample and analytic values agree within absolute tolerances of 0.02 to 0.06.
     alpha = np.array([[1., 2, 3],
                       [2.5, 4, 0.01]], dtype=np.float32)
     dist = dirichlet_lib.Dirichlet(alpha)  # batch_shape=[2], event_shape=[3]
@@ -199,6 +279,14 @@ class DirichletTest(test.TestCase):
   @test_util.run_without_tensor_float_32(
       "Calls Dirichlet.covariance, which calls matmul")
   def testVariance(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the name says variance but the test checks the covariance (the covariance static
+    # shape and values); the variance method itself is not compared.
+    # Scenario: concentration 1,2,3, with the test restricted so TensorFloat-32 is disabled because the
+    # covariance calls matrix multiplication.
+    # Expected: the covariance has static shape 3x3; if scipy is available it equals the diagonal of
+    # scipy variances plus the off-diagonal terms from the closed form over a denominator that is the
+    # squared concentration sum times the sum plus one. Returns early when scipy is missing.
     alpha = [1., 2, 3]
     denominator = np.sum(alpha)**2 * (np.sum(alpha) + 1)
     dirichlet = dirichlet_lib.Dirichlet(concentration=alpha)
@@ -212,6 +300,10 @@ class DirichletTest(test.TestCase):
         self.evaluate(dirichlet.covariance()), expected_covariance)
 
   def testMode(self):
+    # [FUNCTION DOC]
+    # Scenario: concentration above one in every component.
+    # Expected: the mode has static shape three and equals (alpha minus one) divided by (sum minus
+    # dimension).
     alpha = np.array([1.1, 2, 3])
     expected_mode = (alpha - 1) / (np.sum(alpha) - 3)
     dirichlet = dirichlet_lib.Dirichlet(concentration=alpha)
@@ -219,6 +311,9 @@ class DirichletTest(test.TestCase):
     self.assertAllClose(self.evaluate(dirichlet.mode()), expected_mode)
 
   def testModeInvalid(self):
+    # [FUNCTION DOC]
+    # Scenario: allow_nan_stats off, concentration with a component equal to one.
+    # Expected: evaluating the mode raises an op error from a less-than condition check.
     alpha = np.array([1., 2, 3])
     dirichlet = dirichlet_lib.Dirichlet(
         concentration=alpha, allow_nan_stats=False)
@@ -226,6 +321,9 @@ class DirichletTest(test.TestCase):
       self.evaluate(dirichlet.mode())
 
   def testModeEnableAllowNanStats(self):
+    # [FUNCTION DOC]
+    # Scenario: allow_nan_stats on with the same invalid concentration.
+    # Expected: no error; the mode has static shape three and every entry is not-a-number.
     alpha = np.array([1., 2, 3])
     dirichlet = dirichlet_lib.Dirichlet(
         concentration=alpha, allow_nan_stats=True)
@@ -235,6 +333,10 @@ class DirichletTest(test.TestCase):
     self.assertAllClose(self.evaluate(dirichlet.mode()), expected_mode)
 
   def testEntropy(self):
+    # [FUNCTION DOC]
+    # Scenario: concentration of length three.
+    # Expected: the entropy is a scalar (empty static shape); if scipy is available it matches the scipy
+    # entropy. Returns early when scipy is missing.
     alpha = [1., 2, 3]
     dirichlet = dirichlet_lib.Dirichlet(concentration=alpha)
     self.assertEqual(dirichlet.entropy().get_shape(), ())
@@ -244,6 +346,10 @@ class DirichletTest(test.TestCase):
     self.assertAllClose(self.evaluate(dirichlet.entropy()), expected_entropy)
 
   def testSample(self):
+    # [FUNCTION DOC]
+    # Scenario: concentration (1,2) and a constant tensor sample count of 100000.
+    # Expected: sample shape is 100000x2 and all values are positive; if scipy is available a
+    # Kolmogorov-Smirnov statistic of the first coordinate against the Beta(1,2) cdf is under 0.01.
     alpha = [1., 2]
     dirichlet = dirichlet_lib.Dirichlet(alpha)
     n = constant_op.constant(100000)
@@ -261,6 +367,9 @@ class DirichletTest(test.TestCase):
         0.01)
 
   def testDirichletFullyReparameterized(self):
+    # [FUNCTION DOC]
+    # Scenario: concentration constant tensor watched on a gradient tape while 100 samples are drawn.
+    # Expected: the gradient of the samples with respect to the concentration is not null.
     alpha = constant_op.constant([1.0, 2.0, 3.0])
     with backprop.GradientTape() as tape:
       tape.watch(alpha)
@@ -270,6 +379,14 @@ class DirichletTest(test.TestCase):
     self.assertIsNotNone(grad_alpha)
 
   def testDirichletDirichletKL(self):
+    # [FUNCTION DOC]
+    # Scenario: two Dirichlet distributions with concentrations of shape 2x6 and 1x6; 10000 seeded
+    # samples from the first.
+    # Action: computes a Monte Carlo KL estimate (mean log-density difference), the registered KL
+    # divergence, and, when scipy is available, a closed-form KL.
+    # Expected: the KL result has the batch shape; when scipy is available it matches the closed form to
+    # tight tolerance and the Monte Carlo estimate within 10 percent, and KL of the first distribution
+    # with itself is zero. Returns early (skipping the value checks) when scipy is missing.
     conc1 = np.array([[1., 2., 3., 1.5, 2.5, 3.5],
                       [1.5, 2.5, 3.5, 4.5, 5.5, 6.5]])
     conc2 = np.array([[0.5, 1., 1.5, 2., 2.5, 3.]])
