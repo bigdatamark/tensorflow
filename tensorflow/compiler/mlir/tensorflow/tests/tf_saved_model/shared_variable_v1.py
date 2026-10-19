@@ -47,7 +47,7 @@ def Test():
   # names to definitions, nothing for table initializers and nothing for asset paths. Adds nodes to
   # the default graph.
 
-  x =tf.constant([[1.0], [1.0], [1.0]])
+  x = tf.constant([[1.0], [1.0], [1.0]])
   y = tf.get_variable(
       name='y',
       shape=(1, 3),

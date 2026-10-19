@@ -69,7 +69,7 @@ def Test():
   # signature names to definitions, the table initializers operation, and nothing (no asset
   # paths). Side effect: adds nodes to the default graph.
 
-  z =tf.compat.v1.get_variable(
+  z = tf.compat.v1.get_variable(
       name='y',
       shape=(),
       initializer=tf.random_normal_initializer(),

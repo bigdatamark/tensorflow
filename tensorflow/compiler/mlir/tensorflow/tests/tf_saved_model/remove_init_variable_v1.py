@@ -57,7 +57,7 @@ def Test():
   # variables initializer operation as the init op, and nothing for asset paths. Adds nodes to the
   # default graph.
 
-  x =tf.constant([[1.0], [1.0], [1.0]])
+  x = tf.constant([[1.0], [1.0], [1.0]])
   y = tf.compat.v1.get_variable(
       name='y',
       shape=(1, 3),

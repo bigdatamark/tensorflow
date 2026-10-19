@@ -37,7 +37,7 @@ class TestModule(tf.Module):
     # Calls the parent constructor and creates the variable v with initial value 42.0. Takes no
     # arguments and returns nothing.
     super(TestModule, self).__init__()
-    self.v =tf.Variable(42.0)
+    self.v = tf.Variable(42.0)
 
   # We guarantee that there are no calls to exported functions from inside the
   # module.

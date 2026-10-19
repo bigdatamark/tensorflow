@@ -67,7 +67,7 @@ def Test():
   # output r). Takes no arguments. Returns a three element tuple: mapping of signature names to
   # definitions, the global variables initializer operation (used as the init op), and nothing for
   # asset paths. Adds nodes to the default graph.
-  x =tf.constant([[1.0], [1.0], [1.0]])
+  x = tf.constant([[1.0], [1.0], [1.0]])
   y = tf.compat.v1.get_variable(
       name='y',
       shape=(1, 3),

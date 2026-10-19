@@ -44,7 +44,7 @@ def Test():
   # of signature names to definitions, nothing for table initializers and nothing for asset paths.
   # Adds nodes to the default graph.
 
-  x =tf.compat.v1.get_variable(
+  x = tf.compat.v1.get_variable(
       name='x',
       shape=(5, 3),
       initializer=tf.random_normal_initializer(),

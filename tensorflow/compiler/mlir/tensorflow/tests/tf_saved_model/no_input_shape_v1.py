@@ -52,7 +52,7 @@ def Test():
   # input x and output r. Takes no arguments. Returns a three element tuple: mapping of signature
   # names to definitions, nothing for table initializers and nothing for asset paths.
 
-  x =tf.placeholder(dtype=tf.float32, shape=[None])
+  x = tf.placeholder(dtype=tf.float32, shape=[None])
   batch_size = tf.shape(x)[0]
   r = tf.convert_to_tensor([batch_size, 1])
 

@@ -66,7 +66,7 @@ def Test():
   # asset paths (so the importer must synthesize the restore initializer). Adds nodes to the
   # default graph.
 
-  x =tf.constant([[1.0], [1.0], [1.0]])
+  x = tf.constant([[1.0], [1.0], [1.0]])
   y = tf.compat.v1.get_variable(
       name='y',
       shape=(1, 3),
