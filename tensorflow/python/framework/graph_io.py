@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Utility module for writing graph definitions to disk. It exposes one public function, exported
+# in the public API under the io and (for the v1 API) train namespaces, that serializes a graph or
+# graph definition as text or binary protocol buffer to a file, handling remote filesystems and
+# byte order. Import-time side effects: only the API export registration of that function.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,6 +32,15 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export('io.write_graph', v1=['io.write_graph', 'train.write_graph'])
 def write_graph(graph_or_graph_def, logdir, name, as_text=True):
+  # [FUNCTION DOC]
+  # Serializes a graph to a file. Inputs: a graph object or a graph/function definition message
+  # (a graph object is first converted to its definition); logdir, the target directory (may be a
+  # remote store path); name, the file name; as_text, true by default for human-readable text
+  # format, otherwise deterministic binary serialization. On big-endian hosts the tensor contents
+  # inside the definition are byte-swapped to little-endian first, which mutates the passed
+  # definition in place. The directory is created (recursively) unless the path starts with the
+  # Google Cloud Storage scheme. The file is written atomically. Returns the full output path.
+  # Raises whatever the file or serialization layers raise.
   """Writes a graph proto to a file.
 
   The graph is written as a text proto unless `as_text` is `False`.

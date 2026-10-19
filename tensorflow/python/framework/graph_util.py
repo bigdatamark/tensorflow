@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Thin public facade module for graph manipulation helpers. It only re-exports a handful of
+# functions (extract a sub graph, compare graph definitions, list ops that must run on the CPU,
+# remove training-only nodes, derive a tensor shape from a node name) from the implementation
+# module so they are reachable under this stable module name. No logic of its own.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

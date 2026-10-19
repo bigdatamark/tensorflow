@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Small helper module that extracts GPU model information from the device description string that
+# the runtime attaches to a device attributes record. It defines a regular expression for the
+# description text, a named pair type holding a GPU name and its compute capability, and one
+# function that parses a description into that pair. No import-time side effects beyond compiling
+# the regular expression. The description format must stay in sync with the C++ GPU device code.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +35,15 @@ GpuInfo = collections.namedtuple('gpu_info', ['name', 'compute_capability'])
 
 
 def compute_capability_from_device_desc(device_attrs):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring's "Returns" heading lacks a colon, and it says both fields are None
+  # only when the description is invalid; a description that matches but has no compute
+  # capability part yields the parsed name with a null capability.
+  # Parses the physical device description text of a device attributes record. Input: a device
+  # attributes message. Output: a name/compute-capability pair; the name is the text after the
+  # name label, and the capability is a (major, minor) integer pair or null when absent (non-Nvidia
+  # device). If the description does not match at all, both fields are null. No exceptions are
+  # raised for non-matching text and there are no side effects.
   """Returns the GpuInfo given a DeviceAttributes proto.
 
   Args:

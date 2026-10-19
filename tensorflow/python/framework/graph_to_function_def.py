@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Converts a set of graph operations into a function definition protocol buffer. It exposes one
+# main public function and several private helpers that build argument definitions with unique
+# names, map graph tensor names to function-internal tensor names, and copy node definitions into
+# the function body. Used by the older function-building machinery in this package. No import-time
+# side effects.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,10 +28,21 @@ from tensorflow.python.framework import op_def_registry
 
 
 def _make_argname_from_tensor_name(name):
+  # [FUNCTION DOC]
+  # HELPER: builds argument names for graph_to_function_def.
+  # Turns a tensor name into a legal argument name: strips a trailing output index of zero and
+  # replaces any remaining colon with an underscore followed by the letter o. Returns the string.
   return re.sub(":0$", "", name).replace(":", "_o")
 
 
 def _tensor_to_argdef(t, name=None, used_names=None):
+  # [FUNCTION DOC]
+  # HELPER: creates signature argument entries for graph_to_function_def.
+  # Builds an argument definition message for tensor t whose type is the tensor's data type. If
+  # name is given it is used verbatim. Otherwise the name is derived from the tensor name and, when
+  # used_names (a mutable set of strings, optional) is given, made unique by appending a suffix
+  # with an increasing counter; the chosen name is then added to used_names (side effect).
+  # Returns the argument definition message.
   """Convert tensor t to an argdef, with a specified name or a unique name."""
   arg = op_def_pb2.OpDef.ArgDef()
   if name is None:
@@ -47,22 +64,45 @@ def _tensor_to_argdef(t, name=None, used_names=None):
 
 
 def _is_in_placeholders(op, func_arg_placeholders):
+  # [FUNCTION DOC]
+  # HELPER: filter used when building function bodies.
+  # KNOWN ISSUE: the docstring promises a boolean check, but for an op with no outputs the empty
+  # outputs sequence itself is returned instead of false.
+  # Returns a truthy value when the operation has outputs and at least one output tensor name is in
+  # func_arg_placeholders (a set of input tensor names).
   """Checks whether any output of this op is in func_arg_placeholders."""
   return op.values() and any(x.name in func_arg_placeholders
                              for x in op.values())
 
 
 def _get_node_def(op):
+  # [FUNCTION DOC]
+  # HELPER: accessor returning the node definition message of the given operation.
+  # KNOWN ISSUE: the trailing protected-access lint suppression comment is stale; the public
+  # node definition property is used, so no protected access happens.
   return op.node_def  # pylint: disable=protected-access
 
 
 def _get_op_def(op):
+  # [FUNCTION DOC]
+  # HELPER: accessor returning the operation's own op definition if it has one, otherwise the
+  # registered definition looked up by op type in the op definition registry (may be null if
+  # neither exists).
   return op.op_def or op_def_registry.get(op.type)
 
 
 def _create_input_dict(function_graph,
                        func_arg_placeholders,
                        initial_value=None):
+  # [FUNCTION DOC]
+  # HELPER: builds the tensor-name translation table for graph_to_function_def.
+  # Inputs: function_graph, the graph whose operations are scanned; func_arg_placeholders, set of
+  # names of tensors that become function inputs; initial_value, optional mapping seeded into the
+  # result (copied, not mutated). Output: a mapping from graph tensor names (and op names for the
+  # first output) to function-style names. Placeholder-input ops map to their own name; other ops
+  # map each output to "op:output_arg:index", with the output count taken from the number or
+  # type-list attribute when the output argument is a list, else one. Raises a key/lookup error if
+  # a needed attribute or op definition is missing.
   """Create a mapping from graph tensor names to function tensor names."""
   if initial_value is None:
     input_dict = {}
@@ -92,6 +132,12 @@ def _create_input_dict(function_graph,
 
 
 def _add_op_node(op, func, input_dict):
+  # [FUNCTION DOC]
+  # HELPER: appends one operation to the function body for graph_to_function_def.
+  # Copies the operation's node definition into func (a function definition message, mutated),
+  # rewrites every non-control input name using input_dict (mapping graph tensor names to function
+  # names), and marks the function signature stateful if the op's definition says it is stateful.
+  # Raises an assertion error if a data input is missing from input_dict. Returns nothing.
   """Converts an op to a function def node and add it to `func`."""
   # Add an entry in func.node_def
 
@@ -115,6 +161,14 @@ def _add_op_node(op, func, input_dict):
 
 
 def graph_to_function_def(graph, operations, inputs, outputs, out_names=None):
+  # [FUNCTION DOC]
+  # Builds a function definition from part of a graph. Inputs: graph; operations, the ops forming
+  # the body (ops producing the input tensors are skipped); inputs and outputs, lists of tensors
+  # (possibly empty); out_names, optional list of unique output names, one per output. The function
+  # is named with a placeholder underscore. Input arg names derive from tensor names and are made
+  # unique; output names derive likewise unless out_names is given. Return map entries link each
+  # output name to the translated tensor name. Returns the function definition message.
+  # Raises a value error if out_names length differs from outputs or has duplicates.
   """Returns `graph` as a `FunctionDef` protocol buffer.
 
   This method creates a [`FunctionDef`](
