@@ -1,3 +1,18 @@
+# [MODULE DOC]
+# Graph-mode (TF1 style) streaming metrics implementation behind the v1 metrics API.
+# Every public metric (mean, accuracy, auc, precision, recall, confusion-count metrics,
+# top-k and sparse-at-k retrieval metrics, error metrics, sensitivity/specificity
+# metrics, and so on) follows one pattern: it creates non-trainable local "metric"
+# variables that accumulate statistics, returns a value tensor computed from those
+# variables, and returns an update operation that folds a new batch of data into them.
+# Most public functions are exported under the v1 metrics namespace via an export
+# decorator, and they refuse to run (raise a runtime error) when eager execution is on.
+# The module also holds private helpers for fixing up tensor ranks, building confusion
+# matrices and counting conditions, selecting class ids, computing sparse top-k
+# statistics, and aggregating values across replicas of a distribution strategy.
+# Import-time side effects: only imports and the export/deprecation decorators are
+# applied; no flags or global state are defined. Variables are registered in the local
+# variables and metric variables graph collections at metric construction time.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -38,6 +53,15 @@ from tensorflow.python.util.tf_export import tf_export
 
 
 def metric_variable(shape, dtype, validate_shape=True, name=None):
+  # [FUNCTION DOC]
+  # HELPER: creates the accumulator variables used by all metrics in this module.
+  # Creates a zero-initialised, non-trainable variable and registers it in both the local
+  # variables and metric variables graph collections. Inputs: shape (shape of the variable),
+  # dtype (element type), validate_shape (optional, default true, whether the shape is
+  # validated on assignment) and name (optional variable name). Returns the variable; under a
+  # distribution strategy it is a sync-on-read container whose reads sum over all replicas
+  # (synchronization on read, aggregation by sum). Side effects: adds the variable to graph
+  # collections. Raises nothing itself.
   """Create variable in `GraphKeys.(LOCAL|METRIC_VARIABLES)` collections.
 
   If running in a `DistributionStrategy` context, the variable will be
@@ -85,6 +109,15 @@ def metric_variable(shape, dtype, validate_shape=True, name=None):
 
 
 def _remove_squeezable_dimensions(predictions, labels, weights):
+  # [FUNCTION DOC]
+  # HELPER: rank normalisation shared by most metrics before elementwise comparison.
+  # Converts predictions to a tensor; if labels are given, drops a trailing size-1 dimension
+  # from whichever of labels/predictions has one extra rank and asserts the shapes are
+  # compatible. Weights (optional, may be nothing) are returned unchanged when absent or
+  # scalar; otherwise a trailing dimension is squeezed or added so the weight rank matches
+  # the prediction rank, using static ranks when known and conditional graph ops on dynamic
+  # ranks otherwise. Returns a triple of predictions, labels (nothing if none were given) and
+  # weights. Raises a shape error when labels and predictions are incompatible.
   """Squeeze or expand last dim if needed.
 
   Squeezes last dim of `predictions` or `labels` if their rank differs by 1
@@ -136,6 +169,11 @@ def _remove_squeezable_dimensions(predictions, labels, weights):
     rank_diff = weights_rank_tensor - array_ops.rank(predictions)
 
     def _maybe_expand_weights():
+      # [FUNCTION DOC]
+      # HELPER: dynamic-rank branch of the weight adjustment.
+      # Returns the weights with a trailing dimension added when the weight rank is exactly
+      # one less than the prediction rank (decided at graph run time), else the weights
+      # unchanged. Takes no arguments; uses the enclosing weights and rank difference.
       return cond.cond(
           math_ops.equal(rank_diff, -1),
           lambda: array_ops.expand_dims(weights, [-1]), lambda: weights)
@@ -148,6 +186,11 @@ def _remove_squeezable_dimensions(predictions, labels, weights):
       maybe_squeeze_weights = lambda: array_ops.squeeze(weights, [-1])
 
     def _maybe_adjust_weights():
+      # [FUNCTION DOC]
+      # HELPER: dynamic-rank branch of the weight adjustment.
+      # At graph run time: if weights have one more rank than predictions, squeeze the last
+      # dimension (or keep weights as is when a static check shows squeezing would fail);
+      # otherwise fall through to the expand branch. Takes no arguments; returns a tensor.
       return cond.cond(
           math_ops.equal(rank_diff, 1), maybe_squeeze_weights,
           _maybe_expand_weights)
@@ -161,6 +204,13 @@ def _remove_squeezable_dimensions(predictions, labels, weights):
 
 
 def _maybe_expand_labels(labels, predictions):
+  # [FUNCTION DOC]
+  # HELPER: aligns label rank with prediction rank for the sparse top-k metrics.
+  # Inputs: labels (dense or sparse tensor) and predictions (dense tensor). Adds a trailing
+  # dimension of size one to the labels when predictions have exactly one more rank. For
+  # sparse labels the sparse shape is reshaped; for dense labels the static ranks are used
+  # when known, otherwise a runtime conditional decides. Returns the possibly expanded labels.
+  # Raises a value error when static ranks differ by anything other than zero or one.
   """If necessary, expand `labels` along last dimension to match `predictions`.
 
   Args:
@@ -213,6 +263,11 @@ def _maybe_expand_labels(labels, predictions):
 
 
 def _safe_scalar_div(numerator, denominator, name):
+  # [FUNCTION DOC]
+  # HELPER: division that yields zero instead of infinity or nan for a zero denominator.
+  # Inputs: numerator and denominator tensors (rank at most one) and an op name. Verifies
+  # both have rank of at most one (raises a shape error otherwise; the check results are
+  # otherwise discarded), then returns the no-nan division result.
   """Divides two values, returning 0 if the denominator is 0.
 
   Args:
@@ -229,6 +284,13 @@ def _safe_scalar_div(numerator, denominator, name):
 
 
 def _streaming_confusion_matrix(labels, predictions, num_classes, weights=None):
+  # [FUNCTION DOC]
+  # HELPER: accumulator used by the mean-IoU metric.
+  # Creates a float64 metric variable of size num_classes by num_classes, casts labels and
+  # predictions to 64-bit integers, flattens labels, predictions and weights when their rank
+  # exceeds one, builds the confusion matrix of this batch and adds it to the variable.
+  # Weights are optional (may be nothing). Returns the pair of total confusion matrix
+  # variable and the update operation. Side effect: creates a new metric variable.
   """Calculate a streaming confusion matrix.
 
   Calculates a confusion matrix. For estimation over a stream of data,
@@ -278,8 +340,23 @@ def _streaming_confusion_matrix(labels, predictions, num_classes, weights=None):
 
 
 def _aggregate_across_replicas(metrics_collections, metric_value_fn, *args):
+  # [FUNCTION DOC]
+  # HELPER: makes metric result values correct under distribution strategies.
+  # Runs the value function once (not per replica) through a merge call on the current
+  # replica context, passing the extra positional arguments (typically sync-on-read metric
+  # variables). The result is added to the given graph collections if any are supplied.
+  # Inputs: metrics_collections (list of collection names or nothing), metric_value_fn
+  # (callback taking the distribution strategy followed by the variable values), and the
+  # variadic arguments. Returns the metric value tensor. Needs an active replica context.
   """Aggregate metric value across replicas."""
   def fn(distribution, *a):
+    # [FUNCTION DOC]
+    # HELPER: merge-call body for the replica aggregation.
+    # Calls the metric value function in the right control flow context: if the strategy
+    # captured an outer control flow context, the call is made outside it (no dependencies
+    # when the captured context is nothing, otherwise by entering and exiting that context)
+    # so that the value op is created once outside loops or device rewrites. Afterwards the
+    # value is added to the metric collections if given. Returns the metric value.
     """Call `metric_value_fn` in the correct control flow context."""
     if hasattr(distribution.extended, '_outer_control_flow_context'):
       # If there was an outer context captured before this method was called,
@@ -318,6 +395,20 @@ def mean(values,
          metrics_collections=None,
          updates_collections=None,
          name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the update operation's value matches "mean_value", but
+  # the returned value tensor is named mean; the migration table also names update_collections
+  # inconsistently with the real parameter updates_collections.
+  # Streaming weighted mean (v1 metrics API). Inputs: values (tensor of any shape, cast to
+  # float32), weights (optional tensor, rank zero or same rank as values, broadcastable),
+  # metrics_collections and updates_collections (optional lists of graph collection names to
+  # receive the value tensor and update op), name (optional variable scope name). Creates two
+  # local float32 variables, total and count; the update op adds the weighted sum of values to
+  # total and the sum of weights (or the element count when weights are nothing) to count, and
+  # returns total over count with negative counts clamped to zero and zero division giving zero.
+  # Returns the pair of mean tensor (aggregated across replicas) and update op. Raises a
+  # runtime error when eager execution is enabled; raises value errors for incompatible
+  # weight shapes or non-list collections.
   """Computes the (weighted) mean of the given values.
 
   The `mean` function creates two local variables, `total` and `count`
@@ -465,6 +556,10 @@ def mean(values,
       update_count_op = state_ops.assign_add(count, num_values)
 
     def compute_mean(_, t, c):
+      # [FUNCTION DOC]
+      # HELPER: value function handed to the replica aggregation for the mean metric.
+      # Ignores the distribution argument; divides total t by count c (floored at zero),
+      # giving zero when the count is zero. Returns the mean tensor named value.
       return math_ops.div_no_nan(t, math_ops.maximum(c, 0), name='value')
 
     mean_t = _aggregate_across_replicas(
@@ -485,6 +580,17 @@ def accuracy(labels,
              metrics_collections=None,
              updates_collections=None,
              name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the migration table in the docstring maps the predictions argument to the
+  # Keras y_true name (should be y_pred), and its before-example passes logits first and
+  # labels second, the reverse of this function's parameter order.
+  # Streaming accuracy (v1 metrics API). Inputs: labels (ground truth), predictions (any
+  # shape, same shape as labels after squeezing), weights (optional), metrics_collections and
+  # updates_collections (optional lists of collection names), name (optional scope, defaults
+  # to accuracy). Squeezes trailing dimensions, checks shape compatibility, casts predictions
+  # to the labels type, computes elementwise equality as float values and delegates to the
+  # streaming mean. Returns the pair of accuracy tensor and update op. Raises a runtime error
+  # in eager mode, and value errors for mismatched shapes or bad collection arguments.
   """Calculates how often `predictions` matches `labels`.
 
   The `accuracy` function creates two local variables, `total` and
@@ -639,6 +745,17 @@ def _confusion_matrix_at_thresholds(labels,
                                     thresholds,
                                     weights=None,
                                     includes=None):
+  # [FUNCTION DOC]
+  # HELPER: shared engine for the threshold based metrics (auc, precision/recall at
+  # thresholds, sensitivity/specificity, and the count metrics at thresholds).
+  # Inputs: labels (cast to boolean), predictions (floating tensor with values in zero to
+  # one, asserted at graph run time), thresholds (list or tuple of floats), weights (optional)
+  # and includes (optional tuple of keys among tp, fn, tn, fp; default all four). For each
+  # requested key a float32 metric variable of length equal to the number of thresholds is
+  # created and an op adding the (weighted) count of that outcome per threshold is built;
+  # a prediction counts as positive when strictly above the threshold. Returns two mappings
+  # keyed by the requested names: the variables, and their update ops. Raises a value error
+  # for an unknown key in includes or for incompatible shapes.
   """Computes true_positives, false_negatives, true_negatives, false_positives.
 
   This function creates up to four local variables, `true_positives`,
@@ -798,6 +915,11 @@ def _confusion_matrix_at_thresholds(labels,
 
 
 def _aggregate_variable(v, collections):
+  # [FUNCTION DOC]
+  # HELPER: reads a metric variable in a way that is correct under distribution strategies.
+  # Inputs: v (a metric variable, possibly a sync-on-read container) and collections (list of
+  # collection names or nothing to which the read value is added). Returns the aggregated
+  # (summed across replicas) value of the variable via the replica aggregation helper.
   f = lambda distribution, value: distribution.extended.read_var(value)
   return _aggregate_across_replicas(collections, f, v)
 
@@ -816,6 +938,22 @@ def auc(labels,
         name=None,
         summation_method='trapezoidal',
         thresholds=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the default summation method (trapezoidal) is documented as the default, yet
+  # for the precision-recall curve it logs a warning at every call saying it yields incorrect
+  # areas; the function is also marked deprecated because the value may race with the update.
+  # Streaming approximate area under the ROC or precision-recall curve. Inputs: labels (cast to
+  # boolean), predictions (floats in zero to one), weights (optional), num_thresholds (default
+  # 200, ignored when thresholds is given), metrics_collections / updates_collections (optional
+  # lists of collection names), curve (ROC, the default, or PR), name (optional scope),
+  # summation_method (trapezoidal, careful_interpolation, minoring or majoring) and thresholds
+  # (optional list of floats; sorted, then padded with an entry just below zero and just above
+  # one). Builds the threshold confusion counts, then sums the areas of the segments between
+  # successive thresholds using the chosen rule (recall and false positive rate for ROC,
+  # precision versus recall for PR, with a closed-form interpolation for careful_interpolation).
+  # Returns the pair of auc tensor and update op (the update op value is computed from the
+  # post-update counts). Raises a runtime error in eager mode and value errors for an unknown
+  # curve, an invalid summation method, or mismatched shapes.
   """Computes the approximate AUC via a Riemann sum.
 
   The `auc` function creates four local variables, `true_positives`,
@@ -925,6 +1063,12 @@ def auc(labels,
     epsilon = 1.0e-6
 
     def interpolate_pr_auc(tp, fp, fn):
+      # [FUNCTION DOC]
+      # HELPER: PR-curve area for the careful_interpolation summation method of auc.
+      # Inputs: tp, fp, fn count vectors (one entry per threshold). Assumes precision varies
+      # via linearly varying true and false positive weights inside each threshold interval
+      # and sums the closed-form area per interval, normalised by the total positive weight;
+      # divisions are zero-safe. Returns a scalar tensor with the approximated area.
       """Interpolation formula inspired by section 4 of (Davis et al., 2006).
 
       Note here we derive & use a closed formula not present in the paper
@@ -982,6 +1126,14 @@ def auc(labels,
           name='interpolate_pr_auc')
 
     def compute_auc(tp, fn, tn, fp, name):
+      # [FUNCTION DOC]
+      # HELPER: turns confusion counts into the curve area for auc.
+      # Inputs: per-threshold true positive, false negative, true negative and false positive
+      # vectors, and a name for the result op. Uses the enclosing curve and summation method.
+      # For PR with trapezoidal it logs a warning; with careful_interpolation it delegates to
+      # the interpolation helper. Otherwise computes recall and (false positive rate or
+      # precision) with a small epsilon and sums trapezoids, lower sums or upper sums.
+      # Returns a scalar tensor; raises a value error for an unknown summation method.
       """Computes the roc-auc or pr-auc based on confusion counts."""
       if curve == 'PR':
         if summation_method == 'trapezoidal':
@@ -1025,6 +1177,10 @@ def auc(labels,
 
     # sum up the areas of all the trapeziums
     def compute_auc_value(_, values):
+      # [FUNCTION DOC]
+      # HELPER: value function handed to the replica aggregation for auc.
+      # Ignores the distribution argument and computes the area from the mapping of count
+      # variables (keys tp, fn, tn, fp), naming the result value. Returns a scalar tensor.
       return compute_auc(values['tp'], values['fn'], values['tn'], values['fp'],
                          'value')
 
@@ -1046,6 +1202,13 @@ def mean_absolute_error(labels,
                         metrics_collections=None,
                         updates_collections=None,
                         name=None):
+  # [FUNCTION DOC]
+  # Streaming mean absolute error. Inputs: labels and predictions (same shape after
+  # squeezing), weights (optional), metrics_collections / updates_collections (optional lists
+  # of collection names), name (optional, defaults to mean_absolute_error). Computes the
+  # absolute difference elementwise and feeds it to the streaming mean. Returns the pair of
+  # value tensor and update op. Raises a runtime error in eager mode and value errors for
+  # mismatched shapes or bad collection arguments.
   """Computes the mean absolute error between the labels and predictions.
 
   The `mean_absolute_error` function creates two local variables,
@@ -1108,6 +1271,16 @@ def mean_cosine_distance(labels,
                          metrics_collections=None,
                          updates_collections=None,
                          name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the result is one minus the mean of the plain dot product along the given
+  # dimension; it is only a cosine distance when labels and predictions are already unit
+  # normalised, which is neither checked nor enforced.
+  # Streaming mean cosine distance. Inputs: labels, predictions (same shape), dim (axis along
+  # which the dot product is taken, kept as size one), weights (optional; dimension dim must be
+  # one), metrics_collections / updates_collections (optional lists), name (optional).
+  # Multiplies predictions with labels, sums along dim, takes the streaming mean and subtracts
+  # it (and the update value) from one; collections are filled after this transformation.
+  # Returns the pair of distance tensor and update op. Raises a runtime error in eager mode.
   """Computes the cosine distance between the labels and predictions.
 
   The `mean_cosine_distance` function creates two local variables,
@@ -1182,6 +1355,16 @@ def mean_per_class_accuracy(labels,
                             metrics_collections=None,
                             updates_collections=None,
                             name=None):
+  # [FUNCTION DOC]
+  # Streaming mean of per-class accuracies. Inputs: labels and predictions (integer class
+  # indices, flattened when rank exceeds one; predictions are cast to the labels type),
+  # num_classes (size of the two per-class accumulators), weights (optional, flattened),
+  # metrics_collections / updates_collections (optional lists), name (optional scope, default
+  # mean_accuracy). Creates float32 total and count variables of length num_classes and uses
+  # scatter-add keyed by label: total gets the weights, count gets the weighted correctness.
+  # The value is the mean over classes of count divided by total (zero-safe); the update op
+  # is the same ratio computed from the updated variables. Returns the pair of value tensor
+  # and update op. Raises a runtime error in eager mode and shape errors on mismatch.
   """Calculates the mean of the per-class accuracies.
 
   Calculates the accuracy for each class, then takes the mean of that.
@@ -1262,6 +1445,10 @@ def mean_per_class_accuracy(labels,
     update_count_op = state_ops.scatter_add(count, labels, is_correct)
 
     def compute_mean_accuracy(_, count, total):
+      # [FUNCTION DOC]
+      # HELPER: value function handed to the replica aggregation for mean per-class accuracy.
+      # Ignores the distribution argument; divides per-class correct counts by per-class
+      # totals (zero-safe, totals floored at zero) and returns their mean as a scalar tensor.
       per_class_accuracy = math_ops.div_no_nan(
           count, math_ops.maximum(total, 0), name=None)
       mean_accuracy_v = math_ops.reduce_mean(
@@ -1287,6 +1474,14 @@ def mean_iou(labels,
              metrics_collections=None,
              updates_collections=None,
              name=None):
+  # [FUNCTION DOC]
+  # Streaming mean intersection-over-union for semantic segmentation. Inputs: labels and
+  # predictions (integer class indices, flattened), num_classes (size of the square confusion
+  # matrix), weights (optional), metrics_collections / updates_collections (optional lists),
+  # name (optional scope, default mean_iou). Accumulates a float64 confusion matrix; the value
+  # is the mean over classes present of true positives divided by the union (row sum plus
+  # column sum minus diagonal), with classes of zero union excluded from the mean. Returns the
+  # pair of mean-iou tensor and update op. Raises a runtime error in eager mode.
   """Calculate per-step mean Intersection-Over-Union (mIOU).
 
   Mean Intersection-Over-Union is a common evaluation metric for
@@ -1344,6 +1539,12 @@ def mean_iou(labels,
                                                       num_classes, weights)
 
     def compute_mean_iou(_, total_cm):
+      # [FUNCTION DOC]
+      # HELPER: value function handed to the replica aggregation for mean_iou.
+      # Ignores the distribution argument. From the accumulated confusion matrix computes, per
+      # class, diagonal divided by (row sum plus column sum minus diagonal), skipping classes
+      # whose union is zero, and returns the mean over the remaining classes (zero when no
+      # class is valid) as a scalar tensor.
       """Compute the mean intersection-over-union via the confusion matrix."""
       sum_over_row = math_ops.cast(
           math_ops.reduce_sum(total_cm, 0), dtypes.float32)
@@ -1390,6 +1591,13 @@ def mean_relative_error(labels,
                         metrics_collections=None,
                         updates_collections=None,
                         name=None):
+  # [FUNCTION DOC]
+  # Streaming mean relative error. Inputs: labels, predictions and normalizer (same shape;
+  # trailing singleton dimensions are squeezed), weights (optional), metrics_collections /
+  # updates_collections (optional lists), name (optional, default mean_relative_error). Each
+  # element error is the absolute difference divided by the normalizer, defined as zero where
+  # the normalizer is zero; errors are fed to the streaming mean. Returns the pair of value
+  # tensor and update op. Raises a runtime error in eager mode and shape errors on mismatch.
   """Computes the mean relative error by normalizing with the given values.
 
   The `mean_relative_error` function creates two local variables,
@@ -1458,6 +1666,12 @@ def mean_squared_error(labels,
                        metrics_collections=None,
                        updates_collections=None,
                        name=None):
+  # [FUNCTION DOC]
+  # Streaming mean squared error. Inputs: labels and predictions (same shape after
+  # squeezing), weights (optional), metrics_collections / updates_collections (optional
+  # lists), name (optional, default mean_squared_error). Squares the elementwise difference and
+  # feeds it to the streaming mean. Returns the pair of value tensor and update op. Raises a
+  # runtime error in eager mode and value errors for mismatched shapes or bad collections.
   """Computes the mean squared error between the labels and predictions.
 
   The `mean_squared_error` function creates two local variables,
@@ -1518,6 +1732,17 @@ def mean_tensor(values,
                 metrics_collections=None,
                 updates_collections=None,
                 name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the update op value matches "mean_value" and refers to
+  # total and count; the real accumulators are float32 variables named total_tensor and
+  # count_tensor, and the variables take their shape from the static shape of values, so the
+  # input shape must be fully known.
+  # Streaming element-wise weighted mean that keeps the input shape. Inputs: values (any
+  # numeric tensor, cast to float32), weights (optional), metrics_collections /
+  # updates_collections (optional lists), name (optional scope, default mean). Accumulates
+  # elementwise sums of values times weights and of weights (ones when no weights). Returns the
+  # pair of mean tensor (total over count, zero-safe) and update op. Raises a runtime error in
+  # eager mode and value errors for bad weights or collections.
   """Computes the element-wise (weighted) mean of the given tensors.
 
   In contrast to the `mean` function which returns a scalar with the
@@ -1604,6 +1829,12 @@ def percentage_below(values,
                      metrics_collections=None,
                      updates_collections=None,
                      name=None):
+  # [FUNCTION DOC]
+  # Streaming fraction of values strictly below a threshold. Inputs: values (numeric tensor),
+  # threshold (scalar), weights (optional), metrics_collections / updates_collections
+  # (optional lists), name (optional, default percentage_below_threshold). Marks each value
+  # below the threshold with one, others zero, and delegates to the streaming mean. Returns the
+  # pair of fraction tensor and update op. Raises a runtime error in eager mode.
   """Computes the percentage of values less than the given threshold.
 
   The `percentage_below` function creates two local variables,
@@ -1656,6 +1887,13 @@ def _count_condition(values,
                      weights=None,
                      metrics_collections=None,
                      updates_collections=None):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation of the false/true positive/negative count metrics.
+  # Inputs: values (boolean tensor marking where the condition holds), weights (optional;
+  # rank zero or equal to the rank of values, checked at graph run time), metrics_collections
+  # and updates_collections (optional lists). Creates one float32 count variable, adds the
+  # (weighted) number of true entries on each update. Returns the pair of aggregated count
+  # value and update op. Raises a type error if values is not boolean.
   """Sums the weights of cases where the given values are True.
 
   If `weights` is `None`, weights default to 1. Use weights of 0 to mask values.
@@ -1705,6 +1943,12 @@ def false_negatives(labels,
                     metrics_collections=None,
                     updates_collections=None,
                     name=None):
+  # [FUNCTION DOC]
+  # Streaming weighted count of false negatives (label true, prediction false). Inputs: labels
+  # and predictions (cast to boolean, same shape), weights (optional), metrics_collections /
+  # updates_collections (optional lists), name (optional scope, default false_negatives).
+  # Returns the pair of count tensor and update op. Raises a runtime error in eager mode and
+  # shape errors on mismatch.
   """Computes the total number of false negatives.
 
   If `weights` is `None`, weights default to 1. Use weights of 0 to mask values.
@@ -1758,6 +2002,13 @@ def false_negatives_at_thresholds(labels,
                                   metrics_collections=None,
                                   updates_collections=None,
                                   name=None):
+  # [FUNCTION DOC]
+  # Streaming weighted false negative counts, one per threshold. Inputs: labels (cast to
+  # boolean), predictions (floats in zero to one), thresholds (list or tuple of floats),
+  # weights (optional), metrics_collections / updates_collections (optional lists), name
+  # (optional scope). Uses the threshold confusion helper requesting only false negatives.
+  # Returns the pair of vector tensor (length equal to number of thresholds) and update op.
+  # Raises a runtime error in eager mode and value errors for mismatched shapes.
   """Computes false negatives at provided threshold values.
 
   If `weights` is `None`, weights default to 1. Use weights of 0 to mask values.
@@ -1813,6 +2064,12 @@ def false_positives(labels,
                     metrics_collections=None,
                     updates_collections=None,
                     name=None):
+  # [FUNCTION DOC]
+  # Streaming weighted count of false positives (label false, prediction true). Inputs: labels
+  # and predictions (cast to boolean, same shape), weights (optional), metrics_collections /
+  # updates_collections (optional lists), name (optional scope, default false_positives).
+  # Returns the pair of count tensor and update op. Raises a runtime error in eager mode and
+  # shape errors on mismatch.
   """Sum the weights of false positives.
 
   If `weights` is `None`, weights default to 1. Use weights of 0 to mask values.
@@ -1867,6 +2124,13 @@ def false_positives_at_thresholds(labels,
                                   metrics_collections=None,
                                   updates_collections=None,
                                   name=None):
+  # [FUNCTION DOC]
+  # Streaming weighted false positive counts, one per threshold. Inputs: labels (cast to
+  # boolean), predictions (floats in zero to one), thresholds (list or tuple of floats),
+  # weights (optional), metrics_collections / updates_collections (optional lists), name
+  # (optional scope). Uses the threshold confusion helper requesting only false positives.
+  # Returns the pair of vector tensor and update op. Raises a runtime error in eager mode and
+  # value errors for mismatched shapes.
   """Computes false positives at provided threshold values.
 
   If `weights` is `None`, weights default to 1. Use weights of 0 to mask values.
@@ -1922,6 +2186,12 @@ def true_negatives(labels,
                    metrics_collections=None,
                    updates_collections=None,
                    name=None):
+  # [FUNCTION DOC]
+  # Streaming weighted count of true negatives (label false, prediction false). Inputs: labels
+  # and predictions (cast to boolean, same shape), weights (optional), metrics_collections /
+  # updates_collections (optional lists), name (optional scope, default true_negatives).
+  # Returns the pair of count tensor and update op. Raises a runtime error in eager mode and
+  # shape errors on mismatch.
   """Sum the weights of true_negatives.
 
   If `weights` is `None`, weights default to 1. Use weights of 0 to mask values.
@@ -1976,6 +2246,13 @@ def true_negatives_at_thresholds(labels,
                                  metrics_collections=None,
                                  updates_collections=None,
                                  name=None):
+  # [FUNCTION DOC]
+  # Streaming weighted true negative counts, one per threshold. Inputs: labels (cast to
+  # boolean), predictions (floats in zero to one), thresholds (list or tuple of floats),
+  # weights (optional), metrics_collections / updates_collections (optional lists), name
+  # (optional scope). Uses the threshold confusion helper requesting only true negatives.
+  # Returns the pair of vector tensor and update op. Raises a runtime error in eager mode and
+  # value errors for mismatched shapes.
   """Computes true negatives at provided threshold values.
 
   If `weights` is `None`, weights default to 1. Use weights of 0 to mask values.
@@ -2031,6 +2308,12 @@ def true_positives(labels,
                    metrics_collections=None,
                    updates_collections=None,
                    name=None):
+  # [FUNCTION DOC]
+  # Streaming weighted count of true positives (label true, prediction true). Inputs: labels
+  # and predictions (cast to boolean, same shape), weights (optional), metrics_collections /
+  # updates_collections (optional lists), name (optional scope, default true_positives).
+  # Returns the pair of count tensor and update op. Raises a runtime error in eager mode and
+  # shape errors on mismatch.
   """Sum the weights of true_positives.
 
   If `weights` is `None`, weights default to 1. Use weights of 0 to mask values.
@@ -2085,6 +2368,13 @@ def true_positives_at_thresholds(labels,
                                  metrics_collections=None,
                                  updates_collections=None,
                                  name=None):
+  # [FUNCTION DOC]
+  # Streaming weighted true positive counts, one per threshold. Inputs: labels (cast to
+  # boolean), predictions (floats in zero to one), thresholds (list or tuple of floats),
+  # weights (optional), metrics_collections / updates_collections (optional lists), name
+  # (optional scope). Uses the threshold confusion helper requesting only true positives.
+  # Returns the pair of vector tensor and update op. Raises a runtime error in eager mode and
+  # value errors for mismatched shapes.
   """Computes true positives at provided threshold values.
 
   If `weights` is `None`, weights default to 1. Use weights of 0 to mask values.
@@ -2140,6 +2430,14 @@ def precision(labels,
               metrics_collections=None,
               updates_collections=None,
               name=None):
+  # [FUNCTION DOC]
+  # Streaming precision: true positives divided by (true plus false positives). Inputs: labels
+  # and predictions (cast to boolean, same shape), weights (optional), metrics_collections /
+  # updates_collections (optional lists), name (optional scope, default precision). Builds the
+  # true and false positive counters through the corresponding count metrics (without
+  # collections) and combines them; the result is zero when no positives were predicted.
+  # Returns the pair of precision scalar (aggregated across replicas) and update op. Raises a
+  # runtime error in eager mode and shape errors on mismatch.
   """Computes the precision of the predictions with respect to the labels.
 
   The `precision` function creates two local variables,
@@ -2211,10 +2509,18 @@ def precision(labels,
         name=None)
 
     def compute_precision(tp, fp, name):
+      # [FUNCTION DOC]
+      # HELPER: precision formula for the precision metric.
+      # Inputs: true positive and false positive counts and an op name. Returns tp divided by
+      # tp plus fp where that sum is positive, otherwise zero.
       return array_ops.where(
           math_ops.greater(tp + fp, 0), math_ops.divide(tp, tp + fp), 0, name)
 
     def once_across_replicas(_, true_p, false_p):
+      # [FUNCTION DOC]
+      # HELPER: value function handed to the replica aggregation for precision.
+      # Ignores the distribution argument; returns the precision computed from the aggregated
+      # true and false positive counts, named value.
       return compute_precision(true_p, false_p, 'value')
 
     p = _aggregate_across_replicas(metrics_collections, once_across_replicas,
@@ -2236,6 +2542,16 @@ def precision_at_thresholds(labels,
                             metrics_collections=None,
                             updates_collections=None,
                             name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring describes metrics_collections as the collection for "auc"; the
+  # value actually added there is the precision vector. Also precision is divided by the sum
+  # plus a tiny epsilon, so it is slightly below the exact ratio and zero (not undefined) when
+  # nothing is above the threshold.
+  # Streaming precision per threshold. Inputs: labels (cast to boolean), predictions (floats in
+  # zero to one), thresholds (list or tuple of floats), weights (optional), metrics_collections
+  # / updates_collections (optional lists), name (optional scope). Accumulates true and false
+  # positive counts per threshold. Returns the pair of vector tensor (one entry per threshold)
+  # and update op. Raises a runtime error in eager mode and value errors for bad shapes.
   """Computes precision values for different `thresholds` on `predictions`.
 
   The `precision_at_thresholds` function creates four local variables,
@@ -2293,9 +2609,17 @@ def precision_at_thresholds(labels,
     epsilon = 1e-7
 
     def compute_precision(tp, fp, name):
+      # [FUNCTION DOC]
+      # HELPER: precision formula for precision_at_thresholds.
+      # Inputs: true positive and false positive count vectors and a name suffix. Returns tp
+      # divided by (tp + fp + small epsilon), named with the given suffix.
       return math_ops.divide(tp, epsilon + tp + fp, name='precision_' + name)
 
     def precision_across_replicas(_, values):
+      # [FUNCTION DOC]
+      # HELPER: value function handed to the replica aggregation for precision_at_thresholds.
+      # Ignores the distribution argument; takes the mapping of count variables and returns the
+      # per-threshold precision vector named value.
       return compute_precision(values['tp'], values['fp'], 'value')
 
     prec = _aggregate_across_replicas(
@@ -2316,6 +2640,15 @@ def recall(labels,
            metrics_collections=None,
            updates_collections=None,
            name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the eager-mode error message repeats itself ("is not supported is not
+  # supported"), a harmless wording bug.
+  # Streaming recall: true positives divided by (true positives plus false negatives). Inputs:
+  # labels and predictions (cast to boolean, same shape), weights (optional), metrics_collections
+  # / updates_collections (optional lists), name (optional scope, default recall). Builds the
+  # counters through the true positive and false negative count metrics (without collections);
+  # the result is zero when there are no actual positives. Returns the pair of recall scalar
+  # (aggregated across replicas) and update op. Raises a runtime error in eager mode.
   """Computes the recall of the predictions with respect to the labels.
 
   The `recall` function creates two local variables, `true_positives`
@@ -2384,11 +2717,19 @@ def recall(labels,
         name=None)
 
     def compute_recall(true_p, false_n, name):
+      # [FUNCTION DOC]
+      # HELPER: recall formula for the recall metric.
+      # Inputs: true positive and false negative counts and an op name. Returns tp divided by
+      # tp plus fn where that sum is positive, otherwise zero.
       return array_ops.where(
           math_ops.greater(true_p + false_n, 0),
           math_ops.divide(true_p, true_p + false_n), 0, name)
 
     def once_across_replicas(_, true_p, false_n):
+      # [FUNCTION DOC]
+      # HELPER: value function handed to the replica aggregation for recall.
+      # Ignores the distribution argument; returns recall computed from the aggregated true
+      # positive and false negative counts, named value.
       return compute_recall(true_p, false_n, 'value')
 
     rec = _aggregate_across_replicas(
@@ -2403,6 +2744,12 @@ def recall(labels,
 
 
 def _at_k_name(name, k=None, class_id=None):
+  # [FUNCTION DOC]
+  # HELPER: builds metric names for the at-k metrics.
+  # Inputs: name (base string), k (optional integer cutoff) and class_id (optional integer).
+  # Appends "_at_" and the cutoff (or "_at_k" when no cutoff is given) and then, when a class
+  # id is given, "_class" and the id. Returns the resulting string. Raises a type error if k
+  # or class_id is not an integer-like number.
   if k is not None:
     name = '%s_at_%d' % (name, k)
   else:
@@ -2413,6 +2760,12 @@ def _at_k_name(name, k=None, class_id=None):
 
 
 def _select_class_id(ids, selected_id):
+  # [FUNCTION DOC]
+  # HELPER: restricts class id tensors to a single class for per-class at-k metrics.
+  # Inputs: ids (int64 dense or sparse tensor of class ids) and selected_id (integer class).
+  # For sparse ids retains only entries equal to the class; for dense ids intersects each row
+  # with the class as a set. Returns a sparse tensor with the same dense shape as the input
+  # holding only entries equal to the selected class.
   """Filter all but `selected_id` out of `ids`.
 
   Args:
@@ -2447,6 +2800,12 @@ def _select_class_id(ids, selected_id):
 
 
 def _maybe_select_class_id(labels, predictions_idx, selected_id=None):
+  # [FUNCTION DOC]
+  # HELPER: optional per-class filter for the at-k metrics.
+  # Inputs: labels and predictions_idx (int64 class id tensors, dense or sparse) and
+  # selected_id (optional integer). With no selected class both inputs are returned
+  # untouched; otherwise both are filtered to that class. Returns the pair of labels and
+  # predictions_idx.
   """If class ID is specified, filter all other classes.
 
   Args:
@@ -2474,6 +2833,15 @@ def _sparse_true_positive_at_k(labels,
                                class_id=None,
                                weights=None,
                                name=None):
+  # [FUNCTION DOC]
+  # HELPER: per-step true positive counts for recall at k and precision at k.
+  # Inputs: labels (int64 dense or sparse class ids per example), predictions_idx (int64 top-k
+  # predicted class ids, same leading dimensions as labels), class_id (optional; restrict to
+  # one class), weights (optional; rank zero or one less than labels, must be broadcastable
+  # to the result), name (optional scope). Counts the size of the set intersection of the
+  # predicted and label ids for each example (as float64), multiplied by the weights.
+  # Returns a float64 tensor with the leading dimensions of the inputs. Raises an error if
+  # weights are not broadcastable to the counts.
   """Calculates true positives for recall@k and precision@k.
 
   If `class_id` is specified, calculate binary true positives for `class_id`
@@ -2520,6 +2888,14 @@ def _streaming_sparse_true_positive_at_k(labels,
                                          class_id=None,
                                          weights=None,
                                          name=None):
+  # [FUNCTION DOC]
+  # HELPER: streaming accumulator of true positives for recall at k and precision at k.
+  # Inputs: labels and predictions_idx (int64 class id tensors; see the per-step helper), k
+  # (optional integer, only used to build the default scope name), class_id (optional single
+  # class), weights (optional), name (optional scope name, also used as the variable name).
+  # Computes per-example true positive counts, sums them over the batch (float64) and adds the
+  # sum to a new float64 scalar metric variable. Returns the pair of that variable and the
+  # update operation. Raises a value error if the weights shape is incompatible.
   """Calculates weighted per step true positives for recall@k and precision@k.
 
   If `class_id` is specified, calculate binary true positives for `class_id`
@@ -2569,6 +2945,15 @@ def _sparse_false_negative_at_k(labels,
                                 predictions_idx,
                                 class_id=None,
                                 weights=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring text about class_id talks about "true positives" and about
+  # labels_sparse (copied from the true positive helper); this function counts false negatives.
+  # HELPER: per-step false negative counts for recall at k.
+  # Inputs: labels (int64 dense or sparse class ids), predictions_idx (int64 top-k predicted
+  # ids), class_id (optional single class) and weights (optional, rank zero or one less than
+  # labels, must be broadcastable). Counts, per example, the label ids that are not among the
+  # predicted ids (set difference of labels minus predictions, as float64), times the weights.
+  # Returns a float64 tensor with the leading dimensions of the inputs.
   """Calculates false negatives for recall@k.
 
   If `class_id` is specified, calculate binary true positives for `class_id`
@@ -2615,6 +3000,13 @@ def _streaming_sparse_false_negative_at_k(labels,
                                           class_id=None,
                                           weights=None,
                                           name=None):
+  # [FUNCTION DOC]
+  # HELPER: streaming accumulator of false negatives for recall at k.
+  # Inputs: labels, predictions_idx (int64 class id tensors), k (required integer, only used
+  # to build the default scope name), class_id (optional), weights (optional), name (optional
+  # scope, also used as the variable name). Sums the per-example false negative counts over the
+  # batch and adds them to a new float64 scalar metric variable. Returns the pair of that
+  # variable and the update operation. Raises a value error if weights are incompatible.
   """Calculates weighted per step false negatives for recall@k.
 
   If `class_id` is specified, calculate binary true positives for `class_id`
@@ -2669,6 +3061,14 @@ def recall_at_k(labels,
                 metrics_collections=None,
                 updates_collections=None,
                 name=None):
+  # [FUNCTION DOC]
+  # Streaming recall at k from raw prediction scores. Inputs: labels (int64 dense or sparse
+  # class ids per example), predictions (float scores or logits with the class dimension
+  # last), k (integer), class_id (optional single class), weights (optional),
+  # metrics_collections / updates_collections (optional lists), name (optional scope, default
+  # recall_at_k with the cutoff and class). Takes the top k class indices of the predictions
+  # and delegates to the top-k variant. Returns the pair of recall scalar (float64) and update
+  # op. Raises a runtime error in eager mode and value errors on bad weights or collections.
   """Computes recall@k of the predictions with respect to sparse labels.
 
   If `class_id` is specified, we calculate recall by considering only the
@@ -2762,6 +3162,17 @@ def recall_at_top_k(labels,
                     metrics_collections=None,
                     updates_collections=None,
                     name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: unlike the other public metrics it does not refuse to run under eager
+  # execution on its own (only the logits variant checks), and the value is a plain division
+  # of the two counters, so it yields not-a-number when there are no relevant labels at all.
+  # Streaming recall at k from already selected top-k class indices. Inputs: labels (int64
+  # dense or sparse class ids), predictions_idx (integer tensor whose last dimension holds the
+  # top k class ids), k (optional integer used only for naming), class_id (optional single
+  # class), weights (optional), metrics_collections / updates_collections (optional lists),
+  # name (optional scope). Expands labels to match the rank of predictions, accumulates true
+  # positives and false negatives in float64 variables, and divides. Returns the pair of recall
+  # scalar and update op. Raises value errors on incompatible weights.
   """Computes recall@k of top-k predictions with respect to sparse labels.
 
   Differs from `recall_at_k` in that predictions must be in the form of top `k`
@@ -2825,6 +3236,10 @@ def recall_at_top_k(labels,
         weights=weights)
 
     def compute_recall(_, tp, fn):
+      # [FUNCTION DOC]
+      # HELPER: value function handed to the replica aggregation for recall at top k.
+      # Ignores the distribution argument; returns true positives divided by the sum of true
+      # positives and false negatives (no zero guard), named with the enclosing scope.
       return math_ops.divide(tp, math_ops.add(tp, fn), name=scope)
 
     metric = _aggregate_across_replicas(
@@ -2845,6 +3260,13 @@ def recall_at_thresholds(labels,
                          metrics_collections=None,
                          updates_collections=None,
                          name=None):
+  # [FUNCTION DOC]
+  # Streaming recall per threshold. Inputs: labels (cast to boolean), predictions (floats in
+  # zero to one), thresholds (list or tuple of floats), weights (optional), metrics_collections
+  # / updates_collections (optional lists), name (optional scope). Accumulates true positive and
+  # false negative counts per threshold; recall is tp divided by (tp + fn + tiny epsilon).
+  # Returns the pair of vector tensor (one entry per threshold) and update op. Raises a runtime
+  # error in eager mode and value errors for mismatched shapes.
   """Computes various recall values for different `thresholds` on `predictions`.
 
   The `recall_at_thresholds` function creates four local variables,
@@ -2900,9 +3322,17 @@ def recall_at_thresholds(labels,
     epsilon = 1e-7
 
     def compute_recall(tp, fn, name):
+      # [FUNCTION DOC]
+      # HELPER: recall formula for recall_at_thresholds.
+      # Inputs: true positive and false negative count vectors and a name suffix. Returns tp
+      # divided by (tp + fn + small epsilon), named with the suffix.
       return math_ops.divide(tp, epsilon + tp + fn, name='recall_' + name)
 
     def recall_across_replicas(_, values):
+      # [FUNCTION DOC]
+      # HELPER: value function handed to the replica aggregation for recall_at_thresholds.
+      # Ignores the distribution argument; takes the mapping of count variables and returns the
+      # per-threshold recall vector named value.
       return compute_recall(values['tp'], values['fn'], 'value')
 
     rec = _aggregate_across_replicas(
@@ -2922,6 +3352,13 @@ def root_mean_squared_error(labels,
                             metrics_collections=None,
                             updates_collections=None,
                             name=None):
+  # [FUNCTION DOC]
+  # Streaming root mean squared error. Inputs: labels and predictions (same shape after
+  # squeezing), weights (optional), metrics_collections / updates_collections (optional lists),
+  # name (optional, default root_mean_squared_error). Computes the streaming mean squared error
+  # (without collections) and takes its square root for both the value (aggregated across
+  # replicas) and the update op. Returns the pair of value tensor and update op. Raises a
+  # runtime error in eager mode and value errors for mismatched shapes.
   """Computes the root mean squared error between the labels and predictions.
 
   The `root_mean_squared_error` function creates two local variables,
@@ -2995,6 +3432,18 @@ def sensitivity_at_specificity(labels,
                                metrics_collections=None,
                                updates_collections=None,
                                name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the first line of the docstring says it computes "the specificity at a given
+  # sensitivity", but the function computes the sensitivity at a given specificity.
+  # Streaming sensitivity (recall) at the threshold whose specificity is closest to a target.
+  # Inputs: labels (cast to boolean), predictions (floats in zero to one), specificity (scalar
+  # target in zero to one; checked eagerly at graph construction), weights (optional),
+  # num_thresholds (default 200; linearly spaced thresholds padded with one just below zero
+  # and one just above one), metrics_collections / updates_collections (optional lists), name
+  # (optional scope). Accumulates all four confusion counts per threshold, picks the threshold
+  # whose specificity is closest to the target and returns tp / (tp + fn + epsilon) there.
+  # Returns the pair of scalar tensor and update op. Raises a runtime error in eager mode and a
+  # value error when specificity is outside zero to one.
   """Computes the specificity at a given sensitivity.
 
   The `sensitivity_at_specificity` function creates four local
@@ -3065,6 +3514,11 @@ def sensitivity_at_specificity(labels,
         labels, predictions, thresholds, weights)
 
     def compute_sensitivity_at_specificity(tp, tn, fp, fn, name):
+      # [FUNCTION DOC]
+      # HELPER: selects the threshold and computes the sensitivity for the metric.
+      # Inputs: per-threshold count vectors tp, tn, fp, fn and an op name. Computes the
+      # specificity at each threshold, finds the index whose specificity is closest to the
+      # target, and returns tp over (tp + fn + epsilon) at that index, named by the argument.
       specificities = math_ops.divide(tn, tn + fp + kepsilon)
       tf_index = math_ops.argmin(math_ops.abs(specificities - specificity), 0)
       tf_index = math_ops.cast(tf_index, dtypes.int32)
@@ -3074,6 +3528,10 @@ def sensitivity_at_specificity(labels,
                              tp[tf_index] + fn[tf_index] + kepsilon, name)
 
     def sensitivity_across_replicas(_, values):
+      # [FUNCTION DOC]
+      # HELPER: value function handed to the replica aggregation for sensitivity_at_specificity.
+      # Ignores the distribution argument; takes the mapping of count variables and returns the
+      # sensitivity scalar named value.
       return compute_sensitivity_at_specificity(
           values['tp'], values['tn'], values['fp'], values['fn'], 'value')
 
@@ -3090,6 +3548,13 @@ def sensitivity_at_specificity(labels,
 
 
 def _expand_and_tile(tensor, multiple, dim=0, name=None):
+  # [FUNCTION DOC]
+  # HELPER: replicates a tensor along a freshly inserted dimension (used by the sparse average
+  # precision computation).
+  # Inputs: tensor (dense or sparse), multiple (integer, at least one, the repeat count), dim
+  # (integer position where the new dimension is inserted, default 0), name (optional scope).
+  # Returns the expanded and tiled tensor. Raises a value error when multiple is below one or
+  # dim is outside the valid range for the tensor rank.
   """Slice `tensor` shape in 2, then tile along the sliced dimension.
 
   A new dimension is inserted in shape of `tensor` before `dim`, then values are
@@ -3145,6 +3610,13 @@ def _expand_and_tile(tensor, multiple, dim=0, name=None):
 
 
 def _num_relevant(labels, k):
+  # [FUNCTION DOC]
+  # HELPER: relevant-item count per example for the average precision at k computation.
+  # Inputs: labels (int64 dense or sparse tensor with the label list in the last dimension)
+  # and k (integer, at least one). For sparse labels the count is the set size of each row; for
+  # dense labels it is the number of non-negative entries along the last dimension (negative
+  # entries are treated as padding). In both cases the result is capped at k. Returns an
+  # integer tensor with the leading dimensions of labels. Raises a value error if k is below one.
   """Computes number of relevant values for each row in labels.
 
   For labels with shape [D1, ... DN, num_labels], this is the minimum of
@@ -3183,6 +3655,16 @@ def _num_relevant(labels, k):
 
 
 def _sparse_average_precision_at_top_k(labels, predictions_idx):
+  # [FUNCTION DOC]
+  # HELPER: per-example average precision at k for the sparse retrieval metrics.
+  # Inputs: labels (int64 dense or sparse class ids; negative values ignored) and
+  # predictions_idx (integer tensor whose last dimension, which must be statically known, holds
+  # the top k predicted ids). Expands the labels to the label rank of predictions, tiles the
+  # labels once per rank position, computes whether each ranked prediction is relevant,
+  # cumulative precision at each rank, sums the precision at relevant ranks and divides by the
+  # number of relevant items (capped at k). Returns a float64 tensor with the leading
+  # dimensions of the inputs; rows with no relevant labels divide by zero. Raises a value error
+  # if predictions_idx is a scalar or its last dimension is unknown.
   """Computes average precision@k of predictions with respect to sparse labels.
 
   From en.wikipedia.org/wiki/Information_retrieval#Average_precision, formula
@@ -3278,6 +3760,15 @@ def _streaming_sparse_average_precision_at_top_k(labels,
                                                  metrics_collections=None,
                                                  updates_collections=None,
                                                  name=None):
+  # [FUNCTION DOC]
+  # HELPER: streaming mean-average-precision accumulator behind average_precision_at_k.
+  # Inputs: labels and predictions_idx (see the per-example helper), weights (optional; rank
+  # zero or one less than labels, broadcast to the per-example values), metrics_collections /
+  # updates_collections (optional lists), name (optional scope). Computes per-example average
+  # precision (times weights), then accumulates two float64 metric variables: the total of the
+  # average precisions and the maximum attainable total (row count, or sum of weights). The
+  # value is total divided by maximum with zero-safe division. Returns the pair of mean average
+  # precision scalar (aggregated across replicas) and update op.
   """Computes average precision@k of predictions with respect to sparse labels.
 
   `sparse_average_precision_at_top_k` creates two local variables,
@@ -3353,6 +3844,10 @@ def _streaming_sparse_average_precision_at_top_k(labels,
 
     # Divide total by max to get mean, for both vars and the update ops.
     def precision_across_replicas(_, total_var, max_var):
+      # [FUNCTION DOC]
+      # HELPER: value function handed to the replica aggregation for mean average precision.
+      # Ignores the distribution argument; returns the total divided by the maximum with a zero
+      # result when the maximum is zero, named mean.
       return _safe_scalar_div(total_var, max_var, name='mean')
 
     mean_average_precision = _aggregate_across_replicas(
@@ -3366,6 +3861,13 @@ def _streaming_sparse_average_precision_at_top_k(labels,
 
 
 def _clean_out_of_range_indices(labels, num_classes):
+  # [FUNCTION DOC]
+  # HELPER: normalises out-of-range class labels before top-k retrieval metrics.
+  # Inputs: labels (int64 dense tensor, sparse tensor or sparse tensor value) and num_classes
+  # (int64 scalar tensor). If the maximum label is at least num_classes, every such value is
+  # replaced by minus one (which the metrics ignore); otherwise labels are returned unchanged
+  # (the check is a runtime conditional). Sparse inputs keep their indices and shape. Returns
+  # the cleaned labels of the same kind as the input.
   """Replaces large out-of-range labels by small out-of-range labels.
 
   Replaces any value in `labels` that is greater or equal to `num_classes` by
@@ -3380,16 +3882,29 @@ def _clean_out_of_range_indices(labels, num_classes):
   """
 
   def _labels_is_sparse():
+    # [FUNCTION DOC]
+    # HELPER: type test for the label cleaning code.
+    # Takes no arguments; returns true when the enclosing labels are a sparse tensor or a
+    # sparse tensor value, false for dense inputs.
     """Returns true is `labels` is a sparse tensor."""
     return isinstance(labels, (sparse_tensor.SparseTensor,
                                sparse_tensor.SparseTensorValue))
 
   def _clean_out_of_range(values):
+    # [FUNCTION DOC]
+    # HELPER: elementwise replacement used by the label cleaning code.
+    # Input: values (integer tensor). Returns a tensor of the same shape where every value at
+    # least as large as the enclosing num_classes is replaced by minus one.
     """Replaces by -1 any large out-of-range `values`."""
     return array_ops.where_v2(math_ops.greater_equal(values, num_classes),
                               -1 * array_ops.ones_like(values), values)
 
   def _clean_labels_out_of_range():
+    # [FUNCTION DOC]
+    # HELPER: conditional branch that cleans the enclosing labels.
+    # Takes no arguments. For sparse labels rebuilds a tensor of the same class with cleaned
+    # values and unchanged indices and dense shape; for dense labels cleans the tensor directly.
+    # Returns the cleaned labels.
     """Replaces by -1 ane large out-of-range values in `labels`."""
     if _labels_is_sparse():
       return type(labels)(indices=labels.indices,
@@ -3415,6 +3930,11 @@ def sparse_average_precision_at_k(labels,
                                   metrics_collections=None,
                                   updates_collections=None,
                                   name=None):
+  # [FUNCTION DOC]
+  # Deprecated alias kept for backward compatibility. Forwards all arguments (labels,
+  # predictions, k, weights, metrics_collections, updates_collections, name) unchanged to the
+  # average precision at k function and returns its result (value tensor and update op). Any
+  # exception, including the eager-mode runtime error, comes from the target function.
   """Renamed to `average_precision_at_k`, please use that method instead."""
   return average_precision_at_k(
       labels=labels,
@@ -3434,6 +3954,17 @@ def average_precision_at_k(labels,
                            metrics_collections=None,
                            updates_collections=None,
                            name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the eager-mode error message names the old function name
+  # (sparse_average_precision_at_k) instead of this function.
+  # Streaming mean average precision at k from raw prediction scores. Inputs: labels (int64
+  # dense or sparse class ids; values outside zero to number of classes are ignored),
+  # predictions (float scores with the class dimension last), k (integer, at least one),
+  # weights (optional), metrics_collections / updates_collections (optional lists), name
+  # (optional scope, default average_precision_at_k with the cutoff). Takes the top k indices,
+  # replaces labels at or above the class count by minus one, and delegates to the streaming
+  # accumulator. Returns the pair of mean average precision scalar (float64) and update op.
+  # Raises a runtime error in eager mode and a value error when k is below one.
   """Computes average precision@k of predictions with respect to sparse labels.
 
   `average_precision_at_k` creates two local variables,
@@ -3515,6 +4046,15 @@ def _sparse_false_positive_at_k(labels,
                                 predictions_idx,
                                 class_id=None,
                                 weights=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring text about class_id talks about "true positives" and about
+  # labels_sparse (copied from the true positive helper); this function counts false positives.
+  # HELPER: per-step false positive counts for precision at k.
+  # Inputs: labels (int64 dense or sparse class ids), predictions_idx (int64 top-k predicted
+  # ids), class_id (optional single class) and weights (optional, rank zero or one less than
+  # labels, must be broadcastable). Counts per example the predicted ids that are not among
+  # the labels (set difference of predictions minus labels, as float64), times the weights.
+  # Returns a float64 tensor with the leading dimensions of the inputs.
   """Calculates false positives for precision@k.
 
   If `class_id` is specified, calculate binary true positives for `class_id`
@@ -3561,6 +4101,13 @@ def _streaming_sparse_false_positive_at_k(labels,
                                           class_id=None,
                                           weights=None,
                                           name=None):
+  # [FUNCTION DOC]
+  # HELPER: streaming accumulator of false positives for precision at k.
+  # Inputs: labels, predictions_idx (int64 class id tensors), k (optional integer used only
+  # for naming), class_id (optional), weights (optional), name (optional scope, also used as
+  # the variable name). Sums per-example false positive counts over the batch and adds them to
+  # a new float64 scalar metric variable. Returns the pair of that variable and the update
+  # operation. Raises a value error if the weights shape is incompatible.
   """Calculates weighted per step false positives for precision@k.
 
   If `class_id` is specified, calculate binary true positives for `class_id`
@@ -3615,6 +4162,17 @@ def precision_at_top_k(labels,
                        metrics_collections=None,
                        updates_collections=None,
                        name=None):
+  # [FUNCTION DOC]
+  # Streaming precision at k from already selected top-k class indices. Inputs: labels (int64
+  # dense or sparse class ids), predictions_idx (integer tensor whose last dimension holds the
+  # top k ids), k (optional integer used only for naming), class_id (optional single class),
+  # weights (optional), metrics_collections / updates_collections (optional lists), name
+  # (optional scope). Expands labels to the rank of predictions, casts the indices to 64-bit
+  # integers, and accumulates true and false positive counts in float64 metric variables
+  # (optionally restricted to one class). The value is true positives over the sum of true and
+  # false positives with no zero guard, so it is not-a-number when nothing was predicted.
+  # Returns the pair of precision scalar (aggregated across replicas) and update op. Raises a
+  # runtime error in eager mode and value errors on incompatible weights.
   """Computes precision@k of the predictions with respect to sparse labels.
 
   Differs from `sparse_precision_at_k` in that predictions must be in the form
@@ -3683,6 +4241,10 @@ def precision_at_top_k(labels,
         weights=weights)
 
     def precision_across_replicas(_, tp, fp):
+      # [FUNCTION DOC]
+      # HELPER: value function handed to the replica aggregation for precision at top k.
+      # Ignores the distribution argument; returns true positives divided by the sum of true and
+      # false positives (no zero guard), named with the enclosing scope.
       return math_ops.divide(tp, math_ops.add(tp, fp), name=scope)
 
     metric = _aggregate_across_replicas(
@@ -3705,6 +4267,11 @@ def sparse_precision_at_k(labels,
                           metrics_collections=None,
                           updates_collections=None,
                           name=None):
+  # [FUNCTION DOC]
+  # Deprecated alias kept for backward compatibility. Forwards all arguments (labels,
+  # predictions, k, class_id, weights, metrics_collections, updates_collections, name)
+  # unchanged to the precision at k function and returns its result (value tensor and update
+  # op). Any exception, including the eager-mode runtime error, comes from the target function.
   """Renamed to `precision_at_k`, please use that method instead."""
   return precision_at_k(
       labels=labels,
@@ -3726,6 +4293,16 @@ def precision_at_k(labels,
                    metrics_collections=None,
                    updates_collections=None,
                    name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the eager-mode error message names the old function name
+  # (sparse_precision_at_k) instead of precision_at_k.
+  # Streaming precision at k from raw prediction scores. Inputs: labels (int64 dense or sparse
+  # class ids; values outside the class range are ignored), predictions (float scores with the
+  # class dimension last), k (integer), class_id (optional single class), weights (optional),
+  # metrics_collections / updates_collections (optional lists), name (optional scope, default
+  # precision_at_k with the cutoff and class). Takes the top k indices of the predictions and
+  # delegates to the top-k variant. Returns the pair of precision scalar (float64) and update
+  # op. Raises a runtime error in eager mode and value errors on bad weights or collections.
   """Computes precision@k of the predictions with respect to sparse labels.
 
   If `class_id` is specified, we calculate precision by considering only the
@@ -3820,6 +4397,18 @@ def specificity_at_sensitivity(labels,
                                metrics_collections=None,
                                updates_collections=None,
                                name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the upper padding threshold is one minus a small epsilon, whereas the sibling
+  # sensitivity-at-specificity metric uses one plus epsilon; predictions exactly equal to one
+  # are therefore counted as positive at every threshold, which looks like a typo.
+  # Streaming specificity at the threshold whose sensitivity is closest to a target. Inputs:
+  # labels (cast to boolean), predictions (floats in zero to one), sensitivity (scalar target
+  # in zero to one), weights (optional), num_thresholds (default 200, linearly spaced
+  # thresholds padded at both ends), metrics_collections / updates_collections (optional
+  # lists), name (optional scope). Accumulates the four confusion counts per threshold, picks
+  # the threshold with sensitivity nearest the target (the last such one in case of ties) and
+  # returns tn / (tn + fp + epsilon) there. Returns the pair of scalar tensor and update op.
+  # Raises a runtime error in eager mode and a value error if sensitivity is outside zero to one.
   """Computes the specificity at a given sensitivity.
 
   The `specificity_at_sensitivity` function creates four local
@@ -3890,6 +4479,11 @@ def specificity_at_sensitivity(labels,
         labels, predictions, thresholds, weights)
 
     def compute_specificity_at_sensitivity(tp, tn, fp, fn, name):
+      # [FUNCTION DOC]
+      # HELPER: threshold selection and specificity formula for the metric.
+      # Inputs: per-threshold count vectors tp, tn, fp, fn and an op name. Computes the
+      # sensitivity at each threshold, chooses the last index whose sensitivity is closest to
+      # the target, and returns tn over (tn + fp + epsilon) at that index, named by the argument.
       """Computes the specificity at the given sensitivity.
 
       Args:
@@ -3919,6 +4513,10 @@ def specificity_at_sensitivity(labels,
                              tn[tf_index] + fp[tf_index] + kepsilon, name)
 
     def specificity_across_replicas(_, values):
+      # [FUNCTION DOC]
+      # HELPER: value function handed to the replica aggregation for specificity_at_sensitivity.
+      # Ignores the distribution argument; takes the mapping of count variables and returns the
+      # specificity scalar named value.
       return compute_specificity_at_sensitivity(
           values['tp'], values['tn'], values['fp'], values['fn'], 'value')
 
