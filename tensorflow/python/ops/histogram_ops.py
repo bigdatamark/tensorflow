@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Public histogram operations: histogram_fixed_width_bins (maps each value to the index of its
+# equal-width bin) and histogram_fixed_width (counts values per bin). Both are exported to the
+# public API with dispatch support. Importing has no side effects beyond that registration.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,6 +39,18 @@ def histogram_fixed_width_bins(values,
                                nbins=100,
                                dtype=dtypes.int32,
                                name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the dtype parameter is documented as the dtype of the result but is never used;
+  # the returned indices are always cast to 32-bit integers. Also the docstring says the default
+  # scope name is 'histogram_fixed_width' while the code uses 'histogram_fixed_width_bins'.
+  # Computes, for every element of values, the index of the equal-width bin it falls in. Inputs:
+  # values (numeric tensor of any shape), value_range (two-element tensor with low and high edge),
+  # nbins (scalar, default 100, converted to int32), dtype (ignored), name (optional scope name).
+  # Values are scaled into the unit interval using the range, multiplied by nbins and floored;
+  # results are clipped to [0, nbins - 1] so outliers go to the first or last bin. An assertion
+  # on nbins > 0 is attached as a control dependency, so a non-positive nbins fails at run time
+  # with an invalid-argument error. Returns an int32 tensor with the same shape as values.
+  # No state is mutated.
   """Bins the given values for use in a histogram.
 
   Given the tensor `values`, this operation returns a rank 1 `Tensor`
@@ -107,6 +123,14 @@ def histogram_fixed_width(values,
                           nbins=100,
                           dtype=dtypes.int32,
                           name=None):
+  # [FUNCTION DOC]
+  # Counts how many entries of values fall into each of nbins equal-width bins spanning
+  # value_range; values at or below the low edge count in the first bin and values at or above the
+  # high edge count in the last. Inputs: values (numeric tensor), value_range (two-element tensor of
+  # the same dtype), nbins (scalar, default 100), dtype (result dtype, default int32, passed to the
+  # kernel), name (optional scope name). Delegates to the generated histogram kernel inside a name
+  # scope. Returns a 1-D tensor of length nbins with the counts. Invalid ranges or dtypes surface
+  # as errors from the kernel (invalid-argument or type errors). No state is mutated.
   """Return histogram of values.
 
   Given the tensor `values`, this operation returns a rank 1 histogram counting

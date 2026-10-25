@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Test module for image op gradients. It contains no test logic of its own: it aliases the
+# concrete test case classes defined in the shared base module (nearest-neighbor, bilinear and
+# bicubic resize, scale-and-translate, crop-and-resize and RGB-to-HSV gradient tests) under
+# public names so the test runner discovers them, and runs the test main when executed directly.
+# Importing it only binds those aliases.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

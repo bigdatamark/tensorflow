@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Tests for image-op gradients when deterministic op execution is enabled. Covers (1) the
+# unimplemented-error behavior of the GPU nearest-neighbor resize gradient, (2) run-to-run
+# reproducibility of the GPU bilinear resize gradient, and (3) both the error behavior and the
+# reproducibility of the crop-and-resize gradients to image and boxes. Two classes extend shared
+# base test cases so regular functionality is also checked on the deterministic code path.
+# When run as a script it first turns on op determinism, then starts the test runner.
 # Copyright 2020-2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,6 +44,10 @@ from tensorflow.python.platform import test
 
 class ResizeNearestNeighborOpDeterminismExceptionsTest(test.TestCase,
                                                        parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case verifying that, with deterministic ops enabled, taking the gradient of nearest
+  # neighbor resizing on a GPU raises an unimplemented error. It is parameterized over data types
+  # and the align-corners and half-pixel-centers options; there is no shared fixture state.
   """Test d9m-unimplemented exceptions from ResizeNearestNeighborOpGrad.
 
   Test that tf.errors.UnimplementedError is thrown, as appropriate, by the
@@ -73,6 +84,13 @@ class ResizeNearestNeighborOpDeterminismExceptionsTest(test.TestCase,
   @test_util.run_gpu_only
   @test_util.run_all_in_graph_and_eager_modes
   def testExceptionThrowing(self, align_corners, half_pixel_centers, data_type):
+    # [FUNCTION DOC]
+    # Scenario: a zero image of shape one by two by two by one, of the given data type, is resized
+    # to three by three with nearest neighbor on the GPU while a gradient tape watches the input.
+    # Action: compute the gradient of the output with respect to the input and evaluate it.
+    # Expected: an unimplemented error whose message says a deterministic GPU implementation of the
+    # nearest-neighbor resize gradient is not available. Runs only with a GPU, in graph and eager
+    # modes; parameters are data type (half, single, double) and the two resize options.
     with self.session(), test_util.force_gpu():
       input_image = array_ops.zeros((1, 2, 2, 1), dtype=data_type)
       with backprop.GradientTape() as tape:
@@ -90,6 +108,11 @@ class ResizeNearestNeighborOpDeterminismExceptionsTest(test.TestCase,
 
 
 class ResizeBilinearOpDeterministicTest(test_base.ResizeBilinearOpTestBase):
+  # [CLASS DOC]
+  # Test case checking that the bilinear resize gradient is reproducible (bit-identical across
+  # repeated evaluations) when deterministic ops are enabled. Inherits all regular bilinear
+  # resize tests from the shared base class so they also run on the deterministic code path.
+  # Provides helpers that create random numpy-backed constants.
   """Test that ResizeBilinearGrad operates reproducibly.
 
   Inheriting from test_base.ResizeBilinearOpTestBase ensures that regular op
@@ -97,9 +120,17 @@ class ResizeBilinearOpDeterministicTest(test_base.ResizeBilinearOpTestBase):
   """
 
   def _randomNDArray(self, shape):
+    # [FUNCTION DOC]
+    # HELPER: test utility generating random upstream-gradient data.
+    # Returns a numpy array of the given shape with values drawn uniformly from [-1, 1) using the
+    # global numpy random state (so it is affected by, and advances, the current seed).
     return 2 * np.random.random_sample(shape) - 1
 
   def _randomDataOp(self, shape, data_type):
+    # [FUNCTION DOC]
+    # HELPER: test utility wrapping random numpy data into a constant tensor.
+    # Draws a random array of the given shape and returns it as a constant tensor of the given
+    # data type, so graph-mode runs see fixed values rather than re-rolled random ops.
     return constant_op.constant(self._randomNDArray(shape), dtype=data_type)
 
   @parameterized.parameters(
@@ -128,6 +159,15 @@ class ResizeBilinearOpDeterministicTest(test_base.ResizeBilinearOpTestBase):
   @test_util.run_gpu_only
   def testDeterministicGradients(self, align_corners, half_pixel_centers,
                                  data_type):
+    # [FUNCTION DOC]
+    # Scenario: GPU-only test, skipped when XLA is enabled and align-corners is false. A random
+    # image of shape one by 25 by 12 by 3 is bilinearly resized to 200 by 250, with random
+    # upstream gradients injected by multiplying the output, seeded from the parameters.
+    # Action: compute the gradient with respect to the input image twice for each of three seeds
+    # (in eager mode with a persistent tape, in graph mode by evaluating the same gradient tensor
+    # twice with identical fed upstream values).
+    # Expected: the two results are exactly equal each time. Parameters: align corners, half-pixel
+    # centers, and data type (single or double; half precision is not registered on GPU).
     if not align_corners and test_util.is_xla_enabled():
       # Align corners is deprecated in TF2.0, but align_corners==False is not
       # supported by XLA.
@@ -144,6 +184,11 @@ class ResizeBilinearOpDeterministicTest(test_base.ResizeBilinearOpTestBase):
       if context.executing_eagerly():
 
         def resize_bilinear_gradients(local_seed):
+          # [FUNCTION DOC]
+          # HELPER: nested helper computing one gradient of the resized image with respect to the
+          # input image. Seeds numpy with local_seed, builds random upstream gradients, resizes
+          # the captured input image on a persistent tape, multiplies by the upstream gradients
+          # and returns the gradient with respect to the input image (a tensor).
           np.random.seed(local_seed)
           upstream_gradients = self._randomDataOp(output_shape, dtypes.float32)
           with backprop.GradientTape(persistent=True) as tape:
@@ -187,6 +232,10 @@ class ResizeBilinearOpDeterministicTest(test_base.ResizeBilinearOpTestBase):
 
 
 class CropAndResizeOpDeterminismExceptionsTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case verifying that, with deterministic ops enabled, the GPU crop-and-resize gradients
+  # to the image and to the boxes raise unimplemented errors. Uses a small parameter generator
+  # as its only shared fixture.
   """Test d9m-unimplemented exceptions from CropAndResizeBackprop{Image|Boxes}.
 
   Test that tf.errors.UnimplementedError is thrown or not thrown, as
@@ -199,6 +248,11 @@ class CropAndResizeOpDeterminismExceptionsTest(test.TestCase):
   """
 
   def _genParams(self, dtype=dtypes.float32):
+    # [FUNCTION DOC]
+    # HELPER: builds inputs for crop-and-resize. Sets the global random seed to a fixed value, then
+    # creates a random normal image (one by ten by ten by one, given dtype, default single
+    # precision), three random boxes, random box indices (all zero, since the batch is one) and a
+    # constant crop size of three by three. Returns the tuple image, boxes, box indices, crop size.
     batch_size = 1
     image_height = 10
     image_width = 10
@@ -217,6 +271,14 @@ class CropAndResizeOpDeterminismExceptionsTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @test_util.run_gpu_only
   def testExceptionThrowing(self):
+    # [FUNCTION DOC]
+    # Scenario: GPU-only; for each of half, single and double precision images, run crop-and-resize
+    # under a persistent tape that watches the image and boxes.
+    # Action: take the gradient with respect to the image, then with respect to the boxes.
+    # Expected: the image gradient raises an unimplemented error mentioning that the deterministic
+    # GPU implementation of the image backprop is unavailable. The boxes gradient raises an
+    # unimplemented error about the boxes backprop in graph mode, but about the image backprop in
+    # eager mode, because eager execution runs the image backprop first even if unused.
     for dtype in [dtypes.float16, dtypes.float32, dtypes.float64]:
       image, boxes, box_indices, crop_size = self._genParams(dtype)
       with backprop.GradientTape(persistent=True) as tape:
@@ -243,6 +305,11 @@ class CropAndResizeOpDeterminismExceptionsTest(test.TestCase):
 
 
 class CropAndResizeOpDeterministicTest(test_base.CropAndResizeOpTestBase):
+  # [CLASS DOC]
+  # Test case checking that the crop-and-resize gradients to image and boxes are reproducible
+  # under deterministic ops. Inherits the regular crop-and-resize tests from the shared base class
+  # so they also run on the deterministic path. Provides random-data helpers and a parameter
+  # generator used by the reproducibility checks.
   """Test that CropAndResizeBackprop{Image|Boxes} operates reproducibly.
 
   Inheriting from test_base.CropAndResizeOpTestBase ensures that regular op
@@ -250,6 +317,11 @@ class CropAndResizeOpDeterministicTest(test_base.CropAndResizeOpTestBase):
   """
 
   def _randomFloats(self, shape, low=0.0, high=1.0, dtype=dtypes.float32):
+    # [FUNCTION DOC]
+    # HELPER: test utility creating a constant tensor of uniformly random floats. Inputs: shape,
+    # low (inclusive, default 0), high (exclusive, default 1) and dtype (default single
+    # precision). Values come from the global numpy random state, scaled and shifted into the
+    # range, then wrapped in a constant so graph mode does not re-roll them. Returns the tensor.
     """Generate a tensor of random floating-point values.
 
     Values will be continuously distributed in the range [low, high).
@@ -275,6 +347,10 @@ class CropAndResizeOpDeterministicTest(test_base.CropAndResizeOpTestBase):
     return constant_op.constant(val, dtype=dtype)
 
   def _randomInts(self, shape, low, high):
+    # [FUNCTION DOC]
+    # HELPER: test utility creating a constant 32-bit integer tensor of random values in the range
+    # from low (inclusive) to high (exclusive) with the given shape, drawn from the global numpy
+    # random state. Returns the constant tensor.
     """Generate a tensor of random 32-bit integer values.
 
     Note that we use numpy to generate random numbers and then feed the result
@@ -293,6 +369,12 @@ class CropAndResizeOpDeterministicTest(test_base.CropAndResizeOpTestBase):
     return constant_op.constant(val, dtype=dtypes.int32)
 
   def _genParams(self, dtype=dtypes.float32):
+    # [FUNCTION DOC]
+    # HELPER: builds inputs for the reproducibility checks. Seeds numpy with a fixed value, then
+    # creates a random image (batch 16, 64 by 64, one channel, given dtype), 64 random boxes
+    # (slightly exceeding the unit range), random box indices, a crop size of 128 by 128 and
+    # random small upstream gradients (always single precision). Returns the tuple image, boxes,
+    # box indices, crop size, injected gradients.
     batch_size = 16
     input_height = 64
     input_width = 64
@@ -314,6 +396,12 @@ class CropAndResizeOpDeterministicTest(test_base.CropAndResizeOpTestBase):
     return image, boxes, box_indices, crop_size, injected_gradients
 
   def _testReproducibleBackprop(self, test_image_not_boxes):
+    # [FUNCTION DOC]
+    # HELPER: shared body of the two reproducibility tests. For each of half, single and double
+    # precision (on the CPU), it runs bilinear crop-and-resize on a persistent tape, weights the
+    # output by the injected gradients, computes gradients to image and boxes once, then five more
+    # times. Each repeat must exactly equal the first: the image gradients if test_image_not_boxes
+    # is true, otherwise the boxes gradients. Returns nothing; fails via assertions.
     with test_util.force_cpu():
       for dtype in [dtypes.float16, dtypes.float32, dtypes.float64]:
         params = self._genParams(dtype)
@@ -337,6 +425,9 @@ class CropAndResizeOpDeterministicTest(test_base.CropAndResizeOpTestBase):
 
   @test_util.run_in_graph_and_eager_modes
   def testReproducibleBackpropToImage(self):
+    # [FUNCTION DOC]
+    # Runs the shared reproducibility check for the gradient to the image: repeated gradient
+    # computations must be exactly equal. Runs in graph and eager modes.
     """Test that backprop to image is reproducible.
 
     With non-reproducible ordering of reduction operations, upsampling of a
@@ -356,6 +447,9 @@ class CropAndResizeOpDeterministicTest(test_base.CropAndResizeOpTestBase):
 
   @test_util.run_in_graph_and_eager_modes
   def testReproducibleBackpropToBoxes(self):
+    # [FUNCTION DOC]
+    # Runs the shared reproducibility check for the gradient to the boxes: repeated gradient
+    # computations must be exactly equal. Runs in graph and eager modes.
     """Test that backprop to boxes is reproducible.
 
     If the input and output dimensions are the same, then the boxes gradients

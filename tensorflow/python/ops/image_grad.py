@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Gradient registrations for image ops. At import time it registers gradient functions for nearest
+# neighbor, bilinear and bicubic resizing, scale-and-translate, crop-and-resize and RGB-to-HSV
+# conversion, and marks the bilinear resize gradient op as not differentiable. Each gradient
+# function receives the forward operation and the upstream gradient and returns one gradient (or
+# nothing) per forward input, usually delegating to the matching generated gradient kernel.
+# Not meant to be called directly; the autodiff machinery looks the functions up by op type.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +31,16 @@ from tensorflow.python.ops import math_ops
 
 @ops.RegisterGradient("ResizeNearestNeighbor")
 def _ResizeNearestNeighborGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient function for the nearest-neighbor resize op, used by autodiff.
+  # KNOWN ISSUE: the docstring says it returns gradients for the input and the output, but the
+  # second returned entry is always null and stands for the size input, not the output.
+  # Inputs: op is the forward resize op (input images in the first slot, requested size second;
+  # attributes align_corners and half_pixel_centers) and grad is the gradient with respect to the
+  # resized output. The original spatial size of the images (height and width) is taken from the
+  # static shape when fully known, otherwise from the dynamic shape. It then calls the generated
+  # nearest-neighbor gradient kernel with the same attributes. Returns a two-element list: the
+  # gradient for the images and a null value for the size input. No side effects.
   """The derivatives for nearest neighbor resizing.
 
   Args:
@@ -49,6 +66,13 @@ def _ResizeNearestNeighborGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("ResizeBilinear")
 def _ResizeBilinearGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient function for the bilinear resize op, used by autodiff.
+  # Inputs: op is the forward bilinear resize op (attributes align_corners and half_pixel_centers)
+  # and grad is the gradient with respect to the resized output. Calls the generated bilinear
+  # resize gradient kernel with the original input images and the same attributes. Returns a
+  # two-element list: the gradient for the images and a null value for the size input.
+  # No side effects.
   """The derivatives for bilinear resizing.
 
   Args:
@@ -71,6 +95,13 @@ ops.NotDifferentiable("ResizeBilinearGrad")
 
 @ops.RegisterGradient("ScaleAndTranslate")
 def _ScaleAndTranslateGrad(op, grad):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient function for the scale-and-translate image op, used by autodiff.
+  # Inputs: op is the forward op (inputs: images, size, scale, translation; attributes kernel_type
+  # and antialias) and grad is the gradient with respect to the output image. Calls the generated
+  # scale-and-translate gradient kernel with the original images, scale and translation and the
+  # same attributes. Returns a four-element list: the image gradient followed by three null
+  # values for the size, scale and translation inputs. No side effects.
   """The derivatives for ScaleAndTranslate transformation op.
 
   Args:
@@ -93,6 +124,12 @@ def _ScaleAndTranslateGrad(op, grad):
 
 @ops.RegisterGradient("ResizeBicubic")
 def _ResizeBicubicGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient function for the bicubic resize op, used by autodiff.
+  # Inputs: op is the forward bicubic resize op and grad is the gradient with respect to the
+  # output. The gradient kernel is invoked only when the input images are 32- or 64-bit floating
+  # point; for any other dtype the image gradient is null. Returns a two-element list: the image
+  # gradient (possibly null) and a null value for the size input. No side effects.
   """The derivatives for bicubic resizing.
 
   Args:
@@ -115,6 +152,15 @@ def _ResizeBicubicGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("CropAndResize")
 def _CropAndResizeGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient function for the crop-and-resize op, used by autodiff.
+  # Inputs: op is the forward op (inputs: image, boxes, box indices, crop size) and grad is the
+  # gradient with respect to the crops. The image shape is taken from the static shape if fully
+  # known, else from the dynamic shape. The image gradient is computed only for half, single or
+  # double precision floating images and is otherwise null. The boxes gradient is always computed
+  # (even for nearest-neighbor sampling, where it is only an approximation taken from the bilinear
+  # formulation). Returns a four-element list: image gradient, boxes gradient, and null values for
+  # the box indices and crop size. No side effects.
   """The derivatives for crop_and_resize.
 
   We back-propagate to the image only when the input image tensor has floating
@@ -157,6 +203,11 @@ def _CropAndResizeGrad(op: ops.Operation, grad):
 
 
 def _CustomReciprocal(x):
+  # [FUNCTION DOC]
+  # HELPER: safe reciprocal used by the RGB-to-HSV gradient to avoid division by zero.
+  # Computes one divided by x element-wise using a division that yields zero wherever x is zero,
+  # so no infinities or NaNs appear. Input x is a numeric tensor; the constant is cast to its
+  # dtype. Returns a tensor of the same shape and dtype. No side effects.
   """Wrapper function around `math_ops.div_no_nan()` to perform a "safe" reciprocal incase the input is zero. Avoids divide by zero and NaNs.
 
   Input:
@@ -169,6 +220,17 @@ def _CustomReciprocal(x):
 
 @ops.RegisterGradient("RGBToHSV")
 def _RGBToHSVGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient function for the RGB-to-HSV conversion op, used by autodiff.
+  # Inputs: op is the forward op (input tensor whose last axis holds red, green, blue; output
+  # whose last axis holds hue, saturation, value) and grad is the gradient with respect to the
+  # output, same shape. The function builds indicator masks for which channel is the maximum and
+  # minimum of each pixel (ties broken in favor of red, then green, then blue), then computes
+  # analytic partial derivatives of value, saturation and hue with respect to each of the three
+  # input channels, using the safe reciprocal to avoid division by zero. Hue derivatives are
+  # converted from degrees to the unit interval by dividing by 360. The three per-output
+  # contributions are weighted by the matching channel of grad, stacked along a new last axis and
+  # summed. Returns one tensor with the same shape as the input. No side effects.
   """The gradients for `rgb_to_hsv` operation.
 
   This function is a piecewise continuous function as defined here:
