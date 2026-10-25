@@ -1,3 +1,15 @@
+# [MODULE DOC]
+# TF2 variable initializers. Defines the Initializer base class (callable with a shape and dtype,
+# optionally a partition shape and offset for sharded variables) and the concrete initializers:
+# Zeros, Ones, Constant, RandomUniform, RandomNormal, TruncatedNormal, VarianceScaling, Orthogonal,
+# Identity, GlorotUniform and GlorotNormal, plus factory functions for the LeCun and He schemes
+# (all built on VarianceScaling). A private random-generator wrapper picks stateless random ops
+# when a seed is given and the ordinary stateful ones otherwise, and a private helper validates
+# floating point dtypes. The module also defines lower-case alias names for the classes, including
+# compatibility aliases such as zero, one, uniform and normal.
+# Import-time side effects: several classes are registered in the public API under the
+# zeros, ones, constant, random uniform and random normal initializer names (TF2 only); the
+# remaining names are plain module attributes. The fan computation is reused from the v1 module.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,6 +45,12 @@ _PARTITION_OFFSET = "partition_offset"
 
 
 class Initializer:
+  # [CLASS DOC]
+  # Abstract base class of all TF2 initializers. An initializer is a callable object that, given
+  # a shape and a dtype, returns a new tensor with initial values. Subclasses override the call
+  # method and normally the configuration method; the base class supplies configuration
+  # round-tripping (get_config / from_config) and keyword-argument validation for the optional
+  # partition arguments. Instances hold no state in the base class.
   """Initializer base class: all initializers inherit from this class.
 
   Initializers should implement a `__call__` method with the following
@@ -46,6 +64,10 @@ class Initializer:
   """
 
   def __call__(self, shape, dtype=None, **kwargs):
+    # [FUNCTION DOC]
+    # Abstract entry point: subclasses return a tensor of the given shape and dtype. Inputs: shape
+    # (tensor shape), optional dtype, and keyword arguments that may carry a partition shape and
+    # partition offset. The base implementation always raises a not-implemented error.
     """Returns a tensor object initialized as specified by the initializer.
 
     Args:
@@ -66,6 +88,10 @@ class Initializer:
     raise NotImplementedError
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the constructor settings of this initializer as a mapping of names to values.
+    # The base implementation returns an empty mapping; subclasses override it. No inputs, no
+    # side effects.
     """Returns the configuration of the initializer as a JSON-serializable dict.
 
     Returns:
@@ -75,6 +101,13 @@ class Initializer:
 
   @classmethod
   def from_config(cls, config):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: mutates the caller's mapping, because the dtype entry is removed from the
+    # passed config in place (the docstring does not mention this side effect).
+    # Class method that builds a new initializer of this class from a configuration mapping
+    # (typically the output of get_config). Input: config, a mapping of constructor argument names
+    # to values. A dtype entry, if present, is dropped before the remaining entries are passed
+    # to the constructor. Returns the new instance. Constructor errors propagate.
     """Instantiates an initializer from a configuration dictionary.
 
     Example:
@@ -96,6 +129,13 @@ class Initializer:
     return cls(**config)
 
   def _validate_kwargs(self, kwargs, support_partition=True):
+    # [FUNCTION DOC]
+    # HELPER: argument checking shared by the call methods of all initializers.
+    # Inputs: kwargs, the mapping of extra keyword arguments given to the call; support_partition,
+    # whether the initializer accepts partition arguments (default true). Raises a type error for
+    # any key other than the partition shape or partition offset keys. If support_partition is
+    # false and a partition key is present, raises a value error naming the initializer class.
+    # Returns nothing; no side effects.
     for kwarg in kwargs:
       if kwarg not in [_PARTITION_SHAPE, _PARTITION_OFFSET]:
         raise TypeError(
@@ -109,6 +149,9 @@ class Initializer:
 
 @tf_export("zeros_initializer", v1=[])
 class Zeros(Initializer):
+  # [CLASS DOC]
+  # Initializer producing tensors filled with zeros. Stateless; exported as the TF2 zeros
+  # initializer. Supports partitioned creation by returning zeros of the partition shape.
   """Initializer that generates tensors initialized to 0.
 
   Initializers allow you to pre-specify an initialization strategy, encoded in
@@ -133,6 +176,13 @@ class Zeros(Initializer):
   """
 
   def __call__(self, shape, dtype=dtypes.float32, **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring names the exception ValuesError, but the code raises the
+    # standard value error.
+    # Returns a tensor of zeros. Inputs: shape (tensor shape); dtype (default 32-bit float),
+    # converted to a dtype; keyword arguments limited to partition shape and offset, where a
+    # partition shape replaces the shape. Raises a type error for unknown keyword arguments and a
+    # value error if the dtype is not numeric or boolean (strings are rejected). No side effects.
     """Returns a tensor object initialized as specified by the initializer.
 
     Args:
@@ -156,6 +206,9 @@ class Zeros(Initializer):
 
 @tf_export("ones_initializer", v1=[])
 class Ones(Initializer):
+  # [CLASS DOC]
+  # Initializer producing tensors filled with ones. Stateless; exported as the TF2 ones
+  # initializer. Supports partitioned creation by returning ones of the partition shape.
   """Initializer that generates tensors initialized to 1.
 
   Initializers allow you to pre-specify an initialization strategy, encoded in
@@ -180,6 +233,13 @@ class Ones(Initializer):
   """
 
   def __call__(self, shape, dtype=dtypes.float32, **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring names the exception ValuesError, but the code raises the
+    # standard value error.
+    # Returns a tensor of ones. Inputs: shape (tensor shape); dtype (default 32-bit float),
+    # converted to a dtype; keyword arguments limited to partition shape and offset, where a
+    # partition shape replaces the shape. Raises a type error for unknown keyword arguments and a
+    # value error if the dtype is not numeric or boolean (strings are rejected). No side effects.
     """Returns a tensor object initialized as specified by the initializer.
 
     Args:
@@ -203,6 +263,11 @@ class Ones(Initializer):
 
 @tf_export("constant_initializer", v1=[])
 class Constant(Initializer):
+  # [CLASS DOC]
+  # Initializer producing tensors from a fixed value: a scalar (broadcast to the shape) or a list,
+  # tuple or array whose element count must equal the requested shape. Attributes: value (the
+  # stored constant) and support_partition (whether partition arguments are accepted, default
+  # false). Exported as the TF2 constant initializer.
   """Initializer that generates tensors with constant values.
 
   Initializers allow you to pre-specify an initialization strategy, encoded in
@@ -270,6 +335,11 @@ class Constant(Initializer):
   """
 
   def __init__(self, value=0, support_partition=False):
+    # [FUNCTION DOC]
+    # Stores the constant. Inputs: value, a scalar, list, tuple or numpy array (default zero);
+    # support_partition, whether partition keyword arguments are allowed later (default false).
+    # Raises a type error if value is any other type (for example a tensor or variable).
+    # Sets the value and support_partition attributes.
     if not (np.isscalar(value) or isinstance(value, (list, tuple, np.ndarray))):
       raise TypeError(
           f"Invalid type for initial value: {type(value).__name__}. Expected "
@@ -278,6 +348,14 @@ class Constant(Initializer):
     self.support_partition = support_partition
 
   def __call__(self, shape, dtype=None, **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: a partition shape or offset is accepted when support_partition is true, but
+    # the code ignores them and still builds the full-shape constant, so partitioned creation does
+    # not actually return a slice.
+    # Builds a constant tensor. Inputs: shape; optional dtype (if absent, inferred from the
+    # value); keyword arguments, which are rejected with a value error unless support_partition was
+    # enabled (unknown keys give a type error). Returns the constant tensor. Raises a type error
+    # when the value cannot be converted to the dtype or its element count does not match the shape.
     """Returns a tensor object initialized as specified by the initializer.
 
     Args:
@@ -296,11 +374,20 @@ class Constant(Initializer):
     return constant_op.constant(self.value, dtype=dtype, shape=shape)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the support_partition setting is not included, so rebuilding from the config
+    # silently resets it to false.
+    # Returns a mapping with only the stored value.
     return {"value": self.value}
 
 
 @tf_export("random_uniform_initializer", v1=[])
 class RandomUniform(Initializer):
+  # [CLASS DOC]
+  # Initializer drawing values uniformly from the half-open range between a minimum and maximum.
+  # Attributes: minval, maxval, seed, and a private random generator built from the seed (seeded
+  # means deterministic stateless ops, unseeded means ordinary random ops). Exported as the TF2
+  # random uniform initializer. Supports partition arguments.
   """Initializer that generates tensors with a uniform distribution.
 
   Initializers allow you to pre-specify an initialization strategy, encoded in
@@ -333,12 +420,24 @@ class RandomUniform(Initializer):
   """
 
   def __init__(self, minval=-0.05, maxval=0.05, seed=None):
+    # [FUNCTION DOC]
+    # Stores the range and seed. Inputs: minval and maxval (numbers or scalar tensors, defaults
+    # minus and plus 0.05), seed (optional integer). Creates the private random generator from
+    # the seed. Raises nothing itself.
     self.minval = minval
     self.maxval = maxval
     self.seed = seed
     self._random_generator = _RandomGenerator(seed)
 
   def __call__(self, shape, dtype=dtypes.float32, **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the error message says the dtype must be numeric or boolean, but the check
+    # accepts only floating point and integer dtypes (booleans and complex types are rejected).
+    # Returns a tensor of uniform random values. Inputs: shape; dtype (default 32-bit float);
+    # keyword arguments limited to partition shape and offset (a partition shape replaces the
+    # shape; the offset is not used). Raises a type error for unknown keywords and a value error
+    # for a non floating or integer dtype. Uses the seeded or unseeded random op, so repeated
+    # unseeded calls give different values.
     """Returns a tensor object initialized as specified by the initializer.
 
     Args:
@@ -361,6 +460,8 @@ class RandomUniform(Initializer):
                                                  self.maxval, dtype)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with the minval, maxval and seed settings.
     return {
         "minval": self.minval,
         "maxval": self.maxval,
@@ -370,6 +471,11 @@ class RandomUniform(Initializer):
 
 @tf_export("random_normal_initializer", v1=[])
 class RandomNormal(Initializer):
+  # [CLASS DOC]
+  # Initializer drawing values from a normal distribution with a given mean and standard
+  # deviation. Attributes: mean, stddev, seed and a private random generator (seeded gives
+  # deterministic stateless ops). Exported as the TF2 random normal initializer. Floating point
+  # dtypes only; supports partition arguments.
   """Initializer that generates tensors with a normal distribution.
 
   Initializers allow you to pre-specify an initialization strategy, encoded in
@@ -402,12 +508,22 @@ class RandomNormal(Initializer):
   """
 
   def __init__(self, mean=0.0, stddev=0.05, seed=None):
+    # [FUNCTION DOC]
+    # Stores the distribution settings. Inputs: mean and stddev (numbers or scalar tensors,
+    # defaults 0.0 and 0.05), seed (optional integer). Creates the private random generator from
+    # the seed.
     self.mean = mean
     self.stddev = stddev
     self.seed = seed
     self._random_generator = _RandomGenerator(seed)
 
   def __call__(self, shape, dtype=dtypes.float32, **kwargs):
+    # [FUNCTION DOC]
+    # Returns a tensor of normally distributed random values. Inputs: shape; dtype (default
+    # 32-bit float, must be floating point); keyword arguments limited to partition shape and
+    # offset (a partition shape replaces the shape; the offset is not used). Raises a type error
+    # for unknown keywords and a value error for a non floating point dtype. Deterministic when
+    # a seed was given, otherwise random on each call.
     """Returns a tensor object initialized as specified by the initializer.
 
     Args:
@@ -427,6 +543,8 @@ class RandomNormal(Initializer):
                                                 dtype)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with the mean, stddev and seed settings.
     return {
         "mean": self.mean,
         "stddev": self.stddev,
@@ -435,6 +553,11 @@ class RandomNormal(Initializer):
 
 
 class TruncatedNormal(Initializer):
+  # [CLASS DOC]
+  # Initializer drawing from a normal distribution in which values more than two standard
+  # deviations from the mean are discarded and redrawn. Attributes: mean, stddev, seed and a
+  # private random generator. Floating point dtypes only; supports partition arguments. Not
+  # exported under its own public name in this module (only reachable through aliases).
   """Initializer that generates a truncated normal distribution.
 
   Initializers allow you to pre-specify an initialization strategy, encoded in
@@ -471,12 +594,22 @@ class TruncatedNormal(Initializer):
   """
 
   def __init__(self, mean=0.0, stddev=0.05, seed=None):
+    # [FUNCTION DOC]
+    # Stores the distribution settings. Inputs: mean and stddev (numbers or scalar tensors,
+    # defaults 0.0 and 0.05), seed (optional integer). Creates the private random generator from
+    # the seed.
     self.mean = mean
     self.stddev = stddev
     self.seed = seed
     self._random_generator = _RandomGenerator(seed)
 
   def __call__(self, shape, dtype=dtypes.float32, **kwargs):
+    # [FUNCTION DOC]
+    # Returns a tensor of truncated normal random values. Inputs: shape; dtype (default 32-bit
+    # float, must be floating point); keyword arguments limited to partition shape and offset (a
+    # partition shape replaces the shape; the offset is not used). Raises a type error for
+    # unknown keywords and a value error for a non floating point dtype. Deterministic when a
+    # seed was given, otherwise random on each call.
     """Returns a tensor object initialized as specified by the initializer.
 
     Args:
@@ -496,6 +629,8 @@ class TruncatedNormal(Initializer):
                                                    self.stddev, dtype)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with the mean, stddev and seed settings.
     return {
         "mean": self.mean,
         "stddev": self.stddev,
@@ -504,6 +639,12 @@ class TruncatedNormal(Initializer):
 
 
 class VarianceScaling(Initializer):
+  # [CLASS DOC]
+  # Initializer whose spread adapts to the tensor shape: the variance is a scale divided by the
+  # number of input units, output units or their average (the mode), and values come from a
+  # truncated normal, untruncated normal or uniform distribution. Attributes: scale, mode,
+  # distribution, seed and a private random generator. Base class of the Glorot initializers and
+  # the target of the LeCun and He factory functions. Floating point dtypes only.
   """Initializer capable of adapting its scale to the shape of weights tensors.
 
   Initializers allow you to pre-specify an initialization strategy, encoded in
@@ -554,6 +695,13 @@ class VarianceScaling(Initializer):
                mode="fan_in",
                distribution="truncated_normal",
                seed=None):
+    # [FUNCTION DOC]
+    # Validates and stores the settings. Inputs: scale (positive number, default 1.0); mode, one
+    # of fan in, fan out or fan avg (default fan in); distribution, one of uniform, truncated
+    # normal or untruncated normal, case-insensitive, where the name "normal" is accepted as an
+    # alias of truncated normal (default truncated normal); seed (optional integer). Raises a value
+    # error for a non-positive scale, unknown mode or unknown distribution. Creates the private
+    # random generator from the seed.
     if scale <= 0.:
       raise ValueError("Argument `scale` must be a positive float. Received: "
                        f"{scale}")
@@ -576,6 +724,15 @@ class VarianceScaling(Initializer):
     self._random_generator = _RandomGenerator(seed)
 
   def __call__(self, shape, dtype=dtypes.float32, **kwargs):
+    # [FUNCTION DOC]
+    # Returns a random tensor whose variance is scale divided by the chosen fan count (at least
+    # one). Inputs: shape (full variable shape, used to compute fan in and fan out); dtype
+    # (default 32-bit float, must be floating point); keyword arguments limited to partition shape
+    # and offset (a partition shape replaces the shape for sampling only, fans still use the full
+    # shape). Truncated normal uses a standard deviation corrected by a constant for the
+    # truncation; untruncated normal uses the square root of the scaled variance; uniform draws
+    # within plus or minus the square root of three times the scaled variance. Raises a type
+    # error for unknown keywords and a value error for a non floating point dtype.
     """Returns a tensor object initialized as specified by the initializer.
 
     Args:
@@ -611,6 +768,8 @@ class VarianceScaling(Initializer):
       return self._random_generator.random_uniform(shape, -limit, limit, dtype)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with the scale, mode, distribution and seed settings.
     return {
         "scale": self.scale,
         "mode": self.mode,
@@ -620,6 +779,11 @@ class VarianceScaling(Initializer):
 
 
 class Orthogonal(Initializer):
+  # [CLASS DOC]
+  # Initializer producing (semi-)orthogonal matrices from the QR decomposition of random normal
+  # data, scaled by a gain. Tensors with more than two axes are treated as a matrix with the
+  # last axis as columns and then reshaped. Attributes: gain, seed and a private random
+  # generator. Floating point dtypes only; does not support partition arguments.
   """Initializer that generates an orthogonal matrix.
 
   Initializers allow you to pre-specify an initialization strategy, encoded in
@@ -662,11 +826,23 @@ class Orthogonal(Initializer):
   """
 
   def __init__(self, gain=1.0, seed=None):
+    # [FUNCTION DOC]
+    # Stores the settings. Inputs: gain, multiplicative factor (default 1.0); seed (optional
+    # integer). Creates the private random generator from the seed.
     self.gain = gain
     self.seed = seed
     self._random_generator = _RandomGenerator(seed)
 
   def __call__(self, shape, dtype=dtypes.float32, **kwargs):
+    # [FUNCTION DOC]
+    # Returns a tensor with orthogonal rows or columns. Inputs: shape (at least two axes; all
+    # but the last are flattened into rows); dtype (default 32-bit float, floating point only);
+    # keyword arguments: any partition argument is rejected. Draws a random normal matrix of the
+    # taller orientation, takes the Q factor of its QR decomposition, fixes signs using the
+    # diagonal of R so the result is uniformly distributed, transposes if there are fewer rows
+    # than columns, reshapes to the shape and multiplies by the gain. Raises a type error for
+    # unknown keywords, a value error for partition arguments, a non floating point dtype, or fewer
+    # than two axes.
     """Returns a tensor object initialized as specified by the initializer.
 
     Args:
@@ -706,10 +882,16 @@ class Orthogonal(Initializer):
     return self.gain * array_ops.reshape(q, shape)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with the gain and seed settings.
     return {"gain": self.gain, "seed": self.seed}
 
 
 class Identity(Initializer):
+  # [CLASS DOC]
+  # Initializer producing a scaled identity matrix; only two-dimensional shapes are valid
+  # (non-square shapes give a rectangular matrix with ones on the diagonal). Attribute: gain.
+  # Floating point dtypes only; does not support partition arguments.
   """Initializer that generates the identity matrix.
 
   Initializers allow you to pre-specify an initialization strategy, encoded in
@@ -737,9 +919,18 @@ class Identity(Initializer):
   """
 
   def __init__(self, gain=1.0):
+    # [FUNCTION DOC]
+    # Stores the gain, the multiplicative factor applied to the identity matrix (default 1.0).
     self.gain = gain
 
   def __call__(self, shape, dtype=dtypes.float32, **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the error message for a bad shape says the shape must be "at least
+    # two-dimensional", but the check requires exactly two axes (three or more also fail).
+    # Returns a matrix with ones on the diagonal multiplied by the gain. Inputs: shape (exactly two
+    # axes); dtype (default 32-bit float, floating point only); keyword arguments: any partition
+    # argument is rejected. Raises a type error for unknown keywords, a value error for partition
+    # arguments, a non floating point dtype, or a shape that does not have exactly two axes.
     """Returns a tensor object initialized as specified by the initializer.
 
     Args:
@@ -762,10 +953,15 @@ class Identity(Initializer):
     return self.gain * initializer
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with only the gain setting.
     return {"gain": self.gain}
 
 
 class GlorotUniform(VarianceScaling):
+  # [CLASS DOC]
+  # Glorot (Xavier) uniform initializer: a variance scaling initializer fixed to scale one, the
+  # average of fan in and fan out, and a uniform distribution. Only the seed is configurable.
   """The Glorot uniform initializer, also called Xavier uniform initializer.
 
   Initializers allow you to pre-specify an initialization strategy, encoded in
@@ -801,6 +997,9 @@ class GlorotUniform(VarianceScaling):
   """
 
   def __init__(self, seed=None):
+    # [FUNCTION DOC]
+    # Configures the parent with fixed settings (scale one, fan average mode, uniform
+    # distribution). Input: seed, optional integer.
     super(GlorotUniform, self).__init__(
         scale=1.0,
         mode="fan_avg",
@@ -808,10 +1007,16 @@ class GlorotUniform(VarianceScaling):
         seed=seed)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with only the seed, since all other settings are fixed.
     return {"seed": self.seed}
 
 
 class GlorotNormal(VarianceScaling):
+  # [CLASS DOC]
+  # Glorot (Xavier) normal initializer: a variance scaling initializer fixed to scale one, the
+  # average of fan in and fan out, and a truncated normal distribution. Only the seed is
+  # configurable.
   """The Glorot normal initializer, also called Xavier normal initializer.
 
   Initializers allow you to pre-specify an initialization strategy, encoded in
@@ -847,6 +1052,9 @@ class GlorotNormal(VarianceScaling):
   """
 
   def __init__(self, seed=None):
+    # [FUNCTION DOC]
+    # Configures the parent with fixed settings (scale one, fan average mode, truncated normal
+    # distribution). Input: seed, optional integer.
     super(GlorotNormal, self).__init__(
         scale=1.0,
         mode="fan_avg",
@@ -854,6 +1062,8 @@ class GlorotNormal(VarianceScaling):
         seed=seed)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with only the seed, since all other settings are fixed.
     return {"seed": self.seed}
 
 
@@ -875,6 +1085,9 @@ identity_initializer = Identity
 
 
 def lecun_normal(seed=None):
+  # [FUNCTION DOC]
+  # Factory for the LeCun normal initializer. Input: seed, optional integer. Returns a variance
+  # scaling initializer with scale one, fan in mode and truncated normal distribution.
   """LeCun normal initializer.
 
   Initializers allow you to pre-specify an initialization strategy, encoded in
@@ -920,6 +1133,9 @@ def lecun_normal(seed=None):
 
 
 def lecun_uniform(seed=None):
+  # [FUNCTION DOC]
+  # Factory for the LeCun uniform initializer. Input: seed, optional integer. Returns a variance
+  # scaling initializer with scale one, fan in mode and uniform distribution.
   """LeCun uniform initializer.
 
   Initializers allow you to pre-specify an initialization strategy, encoded in
@@ -963,6 +1179,9 @@ def lecun_uniform(seed=None):
 
 
 def he_normal(seed=None):
+  # [FUNCTION DOC]
+  # Factory for the He normal initializer. Input: seed, optional integer. Returns a variance
+  # scaling initializer with scale two, fan in mode and truncated normal distribution.
   """He normal initializer.
 
   Initializers allow you to pre-specify an initialization strategy, encoded in
@@ -1003,6 +1222,9 @@ def he_normal(seed=None):
 
 
 def he_uniform(seed=None):
+  # [FUNCTION DOC]
+  # Factory for the He uniform initializer. Input: seed, optional integer. Returns a variance
+  # scaling initializer with scale two, fan in mode and uniform distribution.
   """He uniform variance scaling initializer.
 
   Initializers allow you to pre-specify an initialization strategy, encoded in
@@ -1046,6 +1268,10 @@ def he_uniform(seed=None):
 
 
 def _assert_float_dtype(dtype):
+  # [FUNCTION DOC]
+  # HELPER: dtype validation for the floating point only initializers.
+  # Input: dtype, anything convertible to a dtype. Returns the converted dtype. Raises a value
+  # error if it is not a floating point type.
   """Validate and return floating point type based on `dtype`.
 
   `dtype` must be a floating point type.
@@ -1067,9 +1293,16 @@ def _assert_float_dtype(dtype):
 
 
 class _RandomGenerator:
+  # [CLASS DOC]
+  # HELPER: internal random-op selector used by the random initializers.
+  # Holds an optional seed (stored as a two-integer pair as the stateless ops require). When a
+  # seed exists it uses deterministic stateless random ops, otherwise the ordinary stateful ones.
   """Random generator that selects appropriate random ops."""
 
   def __init__(self, seed=None):
+    # [FUNCTION DOC]
+    # HELPER: constructor of the internal random generator.
+    # Input: seed, optional integer. Stores the seed as a pair (seed, zero) or nothing if absent.
     super(_RandomGenerator, self).__init__()
     if seed is not None:
       # Stateless random ops requires 2-int seed.
@@ -1078,6 +1311,10 @@ class _RandomGenerator:
       self.seed = None
 
   def random_normal(self, shape, mean=0.0, stddev=1, dtype=dtypes.float32):
+    # [FUNCTION DOC]
+    # HELPER: normal sampling for the initializers.
+    # Inputs: shape, mean (default 0), stddev (default 1), dtype (default 32-bit float). Returns
+    # a normal random tensor from the stateless op when seeded, else the stateful op.
     """A deterministic random normal if seed is passed."""
     if self.seed:
       op = stateless_random_ops.stateless_random_normal
@@ -1087,6 +1324,10 @@ class _RandomGenerator:
         shape=shape, mean=mean, stddev=stddev, dtype=dtype, seed=self.seed)
 
   def random_uniform(self, shape, minval, maxval, dtype):
+    # [FUNCTION DOC]
+    # HELPER: uniform sampling for the initializers.
+    # Inputs: shape, minval, maxval, dtype (all required). Returns a uniform random tensor from
+    # the stateless op when seeded, else the stateful op.
     """A deterministic random uniform if seed is passed."""
     if self.seed:
       op = stateless_random_ops.stateless_random_uniform
@@ -1096,6 +1337,10 @@ class _RandomGenerator:
         shape=shape, minval=minval, maxval=maxval, dtype=dtype, seed=self.seed)
 
   def truncated_normal(self, shape, mean, stddev, dtype):
+    # [FUNCTION DOC]
+    # HELPER: truncated normal sampling for the initializers.
+    # Inputs: shape, mean, stddev, dtype (all required). Returns a truncated normal random tensor
+    # from the stateless op when seeded, else the stateful op.
     """A deterministic truncated normal if seed is passed."""
     if self.seed:
       op = stateless_random_ops.stateless_truncated_normal

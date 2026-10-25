@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Sparse "inplace" row update helpers for tensors. Exposes alias_inplace_update/add/sub (which
+# really alias and overwrite their input through the underlying inplace kernels), the safer
+# inplace_update/add/sub (which first deep-copy the input so the original is untouched), empty_like
+# (uninitialized tensor with the shape and dtype of another) and the alias empty for the raw empty
+# op. A private helper normalizes arguments for all the alias functions. The update, add and sub
+# functions are marked deprecated in favor of the tensor scatter update, add and sub ops.
+# Import-time side effects: none beyond defining functions and the empty alias.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +32,14 @@ from tensorflow.python.util import deprecation
 
 
 def _inplace_helper(x, i, v, op):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation behind the alias_inplace_update/add/sub functions.
+  # Converts x to a tensor and v to a tensor of x's dtype, then applies the given inplace kernel
+  # op. If i is nothing, both tensors are flattened to one row, the op is applied at row zero and
+  # the result is reshaped back to x's shape. Otherwise i is cast to a 32-bit integer; a scalar
+  # index is turned into a one-element vector and v gets a new leading axis; a vector index is
+  # passed straight through. Returns the resulting tensor (aliasing x for the real kernels).
+  # Raises whatever the conversion or kernel raises for incompatible shapes or dtypes.
   """Applies an inplace op on (x, i, v).
 
   op is one of gen_array_ops.alias_inplace_update,
@@ -65,6 +81,12 @@ def _inplace_helper(x, i, v, op):
     ('Prefer tf.tensor_scatter_nd_update, which offers the same functionality '
      'with well-defined read-write semantics.'))
 def alias_inplace_update(x, i, v):
+  # [FUNCTION DOC]
+  # Overwrites rows of x selected by index i with the values v, aliasing and mutating x's buffer.
+  # Inputs: x tensor to update; i nothing (whole tensor), a scalar row index or a vector of row
+  # indices; v tensor of replacement values (converted to x's dtype). Returns the updated tensor
+  # (an alias of x). Delegates to the shared helper with the inplace-update kernel. Emits a
+  # deprecation warning when called. Shape mismatches raise errors from the kernel.
   """Applies an inplace update on input x at index i with value v. Aliases x.
 
   If i is None, x and v must be the same shape. Computes
@@ -91,6 +113,12 @@ def alias_inplace_update(x, i, v):
     ('Prefer tf.tensor_scatter_nd_add, which offers the same functionality '
      'with well-defined read-write semantics.'))
 def alias_inplace_add(x, i, v):
+  # [FUNCTION DOC]
+  # Adds v to the rows of x selected by index i, aliasing and mutating x's buffer.
+  # Inputs: x tensor to update; i nothing (whole tensor), a scalar row index or a vector of row
+  # indices; v tensor of values to add (converted to x's dtype). Returns the updated tensor (an
+  # alias of x). Delegates to the shared helper with the inplace-add kernel. Emits a deprecation
+  # warning when called. Shape mismatches raise errors from the kernel.
   """Applies an inplace add on input x at index i with value v. Aliases x.
 
   If i is None, x and v must be the same shape. Computes
@@ -117,6 +145,12 @@ def alias_inplace_add(x, i, v):
     ('Prefer tf.tensor_scatter_nd_sub, which offers the same functionality '
      'with well-defined read-write semantics.'))
 def alias_inplace_sub(x, i, v):
+  # [FUNCTION DOC]
+  # Subtracts v from the rows of x selected by index i, aliasing and mutating x's buffer.
+  # Inputs: x tensor to update; i nothing (whole tensor), a scalar row index or a vector of row
+  # indices; v tensor of values to subtract (converted to x's dtype). Returns the updated tensor
+  # (an alias of x). Delegates to the shared helper with the inplace-sub kernel. Emits a
+  # deprecation warning when called. Shape mismatches raise errors from the kernel.
   """Applies an inplace sub on input x at index i with value v. Aliases x.
 
   If i is None, x and v must be the same shape. Computes
@@ -139,6 +173,11 @@ def alias_inplace_sub(x, i, v):
 
 
 def empty_like(x, init=None):
+  # [FUNCTION DOC]
+  # Creates a new tensor with the same shape and dtype as x without copying its data.
+  # Inputs: x anything convertible to a tensor; init optional flag, when true the new tensor is
+  # filled with the dtype's default (zero) value, otherwise its contents are arbitrary
+  # (uninitialized). Returns the new tensor, never an alias of x. No side effects on x.
   """Returns a non-initialized tensor with the same shape and dtype as x.
 
   Args:
@@ -162,6 +201,11 @@ def empty_like(x, init=None):
     ('Prefer tf.tensor_scatter_nd_update, which offers the same functionality '
      'with well-defined read-write semantics.'))
 def inplace_update(x, i, v):
+  # [FUNCTION DOC]
+  # Copy-then-update variant: deep-copies x and overwrites the rows selected by i with v in the
+  # copy. Inputs: x tensor; i nothing, scalar row index or vector of row indices; v replacement
+  # values. Returns the updated copy, which does not alias x, so x is left unchanged. Emits a
+  # deprecation warning when called.
   """Applies an inplace update on input x at index i with value v.
 
   Note that this function is not actually inplace - it allocates
@@ -192,6 +236,11 @@ def inplace_update(x, i, v):
     ('Prefer tf.tensor_scatter_nd_add, which offers the same functionality '
      'with well-defined read-write semantics.'))
 def inplace_add(x, i, v):
+  # [FUNCTION DOC]
+  # Copy-then-add variant: deep-copies x and adds v to the rows selected by i in the copy.
+  # Inputs: x tensor; i nothing, scalar row index or vector of row indices; v values to add.
+  # Returns the updated copy, which does not alias x, so x is left unchanged. Emits a deprecation
+  # warning when called.
   """Applies an inplace add on input x at index i with value v.
 
   Note that this function is not actually inplace - it allocates
@@ -222,6 +271,11 @@ def inplace_add(x, i, v):
     ('Prefer tf.tensor_scatter_nd_sub, which offers the same functionality '
      'with well-defined read-write semantics.'))
 def inplace_sub(x, i, v):
+  # [FUNCTION DOC]
+  # Copy-then-subtract variant: deep-copies x and subtracts v from the rows selected by i in the
+  # copy. Inputs: x tensor; i nothing, scalar row index or vector of row indices; v values to
+  # subtract. Returns the updated copy, which does not alias x, so x is left unchanged. Emits a
+  # deprecation warning when called.
   """Applies an inplace sub on input x at index i with value v.
 
   Note that this function is not actually inplace - it allocates

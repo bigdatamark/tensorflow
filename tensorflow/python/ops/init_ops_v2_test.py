@@ -12,6 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Unit tests for the TF2 initializers in the init_ops_v2 module. A shared base test class
+# provides comparison helpers (identical output, differing output, statistical range checks and
+# partitioned-creation checks); derived test classes cover the constant initializers (zeros, ones,
+# constant), uniform, normal and truncated normal random initializers, variance scaling,
+# orthogonal, identity, the Glorot pair and the LeCun/He factory functions. Most tests run in
+# both graph and eager modes. Statistical checks use a tolerance of a few hundredths.
+# Run as a script it starts the TensorFlow test runner.
 """Tests for initializers in init_ops_v2."""
 
 import numpy as np
@@ -28,6 +36,9 @@ from tensorflow.python.platform import test
 
 
 class InitializersTest(test.TestCase):
+  # [CLASS DOC]
+  # HELPER: base class for all initializer test classes in this file; it has no tests of its own
+  # but supplies the comparison and statistics helper methods used by the derived classes.
 
   def _identical_test(self,
                       init1,
@@ -35,6 +46,13 @@ class InitializersTest(test.TestCase):
                       assertion,
                       shape=None,
                       dtype=dtypes.float32):
+    # [FUNCTION DOC]
+    # HELPER: checks whether two initializers produce the same values.
+    # Inputs: init1 and init2 (initializer objects), assertion (expected boolean: true if the
+    # outputs should be equal), shape (default a vector of 100), dtype (default 32-bit float).
+    # Evaluates both initializers, asserts both outputs have the requested shape, and asserts
+    # that the numeric closeness of the two outputs (extremely tight tolerance) equals the
+    # expected boolean.
     if shape is None:
       shape = [100]
     t1 = self.evaluate(init1(shape, dtype))
@@ -44,6 +62,10 @@ class InitializersTest(test.TestCase):
     self.assertEqual(assertion, np.allclose(t1, t2, rtol=1e-15, atol=1e-15))
 
   def _duplicated_test(self, init, shape=None, dtype=dtypes.float32):
+    # [FUNCTION DOC]
+    # HELPER: checks that calling the same initializer object twice gives different values.
+    # Inputs: init (initializer), shape (default a vector of 100), dtype (default 32-bit float).
+    # Asserts both outputs have the requested shape and that they are not numerically close.
     if shape is None:
       shape = [100]
     t1 = self.evaluate(init(shape, dtype))
@@ -59,6 +81,12 @@ class InitializersTest(test.TestCase):
                   target_std=None,
                   target_max=None,
                   target_min=None):
+    # [FUNCTION DOC]
+    # HELPER: statistical check of an initializer's output.
+    # Inputs: init (initializer), shape (required), and optional expected mean, standard
+    # deviation, maximum and minimum (each skipped when not given). Evaluates the initializer,
+    # asserts the output shape, then asserts each supplied statistic is within an absolute
+    # tolerance of 0.03 of its target.
     output = self.evaluate(init(shape))
     self.assertEqual(output.shape, shape)
     lim = 3e-2
@@ -72,6 +100,11 @@ class InitializersTest(test.TestCase):
       self.assertGreater(lim, abs(output.min() - target_min))
 
   def _partition_test(self, init):
+    # [FUNCTION DOC]
+    # HELPER: checks partitioned creation. Input: init (initializer). Creates the full (4, 2)
+    # tensor, then creates a (2, 2) partition at offset (0, 0) through the partition arguments,
+    # and asserts the partition has the partition shape and equals the matching slice of the full
+    # tensor (so the initializer must be deterministic across the two calls).
     full_shape = (4, 2)
     partition_shape = (2, 2)
     partition_offset = (0, 0)
@@ -88,19 +121,30 @@ class InitializersTest(test.TestCase):
 
 
 class ConstantInitializersTest(InitializersTest):
+  # [CLASS DOC]
+  # Tests for the deterministic initializers: Zeros, Ones and Constant (scalar, tuple and array
+  # values, partition behavior, invalid arguments), using the base class helpers.
 
   @test_util.run_in_graph_and_eager_modes
   def testZeros(self):
+    # [FUNCTION DOC]
+    # Scenario: zeros initializer on shape (4, 5). Expects mean and maximum of zero.
     self._range_test(
         init_ops_v2.Zeros(), shape=(4, 5), target_mean=0., target_max=0.)
 
   @test_util.run_in_graph_and_eager_modes
   def testZerosPartition(self):
+    # [FUNCTION DOC]
+    # Scenario: zeros initializer used with partition arguments. Expects the partition to equal
+    # the matching slice of the full tensor.
     init = init_ops_v2.Zeros()
     self._partition_test(init)
 
   @test_util.run_in_graph_and_eager_modes
   def testZerosInvalidKwargs(self):
+    # [FUNCTION DOC]
+    # Scenario: zeros initializer called with a misspelled dtype keyword. Expects a type error
+    # whose message says the keyword must be one of the allowed ones and names the bad keyword.
     init = init_ops_v2.Zeros()
     with self.assertRaisesRegex(
         TypeError, r"Keyword argument should be one of .* Received: dtpye"):
@@ -108,16 +152,24 @@ class ConstantInitializersTest(InitializersTest):
 
   @test_util.run_in_graph_and_eager_modes
   def testOnes(self):
+    # [FUNCTION DOC]
+    # Scenario: ones initializer on shape (4, 5). Expects mean and maximum of one.
     self._range_test(
         init_ops_v2.Ones(), shape=(4, 5), target_mean=1., target_max=1.)
 
   @test_util.run_in_graph_and_eager_modes
   def testOnesPartition(self):
+    # [FUNCTION DOC]
+    # Scenario: ones initializer used with partition arguments. Expects the partition to equal
+    # the matching slice of the full tensor.
     init = init_ops_v2.Ones()
     self._partition_test(init)
 
   @test_util.run_in_graph_and_eager_modes
   def testConstantInt(self):
+    # [FUNCTION DOC]
+    # Scenario: constant initializer with integer value two on shape (5, 6, 4). Expects mean,
+    # maximum and minimum all equal to two.
     self._range_test(
         init_ops_v2.Constant(2),
         shape=(5, 6, 4),
@@ -127,6 +179,10 @@ class ConstantInitializersTest(InitializersTest):
 
   @test_util.run_in_graph_and_eager_modes
   def testConstantPartition(self):
+    # [FUNCTION DOC]
+    # Scenario: constant initializer with a list value called with a partition shape while
+    # partition support is off (the default). Expects a value error with the exact message that
+    # the constant initializer does not support partition-related arguments.
     init = init_ops_v2.Constant([1, 2, 3, 4])
     with self.assertRaisesWithLiteralMatch(
         ValueError,
@@ -135,6 +191,9 @@ class ConstantInitializersTest(InitializersTest):
 
   @test_util.run_in_graph_and_eager_modes
   def testConstantTuple(self):
+    # [FUNCTION DOC]
+    # Scenario: constant initializer built from a tuple of three numbers, called with shape
+    # [3]. Expects values 10, 20, 30 and a result shape of [3].
     init = init_ops_v2.constant_initializer((10, 20, 30))
     tensor = init(shape=[3])
     self.assertAllEqual(self.evaluate(tensor), [10, 20, 30])
@@ -142,6 +201,10 @@ class ConstantInitializersTest(InitializersTest):
 
   @test_util.run_in_graph_and_eager_modes
   def testConstantInvalidValue(self):
+    # [FUNCTION DOC]
+    # Scenario: constructing the constant initializer from a tensor and from a variable. Expects
+    # a type error for each, with a message about an invalid type for the initial value naming
+    # the tensor or variable type.
     c = constant_op.constant([1.0, 2.0, 3.0])
     with self.assertRaisesRegex(TypeError,
                                 r"Invalid type for initial value: .*Tensor.*"):
@@ -152,6 +215,10 @@ class ConstantInitializersTest(InitializersTest):
       init_ops_v2.constant_initializer(v)
 
   def _testNDimConstantInitializer(self, value, shape, expected):
+    # [FUNCTION DOC]
+    # HELPER: for testNDimConstantInitializer. Inputs: value (list or array), shape, expected
+    # flat list. Builds a constant initializer on the GPU test device (when available), flattens
+    # its output and asserts the length and each element equal the expected list.
     with test_util.use_gpu():
       init = init_ops_v2.constant_initializer(value)
       x = init(shape)
@@ -163,6 +230,9 @@ class ConstantInitializersTest(InitializersTest):
 
   @test_util.run_in_graph_and_eager_modes
   def testNDimConstantInitializer(self):
+    # [FUNCTION DOC]
+    # Scenario: six values given as a list, a flat array and an array already shaped (2, 3),
+    # with requested shape [2, 3]. Expects the flattened output to equal the values in order.
     value = [0, 1, 2, 3, 4, 5]
     shape = [2, 3]
     expected = list(value)
@@ -173,12 +243,18 @@ class ConstantInitializersTest(InitializersTest):
         np.asarray(value).reshape(tuple(shape)), shape, expected)
 
   def _testNDimConstantInitializerIncorrectNumberValues(self, value, shape):
+    # [FUNCTION DOC]
+    # HELPER: for the incorrect-count test. Inputs: value and shape whose element counts differ.
+    # Builds a constant initializer and asserts calling it with the shape raises a type error.
     with test_util.use_gpu():
       init = init_ops_v2.constant_initializer(value)
       self.assertRaises(TypeError, init, shape=shape)
 
   @test_util.run_in_graph_and_eager_modes
   def testNDimConstantInitializerIncorrectNumberValues(self):
+    # [FUNCTION DOC]
+    # Scenario: six values (as list, flat array and shaped array) with shapes [2, 4] and [2, 2],
+    # which need eight and four elements. Expects a type error in every combination.
     value = [0, 1, 2, 3, 4, 5]
 
     for shape in [[2, 4], [2, 2]]:
@@ -190,9 +266,15 @@ class ConstantInitializersTest(InitializersTest):
 
 
 class RandomUniformInitializerTest(InitializersTest):
+  # [CLASS DOC]
+  # Tests for the uniform random initializer: output range, seeded versus differently seeded
+  # behavior, repeated-call variation and partition support.
 
   @test_util.run_in_graph_and_eager_modes
   def testRangeInitializer(self):
+    # [FUNCTION DOC]
+    # Scenario: uniform initializer on range minus one to one with a fixed seed, shape
+    # (20, 6, 7). Expects mean near zero, maximum near one, minimum near minus one.
     shape = (20, 6, 7)
     self._range_test(
         init_ops_v2.RandomUniform(minval=-1, maxval=1, seed=124),
@@ -203,6 +285,10 @@ class RandomUniformInitializerTest(InitializersTest):
 
   @test_util.run_in_graph_and_eager_modes
   def testInitializerIdentical(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the test is unconditionally skipped at its first statement ("does not work
+    # without graphs"), so the intended check never runs.
+    # Intended scenario: two uniform initializers with the same seed should give identical values.
     self.skipTest("Doesn't work without the graphs")
     init1 = init_ops_v2.RandomUniform(0, 7, seed=1)
     init2 = init_ops_v2.RandomUniform(0, 7, seed=1)
@@ -210,25 +296,38 @@ class RandomUniformInitializerTest(InitializersTest):
 
   @test_util.run_in_graph_and_eager_modes
   def testInitializerDifferent(self):
+    # [FUNCTION DOC]
+    # Scenario: two uniform initializers with seeds one and two. Expects different values.
     init1 = init_ops_v2.RandomUniform(0, 7, seed=1)
     init2 = init_ops_v2.RandomUniform(0, 7, seed=2)
     self._identical_test(init1, init2, False)
 
   @test_util.run_in_graph_and_eager_modes
   def testDuplicatedInitializer(self):
+    # [FUNCTION DOC]
+    # Scenario: one unseeded uniform initializer called twice. Expects different values.
     init = init_ops_v2.RandomUniform(0.0, 1.0)
     self._duplicated_test(init)
 
   @test_util.run_in_graph_and_eager_modes
   def testInitializePartition(self):
+    # [FUNCTION DOC]
+    # Scenario: seeded uniform initializer with partition arguments. Expects the partition to
+    # match the corresponding slice of the full tensor.
     init = init_ops_v2.RandomUniform(0, 7, seed=1)
     self._partition_test(init)
 
 
 class RandomNormalInitializerTest(InitializersTest):
+  # [CLASS DOC]
+  # Tests for the normal random initializer: mean and spread, seeding behavior, repeated-call
+  # variation and partition support.
 
   @test_util.run_in_graph_and_eager_modes
   def testRangeInitializer(self):
+    # [FUNCTION DOC]
+    # Scenario: normal initializer with mean zero, standard deviation one and a fixed seed on
+    # shape (8, 12, 99). Expects sample mean near zero and standard deviation near one.
     self._range_test(
         init_ops_v2.RandomNormal(mean=0, stddev=1, seed=153),
         shape=(8, 12, 99),
@@ -237,6 +336,10 @@ class RandomNormalInitializerTest(InitializersTest):
 
   @test_util.run_in_graph_and_eager_modes
   def testInitializerIdentical(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the test is unconditionally skipped at its first statement ("does not work
+    # without graphs"), so the intended check never runs.
+    # Intended scenario: two normal initializers with the same seed should give identical values.
     self.skipTest("Doesn't work without the graphs")
     init1 = init_ops_v2.RandomNormal(0, 7, seed=1)
     init2 = init_ops_v2.RandomNormal(0, 7, seed=1)
@@ -244,17 +347,25 @@ class RandomNormalInitializerTest(InitializersTest):
 
   @test_util.run_in_graph_and_eager_modes
   def testInitializerDifferent(self):
+    # [FUNCTION DOC]
+    # Scenario: two normal initializers with seeds one and two. Expects different values.
     init1 = init_ops_v2.RandomNormal(0, 7, seed=1)
     init2 = init_ops_v2.RandomNormal(0, 7, seed=2)
     self._identical_test(init1, init2, False)
 
   @test_util.run_in_graph_and_eager_modes
   def testDuplicatedInitializer(self):
+    # [FUNCTION DOC]
+    # Scenario: one unseeded normal initializer called twice. Expects different values.
     init = init_ops_v2.RandomNormal(0.0, 1.0)
     self._duplicated_test(init)
 
   @test_util.run_in_graph_and_eager_modes
   def testInitializePartition(self):
+    # [FUNCTION DOC]
+    # Scenario: seeded normal initializer with partition arguments. Skipped when XLA is enabled
+    # because XLA ignores seeds for this op. Otherwise expects the partition to match the
+    # corresponding slice of the full tensor.
     if test_util.is_xla_enabled():
       self.skipTest(
           "XLA ignores seeds for RandomNormal, skip xla-enabled test.")
@@ -263,9 +374,15 @@ class RandomNormalInitializerTest(InitializersTest):
 
 
 class TruncatedNormalInitializerTest(InitializersTest):
+  # [CLASS DOC]
+  # Tests for the truncated normal initializer: bounded range, seeding behavior, repeated-call
+  # variation, partition support and rejection of integer dtypes.
 
   @test_util.run_in_graph_and_eager_modes
   def testRangeInitializer(self):
+    # [FUNCTION DOC]
+    # Scenario: truncated normal with mean zero, standard deviation one, fixed seed, shape
+    # (12, 99, 7). Expects mean near zero, maximum near two and minimum near minus two.
     self._range_test(
         init_ops_v2.TruncatedNormal(mean=0, stddev=1, seed=126),
         shape=(12, 99, 7),
@@ -275,6 +392,10 @@ class TruncatedNormalInitializerTest(InitializersTest):
 
   @test_util.run_in_graph_and_eager_modes
   def testInitializerIdentical(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the test is unconditionally skipped at its first statement ("not working in
+    # eager mode"), so the intended check never runs.
+    # Intended scenario: two truncated normal initializers with the same seed should be identical.
     self.skipTest("Not seeming to work in Eager mode")
     init1 = init_ops_v2.TruncatedNormal(0.0, 1.0, seed=1)
     init2 = init_ops_v2.TruncatedNormal(0.0, 1.0, seed=1)
@@ -282,31 +403,49 @@ class TruncatedNormalInitializerTest(InitializersTest):
 
   @test_util.run_in_graph_and_eager_modes
   def testInitializerDifferent(self):
+    # [FUNCTION DOC]
+    # Scenario: two truncated normal initializers with seeds one and two. Expects different values.
     init1 = init_ops_v2.TruncatedNormal(0.0, 1.0, seed=1)
     init2 = init_ops_v2.TruncatedNormal(0.0, 1.0, seed=2)
     self._identical_test(init1, init2, False)
 
   @test_util.run_in_graph_and_eager_modes
   def testDuplicatedInitializer(self):
+    # [FUNCTION DOC]
+    # Scenario: one unseeded truncated normal initializer called twice. Expects different values.
     init = init_ops_v2.TruncatedNormal(0.0, 1.0)
     self._duplicated_test(init)
 
   @test_util.run_in_graph_and_eager_modes
   def testInitializePartition(self):
+    # [FUNCTION DOC]
+    # Scenario: seeded truncated normal initializer with partition arguments. Expects the
+    # partition to match the corresponding slice of the full tensor.
     init = init_ops_v2.TruncatedNormal(0.0, 1.0, seed=1)
     self._partition_test(init)
 
   @test_util.run_in_graph_and_eager_modes
   def testInvalidDataType(self):
+    # [FUNCTION DOC]
+    # Scenario: truncated normal initializer called with a 32-bit integer dtype. Expects a value
+    # error because only floating point dtypes are allowed.
     init = init_ops_v2.TruncatedNormal(0.0, 1.0)
     with self.assertRaises(ValueError):
       init([1], dtype=dtypes.int32)
 
 
 class VarianceScalingInitializerTest(InitializersTest):
+  # [CLASS DOC]
+  # Tests for the variance scaling initializer: for each distribution option on a (100, 100)
+  # shape, checks the sample mean and variance against the expected values and which random op
+  # is used, plus partition handling.
 
   @test_util.run_in_graph_and_eager_modes
   def testTruncatedNormalDistribution(self):
+    # [FUNCTION DOC]
+    # Scenario: variance scaling with truncated normal distribution on shape (100, 100), with
+    # the truncated normal random op wrapped by a mock. Expects the mock to be called, sample mean
+    # near zero and variance near one over the first dimension (tolerance 0.01).
     shape = [100, 100]
     expect_mean = 0.
     expect_var = 1. / shape[0]
@@ -323,6 +462,12 @@ class VarianceScalingInitializerTest(InitializersTest):
 
   @test_util.run_in_graph_and_eager_modes
   def testNormalDistribution(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: despite the name, this is a duplicate of the truncated normal test: it requests
+    # the truncated normal distribution and checks the truncated normal op is used, so the plain
+    # "normal" alias is never exercised.
+    # Scenario: variance scaling on shape (100, 100) with a mock around the truncated normal op.
+    # Expects the mock called, mean near zero and variance near one over the first dimension.
     shape = [100, 100]
     expect_mean = 0.
     expect_var = 1. / shape[0]
@@ -339,6 +484,10 @@ class VarianceScalingInitializerTest(InitializersTest):
 
   @test_util.run_in_graph_and_eager_modes
   def testUntruncatedNormalDistribution(self):
+    # [FUNCTION DOC]
+    # Scenario: variance scaling with untruncated normal distribution on shape (100, 100), with
+    # the normal random op wrapped by a mock. Expects the mock called, mean near zero and
+    # variance near one over the first dimension (tolerance 0.01).
     shape = [100, 100]
     expect_mean = 0.
     expect_var = 1. / shape[0]
@@ -355,6 +504,9 @@ class VarianceScalingInitializerTest(InitializersTest):
 
   @test_util.run_in_graph_and_eager_modes
   def testUniformDistribution(self):
+    # [FUNCTION DOC]
+    # Scenario: variance scaling with uniform distribution on shape (100, 100). Expects sample
+    # mean near zero and variance near one over the first dimension (tolerance 0.01).
     shape = [100, 100]
     expect_mean = 0.
     expect_var = 1. / shape[0]
@@ -368,6 +520,10 @@ class VarianceScalingInitializerTest(InitializersTest):
 
   @test_util.run_in_graph_and_eager_modes
   def testInitializePartition(self):
+    # [FUNCTION DOC]
+    # Scenario: untruncated normal variance scaling for full shape [1000, 100] but a partition
+    # shape of (100, 100), with the normal op mocked. Expects the mock called, output shape equal
+    # to the partition shape, and variance based on the full shape's fan in (tolerance 0.002).
     partition_shape = (100, 100)
     shape = [1000, 100]
     expect_mean = 0.
@@ -386,14 +542,23 @@ class VarianceScalingInitializerTest(InitializersTest):
 
 
 class OrthogonalInitializerTest(InitializersTest):
+  # [CLASS DOC]
+  # Tests for the orthogonal initializer: statistics, seeding, dtype and shape validation, gain,
+  # actual orthogonality of outputs and the rejection of partition arguments.
 
   @test_util.run_in_graph_and_eager_modes
   def testRangeInitializer(self):
+    # [FUNCTION DOC]
+    # Scenario: orthogonal initializer with fixed seed on shape (20, 20). Expects mean near zero.
     self._range_test(
         init_ops_v2.Orthogonal(seed=123), shape=(20, 20), target_mean=0.)
 
   @test_util.run_in_graph_and_eager_modes
   def testInitializerIdentical(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the test is unconditionally skipped at its first statement ("does not work
+    # without graphs"), so the intended check never runs.
+    # Intended scenario: two orthogonal initializers with the same seed give identical values.
     self.skipTest("Doesn't work without the graphs")
     init1 = init_ops_v2.Orthogonal(seed=1)
     init2 = init_ops_v2.Orthogonal(seed=1)
@@ -401,28 +566,44 @@ class OrthogonalInitializerTest(InitializersTest):
 
   @test_util.run_in_graph_and_eager_modes
   def testInitializerDifferent(self):
+    # [FUNCTION DOC]
+    # Scenario: two orthogonal initializers with seeds one and two on shape (10, 10). Expects
+    # different values.
     init1 = init_ops_v2.Orthogonal(seed=1)
     init2 = init_ops_v2.Orthogonal(seed=2)
     self._identical_test(init1, init2, False, (10, 10))
 
   @test_util.run_in_graph_and_eager_modes
   def testDuplicatedInitializer(self):
+    # [FUNCTION DOC]
+    # Scenario: one unseeded orthogonal initializer called twice on shape (10, 10). Expects
+    # different values.
     init = init_ops_v2.Orthogonal()
     self._duplicated_test(init, (10, 10))
 
   @test_util.run_in_graph_and_eager_modes
   def testInvalidDataType(self):
+    # [FUNCTION DOC]
+    # Scenario: orthogonal initializer called with a string dtype. Expects a value error.
     init = init_ops_v2.Orthogonal()
     self.assertRaises(ValueError, init, shape=(10, 10), dtype=dtypes.string)
 
   @test_util.run_in_graph_and_eager_modes
   def testInvalidShape(self):
+    # [FUNCTION DOC]
+    # Scenario: orthogonal initializer called with the one-dimensional shape [5]. Expects a value
+    # error because at least two axes are needed.
     init = init_ops_v2.Orthogonal()
     with test_util.use_gpu():
       self.assertRaises(ValueError, init, shape=[5])
 
   @test_util.run_in_graph_and_eager_modes
   def testGain(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the test is unconditionally skipped at its first statement, so the gain
+    # comparison never runs.
+    # Intended scenario: with the same seed, an initializer with gain 3.14 should equal the
+    # default-gain output multiplied by 3.14.
     self.skipTest("Doesn't work without the graphs")
     init1 = init_ops_v2.Orthogonal(seed=1)
     init2 = init_ops_v2.Orthogonal(gain=3.14, seed=1)
@@ -433,6 +614,10 @@ class OrthogonalInitializerTest(InitializersTest):
 
   @test_util.run_in_graph_and_eager_modes
   def testShapesValues(self):
+    # [FUNCTION DOC]
+    # Scenario: orthogonal initializer on shapes (10,10), (10,9,8), (100,5,5), (50,40), (40,50).
+    # For each, asserts the output shape, flattens all but the last axis, and asserts the inner
+    # product matrix is the identity (columns orthonormal if tall, rows if wide) to 1e-5.
     for shape in [(10, 10), (10, 9, 8), (100, 5, 5), (50, 40), (40, 50)]:
       init = init_ops_v2.Orthogonal()
       tol = 1e-5
@@ -451,6 +636,9 @@ class OrthogonalInitializerTest(InitializersTest):
 
   @test_util.run_in_graph_and_eager_modes
   def testPartition(self):
+    # [FUNCTION DOC]
+    # Scenario: orthogonal initializer called with a partition shape. Expects a value error with
+    # the exact message that the orthogonal initializer does not support partition arguments.
     init = init_ops_v2.Orthogonal(seed=1)
     with self.assertRaisesWithLiteralMatch(
         ValueError,
@@ -459,9 +647,15 @@ class OrthogonalInitializerTest(InitializersTest):
 
 
 class IdentityInitializerTest(InitializersTest):
+  # [CLASS DOC]
+  # Tests for the identity initializer: statistics, dtype and shape validation, non-square
+  # output, gain scaling and rejection of partition arguments.
 
   @test_util.run_in_graph_and_eager_modes
   def testRange(self):
+    # [FUNCTION DOC]
+    # Scenario: identity initializer first on three-axis shape (3, 4, 5), expecting a value
+    # error; then on shape (3, 3), expecting mean one third and maximum one.
     with self.assertRaises(ValueError):
       shape = (3, 4, 5)
       self._range_test(
@@ -479,11 +673,16 @@ class IdentityInitializerTest(InitializersTest):
 
   @test_util.run_in_graph_and_eager_modes
   def testInvalidDataType(self):
+    # [FUNCTION DOC]
+    # Scenario: identity initializer called with a 32-bit integer dtype. Expects a value error.
     init = init_ops_v2.Identity()
     self.assertRaises(ValueError, init, shape=[10, 5], dtype=dtypes.int32)
 
   @test_util.run_in_graph_and_eager_modes
   def testInvalidShape(self):
+    # [FUNCTION DOC]
+    # Scenario: identity initializer called with shapes [5, 7, 7], [5] and the empty shape.
+    # Expects a value error for each (only two-axis shapes are valid).
     init = init_ops_v2.Identity()
     with test_util.use_gpu():
       self.assertRaises(ValueError, init, shape=[5, 7, 7])
@@ -492,6 +691,9 @@ class IdentityInitializerTest(InitializersTest):
 
   @test_util.run_in_graph_and_eager_modes
   def testNonSquare(self):
+    # [FUNCTION DOC]
+    # Scenario: identity initializer on shape (10, 5). Expects the rectangular matrix with ones
+    # on the diagonal, equal to the numpy identity of that shape.
     init = init_ops_v2.Identity()
     shape = (10, 5)
     with test_util.use_gpu():
@@ -499,6 +701,10 @@ class IdentityInitializerTest(InitializersTest):
 
   @test_util.run_in_graph_and_eager_modes
   def testGain(self):
+    # [FUNCTION DOC]
+    # Scenario: identity initializers with default gain and gain 0.9 on shape (10, 10), for
+    # 32-bit and 64-bit floats. Expects the default output to equal the identity matrix and the
+    # custom one to equal the identity matrix scaled by 0.9.
     shape = (10, 10)
     for dtype in [dtypes.float32, dtypes.float64]:
       init_default = init_ops_v2.Identity()
@@ -513,6 +719,9 @@ class IdentityInitializerTest(InitializersTest):
 
   @test_util.run_in_graph_and_eager_modes
   def testPartition(self):
+    # [FUNCTION DOC]
+    # Scenario: identity initializer called with a partition shape. Expects a value error with
+    # the exact message that the identity initializer does not support partition arguments.
     init = init_ops_v2.Identity()
     with self.assertRaisesWithLiteralMatch(
         ValueError,
@@ -521,9 +730,15 @@ class IdentityInitializerTest(InitializersTest):
 
 
 class GlorotInitializersTest(InitializersTest):
+  # [CLASS DOC]
+  # Tests for the Glorot uniform and normal initializers: checks that the sample standard
+  # deviation matches the theoretical value computed from the fan in and fan out.
 
   @test_util.run_in_graph_and_eager_modes
   def testGlorotUniform(self):
+    # [FUNCTION DOC]
+    # Scenario: Glorot uniform with a fixed seed on shape (5, 6, 4, 2). Expects mean near zero
+    # and standard deviation near the square root of two over (fan in plus fan out).
     shape = (5, 6, 4, 2)
     fan_in, fan_out = init_ops_v2._compute_fans(shape)
     std = np.sqrt(2. / (fan_in + fan_out))
@@ -535,6 +750,9 @@ class GlorotInitializersTest(InitializersTest):
 
   @test_util.run_in_graph_and_eager_modes
   def test_GlorotNormal(self):
+    # [FUNCTION DOC]
+    # Scenario: Glorot normal with a fixed seed on shape (5, 6, 4, 2). Expects mean near zero and
+    # standard deviation near the square root of two over (fan in plus fan out).
     shape = (5, 6, 4, 2)
     fan_in, fan_out = init_ops_v2._compute_fans(shape)
     std = np.sqrt(2. / (fan_in + fan_out))
@@ -546,9 +764,15 @@ class GlorotInitializersTest(InitializersTest):
 
 
 class MethodInitializers(InitializersTest):
+  # [CLASS DOC]
+  # Tests for the LeCun and He factory functions (uniform and normal variants): each checks the
+  # sample mean and standard deviation on shape (5, 6, 4, 2) against the fan-in based theory.
 
   @test_util.run_in_graph_and_eager_modes
   def testLecunUniform(self):
+    # [FUNCTION DOC]
+    # Scenario: LeCun uniform with fixed seed. Expects mean near zero and standard deviation
+    # near the square root of one over fan in.
     shape = (5, 6, 4, 2)
     fan_in, _ = init_ops_v2._compute_fans(shape)
     std = np.sqrt(1. / fan_in)
@@ -560,6 +784,9 @@ class MethodInitializers(InitializersTest):
 
   @test_util.run_in_graph_and_eager_modes
   def testHeUniform(self):
+    # [FUNCTION DOC]
+    # Scenario: He uniform with fixed seed. Expects mean near zero and standard deviation near
+    # the square root of two over fan in.
     shape = (5, 6, 4, 2)
     fan_in, _ = init_ops_v2._compute_fans(shape)
     std = np.sqrt(2. / fan_in)
@@ -568,6 +795,9 @@ class MethodInitializers(InitializersTest):
 
   @test_util.run_in_graph_and_eager_modes
   def testLecunNormal(self):
+    # [FUNCTION DOC]
+    # Scenario: LeCun normal with fixed seed. Expects mean near zero and standard deviation near
+    # the square root of one over fan in.
     shape = (5, 6, 4, 2)
     fan_in, _ = init_ops_v2._compute_fans(shape)
     std = np.sqrt(1. / fan_in)
@@ -579,6 +809,9 @@ class MethodInitializers(InitializersTest):
 
   @test_util.run_in_graph_and_eager_modes
   def testHeNormal(self):
+    # [FUNCTION DOC]
+    # Scenario: He normal with fixed seed. Expects mean near zero and standard deviation near the
+    # square root of two over fan in.
     shape = (5, 6, 4, 2)
     fan_in, _ = init_ops_v2._compute_fans(shape)
     std = np.sqrt(2. / fan_in)

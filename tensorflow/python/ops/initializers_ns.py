@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Defines the public tf.initializers-style namespace for the v1 API. It contains no logic of its
+# own: it binds short names (zeros, ones, constant, random_uniform, random_normal,
+# truncated_normal, uniform_unit_scaling, variance_scaling, orthogonal, identity) to the v1
+# initializer classes in the init_ops module, and binds variables, global_variables and
+# local_variables to the variable-initializer op builders from the variables module.
+# Import-time side effects: only the alias assignments; after that the module removes its
+# references to the init_ops and variables modules (it "seals" the API) so they are not exposed.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
