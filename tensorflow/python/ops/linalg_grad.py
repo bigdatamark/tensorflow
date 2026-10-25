@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Registers gradient functions for the linear-algebra ops (matrix inverse, determinant, log
+# determinant, square root, Cholesky, QR, solve, least-squares solve, triangular and banded
+# triangular solve, general and self-adjoint eigendecomposition, SVD, einsum, and tridiagonal
+# multiply and solve). It exposes nothing publicly; importing the module has the side effect of
+# registering each gradient with the global gradient registry so automatic differentiation can
+# find it. Small private helpers (shifts, tridiagonal transposition, safe reciprocal) support
+# several gradients. Derivations follow Giles (2008) and Ionescu et al. (2015).
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -46,6 +54,12 @@ from tensorflow.python.ops.linalg import linalg_impl as _linalg
 
 @ops.RegisterGradient("MatrixInverse")
 def _MatrixInverseGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Registered gradient for the matrix inverse op. Inputs: the forward operation (its output is
+  # the inverse and it carries an adjoint attribute) and the upstream gradient with respect to the
+  # inverse. Returns the gradient with respect to the input matrix: the negated product of the
+  # inverse, the upstream gradient and the inverse, with adjoints applied according to the
+  # attribute. No side effects.
   """Gradient for MatrixInverse."""
   ainv = op.outputs[0]
   op_adjoint = op.get_attr("adjoint")
@@ -58,10 +72,26 @@ def _MatrixInverseGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Einsum")
 def _EinsumGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Registered gradient for the einsum op, supporting one or two operands. Inputs: the forward
+  # operation (equation attribute, decoded from bytes if needed) and the upstream gradient.
+  # For one operand it applies the reversed equation, or, when some labels are summed out, tiles
+  # the gradient back along the reduced axes (with an extra einsum for repeated labels or
+  # transposes). For two operands it computes each input's gradient with an einsum of the
+  # upstream gradient and the other operand (conjugated for complex types), adds ellipses where
+  # needed, and finally sums over broadcast axes when the batch shapes differ or are not static.
+  # Returns the gradient (one operand) or a pair of gradients (two operands). Nested helpers
+  # below handle axis lookup, ellipsis slices, reduced labels and the two gradient cases.
   """Gradient for Einsum."""
   ellipsis = "..."
 
   def _GetAxisFromLabel(subscripts, label):
+    # [FUNCTION DOC]
+    # HELPER: nested helper of the einsum gradient for locating axes.
+    # Finds the axis index of a single-character label in a subscript string: a positive index if
+    # it appears before the ellipsis (or there is no ellipsis), a negative index counted from the
+    # end if after it, using the leftmost occurrence. Returns nothing/null value when the label is
+    # absent. Pure function.
     """Returns the axis (possibly negative) corresponding to a label.
 
     Returns the axis index of the axis label if it is before an ellipsis (or if
@@ -87,6 +117,11 @@ def _EinsumGrad(op: ops.Operation, grad):
     return None
 
   def _GetBcastSubshape(subscripts):
+    # [FUNCTION DOC]
+    # HELPER: nested helper of the einsum gradient for broadcast dimensions.
+    # Given a subscript string, returns a pair (start, end) giving the slice of a tensor's shape
+    # covered by the ellipsis: start is the index of the ellipsis and end is a negative offset
+    # (or null value when the ellipsis is last). Returns zeros for both when there is no ellipsis.
     """Returns a tuple denoting the slice mapping to ellipsis.
 
     For a given subscript, returns a tuple (start, end) denoting the start
@@ -107,6 +142,11 @@ def _EinsumGrad(op: ops.Operation, grad):
     return start, end
 
   def _GetReducedSubscripts(reduced_label_set, input_shape, subscripts):
+    # [FUNCTION DOC]
+    # HELPER: nested helper of the einsum gradient for summed-out labels.
+    # Inputs: a set of reduced axis labels, the shape tensor of the operand and its subscript
+    # string. Returns a triple: the labels joined into a string (in arbitrary set order), a stacked
+    # tensor of the matching dimension sizes, and the list of axes (leftmost occurrence each).
     """Returns reduced subscripts and their corresponding dimensions and axes.
 
     Given a set of axis labels, returns their concatenated subscript, their
@@ -144,6 +184,14 @@ def _EinsumGrad(op: ops.Operation, grad):
 
   def _GetGradReduced(output_grad, output_subs, input_subs, input_shape,
                       reduced_label_set):
+    # [FUNCTION DOC]
+    # HELPER: nested helper of the einsum gradient for operands with summed-out labels.
+    # Computes the gradient of a unary einsum that sums over some labels. Inputs: upstream
+    # gradient, output and input subscripts, the input shape tensor and the set of reduced labels.
+    # If there are no repeated labels and no transpose is needed, it reshapes the gradient with
+    # singleton reduced axes and broadcasts it to the input shape. Otherwise it broadcasts to an
+    # intermediate shape with the reduced dimensions in front and applies one more einsum to map
+    # to the input subscripts. Returns the gradient tensor with the input's shape.
     """Returns the gradient wrt input for a unary einsum with reductions.
 
     Args:
@@ -221,6 +269,13 @@ def _EinsumGrad(op: ops.Operation, grad):
 
   def _GetGradWrt(output_grad, other_operand, input_shape, input_subs,
                   other_subs, output_subs):
+    # [FUNCTION DOC]
+    # HELPER: nested helper of the einsum gradient for two-operand equations.
+    # Computes the gradient for one operand of a binary einsum. Inputs: upstream gradient, the
+    # other operand, this operand's shape tensor, and the subscripts of this operand, the other
+    # operand and the output. It einsums the upstream gradient with the other operand to the
+    # input's subscripts minus labels that appear nowhere else; if such labels exist it expands the
+    # result via the reduction helper. Does not undo broadcasting; the caller does that.
     """Returns the gradient wrt an input operand for a binary einsum.
 
     This function does not handle (un)broadcasting. This must be done separately
@@ -374,6 +429,11 @@ def _EinsumGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("MatrixDeterminant")
 def _MatrixDeterminantGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Registered gradient for the matrix determinant op. Inputs: the forward operation and the
+  # upstream gradient of the determinant. Returns the gradient with respect to the matrix: the
+  # upstream gradient times the determinant times the inverse adjoint of the matrix, with the
+  # scalar factor broadcast over the last two axes. Builds a matrix inverse in the graph.
   """Gradient for MatrixDeterminant."""
   a = op.inputs[0]
   c = op.outputs[0]
@@ -386,6 +446,13 @@ def _MatrixDeterminantGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("MatrixSquareRoot")
 def _MatrixSquareRootGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Registered gradient for the matrix square root op. Inputs: the forward operation (its output
+  # is the root R) and the upstream gradient. Differentiates A = R R, vectorizes the resulting
+  # Sylvester equation using Kronecker products of the identity with R and R transposed, solves
+  # the batched linear system, and reshapes and transposes the solution. Returns the gradient with
+  # respect to the input matrix, same shape as the output. Cost grows with the fourth power of
+  # the matrix order because of the Kronecker matrix.
   """Gradient for MatrixSquareRoot."""
 
   # Let A be an m x m square matrix (or batch of matrices)
@@ -396,6 +463,11 @@ def _MatrixSquareRootGrad(op: ops.Operation, grad):
 
   # Used to find Kronecker products within the Sylvester equation
   def _KroneckerProduct(b1, b2):
+    # [FUNCTION DOC]
+    # HELPER: nested helper of the matrix square root gradient.
+    # Computes the Kronecker product of two batches of square matrices of equal batch shape by
+    # reshaping with singleton axes, multiplying elementwise, and flattening to matrices whose
+    # order is the product of the two orders. Returns the batched product tensor.
     """Computes the Kronecker product of two batches of square matrices."""
     b1_shape = array_ops.shape(b1)
     b2_shape = array_ops.shape(b2)
@@ -451,6 +523,11 @@ def _MatrixSquareRootGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("LogMatrixDeterminant")
 def _LogMatrixDeterminantGrad(op: ops.Operation, _, grad_b):
+  # [FUNCTION DOC]
+  # Registered gradient for the log-determinant op, which has two outputs (sign and log of the
+  # absolute determinant). The gradient with respect to the sign output is ignored. Uses the
+  # upstream gradient of the log output (grad_b) and returns it times the inverse adjoint of the
+  # input matrix, broadcast over the last two axes.
   """Gradient for LogMatrixDeterminant."""
   a = op.inputs[0]
   c = op.outputs[1]
@@ -462,6 +539,12 @@ def _LogMatrixDeterminantGrad(op: ops.Operation, _, grad_b):
 
 @ops.RegisterGradient("Cholesky")
 def _CholeskyGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Registered gradient for the Cholesky factorization. Inputs: the forward operation (output is
+  # the lower factor L) and the upstream gradient. Computes the inverse of L through a triangular
+  # solve against the identity, forms the lower-triangular part of L-adjoint times the gradient
+  # with the diagonal halved, sandwiches it between the inverses, then symmetrizes and halves.
+  # Returns the symmetric gradient with respect to the input matrix.
   """Gradient for Cholesky."""
 
   # Gradient is l^{-H} @ ((l^{H} @ grad) * (tril(ones)-1/2*eye)) @ l^{-1}
@@ -488,6 +571,15 @@ def _CholeskyGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Qr")
 def _QrGrad(op: ops.Operation, dq, dr):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the error text for the full-matrices tall case lacks a space before "and ncols".
+  # Registered gradient for the QR decomposition (method from the cited paper). Inputs: the
+  # forward operation (outputs Q and R) and upstream gradients for Q and R. Requires fully known
+  # static shapes for R; otherwise raises a not-implemented error. Also raises a not-implemented
+  # error when rows exceed columns and full matrices were requested. For rows >= columns it uses
+  # the square/deep formula; for wide matrices it splits the input into a square part and the
+  # remainder, reduces to the square case and concatenates the two gradient pieces.
+  # Returns the gradient with respect to the input matrix.
   """Gradient for Qr."""
 
   # The methodology is explained in detail in https://arxiv.org/abs/2009.10071
@@ -507,12 +599,22 @@ def _QrGrad(op: ops.Operation, dq, dr):
                               f"and ncols={r.shape.dims[-1]}.")
 
   def _TriangularSolve(x, r):
+    # [FUNCTION DOC]
+    # HELPER: nested helper of the QR gradient.
+    # Multiplies x by the adjoint of the inverse of an upper-triangular matrix r, implemented as
+    # an adjoint of a triangular solve. Returns a tensor shaped like x.
     """Equiv to matmul(x, adjoint(matrix_inverse(r))) if r is upper-tri."""
     return _linalg.adjoint(
         linalg_ops.matrix_triangular_solve(
             r, _linalg.adjoint(x), lower=False, adjoint=False))
 
   def _QrGradSquareAndDeepMatrices(q, r, dq, dr):
+    # [FUNCTION DOC]
+    # HELPER: nested helper of the QR gradient for matrices with rows >= columns and reduced
+    # (not full) Q. Inputs: Q, R and their upstream gradients. Combines antisymmetric parts of
+    # Q-adjoint dQ and R dR-adjoint, takes the lower triangle, and uses triangular solves with R.
+    # For complex dtypes it adds a correction term from the diagonal. Returns the gradient with
+    # respect to the input matrix.
     """Gradient for matrix orders num_rows >= num_cols
     and full_matrices is false.
     """
@@ -556,6 +658,12 @@ def _QrGrad(op: ops.Operation, dq, dr):
 
 @ops.RegisterGradient("MatrixSolve")
 def _MatrixSolveGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Registered gradient for the matrix solve op. Inputs: the forward operation (adjoint
+  # attribute, solution as output) and the upstream gradient. The right-hand-side gradient is
+  # another solve with the opposite adjoint setting; the matrix gradient is the negated product of
+  # that and the solution (adjoint on the correct side). Returns a pair: matrix gradient and
+  # right-hand-side gradient. Batch broadcasting is not handled here.
   """Gradient for MatrixSolve."""
   a = op.inputs[0]
   adjoint_a = op.get_attr("adjoint")
@@ -570,6 +678,13 @@ def _MatrixSolveGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("MatrixSolveLs")
 def _MatrixSolveLsGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Registered gradient for the least-squares solve op. Inputs: the forward operation (fast
+  # attribute, matrix, right-hand side, l2 regularizer) and the upstream gradient. Raises a
+  # value error if the fast attribute is false. Chooses the overdetermined formula when the
+  # matrix has at least as many rows as columns, otherwise the underdetermined one; when the
+  # static shape is unknown it picks between them at run time with a conditional. Returns a triple:
+  # gradients for matrix and right-hand side, and nothing for the regularizer.
   """Gradients for MatrixSolveLs."""
 
   # TODO(rmlarsen): The implementation could be more efficient:
@@ -579,6 +694,11 @@ def _MatrixSolveLsGrad(op: ops.Operation, grad):
   #      x*z + transpose(x*z). This pattern occurs other places in TensorFlow.
   # pylint: disable=g-doc-args
   def _Overdetermined(op: ops.Operation, grad):
+    # [FUNCTION DOC]
+    # HELPER: nested helper of the least-squares gradient for the overdetermined case.
+    # Uses the Cholesky factor of the regularized Gramian (first kind) to solve for an
+    # intermediate, then forms gradients for the matrix and right-hand side. Returns a triple of
+    # matrix gradient, right-hand-side gradient and nothing for the regularizer.
     """Gradients for the overdetermined case of MatrixSolveLs.
 
     This is the backprop for the solution to the normal equations of the first
@@ -605,6 +725,11 @@ def _MatrixSolveLsGrad(op: ops.Operation, grad):
 
   # pylint: disable=g-doc-args
   def _Underdetermined(op: ops.Operation, grad):
+    # [FUNCTION DOC]
+    # HELPER: nested helper of the least-squares gradient for the underdetermined case.
+    # Uses the Cholesky factor of the regularized Gramian (second kind) to compute the
+    # right-hand-side gradient and the matrix gradient from two correction terms. Returns a triple
+    # of matrix gradient, right-hand-side gradient and nothing for the regularizer.
     """Gradients for the underdetermined case of MatrixSolveLs.
 
     This is the backprop for the solution to the normal equations of the second
@@ -650,6 +775,13 @@ def _MatrixSolveLsGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("BandedTriangularSolve")
 def _BandedTriangularSolveGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Registered gradient for the banded triangular solve op. Inputs: the forward operation
+  # (adjoint and lower attributes) and the upstream gradient. The right-hand-side gradient is a
+  # banded solve with flipped adjoint; the matrix gradient is the negated product with the
+  # solution, then reduced to the band by extracting the matching diagonals. If batch shapes are
+  # not statically equal, both gradients are summed over broadcast axes and reshaped. Returns a
+  # pair: gradient for the banded matrix and for the right-hand side.
   """Gradient for BandedTriangularSolve."""
   a = op.inputs[0]
   b = op.inputs[1]
@@ -683,6 +815,12 @@ def _BandedTriangularSolveGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("MatrixTriangularSolve")
 def _MatrixTriangularSolveGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Registered gradient for the triangular solve op. Inputs: the forward operation (adjoint and
+  # lower attributes) and the upstream gradient. The right-hand-side gradient is a triangular
+  # solve with flipped adjoint; the matrix gradient is the negated product with the solution,
+  # masked to the lower or upper triangle. If batch shapes are not statically equal, results are
+  # summed over broadcast axes. Returns a pair: matrix gradient and right-hand-side gradient.
   """Gradient for MatrixTriangularSolve."""
   a = op.inputs[0]
   b = op.inputs[1]
@@ -715,12 +853,25 @@ def _MatrixTriangularSolveGrad(op: ops.Operation, grad):
 # degenerate/zero singular values in calculations of
 # f and s_inv_mat, we introduce a Lorentz broadening.
 def _SafeReciprocal(x, epsilon=1e-20):
+  # [FUNCTION DOC]
+  # HELPER: shared by the eigen and SVD gradients.
+  # Computes a regularized reciprocal of x (x divided by x squared plus a small epsilon, default
+  # one in ten to the twentieth), avoiding infinities or NaNs for zero or degenerate values.
+  # Returns a tensor shaped like x. It slightly biases results for tiny inputs.
   return x * math_ops.reciprocal(x * x + epsilon)
 
 
 # pylint: disable=g-doc-args
 @ops.RegisterGradient("Eig")
 def _EigGrad(op: ops.Operation, grad_e, grad_v):
+  # [FUNCTION DOC]
+  # Registered gradient for the general eigendecomposition. Inputs: the forward operation
+  # (compute_v attribute, eigenvalues and optionally eigenvectors as outputs) and upstream
+  # gradients for the eigenvalues and eigenvectors. Assumes distinct eigenvalues; degenerate ones
+  # give very large or NaN results. If eigenvectors were computed, builds the pairwise inverse
+  # eigenvalue difference matrix and solves with the adjoint eigenvector matrix; otherwise
+  # recomputes eigenvectors and uses only the eigenvalue gradient. Runs under control
+  # dependencies on both gradients. Returns the gradient cast to the input dtype.
   """Gradient for Eig.
 
   Based on eq. 4.77 from paper by
@@ -775,6 +926,13 @@ def _EigGrad(op: ops.Operation, grad_e, grad_v):
 
 @ops.RegisterGradient("SelfAdjointEigV2")
 def _SelfAdjointEigV2Grad(op: ops.Operation, grad_e, grad_v):
+  # [FUNCTION DOC]
+  # Registered gradient for the self-adjoint (Hermitian) eigendecomposition. Inputs: the forward
+  # operation (compute_v attribute) and upstream gradients for eigenvalues and eigenvectors.
+  # Uses the regularized pairwise inverse eigenvalue difference matrix when eigenvectors were
+  # computed (degenerate eigenvalues give huge or NaN values), otherwise recomputes eigenvectors.
+  # Because the forward op reads only the lower triangle, the result is symmetrized, reduced to
+  # the lower triangle and its diagonal halved. Returns that gradient.
   """Gradient for SelfAdjointEigV2."""
   e = op.outputs[0]
   compute_v = op.get_attr("compute_v")
@@ -817,6 +975,15 @@ def _SelfAdjointEigV2Grad(op: ops.Operation, grad_e, grad_v):
 
 @ops.RegisterGradient("Svd")
 def _SvdGrad(op: ops.Operation, grad_s, grad_u, grad_v):
+  # [FUNCTION DOC]
+  # Registered gradient for the singular value decomposition. Inputs: the forward operation
+  # (compute_uv and full_matrices attributes; outputs S, U, V) and upstream gradients for each.
+  # Without U and V, recomputes them and uses only the singular value gradient. Otherwise
+  # requires a statically known inner matrix shape (else raises a not-implemented error) and,
+  # for full matrices, a row/column difference of at most one (else not-implemented error).
+  # For tall matrices it works on the adjoint and transposes back. Handles square, wide and
+  # full-matrix cases and adds a complex-valued correction term. Degenerate singular values
+  # produce unstable results. Returns the gradient with respect to the input, with static shape set.
   """Gradient for the singular value decomposition."""
 
   # The derivation for the compute_uv=False case, and most of
@@ -948,6 +1115,10 @@ def _SvdGrad(op: ops.Operation, grad_s, grad_u, grad_v):
 
 
 def _LeftShift(x):
+  # [FUNCTION DOC]
+  # HELPER: shared by the tridiagonal matmul gradient.
+  # Shifts the next-to-last dimension up by one position (dropping the first row) and pads a
+  # zero row at the end. Input: a tensor of rank at least two. Returns a tensor of equal shape.
   """Shifts next-to-last dimension to the left, adding zero on the right."""
   rank = array_ops.rank(x)
   zeros = array_ops.zeros((rank - 2, 2), dtype=dtypes.int32)
@@ -956,6 +1127,10 @@ def _LeftShift(x):
 
 
 def _RightShift(x):
+  # [FUNCTION DOC]
+  # HELPER: shared by the tridiagonal matmul gradient.
+  # Shifts the next-to-last dimension down by one position (dropping the last row) and pads a
+  # zero row at the start. Input: a tensor of rank at least two. Returns a tensor of equal shape.
   """Shifts next-to-last dimension to the right, adding zero on the left."""
   rank = array_ops.rank(x)
   zeros = array_ops.zeros((rank - 2, 2), dtype=dtypes.int32)
@@ -965,6 +1140,13 @@ def _RightShift(x):
 
 @ops.RegisterGradient("TridiagonalMatMul")
 def _TridiagonalMatMulGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Registered gradient for the tridiagonal matrix multiply op, whose inputs are the
+  # superdiagonal, main diagonal, subdiagonal and the dense right-hand side. Inputs: the forward
+  # operation and the upstream gradient. Each diagonal's gradient is a sum over the last axis of
+  # the (shifted) conjugated right-hand side times the gradient, given a leading singleton axis;
+  # the right-hand-side gradient combines shifted conjugated diagonals times the gradient.
+  # Returns four gradients in input order.
   """Gradient for TridiagonalMatMul."""
   superdiag_conj = array_ops.matrix_transpose(op.inputs[0], conjugate=True)
   maindiag_conj = array_ops.matrix_transpose(op.inputs[1], conjugate=True)
@@ -986,6 +1168,15 @@ def _TridiagonalMatMulGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("TridiagonalSolve")
 def _TridiagonalSolveGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says "Gradient for TridiagonalSolveGrad"; the op is actually
+  # TridiagonalSolve.
+  # Registered gradient for the tridiagonal solve op. Inputs: the forward operation
+  # (partial_pivoting and perturb_singular attributes, diagonals input, solution output) and the
+  # upstream gradient. Builds the transposed tridiagonal matrix in Python-level graph ops (not in
+  # the kernel, because of GPU padding requirements), solves with it for the right-hand-side
+  # gradient, and obtains the diagonals' gradient as the negated three-diagonal extract of the
+  # product of that and the solution. Returns a pair: diagonals gradient and right-hand-side gradient.
   """Gradient for TridiagonalSolveGrad."""
   diags = op.inputs[0]
   x = op.outputs[0]
@@ -1008,6 +1199,11 @@ def _TridiagonalSolveGrad(op: ops.Operation, grad):
 
 
 def _TransposeTridiagonalMatrix(diags):
+  # [FUNCTION DOC]
+  # HELPER: used by the tridiagonal solve gradient.
+  # Transposes a tridiagonal matrix stored in compact form (three rows: superdiagonal, main,
+  # subdiagonal). Swaps and shifts the off-diagonals, padding with zeros (by concatenation when the
+  # shape is fully static, by padding otherwise). Returns the compact diagonals of the transpose.
   """Transposes a tridiagonal matrix.
 
   Args:
@@ -1039,6 +1235,12 @@ def _TransposeTridiagonalMatrix(diags):
 
 
 def _MatmulExtractingThreeDiagonals(x, y_tr):
+  # [FUNCTION DOC]
+  # HELPER: used by the tridiagonal solve gradient.
+  # Computes only the main, super and sub diagonals of the product of x and the transpose of
+  # y_tr (second matrix passed already transposed) via elementwise products and sums, in linear
+  # rather than quadratic memory. Handles static and dynamic shapes. Returns the diagonals stacked
+  # in compact form.
   """Multiplies matrices and extracts three diagonals from the product.
 
   With sizes M x K and K x M, this function takes O(MK) time and O(M) space,

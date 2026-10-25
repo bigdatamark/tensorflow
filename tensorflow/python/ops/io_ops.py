@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Legacy input and file-reading ops for TensorFlow. Provides thin wrappers over generated ops for
+# saving tensors, restoring tensor slices, reading whole files and serializing tensors, plus the
+# deprecated graph-mode reader classes (a base class and whole-file, text-line, fixed-length,
+# TFRecord, LMDB and identity readers) that pull string work units from a queue.
+# It also re-exports everything from the generated io ops module. Import-time side effects:
+# exports public symbols through the API export decorator and marks the reader-related ops as
+# not differentiable. Readers are unsupported in eager mode; tf.data is the replacement.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -38,6 +46,14 @@ from tensorflow.python.util.tf_export import tf_export
 
 # pylint: disable=protected-access
 def _save(filename, tensor_names, tensors, tensor_slices=None, name="save"):
+  # [FUNCTION DOC]
+  # HELPER: internal wrapper over the generated save ops, used by checkpoint-saving code.
+  # Saves tensors to a checkpoint file under the given names. Inputs: filename (string file
+  # path), tensor_names (list of strings), tensors (list of tensors), optional tensor_slices
+  # (list of slice-spec strings, one per tensor) and an optional op name. If no slices are
+  # given the plain save op is used (each tensor is a full slice), otherwise the slice-aware
+  # save op is used. Returns the created operation. The three lists are expected to have
+  # matching lengths; mismatches are rejected by the underlying op, not checked here.
   """Save a list of tensors to a file with given names.
 
   Example usage without slice info:
@@ -72,6 +88,14 @@ def _save(filename, tensor_names, tensors, tensor_slices=None, name="save"):
 
 def _restore_slice(file_pattern, tensor_name, shape_and_slice, tensor_type,
                    name="restore_slice", preferred_shard=-1):
+  # [FUNCTION DOC]
+  # HELPER: internal wrapper over the generated restore-slice op, used by checkpoint restore code.
+  # Restores one tensor (or a slice of it) from files matching a pattern. Inputs: file_pattern
+  # (string pattern of checkpoint shards), tensor_name (string), shape_and_slice (slice-spec
+  # string), tensor_type (a dtype or anything convertible to one), optional op name and
+  # preferred_shard (integer shard to try first, default minus one meaning no preference).
+  # The dtype is converted and stripped of any reference wrapper before calling the op.
+  # Returns a tensor of that dtype. Invalid dtypes raise a type error from the conversion.
   """Restore a tensor slice from a set of files with a given pattern.
 
   Example usage:
@@ -96,6 +120,10 @@ def _restore_slice(file_pattern, tensor_name, shape_and_slice, tensor_type,
 
 @tf_export("io.read_file", v1=["io.read_file", "read_file"])
 def read_file(filename, name=None):
+  # [FUNCTION DOC]
+  # Public API for reading a whole file. Takes a filename (string or string tensor) and an
+  # optional op name, and returns a scalar string tensor holding the raw, unparsed bytes of the
+  # file. No parsing or decoding happens. Errors such as a missing file surface when the op runs.
   """Reads the contents of file.
 
   This operation returns a tensor with the entire contents of the input
@@ -137,6 +165,11 @@ def read_file(filename, name=None):
 @tf_export(
     "io.serialize_tensor", v1=["io.serialize_tensor", "serialize_tensor"])
 def serialize_tensor(tensor, name=None):
+  # [FUNCTION DOC]
+  # Public API that serializes a tensor into a scalar string tensor containing the binary
+  # encoding of a tensor protocol message. Inputs: tensor (any tensor) and an optional op name.
+  # Returns a string tensor; the inverse operation is the parse-tensor op. Delegates to the
+  # generated parsing op and has no side effects.
   r"""Transforms a Tensor into a serialized TensorProto proto.
 
   This operation transforms data in a `tf.Tensor` into a `tf.Tensor` of type
@@ -216,6 +249,13 @@ def serialize_tensor(tensor, name=None):
 
 @tf_export(v1=["ReaderBase"])
 class ReaderBase:
+  # [CLASS DOC]
+  # Base class for the deprecated graph-mode readers. A reader turns string work units (usually
+  # filenames, taken from a queue) into one key/value record per step. It holds the op reference
+  # that implements the reader and a flag saying whether its state can be serialized. Subclasses
+  # create the reader op and pass it to the constructor. Each method dispatches to the resource
+  # variant of the generated op, or to the older reference variant when the reader handle is not
+  # a resource. Not usable in eager mode.
   """Base class for different Reader types, that produce a record every step.
 
   Conceptually, Readers convert string 'work units' into records (key,
@@ -236,6 +276,10 @@ class ReaderBase:
   """
 
   def __init__(self, reader_ref, supports_serialize=False):
+    # [FUNCTION DOC]
+    # Constructor. Takes reader_ref (the op or handle implementing the reader) and
+    # supports_serialize (boolean, default false) and stores both on the instance.
+    # Raises a runtime error if eager execution is currently enabled. Returns nothing.
     """Creates a new ReaderBase.
 
     Args:
@@ -256,10 +300,18 @@ class ReaderBase:
 
   @property
   def reader_ref(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the op or handle that implements this reader.
     """Op that implements the reader."""
     return self._reader_ref
 
   def read(self, queue, name=None):
+    # [FUNCTION DOC]
+    # Produces the next record from the reader. Inputs: queue (a queue object or a string tensor
+    # handle to a queue of work items) and an optional op name. If given a queue object its
+    # handle is used. For resource readers it calls the version-2 read op; otherwise it wraps the
+    # handle in a fake queue op for old-style reference readers. Returns a pair of scalar string
+    # tensors: key and value. May dequeue a new work unit when the current one is exhausted.
     """Returns the next record (key, value) pair produced by a reader.
 
     Will dequeue a work unit from queue if necessary (e.g. when the
@@ -290,6 +342,11 @@ class ReaderBase:
 
   def read_up_to(self, queue, num_records,  # pylint: disable=invalid-name
                  name=None):
+    # [FUNCTION DOC]
+    # Produces a batch of records from the reader. Inputs: queue (queue object or string tensor
+    # handle), num_records (maximum number of records to read) and an optional op name.
+    # Same resource versus reference-reader dispatch as the single-record read. Returns a pair
+    # of one-dimensional string tensors: keys and values. Fewer than num_records may be returned.
     """Returns up to num_records (key, value) pairs produced by a reader.
 
     Will dequeue a work unit from queue if necessary (e.g., when the
@@ -327,6 +384,9 @@ class ReaderBase:
                                           name=name)
 
   def num_records_produced(self, name=None):
+    # [FUNCTION DOC]
+    # Returns a 64-bit integer tensor with the count of records this reader has produced so far.
+    # Input: optional op name. Chooses the resource or reference variant of the op by handle type.
     """Returns the number of records this reader has produced.
 
     This is the same as the number of Read executions that have
@@ -347,6 +407,10 @@ class ReaderBase:
                                                     name=name)
 
   def num_work_units_completed(self, name=None):
+    # [FUNCTION DOC]
+    # Returns a 64-bit integer tensor with the number of work units (for example files) this
+    # reader has finished processing. Input: optional op name. Resource or reference variant
+    # chosen by handle type.
     """Returns the number of work units this reader has finished processing.
 
     Args:
@@ -363,6 +427,10 @@ class ReaderBase:
                                                         name=name)
 
   def serialize_state(self, name=None):
+    # [FUNCTION DOC]
+    # Returns a string tensor encoding the reader's state. Input: optional op name. Readers that
+    # do not support serialization produce an unimplemented error when the op runs; the
+    # supports_serialize flag is not checked here.
     """Produce a string tensor that encodes the state of a reader.
 
     Not all Readers support being serialized, so this can produce an
@@ -380,6 +448,10 @@ class ReaderBase:
       return gen_io_ops.reader_serialize_state(self._reader_ref, name=name)
 
   def restore_state(self, state, name=None):
+    # [FUNCTION DOC]
+    # Restores the reader from a previously serialized state. Inputs: state (string tensor from a
+    # matching reader type) and optional op name. Returns the created operation. Readers lacking
+    # support produce an unimplemented error at run time.
     """Restore a reader to a previously saved state.
 
     Not all Readers support being restored, so this can produce an
@@ -401,10 +473,16 @@ class ReaderBase:
 
   @property
   def supports_serialize(self):
+    # [FUNCTION DOC]
+    # Read-only property: true if this reader implementation can serialize its state, as given at
+    # construction time.
     """Whether the Reader implementation can serialize its state."""
     return self._supports_serialize
 
   def reset(self, name=None):
+    # [FUNCTION DOC]
+    # Resets the reader to its initial clean state. Input: optional op name. Returns the created
+    # operation, which discards progress when run.
     """Restore a reader to its initial clean state.
 
     Args:
@@ -430,6 +508,9 @@ ops.NotDifferentiable("ReaderReset")
 
 @tf_export(v1=["WholeFileReader"])
 class WholeFileReader(ReaderBase):
+  # [CLASS DOC]
+  # Deprecated reader whose records are (filename, entire file contents) pairs. Work units are
+  # filenames from a queue. Supports state serialization. Graph mode only.
   """A Reader that outputs the entire contents of a file as a value.
 
   To use, enqueue filenames in a Queue.  The output of Read will
@@ -447,6 +528,10 @@ class WholeFileReader(ReaderBase):
       None, "Queue-based input pipelines have been replaced by `tf.data`. Use "
       "`tf.data.Dataset.map(tf.read_file)`.")
   def __init__(self, name=None):
+    # [FUNCTION DOC]
+    # Constructor (deprecated, emits a deprecation warning). Optional op name. Creates the
+    # whole-file reader op and initializes the base class with serialization support enabled.
+    # Raises a runtime error in eager mode via the base class.
     """Create a WholeFileReader.
 
     Args:
@@ -461,6 +546,9 @@ ops.NotDifferentiable("WholeFileReader")
 
 @tf_export(v1=["TextLineReader"])
 class TextLineReader(ReaderBase):
+  # [CLASS DOC]
+  # Deprecated reader that outputs each line of a text file (newline stripped) as a record.
+  # Does not support state serialization. Graph mode only.
   """A Reader that outputs the lines of a file delimited by newlines.
 
   Newlines are stripped from the output.
@@ -477,6 +565,10 @@ class TextLineReader(ReaderBase):
       None, "Queue-based input pipelines have been replaced by `tf.data`. Use "
       "`tf.data.TextLineDataset`.")
   def __init__(self, skip_header_lines=None, name=None):
+    # [FUNCTION DOC]
+    # Constructor (deprecated). Inputs: skip_header_lines (optional integer, lines skipped at the
+    # start of every file; null means the op default of zero) and optional op name. Creates the
+    # text-line reader op and initializes the base class without serialization support.
     """Create a TextLineReader.
 
     Args:
@@ -494,6 +586,9 @@ ops.NotDifferentiable("TextLineReader")
 
 @tf_export(v1=["FixedLengthRecordReader"])
 class FixedLengthRecordReader(ReaderBase):
+  # [CLASS DOC]
+  # Deprecated reader that outputs fixed-size byte records from binary files. Does not support
+  # state serialization. Graph mode only.
   """A Reader that outputs fixed-length records from a file.
 
   See ReaderBase for supported methods.
@@ -515,6 +610,11 @@ class FixedLengthRecordReader(ReaderBase):
                hop_bytes=None,
                name=None,
                encoding=None):
+    # [FUNCTION DOC]
+    # Constructor (deprecated). Inputs: record_bytes (integer size of each record), optional
+    # header_bytes, footer_bytes and hop_bytes (integers, zero by default when null), optional
+    # op name and encoding (compression type of the file, none by default). Creates the
+    # fixed-length reader op and initializes the base class without serialization support.
     """Create a FixedLengthRecordReader.
 
     Args:
@@ -540,6 +640,9 @@ ops.NotDifferentiable("FixedLengthRecordReader")
 
 @tf_export(v1=["TFRecordReader"])
 class TFRecordReader(ReaderBase):
+  # [CLASS DOC]
+  # Deprecated reader that outputs the records of TFRecord files. Does not support state
+  # serialization. Graph mode only.
   """A Reader that outputs the records from a TFRecords file.
 
   See ReaderBase for supported methods.
@@ -555,6 +658,10 @@ class TFRecordReader(ReaderBase):
       None, "Queue-based input pipelines have been replaced by `tf.data`. Use "
       "`tf.data.TFRecordDataset`.")
   def __init__(self, name=None, options=None):
+    # [FUNCTION DOC]
+    # Constructor (deprecated). Inputs: optional op name and optional TFRecord options object,
+    # from which the compression type string is derived. Creates the TFRecord reader op and
+    # initializes the base class without serialization support.
     """Create a TFRecordReader.
 
     Args:
@@ -574,6 +681,9 @@ ops.NotDifferentiable("TFRecordReader")
 
 @tf_export(v1=["LMDBReader"])
 class LMDBReader(ReaderBase):
+  # [CLASS DOC]
+  # Deprecated reader that outputs records from an LMDB database file. Does not support state
+  # serialization. Graph mode only.
   """A Reader that outputs the records from a LMDB file.
 
   See ReaderBase for supported methods.
@@ -588,6 +698,11 @@ class LMDBReader(ReaderBase):
       None, "Queue-based input pipelines have been replaced by `tf.data`. Use "
       "`tf.contrib.data.LMDBDataset`.")
   def __init__(self, name=None, options=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the options argument is accepted but immediately discarded and has no effect,
+    # although the docstring describes it as an LMDB options object.
+    # Constructor (deprecated). Optional op name; creates the LMDB reader op and initializes the
+    # base class without serialization support.
     """Create a LMDBReader.
 
     Args:
@@ -604,6 +719,9 @@ ops.NotDifferentiable("LMDBReader")
 
 @tf_export(v1=["IdentityReader"])
 class IdentityReader(ReaderBase):
+  # [CLASS DOC]
+  # Deprecated reader that outputs each queued work string as both key and value. Supports state
+  # serialization. Graph mode only.
   """A Reader that outputs the queued work as both the key and value.
 
   To use, enqueue strings in a Queue.  Read will take the front
@@ -621,6 +739,9 @@ class IdentityReader(ReaderBase):
       None, "Queue-based input pipelines have been replaced by `tf.data`. Use "
       "`tf.data.Dataset.map(...)`.")
   def __init__(self, name=None):
+    # [FUNCTION DOC]
+    # Constructor (deprecated). Optional op name. Creates the identity reader op and initializes
+    # the base class with serialization support enabled.
     """Create a IdentityReader.
 
     Args:
