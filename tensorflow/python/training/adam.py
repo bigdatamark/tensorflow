@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Defines the TF1 AdamOptimizer (exported under the v1 train namespace), an optimizer subclass
+# implementing the Adam algorithm with first and second moment slots per variable and shared
+# beta power accumulators that are updated once per step. Dense updates use generated fused ops;
+# sparse updates are composed from assignment and scatter-add operations. Import-time side
+# effect: registers the public export of the class.
+#
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +33,13 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export(v1=["train.AdamOptimizer"])
 class AdamOptimizer(optimizer.Optimizer):
+  # [CLASS DOC]
+  # Optimizer implementing Adam. Holds learning rate, beta1, beta2 and epsilon (numbers,
+  # tensors or, in eager mode, callables) and their tensor versions created at prepare time.
+  # Per variable it keeps zero-initialized moment slots m and v; across variables it keeps two
+  # non-slot variables (beta1 power and beta2 power) created on the device of the first variable
+  # by name. Overrides the dense and sparse apply hooks and the finish hook which advances the
+  # power accumulators.
   """Optimizer that implements the Adam algorithm.
 
   References:
@@ -113,6 +127,12 @@ class AdamOptimizer(optimizer.Optimizer):
       name="Adam",
       use_own_namescope_for_non_slot_vars=False,
   ):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: learning_rate (default 0.001), beta1 (default 0.9) and beta2 (default
+    # 0.999) as numbers or tensors, epsilon (default 1e-8), use_locking (default false), name
+    # (default "Adam"), use_own_namescope_for_non_slot_vars (default false; passed to the base
+    # class to place non-slot variables in a root name scope). Stores the hyperparameters;
+    # tensor copies start empty and are filled by the prepare hook. Returns nothing.
     r"""Construct a new Adam optimizer.
 
     Initialization:
@@ -178,6 +198,10 @@ class AdamOptimizer(optimizer.Optimizer):
     self._epsilon_t = None
 
   def _get_beta_accumulators(self):
+    # [FUNCTION DOC]
+    # HELPER: fetches the two shared accumulators. Takes no arguments. Inside the initialization
+    # scope, looks up the non-slot variables named beta1 power and beta2 power for the current
+    # graph (none in eager mode). Returns a pair of those variables.
     with ops.init_scope():
       if context.executing_eagerly():
         graph = None
@@ -187,6 +211,11 @@ class AdamOptimizer(optimizer.Optimizer):
               self._get_non_slot_variable("beta2_power", graph=graph))
 
   def _create_slots(self, var_list):
+    # [FUNCTION DOC]
+    # HELPER: base-class hook creating optimizer state. Input: var_list, variables to update.
+    # Creates the beta1 power and beta2 power non-slot variables (initialized to beta1 and beta2)
+    # colocated with the variable having the smallest name, so the device is the same across
+    # workers; then creates zero-filled slots m and v for every variable. Returns nothing.
     # Create the beta1 and beta2 accumulators on the same device as the first
     # variable. Sort the var_list to make sure this device is consistent across
     # workers (these need to go on the same PS, otherwise some updates are
@@ -203,6 +232,10 @@ class AdamOptimizer(optimizer.Optimizer):
       self._zeros_slot(v, "v", self._name)
 
   def _prepare(self):
+    # [FUNCTION DOC]
+    # HELPER: base-class hook run before applying gradients. Resolves learning rate, beta1,
+    # beta2 and epsilon (calling any callables) and converts them to tensors stored on the
+    # optimizer. Returns nothing.
     lr = self._call_if_callable(self._lr)
     beta1 = self._call_if_callable(self._beta1)
     beta2 = self._call_if_callable(self._beta2)
@@ -214,6 +247,11 @@ class AdamOptimizer(optimizer.Optimizer):
     self._epsilon_t = ops.convert_to_tensor(epsilon, name="epsilon")
 
   def _apply_dense(self, grad, var):
+    # [FUNCTION DOC]
+    # Dense Adam update for a reference variable. Inputs: grad, dense gradient; var, the
+    # variable. Uses its m and v slots, the beta power accumulators and all hyperparameters cast
+    # to the variable's dtype, honoring locking. Returns the underlying operation of the fused
+    # update (not the output tensor).
     m = self.get_slot(var, "m")
     v = self.get_slot(var, "v")
     beta1_power, beta2_power = self._get_beta_accumulators()
@@ -231,6 +269,10 @@ class AdamOptimizer(optimizer.Optimizer):
         use_locking=self._use_locking).op
 
   def _resource_apply_dense(self, grad, var):
+    # [FUNCTION DOC]
+    # Dense update for a resource variable: uses resource handles of the variable and slots and
+    # casts accumulators and hyperparameters to the gradient's dtype. Inputs: grad, var.
+    # Returns the update operation.
     m = self.get_slot(var, "m")
     v = self.get_slot(var, "v")
     beta1_power, beta2_power = self._get_beta_accumulators()
@@ -248,6 +290,15 @@ class AdamOptimizer(optimizer.Optimizer):
         use_locking=self._use_locking)
 
   def _apply_sparse_shared(self, grad, var, indices, scatter_add):
+    # [FUNCTION DOC]
+    # HELPER: common sparse update logic for reference and resource variables. Inputs: grad,
+    # gradient values for the selected rows; var, the variable; indices, selected row indices;
+    # scatter_add, a callable adding values at indices into a variable and returning the
+    # updated value. Computes the bias-corrected learning rate from the beta powers, decays the
+    # whole first moment by beta1 and scatter-adds the scaled gradient, does the same for the
+    # second moment with beta2 and squared gradient, then subtracts the Adam step from the
+    # variable. Ordering is enforced with control dependencies. Returns a grouped operation of
+    # the variable, m and v updates.
     beta1_power, beta2_power = self._get_beta_accumulators()
     beta1_power = math_ops.cast(beta1_power, var.dtype.base_dtype)
     beta2_power = math_ops.cast(beta2_power, var.dtype.base_dtype)
@@ -274,6 +325,10 @@ class AdamOptimizer(optimizer.Optimizer):
     return control_flow_ops.group(*[var_update, m_t, v_t])
 
   def _apply_sparse(self, grad, var):
+    # [FUNCTION DOC]
+    # Sparse update for a reference variable. Inputs: grad, indexed-slices gradient; var, the
+    # variable. Delegates to the shared sparse logic with the gradient values and indices and a
+    # scatter-add that honors the locking setting. Returns that operation.
     return self._apply_sparse_shared(
         grad.values,
         var,
@@ -285,15 +340,29 @@ class AdamOptimizer(optimizer.Optimizer):
             use_locking=self._use_locking))
 
   def _resource_scatter_add(self, x, i, v):
+    # [FUNCTION DOC]
+    # HELPER: scatter-add for resource variables. Inputs: x, resource variable; i, indices;
+    # v, values to add. Performs the resource scatter add and, after it completes (control
+    # dependency), returns the variable's current value.
     with ops.control_dependencies(
         [resource_variable_ops.resource_scatter_add(x.handle, i, v)]):
       return x.value()
 
   def _resource_apply_sparse(self, grad, var, indices):
+    # [FUNCTION DOC]
+    # Sparse update for a resource variable. Inputs: grad, gradient values; var, resource
+    # variable; indices, row indices. Delegates to the shared sparse logic using the resource
+    # scatter-add helper. Returns that operation.
     return self._apply_sparse_shared(grad, var, indices,
                                      self._resource_scatter_add)
 
   def _finish(self, update_ops, name_scope):
+    # [FUNCTION DOC]
+    # Base-class hook run after all variable updates. Inputs: update_ops, list of update
+    # operations for the variables; name_scope, name for the final grouped operation. After
+    # all updates complete (control dependency), multiplies the beta1 power and beta2 power
+    # accumulators by beta1 and beta2 (colocated, honoring locking). Returns one grouped
+    # operation covering the updates and both accumulator updates.
     # Update the power accumulators.
     with ops.control_dependencies(update_ops):
       beta1_power, beta2_power = self._get_beta_accumulators()

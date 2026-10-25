@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Functional tests for the AdagradDAOptimizer: numeric checks of one update step for
+# no regularization (zero and non-zero initial variables, reference and resource variables),
+# L1 only, and L1 plus L2, plus a sparse-gradient minimize test. Expected numbers come from the
+# closed-form dual averaging update. Run via the TensorFlow test main.
+#
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,8 +35,18 @@ from tensorflow.python.training import adagrad_da
 
 
 class AdagradDAOptimizerTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for AdagradDAOptimizer. Every test builds its own graph, a global step variable
+  # and small vectors with fixed gradients, applies one optimizer step and compares with
+  # precomputed expected values.
 
   def doTestAdagradDAwithoutRegularizationBasic1(self, use_resource=False):
+    # [FUNCTION DOC]
+    # HELPER: shared body for the no-regularization test. Input: use_resource, use resource
+    # variables instead of reference ones (default false). For float64 and float32: two
+    # zero-initialized variables, learning rate 3, initial squared accumulator 0.1, zero L1/L2.
+    # Checks initial zeros, runs one step, then expects the known negative values from the
+    # dual averaging formula (about -0.9045, -1.6036 and -0.0948, -0.1894).
     for dtype in [dtypes.float64, dtypes.float32]:
       with ops.Graph().as_default(), self.cached_session():
         global_step = variables.Variable(0, dtype=dtypes.int64)
@@ -72,13 +88,24 @@ class AdagradDAOptimizerTest(test.TestCase):
             np.array([-0.094821, -0.189358]), v1_val)
 
   def testAdagradDAWithoutRegularizationBasic1(self):
+    # [FUNCTION DOC]
+    # Scenario: run the shared no-regularization check with reference variables. Expects the
+    # helper's assertions to pass.
     self.doTestAdagradDAwithoutRegularizationBasic1()
 
   def testResourceAdagradDAWithoutRegularizationBasic1(self):
+    # [FUNCTION DOC]
+    # Scenario: same as the basic test but using resource variables. Expects the same values.
     self.doTestAdagradDAwithoutRegularizationBasic1(use_resource=True)
 
   @test_util.run_v1_only("loss needs to be callable in v2")
   def testMinimizeSparseResourceVariable(self):
+    # [FUNCTION DOC]
+    # Scenario (v1 only, since the loss must be callable in v2): a one-row resource variable is
+    # read through an embedding lookup, multiplied by a constant and squared as the loss, then
+    # minimized with AdagradDA (learning rate one) for one step with a resource global step.
+    # Expects the initial value before the step and approximately minus one in each entry after
+    # (relative tolerance one percent). Repeated for float32 and float64.
     for dtype in [dtypes.float32, dtypes.float64]:
       with self.cached_session():
         var0 = resource_variable_ops.ResourceVariable([[1.0, 2.0]], dtype=dtype)
@@ -100,6 +127,10 @@ class AdagradDAOptimizerTest(test.TestCase):
                                            rtol=0.01)
 
   def testAdagradDAwithoutRegularizationBasic2(self):
+    # [FUNCTION DOC]
+    # Scenario: variables start at non-zero values (one, two and four, three), no
+    # regularization, one step. Expects the same final values as for zero-initialized variables,
+    # since the dual averaging result does not depend on the starting value.
     for dtype in [dtypes.float64, dtypes.float32]:
       with ops.Graph().as_default(), self.cached_session():
         global_step = variables.Variable(0, dtype=dtypes.int64)
@@ -132,6 +163,10 @@ class AdagradDAOptimizerTest(test.TestCase):
             np.array([-0.094821, -0.189358]), v1_val)
 
   def testAdagradDAWithL1(self):
+    # [FUNCTION DOC]
+    # Scenario: L1 strength 0.001, no L2, one step on non-zero starting variables. Expects the
+    # slightly shrunken results (about -0.8955, -1.5956 and -0.0853, -0.1799) compared with the
+    # unregularized case.
     for dtype in [dtypes.float64, dtypes.float32]:
       with ops.Graph().as_default(), self.cached_session():
         global_step = variables.Variable(0, dtype=dtypes.int64)
@@ -164,6 +199,9 @@ class AdagradDAOptimizerTest(test.TestCase):
             np.array([-0.085339, -0.17989]), v1_val)
 
   def testAdagradDAWithL1_L2(self):
+    # [FUNCTION DOC]
+    # Scenario: L1 strength 0.001 and L2 strength 2.0, one step on non-zero starting variables.
+    # Expects strongly shrunken results (about -0.0469, -0.0937 and -0.0043, -0.0090).
     for dtype in [dtypes.float64, dtypes.float32]:
       with ops.Graph().as_default(), self.cached_session():
         global_step = variables.Variable(0, dtype=dtypes.int64)

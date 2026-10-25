@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Unit tests for the AdadeltaOptimizer in the training package: numeric update checks against
+# a NumPy reference (reference and resource variables, plain and callable hyperparameters)
+# and a sparse-gradient minimize test on a resource variable. Run via the TensorFlow test main.
+#
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,8 +34,20 @@ from tensorflow.python.training import adadelta
 
 
 class AdadeltaOptimizerTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for AdadeltaOptimizer. Shares one parameterized helper that runs the basic
+  # numeric scenario; individual tests choose the variable kind and parameter style.
 
   def doTestBasic(self, use_resource=False, use_callable_params=False):
+    # [FUNCTION DOC]
+    # HELPER: shared body for the basic tests. Inputs: use_resource, use resource variables
+    # instead of reference variables (default false); use_callable_params, pass learning rate,
+    # rho and epsilon as callables (default false). For half and float32 dtypes, several
+    # gradients and learning rates, it creates two variables, applies four Adadelta steps with
+    # the optimizer, and computes the expected accumulators and updates in NumPy. In graph mode
+    # it also checks slot names, count, shapes, that slots are not trainable, and after each step
+    # that slot values and variable values match the reference within tolerance. In eager mode
+    # only the stepping runs (variable and slot checks are skipped). Initial values are checked.
     num_updates = 4  # number of ADADELTA steps to perform
     for dtype in [dtypes.half, dtypes.float32]:
       for grad in [0.2, 0.1, 0.01]:
@@ -151,19 +168,34 @@ class AdadeltaOptimizerTest(test.TestCase):
                   rtol=1e-5)
 
   def testBasic(self):
+    # [FUNCTION DOC]
+    # Scenario: run the shared basic check with reference variables inside a cached session.
+    # Expects all numeric and slot assertions of the helper to hold.
     with self.cached_session():
       self.doTestBasic(use_resource=False)
 
   @test_util.run_in_graph_and_eager_modes
   def testResourceBasic(self):
+    # [FUNCTION DOC]
+    # Scenario: run the shared basic check with resource variables, in both graph and eager
+    # modes. Expects the helper's assertions to hold.
     self.doTestBasic(use_resource=True)
 
   def testBasicCallableParams(self):
+    # [FUNCTION DOC]
+    # Scenario: in eager mode, run the shared basic check with resource variables and
+    # hyperparameters given as callables. Expects the same updates as with plain numbers.
     with context.eager_mode():
       self.doTestBasic(use_resource=True, use_callable_params=True)
 
   @test_util.run_deprecated_v1
   def testMinimizeSparseResourceVariable(self):
+    # [FUNCTION DOC]
+    # Scenario (v1 graph mode, half/float32/float64): a one-row resource variable is read
+    # through an embedding lookup, multiplied with a constant and squared as the loss;
+    # Adadelta with learning rate, rho and epsilon all one minimizes it for one step. Expects
+    # the initial value to be unchanged before the step and the variable to equal the known
+    # updated values afterwards.
     for dtype in [dtypes.half, dtypes.float32, dtypes.float64]:
       with self.cached_session():
         var0 = resource_variable_ops.ResourceVariable([[1.0, 2.0]], dtype=dtype)

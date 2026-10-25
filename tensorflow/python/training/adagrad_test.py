@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# KNOWN ISSUE: the module docstring says "aggregate operations", but the file actually tests
+# the AdagradOptimizer.
+# Functional tests for the AdagradOptimizer: dense and sparse updates, reference and resource
+# variables, locking, callable and tensor learning rates, repeated sparse indices, numerical
+# stability, slot sharing between apply calls, and dynamic-shape variables. Run via the
+# TensorFlow test main.
+#
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,11 +40,22 @@ from tensorflow.python.training import adagrad
 
 
 class AdagradOptimizerTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for AdagradOptimizer. Tests mostly build small variables with fixed gradients,
+  # run several optimizer steps and compare against precomputed expected values. A shared helper
+  # covers the basic scenario.
 
   def doTestBasic(self,
                   use_locking=False,
                   use_resource=False,
                   use_callable_params=False):
+    # [FUNCTION DOC]
+    # HELPER: shared body for the basic tests. Inputs: use_locking, pass locking to the
+    # optimizer (default false); use_resource, use resource variables (default false);
+    # use_callable_params, give the learning rate as a callable (default false). For half,
+    # float32 and float64: two variables with fixed gradients, learning rate three and initial
+    # accumulator 0.1. Checks initial values, runs three steps (graph or eager) and expects the
+    # known final values.
     for dtype in [dtypes.half, dtypes.float32, dtypes.float64]:
       if use_resource:
         var0 = resource_variable_ops.ResourceVariable([1.0, 2.0], dtype=dtype)
@@ -79,21 +98,35 @@ class AdagradOptimizerTest(test.TestCase):
           np.array([2.715679168701172, 3.715679168701172]), v1_val)
 
   def testBasic(self):
+    # [FUNCTION DOC]
+    # Scenario: shared basic check with reference variables, no locking. Expects known values.
     self.doTestBasic(use_locking=False)
 
   @test_util.run_in_graph_and_eager_modes
   def testBasicResource(self):
+    # [FUNCTION DOC]
+    # Scenario: shared basic check with resource variables in graph and eager modes.
     self.doTestBasic(use_locking=False, use_resource=True)
 
   def testBasicCallableParams(self):
+    # [FUNCTION DOC]
+    # Scenario: in eager mode, shared basic check with resource variables and a callable
+    # learning rate. Expects the same values as with a plain number.
     with context.eager_mode():
       self.doTestBasic(
           use_locking=False, use_resource=True, use_callable_params=True)
 
   def testBasicLocked(self):
+    # [FUNCTION DOC]
+    # Scenario: shared basic check with locking enabled. Expects the same values.
     self.doTestBasic(use_locking=True)
 
   def testMinimizeSparseResourceVariable(self):
+    # [FUNCTION DOC]
+    # Scenario (graph, three dtypes): a 2x2 resource variable is read through an embedding
+    # lookup of row zero, multiplied by a constant and squared as loss; Adagrad with learning
+    # rate one minimizes it for one step. Expects the initial value before and, after, only row
+    # zero changed (to about 0 and 1) while row one stays at three and four.
     with ops.Graph().as_default():
       for dtype in [dtypes.half, dtypes.float32, dtypes.float64]:
         with self.cached_session():
@@ -115,6 +148,9 @@ class AdagradOptimizerTest(test.TestCase):
                                              atol=0.01)
 
   def testTensorLearningRate(self):
+    # [FUNCTION DOC]
+    # Scenario (graph, three dtypes): the learning rate is a constant tensor instead of a
+    # number. Three steps on two variables. Expects the same final values as the basic test.
     with ops.Graph().as_default():
       for dtype in [dtypes.half, dtypes.float32, dtypes.float64]:
         with self.cached_session():
@@ -142,6 +178,10 @@ class AdagradOptimizerTest(test.TestCase):
               self.evaluate(var1))
 
   def testSparseBasic(self):
+    # [FUNCTION DOC]
+    # Scenario (graph, three dtypes): sparse gradients touching only one row of each of two
+    # variables. Three steps. Expects only the touched rows to change, to the known values
+    # (for example -1.6026 for the first variable's first row), untouched rows unchanged.
     with ops.Graph().as_default():
       for dtype in [dtypes.half, dtypes.float32, dtypes.float64]:
         with self.cached_session():
@@ -174,6 +214,10 @@ class AdagradOptimizerTest(test.TestCase):
               np.array([[3.0], [3.715679168701172]]), self.evaluate(var1))
 
   def testSparseRepeatedIndices(self):
+    # [FUNCTION DOC]
+    # Scenario (graph, three dtypes): one variable is updated with a sparse gradient that
+    # repeats an index twice, another with the equivalent pre-aggregated gradient. Expects both
+    # variables to be equal initially and after each of three steps.
     with ops.Graph().as_default():
       for dtype in [dtypes.half, dtypes.float32, dtypes.float64]:
         with self.cached_session():
@@ -205,6 +249,10 @@ class AdagradOptimizerTest(test.TestCase):
                                 self.evaluate(repeated_index_update_var))
 
   def testSparseRepeatedIndicesResourceVariable(self):
+    # [FUNCTION DOC]
+    # Scenario (graph, three dtypes): two resource variables, one whose loss looks up the same
+    # index twice and one whose loss is the doubled single lookup; each minimized with Adagrad
+    # (learning rate two). Expects both variables to stay equal initially and over three steps.
     with ops.Graph().as_default():
       for dtype in [dtypes.half, dtypes.float32, dtypes.float64]:
         with self.cached_session():
@@ -230,6 +278,12 @@ class AdagradOptimizerTest(test.TestCase):
                 self.evaluate(var_repeated), self.evaluate(var_aggregated))
 
   def testSparseStability(self):
+    # [FUNCTION DOC]
+    # Scenario (graph, three dtypes): a one-row variable with a tiny sparse gradient, learning
+    # rate one. For 100 repetitions it re-initializes all variables, runs one update and checks
+    # that the accumulator slot is back to 0.1 in every entry and the variable has the known
+    # updated values, i.e. the result is numerically stable and repeatable. Also checks the
+    # slot names list holds only the accumulator.
     with ops.Graph().as_default():
       for dtype in [dtypes.half, dtypes.float32, dtypes.float64]:
         with self.cached_session():
@@ -268,6 +322,11 @@ class AdagradOptimizerTest(test.TestCase):
                 ]]), self.evaluate(var0))
 
   def testSharing(self):
+    # [FUNCTION DOC]
+    # Scenario (graph, three dtypes): one optimizer's apply_gradients is called twice on the same
+    # variables; the two update ops are run alternately (first, second, first). Checks slot
+    # names and shapes, and that the final values equal those of three steps of a single
+    # update, showing both applications share the same accumulators.
     with ops.Graph().as_default():
       for dtype in [dtypes.half, dtypes.float32, dtypes.float64]:
         with self.cached_session():
@@ -305,6 +364,11 @@ class AdagradOptimizerTest(test.TestCase):
               self.evaluate(var1))
 
   def testDynamicShapeVariableWithCallableInit(self):
+    # [FUNCTION DOC]
+    # Scenario: a scalar variable created without shape validation (unknown static shape) and a
+    # callable learning rate with locking. Three steps of Adagrad. Expects the initial value one
+    # and the final value of about -1.6026, showing the accumulator initializer works for
+    # variables without a fully defined shape.
     with ops.Graph().as_default():
       var0 = variable_scope.get_variable("var0",
                                          initializer=constant_op.constant(1.),

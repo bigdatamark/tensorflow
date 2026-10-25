@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# HELPER: utility module for the trackable and checkpoint machinery.
+# Provides a stable topological sort of dependency maps, a cycle error type, and the naming
+# scheme for checkpoint keys: escaping of local names, building object path strings, keys for
+# object attributes and for optimizer slot variables, and extracting object or local names
+# back from keys. Defines the constants (attribute, slot and tensor-serialization markers)
+# used in those keys. No import-time side effects beyond defining constants.
+#
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +29,10 @@ import collections
 
 
 def pretty_print_node_path(path):
+  # [FUNCTION DOC]
+  # HELPER: formats a trackable object path for error messages. Input: path, a list of
+  # edge objects each having a name (may be empty). Returns the text "root object" for an
+  # empty path, otherwise "root." followed by the edge names joined with dots.
   if not path:
     return "root object"
   else:
@@ -28,8 +40,15 @@ def pretty_print_node_path(path):
 
 
 class CyclicDependencyError(Exception):
+  # [CLASS DOC]
+  # Error raised by the dependency sort when the dependency graph contains a cycle. Carries
+  # the edges that could not be sorted in an attribute for diagnostics.
 
   def __init__(self, leftover_dependency_map):
+    # [FUNCTION DOC]
+    # Constructor. Input: leftover_dependency_map, mapping from each remaining item to the
+    # list of items it still depends on (the part of the graph left after sorting). Stores it
+    # as a public attribute and initializes the base exception with no message.
     """Creates a CyclicDependencyException."""
     # Leftover edges that were not able to be topologically sorted.
     self.leftover_dependency_map = leftover_dependency_map
@@ -37,6 +56,16 @@ class CyclicDependencyError(Exception):
 
 
 def order_by_dependency(dependency_map):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it returns a sorted array, but the code returns a
+  # reversed iterator over a list (not a list), so callers needing indexing must convert it.
+  # Topologically sorts a mapping so every item appears after the items it depends on.
+  # Input: dependency_map, mapping from hashable items to lists of items they depend on (all
+  # of which must themselves be keys). Algorithm: build the reverse edges, start from items
+  # nothing depends on, repeatedly remove them and release items whose dependents are all
+  # processed, then reverse the processing order. Returns that iterator. Raises a value error
+  # when a dependency is not a key of the map, and CyclicDependencyError (with the leftover
+  # edges) when a cycle remains. Does not modify the input.
   """Topologically sorts the keys of a map so that dependencies appear first.
 
   Uses Kahn's algorithm:
@@ -118,6 +147,11 @@ SERIALIZE_TO_TENSORS_NAME = _ESCAPE_CHAR + "TENSORS"
 
 
 def escape_local_name(name):
+  # [FUNCTION DOC]
+  # Makes an attribute name safe for use inside a checkpoint key. Input: name, a string.
+  # Doubles every escape character (dot) and replaces forward slashes with the escape
+  # character followed by an upper-case S, so slashes can serve as path separators. Returns
+  # the escaped string.
   # We need to support slashes in local names for compatibility, since this
   # naming scheme is being patched in to things like Layer.add_variable where
   # slashes were previously accepted. We also want to use slashes to indicate
@@ -128,12 +162,21 @@ def escape_local_name(name):
 
 
 def object_path_to_string(node_path_arr):
+  # [FUNCTION DOC]
+  # Input: node_path_arr, list of edge objects each with a name. Returns the escaped names
+  # joined with slashes, forming the object part of a checkpoint key (empty text for an empty
+  # list).
   """Converts a list of nodes to a string."""
   return "/".join(
       (escape_local_name(trackable.name) for trackable in node_path_arr))
 
 
 def checkpoint_key(object_path, local_name):
+  # [FUNCTION DOC]
+  # Builds the checkpoint key for one attribute of an object. Inputs: object_path, string path
+  # of the object; local_name, the attribute name. The name is escaped, except that the special
+  # tensor-serialization name yields an empty suffix. Returns the object path, the attributes
+  # marker and the suffix joined by slashes.
   """Returns the checkpoint key for a local attribute of an object."""
   key_suffix = escape_local_name(local_name)
   if local_name == SERIALIZE_TO_TENSORS_NAME:
@@ -146,12 +189,20 @@ def checkpoint_key(object_path, local_name):
 
 
 def extract_object_name(key):
+  # [FUNCTION DOC]
+  # Input: key, a checkpoint key string. Returns the part before the first slash-attributes
+  # marker, i.e. the object path. Raises a value error if the marker is absent.
   """Substrings the checkpoint key to the start of "/.ATTRIBUTES"."""
   search_key = "/" + OBJECT_ATTRIBUTES_NAME
   return key[:key.index(search_key)]
 
 
 def extract_local_name(key, prefix=None):
+  # [FUNCTION DOC]
+  # Inputs: key, a checkpoint key string; prefix, optional string (default none, treated as
+  # empty) that follows the attributes marker and is dropped along with it. Returns the text
+  # after the marker plus prefix. If the marker is not found (such as keys saved from TF1) the
+  # whole key is returned unchanged. Never raises for a missing marker.
   """Returns the substring after the "/.ATTIBUTES/" in the checkpoint key."""
   # "local name" refers to the keys of `Trackable._serialize_to_tensors.`
   prefix = prefix or ""
@@ -164,6 +215,11 @@ def extract_local_name(key, prefix=None):
 
 
 def slot_variable_key(variable_path, optimizer_path, slot_name):
+  # [FUNCTION DOC]
+  # Builds the checkpoint key of an optimizer slot variable. Inputs: variable_path, the
+  # checkpoint name of the variable being slotted; optimizer_path, path of the optimizer
+  # object; slot_name, the slot's local name (escaped). Returns the variable path, slot marker,
+  # optimizer path and escaped slot name joined by slashes.
   """Returns checkpoint key for a slot variable."""
   # Name slot variables:
   #

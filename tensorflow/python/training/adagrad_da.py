@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Defines the TF1 AdagradDAOptimizer (exported under the v1 train namespace), the Adagrad dual
+# averaging optimizer for sparse linear models, with L1/L2 regularization and a global step
+# input. Uses two accumulator slots per variable and generated training ops for updates.
+# Import-time side effect: registers the public export of the class.
+#
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +30,12 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export(v1=["train.AdagradDAOptimizer"])
 class AdagradDAOptimizer(optimizer.Optimizer):
+  # [CLASS DOC]
+  # Adagrad dual averaging optimizer. Holds the learning rate, a global step tensor, the
+  # initial squared-gradient accumulator value and L1/L2 strengths, plus a per-worker copy of
+  # the global step (plus one) made at prepare time. Keeps two slots per variable: the gradient
+  # accumulator (zeros) and the squared-gradient accumulator (initial value). Overrides dense
+  # and sparse apply hooks for reference and resource variables.
   """Adagrad Dual Averaging algorithm for sparse linear models.
 
   This optimizer takes care of regularization of unseen features in a mini batch
@@ -49,6 +61,13 @@ class AdagradDAOptimizer(optimizer.Optimizer):
                l2_regularization_strength=0.0,
                use_locking=False,
                name="AdagradDA"):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: learning_rate, number or tensor; global_step, tensor holding the
+    # current training step; initial_gradient_squared_accumulator_value, start value for the
+    # squared accumulator (default 0.1, must be positive); l1_regularization_strength and
+    # l2_regularization_strength, non-negative floats (default 0.0, not validated here);
+    # use_locking (default false); name (default "AdagradDA"). Raises a value error if the
+    # initial accumulator value is not positive. Stores all settings. Returns nothing.
     """Construct a new AdagradDA optimizer.
 
     Args:
@@ -84,6 +103,11 @@ class AdagradDAOptimizer(optimizer.Optimizer):
     self._global_step_on_worker = None
 
   def _create_slots(self, var_list):
+    # [FUNCTION DOC]
+    # HELPER: base-class hook creating optimizer state. Input: var_list, variables to update.
+    # For each, builds (colocated with the variable) a zero tensor and a tensor filled with the
+    # initial squared accumulator value, both shaped and typed like the variable, and registers
+    # them as the gradient accumulator and gradient squared accumulator slots. Returns nothing.
     for v in var_list:
       with ops.colocate_with(v):
         g_val = constant_op.constant(
@@ -97,6 +121,10 @@ class AdagradDAOptimizer(optimizer.Optimizer):
                              self._name)
 
   def _prepare(self):
+    # [FUNCTION DOC]
+    # HELPER: base-class hook run before applying gradients. Converts the learning rate to a
+    # tensor and creates a worker-local copy of the global step incremented by one (colocated
+    # with the learning rate tensor) to avoid loading the parameter server. Returns nothing.
     self._learning_rate_tensor = ops.convert_to_tensor(
         self._learning_rate, name="learning_rate")
     # Performance optimization so that worker creates a copy of the global step
@@ -105,6 +133,11 @@ class AdagradDAOptimizer(optimizer.Optimizer):
       self._global_step_on_worker = array_ops.identity(self._global_step) + 1
 
   def _apply_dense(self, grad, var):
+    # [FUNCTION DOC]
+    # Dense AdagradDA update for a reference variable. Inputs: grad, dense gradient; var, the
+    # variable. Uses both accumulator slots, a copy of the worker global step placed on the
+    # variable's device, and learning rate and L1/L2 strengths cast to the variable's dtype.
+    # Returns the update operation.
     g_acc = self.get_slot(var, "gradient_accumulator")
     gg_acc = self.get_slot(var, "gradient_squared_accumulator")
     with ops.device(var.device):
@@ -121,6 +154,11 @@ class AdagradDAOptimizer(optimizer.Optimizer):
         use_locking=self._use_locking)
 
   def _resource_apply_dense(self, grad, var):
+    # [FUNCTION DOC]
+    # Dense update for a resource variable. Same as the reference version but passes the
+    # variable's resource handle and the accumulator slots' handles, and casts the learning
+    # rate and L1/L2 strengths to the gradient's dtype. Inputs: grad, var. Returns the update
+    # operation.
     g_acc = self.get_slot(var, "gradient_accumulator")
     gg_acc = self.get_slot(var, "gradient_squared_accumulator")
     with ops.device(var.device):
@@ -137,6 +175,10 @@ class AdagradDAOptimizer(optimizer.Optimizer):
         use_locking=self._use_locking)
 
   def _apply_sparse(self, grad, var):
+    # [FUNCTION DOC]
+    # Sparse update for a reference variable. Inputs: grad, indexed-slices gradient (values and
+    # indices used); var, the variable. Same slots, device-local global step and dtype casts as
+    # the dense version. Returns the update operation.
     g_acc = self.get_slot(var, "gradient_accumulator")
     gg_acc = self.get_slot(var, "gradient_squared_accumulator")
     with ops.device(var.device):
@@ -154,6 +196,11 @@ class AdagradDAOptimizer(optimizer.Optimizer):
         use_locking=self._use_locking)
 
   def _resource_apply_sparse(self, grad, var, indices):
+    # [FUNCTION DOC]
+    # Sparse update for a resource variable. Inputs: grad, gradient values for selected rows;
+    # var, resource variable; indices, row indices. Uses resource handles for the variable and
+    # accumulators, the device-local global step copy, and casts learning rate and L1/L2
+    # strengths to the gradient's dtype. Returns the update operation.
     g_acc = self.get_slot(var, "gradient_accumulator")
     gg_acc = self.get_slot(var, "gradient_squared_accumulator")
     with ops.device(var.device):

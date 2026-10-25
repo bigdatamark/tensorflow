@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Defines the TF1 AdadeltaOptimizer (exported under the v1 train namespace), an optimizer
+# subclass implementing the Adadelta algorithm with two accumulator slots per variable.
+# It delegates the actual updates to generated training ops. Import-time side effect:
+# registers the public export of the class.
+#
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +29,12 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export(v1=["train.AdadeltaOptimizer"])
 class AdadeltaOptimizer(optimizer.Optimizer):
+  # [CLASS DOC]
+  # Optimizer implementing Adadelta. Holds the learning rate, decay rate rho and epsilon
+  # (each a number, tensor or, in eager mode, a callable) plus their tensor versions created
+  # at prepare time. Per variable it keeps two zero-initialized slots: the gradient accumulator
+  # and the update accumulator. Overrides the dense and sparse apply hooks of the base class
+  # for both ref and resource variables.
   """Optimizer that implements the Adadelta algorithm.
 
   References:
@@ -105,6 +117,13 @@ class AdadeltaOptimizer(optimizer.Optimizer):
 
   def __init__(self, learning_rate=0.001, rho=0.95, epsilon=1e-8,
                use_locking=False, name="Adadelta"):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: learning_rate, number or tensor (default 0.001); rho, decay rate
+    # (default 0.95); epsilon, small conditioning constant (default 1e-8); use_locking, whether
+    # updates use locks (default false); name, name prefix for created ops (default "Adadelta").
+    # Passes locking and name to the base class and stores the hyperparameters; tensor copies
+    # start empty and are filled by the prepare hook. Returns nothing.
+    # KNOWN ISSUE: the docstring recommends 1.0 to match the paper while the default is 0.001.
     """Construct a new Adadelta optimizer.
 
     Args:
@@ -130,11 +149,19 @@ class AdadeltaOptimizer(optimizer.Optimizer):
     self._epsilon_t = None
 
   def _create_slots(self, var_list):
+    # [FUNCTION DOC]
+    # HELPER: base-class hook creating optimizer state. Input: var_list, list of variables to
+    # be updated. For each variable creates two zero-filled slots named accum and accum_update
+    # (scoped by the optimizer name). Returns nothing.
     for v in var_list:
       self._zeros_slot(v, "accum", self._name)
       self._zeros_slot(v, "accum_update", self._name)
 
   def _prepare(self):
+    # [FUNCTION DOC]
+    # HELPER: base-class hook run before applying gradients. Resolves learning rate, rho and
+    # epsilon (calling them if they are callables) and converts each to a tensor stored on the
+    # optimizer. Takes no arguments, returns nothing.
     lr = self._call_if_callable(self._lr)
     rho = self._call_if_callable(self._rho)
     epsilon = self._call_if_callable(self._epsilon)
@@ -144,6 +171,11 @@ class AdadeltaOptimizer(optimizer.Optimizer):
     self._epsilon_t = ops.convert_to_tensor(epsilon, name="epsilon")
 
   def _apply_dense(self, grad, var):
+    # [FUNCTION DOC]
+    # Applies the Adadelta update for a dense gradient to a reference variable. Inputs: grad,
+    # dense gradient tensor; var, the variable. Looks up the two slots and builds the fused
+    # apply op with hyperparameters cast to the variable's dtype, honoring the locking
+    # setting. Returns the created update operation.
     accum = self.get_slot(var, "accum")
     accum_update = self.get_slot(var, "accum_update")
     return gen_training_ops.apply_adadelta(
@@ -157,6 +189,10 @@ class AdadeltaOptimizer(optimizer.Optimizer):
         use_locking=self._use_locking)
 
   def _resource_apply_dense(self, grad, var):
+    # [FUNCTION DOC]
+    # Same as the dense apply hook but for resource variables: passes the resource handles of
+    # the variable and slots, and casts hyperparameters to the gradient's dtype. Inputs: grad,
+    # dense gradient; var, resource variable. Returns the created update operation.
     accum = self.get_slot(var, "accum")
     accum_update = self.get_slot(var, "accum_update")
     return gen_training_ops.resource_apply_adadelta(
@@ -170,6 +206,10 @@ class AdadeltaOptimizer(optimizer.Optimizer):
         use_locking=self._use_locking)
 
   def _apply_sparse(self, grad, var):
+    # [FUNCTION DOC]
+    # Applies the update for a sparse gradient (indexed slices) to a reference variable.
+    # Inputs: grad, indexed-slices gradient (its values and indices are used); var, the
+    # variable. Hyperparameters are cast to the variable's dtype. Returns the update operation.
     accum = self.get_slot(var, "accum")
     accum_update = self.get_slot(var, "accum_update")
     return gen_training_ops.sparse_apply_adadelta(
@@ -184,6 +224,10 @@ class AdadeltaOptimizer(optimizer.Optimizer):
         use_locking=self._use_locking)
 
   def _resource_apply_sparse(self, grad, var, indices):
+    # [FUNCTION DOC]
+    # Sparse update for resource variables. Inputs: grad, tensor of gradient values for the
+    # selected rows; var, resource variable; indices, row indices being updated. Uses resource
+    # handles and casts hyperparameters to the gradient's dtype. Returns the update operation.
     accum = self.get_slot(var, "accum")
     accum_update = self.get_slot(var, "accum_update")
     return gen_training_ops.resource_sparse_apply_adadelta(

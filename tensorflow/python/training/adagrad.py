@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Defines the TF1 AdagradOptimizer (exported under the v1 train namespace), an optimizer
+# subclass implementing Adagrad with one accumulator slot per variable, initialized to a
+# positive constant. Updates are delegated to generated training ops. Import-time side effect:
+# registers the public export of the class.
+#
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +32,11 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export(v1=["train.AdagradOptimizer"])
 class AdagradOptimizer(optimizer.Optimizer):
+  # [CLASS DOC]
+  # Optimizer implementing Adagrad. Holds the learning rate (number, tensor or callable), the
+  # initial accumulator value and, after preparation, the learning rate as a tensor. Keeps one
+  # slot named accumulator per variable, filled with the initial value. Overrides the dense and
+  # sparse apply hooks for reference and resource variables.
   """Optimizer that implements the Adagrad algorithm.
 
   References:
@@ -108,6 +119,12 @@ class AdagradOptimizer(optimizer.Optimizer):
 
   def __init__(self, learning_rate, initial_accumulator_value=0.1,
                use_locking=False, name="Adagrad"):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: learning_rate, number or tensor (required); initial_accumulator_value,
+    # start value of the accumulators (default 0.1, must be positive); use_locking, whether
+    # updates use locks (default false); name, op name prefix (default "Adagrad"). Raises a
+    # value error if the initial accumulator value is zero or negative. Stores the
+    # hyperparameters; the learning rate tensor is created later. Returns nothing.
     """Construct a new Adagrad optimizer.
 
     Args:
@@ -132,6 +149,11 @@ class AdagradOptimizer(optimizer.Optimizer):
     self._learning_rate_tensor = None
 
   def _create_slots(self, var_list):
+    # [FUNCTION DOC]
+    # HELPER: base-class hook creating optimizer state. Input: var_list, variables to update.
+    # For each, creates an accumulator slot filled with the initial accumulator value: via a
+    # constant initializer when the shape is fully known, otherwise via a deferred fill
+    # computed from the variable's runtime shape. Returns nothing.
     for v in var_list:
       dtype = v.dtype.base_dtype
       if v.get_shape().is_fully_defined():
@@ -143,7 +165,15 @@ class AdagradOptimizer(optimizer.Optimizer):
                                               "accumulator", self._name)
 
   def _init_constant_op(self, v, dtype):
+    # [FUNCTION DOC]
+    # HELPER: builds an initializer for variables lacking a static shape. Inputs: v, the
+    # variable; dtype, element type of the slot. Returns a no-argument callable that produces a
+    # tensor of the variable's dynamic shape filled with the initial accumulator value, cast to
+    # the dtype.
     def init():
+      # [FUNCTION DOC]
+      # HELPER: the returned initializer. Takes no arguments; fills a tensor shaped like the
+      # variable with the initial accumulator value, casts it to the dtype and returns it.
       # Use a Tensor instead of initializer if variable does not have
       # static shape.
       init_constant = gen_array_ops.fill(array_ops.shape(v),
@@ -152,11 +182,18 @@ class AdagradOptimizer(optimizer.Optimizer):
     return init
 
   def _prepare(self):
+    # [FUNCTION DOC]
+    # HELPER: base-class hook run before applying gradients. Resolves the learning rate
+    # (calling it if callable) and stores it as a tensor named learning_rate. Returns nothing.
     learning_rate = self._call_if_callable(self._learning_rate)
     self._learning_rate_tensor = ops.convert_to_tensor(
         learning_rate, name="learning_rate")
 
   def _apply_dense(self, grad, var):
+    # [FUNCTION DOC]
+    # Dense Adagrad update for a reference variable. Inputs: grad, dense gradient; var, the
+    # variable. Uses its accumulator slot and the learning rate cast to the variable's dtype,
+    # honoring locking. Returns the update operation.
     acc = self.get_slot(var, "accumulator")
     return gen_training_ops.apply_adagrad(
         var,
@@ -166,6 +203,10 @@ class AdagradOptimizer(optimizer.Optimizer):
         use_locking=self._use_locking)
 
   def _resource_apply_dense(self, grad, var):
+    # [FUNCTION DOC]
+    # Dense update for a resource variable, using resource handles of the variable and its
+    # accumulator and the learning rate cast to the gradient's dtype. Inputs: grad, var.
+    # Returns the update operation.
     acc = self.get_slot(var, "accumulator")
     return gen_training_ops.resource_apply_adagrad(
         var.handle,
@@ -175,6 +216,10 @@ class AdagradOptimizer(optimizer.Optimizer):
         use_locking=self._use_locking)
 
   def _apply_sparse(self, grad, var):
+    # [FUNCTION DOC]
+    # Sparse update for a reference variable. Inputs: grad, indexed-slices gradient (values and
+    # indices used); var, the variable. Learning rate cast to the variable's dtype. Returns the
+    # update operation.
     acc = self.get_slot(var, "accumulator")
     return gen_training_ops.sparse_apply_adagrad(
         var,
@@ -185,6 +230,10 @@ class AdagradOptimizer(optimizer.Optimizer):
         use_locking=self._use_locking)
 
   def _resource_apply_sparse(self, grad, var, indices):
+    # [FUNCTION DOC]
+    # Sparse update for a resource variable. Inputs: grad, gradient values for selected rows;
+    # var, resource variable; indices, the row indices. Uses resource handles and casts the
+    # learning rate to the gradient's dtype. Returns the update operation.
     acc = self.get_slot(var, "accumulator")
     return gen_training_ops.resource_sparse_apply_adagrad(
         var.handle,
