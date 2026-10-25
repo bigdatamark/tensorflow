@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Public Python wrappers for the candidate sampling ops used by sampled softmax, NCE and
+# sampled logistic losses. Exposes uniform, log-uniform (Zipfian), learned-unigram, fixed-unigram
+# and all-class samplers plus a helper that finds accidental hits between sampled and true
+# classes. Each wrapper derives graph-level and op-level seeds from an optional user seed and
+# forwards to the generated op module. Registers public endpoints (random.* and nn.*) through the
+# export decorators and adds dispatch support; some nn.* endpoints are deprecated aliases.
+# No other import-time side effects.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,6 +39,16 @@ from tensorflow.python.util.tf_export import tf_export
 @deprecation.deprecated_endpoints('nn.uniform_candidate_sampler')
 def uniform_candidate_sampler(true_classes, num_true, num_sampled, unique,
                               range_max, seed=None, name=None):
+  # [FUNCTION DOC]
+  # Samples candidate classes from a uniform distribution over integers from zero up to
+  # range_max, with or without replacement.
+  # Inputs: true_classes (int64 matrix of targets, used only for the expected-count output),
+  # num_true (targets per example), num_sampled (classes to draw; must not exceed range_max when
+  # unique), unique (draw without replacement if true), range_max, seed (optional integer),
+  # name (optional op name).
+  # Returns sampled candidates, expected counts of true classes, expected counts of sampled
+  # classes. Side effect: derives two seeds from the graph/op seed. Invalid arguments are
+  # rejected by the underlying op.
   """Samples a set of classes using a uniform base distribution.
 
   This operation randomly samples a tensor of sampled classes
@@ -123,6 +141,15 @@ def uniform_candidate_sampler(true_classes, num_true, num_sampled, unique,
 @deprecation.deprecated_endpoints('nn.log_uniform_candidate_sampler')
 def log_uniform_candidate_sampler(true_classes, num_true, num_sampled, unique,
                                   range_max, seed=None, name=None):
+  # [FUNCTION DOC]
+  # Samples candidate classes from an approximately log-uniform (Zipfian) distribution over
+  # integers from zero up to range_max, suitable when classes are sorted by decreasing frequency.
+  # Inputs: true_classes (int64 matrix of target classes), num_true (targets per example),
+  # num_sampled (number of classes to draw), unique (draw without replacement if true),
+  # range_max (number of possible classes), seed (optional integer), name (optional op name).
+  # Returns a triple: sampled candidates, expected counts of the true classes, and expected
+  # counts of the sampled classes. Side effect: derives two seeds from the graph/op seed.
+  # Raises no explicit errors; the underlying op validates its arguments.
   """Samples a set of classes using a log-uniform (Zipfian) base distribution.
 
   This operation randomly samples a tensor of sampled classes
@@ -216,6 +243,14 @@ def log_uniform_candidate_sampler(true_classes, num_true, num_sampled, unique,
 @deprecation.deprecated_endpoints(['nn.learned_unigram_candidate_sampler'])
 def learned_unigram_candidate_sampler(true_classes, num_true, num_sampled,
                                       unique, range_max, seed=None, name=None):
+  # [FUNCTION DOC]
+  # Samples candidate classes from a unigram distribution learned on the fly from target
+  # classes seen during training (not saved to checkpoints).
+  # Inputs: true_classes (int64 matrix), num_true, num_sampled, unique, range_max, seed
+  # (optional integer), name (optional op name).
+  # Returns sampled candidates and expected counts of true and sampled classes.
+  # Raises a value error if range_max exceeds the largest 32-bit signed integer.
+  # Side effect: derives two seeds from the graph/op seed; the op keeps internal state.
   """Samples a set of classes from a distribution learned during training.
 
   This operation randomly samples a tensor of sampled classes
@@ -319,6 +354,16 @@ def fixed_unigram_candidate_sampler(true_classes,
                                     unigrams=(),
                                     seed=None,
                                     name=None):
+  # [FUNCTION DOC]
+  # Samples candidate classes from a fixed base distribution given either by a vocabulary file
+  # or an in-memory list of unigram counts/probabilities (exactly one should be supplied).
+  # Inputs: true_classes, num_true, num_sampled, unique, range_max as in the other samplers;
+  # vocab_file (path of CSV-like file, default empty); distortion (power applied to weights,
+  # default 1.0 for plain unigram, 0.0 for uniform); num_reserved_ids (leading ids with zero
+  # probability); num_shards and shard (partition count and index for parallel sampling);
+  # unigrams (sequence of counts, default empty); seed (optional integer); name (optional).
+  # Returns sampled candidates and the expected counts of true and sampled classes.
+  # Side effect: derives two seeds from the graph/op seed; the op may read the vocab file.
   """Samples a set of classes using the provided (fixed) base distribution.
 
   This operation randomly samples a tensor of sampled classes
@@ -430,6 +475,15 @@ def fixed_unigram_candidate_sampler(true_classes,
 @tf_export('random.all_candidate_sampler', 'nn.all_candidate_sampler')
 def all_candidate_sampler(true_classes, num_true, num_sampled, unique,
                           seed=None, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the output is the range zero through num_sampled and that
+  # the unique parameter is ignored, but the wrapper still forwards unique to the op, and the
+  # docstring's argument text for unique is garbled (a stray duplicated word). Behavior is
+  # delegated entirely to the generated op.
+  # Deterministically returns all classes (for testing only). Inputs: true_classes (int64
+  # matrix of targets), num_true, num_sampled (number of classes), unique, seed (optional
+  # integer), name (optional op name). Returns sampled candidates plus expected counts for true
+  # and sampled classes (all ones). Side effect: derives two seeds from the graph/op seed.
   """Generate the set of all classes.
 
   Deterministically generates and returns the set of all possible classes.
@@ -467,6 +521,15 @@ def all_candidate_sampler(true_classes, num_true, num_sampled, unique,
 @dispatch.add_dispatch_support
 def compute_accidental_hits(true_classes, sampled_candidates, num_true,
                             seed=None, name=None):
+  # [FUNCTION DOC]
+  # Finds accidental hits: places where a sampled candidate equals one of the true target
+  # classes of an example, so the caller can mask those logits out.
+  # Inputs: true_classes (int64 matrix of targets per example), sampled_candidates (int64 vector
+  # of unique sampled classes), num_true (targets per example), seed (optional integer),
+  # name (optional op name).
+  # Returns three vectors: row indices into true_classes (int32), positions in the sampled
+  # candidates (int64), and weights each equal to the most negative float value.
+  # Side effect: derives two seeds from the graph/op seed. No explicit errors raised.
   """Compute the position ids in `sampled_candidates` matching `true_classes`.
 
   In Candidate Sampling, this operation facilitates virtually removing

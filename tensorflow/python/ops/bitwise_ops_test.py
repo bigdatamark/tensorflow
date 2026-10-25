@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Unit tests for the bitwise ops (and, or, xor, invert, left/right shift, population count).
+# Covers many signed and unsigned integer dtypes, shape inference and shifts with
+# implementation-defined amounts. Test-only module; no import-time side effects beyond
+# imports, and it runs the test main when executed directly.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,12 +30,21 @@ from tensorflow.python.platform import googletest
 
 
 class BitwiseOpTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering the bitwise op wrappers and the generated population count op across
+  # integer dtypes. Holds no shared fixtures; each test builds its own constants and sessions.
 
   def __init__(self, method_name="runTest"):
+    # [FUNCTION DOC]
+    # Constructor that simply forwards the test method name (default run-test name) to the
+    # base test case. Returns nothing; no other side effects.
     super(BitwiseOpTest, self).__init__(method_name)
 
   @test_util.run_deprecated_v1
   def testBinaryOps(self):
+    # [FUNCTION DOC]
+    # For each of eight integer dtypes, applies bitwise and, or and xor to two small constant
+    # vectors in a session and asserts the results equal the hand-computed expected vectors.
     dtype_list = [dtypes.int8, dtypes.int16, dtypes.int32, dtypes.int64,
                   dtypes.uint8, dtypes.uint16, dtypes.uint32, dtypes.uint64]
 
@@ -47,6 +61,10 @@ class BitwiseOpTest(test_util.TensorFlowTestCase):
         self.assertAllEqual(xor_result, [5, 5, 4, 5])
 
   def testPopulationCountOp(self):
+    # [FUNCTION DOC]
+    # For each integer dtype, casts a list of edge-case values to that dtype, runs the population
+    # count op and asserts the result matches bit counts computed in pure Python from the raw
+    # bytes of each value. Prints the dtype being tested as a side effect.
     dtype_list = [
         dtypes.int8, dtypes.int16, dtypes.int32, dtypes.int64, dtypes.uint8,
         dtypes.uint16, dtypes.uint32, dtypes.uint64
@@ -56,6 +74,10 @@ class BitwiseOpTest(test_util.TensorFlowTestCase):
                   2**31 - 1, 2**31, 2**32 - 1, 2**32, -2**32 + 1, -2**32,
                   -2**63 + 1, 2**63 - 1]
     def count_bits(x):
+      # [FUNCTION DOC]
+      # HELPER: reference implementation for the population count test.
+      # Takes a single numpy scalar and returns the total number of set bits across all of its
+      # raw bytes. No side effects.
       return sum(bin(z).count("1") for z in x.tobytes())
     for dtype in dtype_list:
       with self.cached_session():
@@ -68,6 +90,9 @@ class BitwiseOpTest(test_util.TensorFlowTestCase):
         self.assertAllEqual(truth, popcnt_result)
 
   def testPopulationCountOpEmptyInput(self):
+    # [FUNCTION DOC]
+    # Runs population count on an empty int64 tensor of shape zero and asserts the result is an
+    # empty array.
     with self.cached_session():
       popcnt_result = self.evaluate(
           gen_bitwise_ops.population_count(
@@ -82,6 +107,10 @@ class BitwiseOpTest(test_util.TensorFlowTestCase):
 
   @test_util.run_deprecated_v1
   def testInvertOp(self):
+    # [FUNCTION DOC]
+    # Tests invert indirectly for each integer dtype: a value anded with its inverse must be
+    # zero, and a value ored with its inverse must equal the inverse of zero. For unsigned
+    # dtypes also asserts the inverse equals the dtype maximum minus the input.
     dtype_list = [dtypes.int8, dtypes.int16, dtypes.int32, dtypes.int64,
                   dtypes.uint8, dtypes.uint16, dtypes.uint32, dtypes.uint64]
     inputs = [0, 5, 3, 14]
@@ -107,6 +136,9 @@ class BitwiseOpTest(test_util.TensorFlowTestCase):
 
   @test_util.run_deprecated_v1
   def testShiftsWithPositiveLHS(self):
+    # [FUNCTION DOC]
+    # Runs left and right shifts on non-negative numpy arrays across signed and unsigned dtypes
+    # and asserts the results match numpy's own shift functions.
     dtype_list = [np.int8, np.int16, np.int32, np.int64,
                   np.uint8, np.uint16, np.uint32, np.uint64]
 
@@ -122,6 +154,9 @@ class BitwiseOpTest(test_util.TensorFlowTestCase):
 
   @test_util.run_deprecated_v1
   def testShiftsWithNegativeLHS(self):
+    # [FUNCTION DOC]
+    # Same as the positive-operand shift test but with negative left operands for signed
+    # dtypes only; asserts results equal numpy's left and right shift outputs.
     dtype_list = [np.int8, np.int16, np.int32, np.int64]
 
     with self.session() as sess:
@@ -136,6 +171,10 @@ class BitwiseOpTest(test_util.TensorFlowTestCase):
 
   @test_util.run_deprecated_v1
   def testImplementationDefinedShiftsDoNotCrash(self):
+    # [FUNCTION DOC]
+    # Runs shifts with negative or oversized shift amounts on signed dtypes, whose results are
+    # implementation-defined. Asserts nothing about values; passes if no crash or sanitizer
+    # error occurs.
     dtype_list = [np.int8, np.int16, np.int32, np.int64]
 
     with self.session() as sess:
@@ -151,6 +190,10 @@ class BitwiseOpTest(test_util.TensorFlowTestCase):
 
   @test_util.run_deprecated_v1
   def testShapeInference(self):
+    # [FUNCTION DOC]
+    # Broadcasts a column vector against a row vector through and, or, xor and both shifts for
+    # several dtypes, then asserts the statically inferred shape equals the computed result
+    # shape and equals three by three.
     dtype_list = [dtypes.int8, dtypes.int16, dtypes.int32, dtypes.int64,
                   dtypes.uint8, dtypes.uint16]
 
