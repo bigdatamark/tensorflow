@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Unit tests and a benchmark for the special math ops module: the log-beta function, Dawson's
+# integral, exponential integral, Fresnel cosine and sine integrals, Spence's dilogarithm,
+# the Bessel function families (I, J, K, Y with scaled variants), and Einstein summation
+# (forward values against numpy, gradients through the gradient checker, error handling,
+# caching of the path optimizer) plus a CPU einsum benchmark. Many tests compare against scipy
+# when it is installed and silently log a warning if it is missing. Test classes run in both
+# graph and eager modes. No import-time side effects other than imports.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,9 +45,15 @@ from tensorflow.python.platform import test
 from tensorflow.python.platform import tf_logging
 
 class LBetaTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for the log-beta function: scalar and batched results, static and dynamic shapes,
+  # and degenerate empty inputs. No shared fixtures; each test builds its own tensors.
 
   @test_util.run_in_graph_and_eager_modes
   def test_one_dimensional_arg(self):
+    # [FUNCTION DOC]
+    # Checks that the exponential of log-beta of a length-2 vector gives 1 for [1, 1] and 0.5 for
+    # [2, 1], and that the static result shape is scalar. Runs in graph and eager modes.
     # Should evaluate to 1 and 1/2.
     x_one = [1, 1.]
     x_one_half = [2, 1.]
@@ -52,6 +66,9 @@ class LBetaTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def test_one_dimensional_arg_dynamic(self):
+    # [FUNCTION DOC]
+    # Same expected values as the static one-dimensional test (1 and 0.5) but the input is fed
+    # through a placeholder of unknown shape. Deprecated-v1 graph mode only.
     # Should evaluate to 1 and 1/2.
     x_one = [1, 1.]
     x_one_half = [2, 1.]
@@ -64,6 +81,10 @@ class LBetaTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def test_four_dimensional_arg_with_partial_shape_dynamic(self):
+    # [FUNCTION DOC]
+    # Feeds an all-ones array of shape 3x2x3x4 into a placeholder whose last dimension is unknown
+    # and checks that the exponential of log-beta equals one sixth everywhere over the 3x2x3
+    # batch (Beta of four ones is 1/6). Graph mode only.
     x_ = np.ones((3, 2, 3, 4))
     # Gamma(1) = 0! = 1
     # Gamma(1 + 1 + 1 + 1) = Gamma(4) = 3! = 6
@@ -79,6 +100,9 @@ class LBetaTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_two_dimensional_arg(self):
+    # [FUNCTION DOC]
+    # Batch of two identical vectors [2, 1]: expects values 0.5 each after exponentiation and a
+    # static result shape of two. Runs in graph and eager modes.
     # Should evaluate to 1/2.
     x_one_half = [[2, 1.], [2, 1.]]
     with self.session():
@@ -89,6 +113,9 @@ class LBetaTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def test_two_dimensional_arg_dynamic(self):
+    # [FUNCTION DOC]
+    # Same batch of two [2, 1] vectors fed through a placeholder of unknown shape; expects 0.5 for
+    # each row. Graph mode only.
     # Should evaluate to 1/2.
     x_one_half = [[2, 1.], [2, 1.]]
     with self.session():
@@ -99,6 +126,9 @@ class LBetaTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_two_dimensional_proper_shape(self):
+    # [FUNCTION DOC]
+    # For a batch of two vectors checks values 0.5, that the evaluated dynamic shape of the result
+    # is two, and that the static shape is the one-dimensional shape of size two.
     # Should evaluate to 1/2.
     x_one_half = [[2, 1.], [2, 1.]]
     with self.session():
@@ -114,6 +144,9 @@ class LBetaTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_complicated_shape(self):
+    # [FUNCTION DOC]
+    # Random input of shape 3x2x2: checks that both the evaluated and the static shape of the
+    # log-beta result are 3x2 (the last dimension is reduced).
     with self.session():
       x = ops.convert_to_tensor(np.random.rand(3, 2, 2))
       self.assertAllEqual(
@@ -124,6 +157,10 @@ class LBetaTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_length_1_last_dimension_results_in_one(self):
+    # [FUNCTION DOC]
+    # With a single coefficient (5.5 or 0.1) the beta function is always one, so the exponential
+    # of the result must be close to 1 (looser relative tolerance for 5.5) and the static shape is
+    # scalar.
     # If there is only one coefficient, the formula still works, and we get one
     # as the answer, always.
     x_a = [5.5]
@@ -139,6 +176,9 @@ class LBetaTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_empty_rank1_returns_negative_infinity(self):
+    # [FUNCTION DOC]
+    # An empty vector yields negative infinity (log of zero-size product); the value and static
+    # shape must equal a scalar negative infinity constant.
     with self.session():
       x = constant_op.constant([], shape=[0])
       lbeta_x = special_math_ops.lbeta(x)
@@ -150,6 +190,9 @@ class LBetaTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_empty_rank2_with_zero_last_dim_returns_negative_infinity(self):
+    # [FUNCTION DOC]
+    # For inputs with zero event size and batch sizes 0, 1, 2, the result must be a vector of
+    # negative infinities of the batch size, with matching static shape.
     with self.session():
       event_size = 0
       for batch_size in [0, 1, 2]:
@@ -163,6 +206,9 @@ class LBetaTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_empty_rank2_with_zero_batch_dim_returns_empty(self):
+    # [FUNCTION DOC]
+    # For inputs with zero batch size and event sizes 0, 1, 2, the result must be an empty vector,
+    # with matching static shape.
     with self.session():
       batch_size = 0
       for event_size in [0, 1, 2]:
@@ -178,14 +224,23 @@ class LBetaTest(test.TestCase):
 
 @test_util.run_all_in_graph_and_eager_modes
 class DawsnTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests for Dawson's integral: boundary values, odd symmetry, comparison with scipy on small
+  # and larger ranges, and gradient accuracy. Parameterized over float32 and float64 where
+  # noted; runs in graph and eager modes.
 
   @test_util.run_in_graph_and_eager_modes
   def test_dawsn_boundary(self):
+    # [FUNCTION DOC]
+    # Checks the value at zero is zero and that not-a-number input gives not-a-number output.
     self.assertAllClose(0., special_math_ops.dawsn(0.))
     self.assertTrue(np.isnan(self.evaluate(special_math_ops.dawsn(np.nan))))
 
   @parameterized.parameters(np.float32, np.float64)
   def test_dawsn_odd(self, dtype):
+    # [FUNCTION DOC]
+    # Parameter dtype (float32 or float64). Draws 10000 random values in minus to plus 100 and
+    # checks f(x) equals minus f(minus x), i.e. odd symmetry.
     x = np.random.uniform(-100., 100., size=int(1e4)).astype(dtype)
     self.assertAllClose(
         self.evaluate(special_math_ops.dawsn(x)),
@@ -193,6 +248,9 @@ class DawsnTest(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(np.float32, np.float64)
   def test_dawsn_small(self, dtype):
+    # [FUNCTION DOC]
+    # Parameter dtype. Draws 10000 values in [-1, 1] and compares with scipy's Dawson function.
+    # If scipy cannot be imported it logs a warning and the test passes without checking.
     x = np.random.uniform(-1., 1., size=int(1e4)).astype(dtype)
     try:
       from scipy import special  # pylint: disable=g-import-not-at-top
@@ -203,6 +261,9 @@ class DawsnTest(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(np.float32, np.float64)
   def test_dawsn_larger(self, dtype):
+    # [FUNCTION DOC]
+    # Parameter dtype. Draws 10000 values in [1, 100] and compares with scipy's Dawson function;
+    # logs a warning instead of failing if scipy is missing.
     x = np.random.uniform(1., 100., size=int(1e4)).astype(dtype)
     try:
       from scipy import special  # pylint: disable=g-import-not-at-top
@@ -212,6 +273,9 @@ class DawsnTest(test.TestCase, parameterized.TestCase):
       tf_logging.warn('Cannot test special functions: %s' % str(e))
 
   def test_dawsn_gradient(self):
+    # [FUNCTION DOC]
+    # Computes analytical and numerical gradients at 100 random points in [-50, 50] and asserts
+    # the maximum error is below 1e-4.
     inputs = [np.random.uniform(-50., 50., size=int(1e2))]
     analytical, numerical = gradient_checker_v2.compute_gradient(
         special_math_ops.dawsn, inputs)
@@ -220,9 +284,16 @@ class DawsnTest(test.TestCase, parameterized.TestCase):
 
 @test_util.run_all_in_graph_and_eager_modes
 class ExpintTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests for the exponential integral: boundary and domain behavior, scipy comparison on small
+  # and larger ranges, and gradient accuracy. Runs in graph and eager modes.
 
   @test_util.run_in_graph_and_eager_modes
   def test_expint_boundary(self):
+    # [FUNCTION DOC]
+    # Checks the value at zero is negative infinity, not-a-number maps to not-a-number, and that
+    # negative inputs (random values in [-20, -1]) all give not-a-number (domain is zero to
+    # infinity).
     self.assertAllClose(-np.inf, special_math_ops.expint(0.))
     self.assertTrue(np.isnan(self.evaluate(special_math_ops.expint(np.nan))))
     # Check that the domain of definition is [0, inf)
@@ -235,6 +306,9 @@ class ExpintTest(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(np.float32, np.float64)
   def test_expint_small(self, dtype):
+    # [FUNCTION DOC]
+    # Parameter dtype. Draws 10000 values in [0, 1] and compares with scipy's exponential integral;
+    # logs a warning instead of failing if scipy is missing.
     x = np.random.uniform(0., 1., size=int(1e4)).astype(dtype)
     try:
       from scipy import special  # pylint: disable=g-import-not-at-top
@@ -245,6 +319,9 @@ class ExpintTest(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(np.float32, np.float64)
   def test_expint_larger(self, dtype):
+    # [FUNCTION DOC]
+    # Parameter dtype. Draws 10000 values in [1, 50] and compares with scipy's exponential
+    # integral; logs a warning instead of failing if scipy is missing.
     x = np.random.uniform(1., 50., size=int(1e4)).astype(dtype)
     try:
       from scipy import special  # pylint: disable=g-import-not-at-top
@@ -254,6 +331,9 @@ class ExpintTest(test.TestCase, parameterized.TestCase):
       tf_logging.warn('Cannot test special functions: %s' % str(e))
 
   def test_expint_gradient(self):
+    # [FUNCTION DOC]
+    # Compares analytical and numerical gradients at 100 random points in [1, 10]; maximum error
+    # must be below 5e-3.
     inputs = [np.random.uniform(1., 10., size=int(1e2))]
     analytical, numerical = gradient_checker_v2.compute_gradient(
         special_math_ops.expint, inputs)
@@ -262,15 +342,22 @@ class ExpintTest(test.TestCase, parameterized.TestCase):
 
 @test_util.run_all_in_graph_and_eager_modes
 class FresnelCosTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests for the Fresnel cosine integral: boundary values, odd symmetry, scipy comparison on
+  # small and larger ranges, and gradient accuracy. Runs in graph and eager modes.
 
   @test_util.run_in_graph_and_eager_modes
   def test_fresnel_cos_boundary(self):
+    # [FUNCTION DOC]
+    # Checks the value at zero is zero and not-a-number input gives not-a-number output.
     self.assertAllClose(0., special_math_ops.fresnel_cos(0.))
     self.assertTrue(
         np.isnan(self.evaluate(special_math_ops.fresnel_cos(np.nan))))
 
   @parameterized.parameters(np.float32, np.float64)
   def test_fresnel_cos_odd(self, dtype):
+    # [FUNCTION DOC]
+    # Parameter dtype. Over 10000 random values in minus to plus 100, checks odd symmetry.
     x = np.random.uniform(-100., 100., size=int(1e4)).astype(dtype)
     self.assertAllClose(
         self.evaluate(special_math_ops.fresnel_cos(x)),
@@ -278,6 +365,9 @@ class FresnelCosTest(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(np.float32, np.float64)
   def test_fresnel_cos_small(self, dtype):
+    # [FUNCTION DOC]
+    # Parameter dtype. Draws 10000 values in [0, 1] and compares with the cosine part (second
+    # result) of scipy's Fresnel function; logs a warning instead of failing if scipy is missing.
     x = np.random.uniform(0., 1., size=int(1e4)).astype(dtype)
     try:
       from scipy import special  # pylint: disable=g-import-not-at-top
@@ -288,6 +378,9 @@ class FresnelCosTest(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(np.float32, np.float64)
   def test_fresnel_cos_larger(self, dtype):
+    # [FUNCTION DOC]
+    # Parameter dtype. Draws 10000 values in [1, 100] and compares with the cosine part of scipy's
+    # Fresnel function using relative tolerance 1e-5; logs a warning if scipy is missing.
     x = np.random.uniform(1., 100., size=int(1e4)).astype(dtype)
     try:
       from scipy import special  # pylint: disable=g-import-not-at-top
@@ -299,6 +392,9 @@ class FresnelCosTest(test.TestCase, parameterized.TestCase):
       tf_logging.warn('Cannot test special functions: %s' % str(e))
 
   def test_fresnel_cos_gradient(self):
+    # [FUNCTION DOC]
+    # Compares analytical and numerical gradients at 100 random points in [1, 50]; maximum error
+    # must be below 5e-3.
     inputs = [np.random.uniform(1., 50., size=int(1e2))]
     analytical, numerical = gradient_checker_v2.compute_gradient(
         special_math_ops.fresnel_cos, inputs)
@@ -307,15 +403,22 @@ class FresnelCosTest(test.TestCase, parameterized.TestCase):
 
 @test_util.run_all_in_graph_and_eager_modes
 class FresnelSinTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests for the Fresnel sine integral: boundary values, odd symmetry, scipy comparison on
+  # small and larger ranges, and gradient accuracy. Runs in graph and eager modes.
 
   @test_util.run_in_graph_and_eager_modes
   def test_fresnel_sin_boundary(self):
+    # [FUNCTION DOC]
+    # Checks the value at zero is zero and not-a-number input gives not-a-number output.
     self.assertAllClose(0., special_math_ops.fresnel_sin(0.))
     self.assertTrue(
         np.isnan(self.evaluate(special_math_ops.fresnel_sin(np.nan))))
 
   @parameterized.parameters(np.float32, np.float64)
   def test_fresnel_sin_odd(self, dtype):
+    # [FUNCTION DOC]
+    # Parameter dtype. Over 10000 random values in minus to plus 100, checks odd symmetry.
     x = np.random.uniform(-100., 100., size=int(1e4)).astype(dtype)
     self.assertAllClose(
         self.evaluate(special_math_ops.fresnel_sin(x)),
@@ -323,6 +426,9 @@ class FresnelSinTest(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(np.float32, np.float64)
   def test_fresnel_sin_small(self, dtype):
+    # [FUNCTION DOC]
+    # Parameter dtype. Draws 10000 values in [0, 1] and compares with the sine part (first result)
+    # of scipy's Fresnel function; logs a warning instead of failing if scipy is missing.
     x = np.random.uniform(0., 1., size=int(1e4)).astype(dtype)
     try:
       from scipy import special  # pylint: disable=g-import-not-at-top
@@ -333,6 +439,9 @@ class FresnelSinTest(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(np.float32, np.float64)
   def test_fresnel_sin_larger(self, dtype):
+    # [FUNCTION DOC]
+    # Parameter dtype. Draws 10000 values in [1, 100] and compares with the sine part of scipy's
+    # Fresnel function using relative tolerance 1e-5; logs a warning if scipy is missing.
     x = np.random.uniform(1., 100., size=int(1e4)).astype(dtype)
     try:
       from scipy import special  # pylint: disable=g-import-not-at-top
@@ -344,6 +453,9 @@ class FresnelSinTest(test.TestCase, parameterized.TestCase):
       tf_logging.warn('Cannot test special functions: %s' % str(e))
 
   def test_fresnel_sin_gradient(self):
+    # [FUNCTION DOC]
+    # Compares analytical and numerical gradients at 100 random points in [1, 50]; maximum error
+    # must be below 5e-3.
     inputs = [np.random.uniform(1., 50., size=int(1e2))]
     analytical, numerical = gradient_checker_v2.compute_gradient(
         special_math_ops.fresnel_sin, inputs)
@@ -352,9 +464,16 @@ class FresnelSinTest(test.TestCase, parameterized.TestCase):
 
 @test_util.run_all_in_graph_and_eager_modes
 class SpenceTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests for Spence's dilogarithm: boundary values, domain, scipy comparison, and gradient
+  # accuracy including the special point one. Runs in graph and eager modes.
 
   @test_util.run_in_graph_and_eager_modes
   def test_spence_boundary(self):
+    # [FUNCTION DOC]
+    # Checks the value at zero is pi squared over six, the value at one is zero, not-a-number maps
+    # to not-a-number, and negative random inputs in [-20, -1] give not-a-number (domain is zero to
+    # infinity).
     self.assertAllClose(np.pi**2 / 6., special_math_ops.spence(0.))
     self.assertAllClose(0., special_math_ops.spence(1.))
     self.assertTrue(np.isnan(self.evaluate(special_math_ops.spence(np.nan))))
@@ -368,6 +487,9 @@ class SpenceTest(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(np.float32, np.float64)
   def test_spence_small(self, dtype):
+    # [FUNCTION DOC]
+    # Parameter dtype. Draws 10000 values in [0, 1] and compares with scipy's Spence function;
+    # logs a warning instead of failing if scipy is missing.
     x = np.random.uniform(0., 1., size=int(1e4)).astype(dtype)
     try:
       from scipy import special  # pylint: disable=g-import-not-at-top
@@ -378,6 +500,9 @@ class SpenceTest(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(np.float32, np.float64)
   def test_spence_larger(self, dtype):
+    # [FUNCTION DOC]
+    # Parameter dtype. Draws 10000 values in [1, 100] and compares with scipy's Spence function;
+    # logs a warning instead of failing if scipy is missing.
     x = np.random.uniform(1., 100., size=int(1e4)).astype(dtype)
     try:
       from scipy import special  # pylint: disable=g-import-not-at-top
@@ -387,12 +512,17 @@ class SpenceTest(test.TestCase, parameterized.TestCase):
       tf_logging.warn('Cannot test special functions: %s' % str(e))
 
   def test_spence_gradient(self):
+    # [FUNCTION DOC]
+    # Compares analytical and numerical gradients at 100 random points in [1, 50]; maximum error
+    # must be below 1e-4.
     inputs = [np.random.uniform(1., 50., size=int(1e2))]
     analytical, numerical = gradient_checker_v2.compute_gradient(
         special_math_ops.spence, inputs)
     self.assertLess(gradient_checker_v2.max_error(analytical, numerical), 1e-4)
 
   def test_spence_gradient_at_one(self):
+    # [FUNCTION DOC]
+    # Computes the analytical Jacobian at the single input one and checks it equals minus one.
     analytical, _ = gradient_checker_v2.compute_gradient(
         special_math_ops.spence, [1.])
     self.assertAllClose([[[-1.]]], analytical)
@@ -400,9 +530,16 @@ class SpenceTest(test.TestCase, parameterized.TestCase):
 
 @test_util.run_all_in_graph_and_eager_modes
 class BesselTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests for the Bessel function ops (modified I with exponentially scaled variants, J, modified
+  # K with scaled variants, and Y): boundary values, symmetry, scipy comparison on small and
+  # larger ranges, and gradient accuracy. Runs in graph and eager modes.
 
   @test_util.run_in_graph_and_eager_modes
   def test_besseli_boundary(self):
+    # [FUNCTION DOC]
+    # Checks order-0 and order-1 modified Bessel I and their scaled versions: at zero they give 1,
+    # 1, 0, 0 respectively, and not-a-number inputs give not-a-number outputs.
     self.assertAllClose(1., special_math_ops.bessel_i0(0.))
     self.assertAllClose(1., special_math_ops.bessel_i0e(0.))
     self.assertAllClose(0., special_math_ops.bessel_i1(0.))
@@ -416,6 +553,9 @@ class BesselTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_besselj_boundary(self):
+    # [FUNCTION DOC]
+    # Checks Bessel J orders 0 and 1 at zero give 1 and 0, and not-a-number inputs give
+    # not-a-number outputs.
     self.assertAllClose(1., special_math_ops.bessel_j0(0.))
     self.assertAllClose(0., special_math_ops.bessel_j1(0.))
     self.assertTrue(np.isnan(self.evaluate(special_math_ops.bessel_j0(np.nan))))
@@ -423,6 +563,9 @@ class BesselTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_besselk_boundary(self):
+    # [FUNCTION DOC]
+    # Checks modified Bessel K orders 0 and 1 and their scaled versions are infinite at zero and
+    # not-a-number inputs give not-a-number outputs.
     self.assertTrue(np.isinf(self.evaluate(special_math_ops.bessel_k0(0.))))
     self.assertTrue(np.isinf(self.evaluate(special_math_ops.bessel_k0e(0.))))
     self.assertTrue(np.isinf(self.evaluate(special_math_ops.bessel_k1(0.))))
@@ -436,6 +579,9 @@ class BesselTest(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(np.float32, np.float64)
   def test_i0j0_even(self, dtype):
+    # [FUNCTION DOC]
+    # Parameter dtype. Over 10000 random values in minus to plus 100, checks that order-0 I,
+    # scaled I, and J are even functions (same value at x and minus x).
     x = np.random.uniform(-100., 100., size=int(1e4)).astype(dtype)
     self.assertAllClose(
         self.evaluate(special_math_ops.bessel_i0(x)),
@@ -451,6 +597,9 @@ class BesselTest(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(np.float32, np.float64)
   def test_i1j1_odd(self, dtype):
+    # [FUNCTION DOC]
+    # Parameter dtype. Over 10000 random values in minus to plus 100, checks that order-1 I, scaled
+    # I, and J are odd functions.
     x = np.random.uniform(-100., 100., size=int(1e4)).astype(dtype)
     self.assertAllClose(
         self.evaluate(special_math_ops.bessel_i1(x)),
@@ -466,6 +615,9 @@ class BesselTest(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(np.float32, np.float64)
   def test_besseli_small(self, dtype):
+    # [FUNCTION DOC]
+    # Parameter dtype. Draws 10000 values in [-1, 1] and compares I0, I1 and their scaled variants
+    # with scipy; logs a warning instead of failing if scipy is missing.
     x = np.random.uniform(-1., 1., size=int(1e4)).astype(dtype)
     try:
       from scipy import special  # pylint: disable=g-import-not-at-top
@@ -482,6 +634,9 @@ class BesselTest(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(np.float32, np.float64)
   def test_besselj_small(self, dtype):
+    # [FUNCTION DOC]
+    # Parameter dtype. Draws 10000 values in [-1, 1] and compares J0 and J1 with scipy; logs a
+    # warning if scipy is missing.
     x = np.random.uniform(-1., 1., size=int(1e4)).astype(dtype)
     try:
       from scipy import special  # pylint: disable=g-import-not-at-top
@@ -494,6 +649,9 @@ class BesselTest(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(np.float32, np.float64)
   def test_besselk_small(self, dtype):
+    # [FUNCTION DOC]
+    # Parameter dtype. Draws 10000 values between the machine epsilon of the dtype and 1 and
+    # compares K0, K0 scaled, K1 and K1 scaled with scipy; logs a warning if scipy is missing.
     x = np.random.uniform(np.finfo(dtype).eps, 1., size=int(1e4)).astype(dtype)
     try:
       from scipy import special  # pylint: disable=g-import-not-at-top
@@ -510,6 +668,9 @@ class BesselTest(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(np.float32, np.float64)
   def test_bessely_small(self, dtype):
+    # [FUNCTION DOC]
+    # Parameter dtype. Draws 10000 values between the machine epsilon of the dtype and 1 and
+    # compares Y0 and Y1 with scipy; logs a warning if scipy is missing.
     x = np.random.uniform(np.finfo(dtype).eps, 1., size=int(1e4)).astype(dtype)
     try:
       from scipy import special  # pylint: disable=g-import-not-at-top
@@ -522,6 +683,9 @@ class BesselTest(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(np.float32, np.float64)
   def test_besseli_larger(self, dtype):
+    # [FUNCTION DOC]
+    # Parameter dtype. Draws 10000 values in [1, 20] and compares the scaled I0 and I1 with scipy;
+    # logs a warning if scipy is missing.
     x = np.random.uniform(1., 20., size=int(1e4)).astype(dtype)
     try:
       from scipy import special  # pylint: disable=g-import-not-at-top
@@ -534,6 +698,9 @@ class BesselTest(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(np.float32, np.float64)
   def test_besselj_larger(self, dtype):
+    # [FUNCTION DOC]
+    # Parameter dtype. Draws 10000 values in [1, 30] and compares J0 and J1 with scipy; logs a
+    # warning if scipy is missing.
     x = np.random.uniform(1., 30., size=int(1e4)).astype(dtype)
     try:
       from scipy import special  # pylint: disable=g-import-not-at-top
@@ -546,6 +713,9 @@ class BesselTest(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(np.float32, np.float64)
   def test_besselk_larger(self, dtype):
+    # [FUNCTION DOC]
+    # Parameter dtype. Draws 10000 values in [1, 30] and compares K0, K0 scaled, K1 and K1 scaled
+    # with scipy; logs a warning if scipy is missing.
     x = np.random.uniform(1., 30., size=int(1e4)).astype(dtype)
     try:
       from scipy import special  # pylint: disable=g-import-not-at-top
@@ -562,6 +732,9 @@ class BesselTest(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(np.float32, np.float64)
   def test_bessely_larger(self, dtype):
+    # [FUNCTION DOC]
+    # Parameter dtype. Draws 10000 values in [1, 30] and compares Y0 and Y1 with scipy; logs a
+    # warning if scipy is missing.
     x = np.random.uniform(1., 30., size=int(1e4)).astype(dtype)
     try:
       from scipy import special  # pylint: disable=g-import-not-at-top
@@ -573,6 +746,9 @@ class BesselTest(test.TestCase, parameterized.TestCase):
       tf_logging.warn('Cannot test special functions: %s' % str(e))
 
   def test_besseli_gradient(self):
+    # [FUNCTION DOC]
+    # At 100 random points in [-10, 10], compares analytical and numerical gradients of I0, scaled
+    # I0, I1 and scaled I1; maximum errors must be below 1e-3 (unscaled) and 1e-4 (scaled).
     inputs = [np.random.uniform(-10., 10., size=int(1e2))]
     analytical, numerical = gradient_checker_v2.compute_gradient(
         special_math_ops.bessel_i0, inputs)
@@ -591,6 +767,9 @@ class BesselTest(test.TestCase, parameterized.TestCase):
     self.assertLess(gradient_checker_v2.max_error(analytical, numerical), 1e-4)
 
   def test_besselj_gradient(self):
+    # [FUNCTION DOC]
+    # At 100 random points in [-50, 50], compares analytical and numerical gradients of J0 and J1;
+    # maximum errors must be below 1e-4.
     inputs = [np.random.uniform(-50., 50., size=int(1e2))]
     analytical, numerical = gradient_checker_v2.compute_gradient(
         special_math_ops.bessel_j0, inputs)
@@ -601,6 +780,9 @@ class BesselTest(test.TestCase, parameterized.TestCase):
     self.assertLess(gradient_checker_v2.max_error(analytical, numerical), 1e-4)
 
   def test_besselk_gradient(self):
+    # [FUNCTION DOC]
+    # At 100 random points in [1, 50], compares analytical and numerical gradients of K0, K0
+    # scaled, K1 and K1 scaled; maximum errors must be below 1e-4.
     inputs = [np.random.uniform(1., 50., size=int(1e2))]
     analytical, numerical = gradient_checker_v2.compute_gradient(
         special_math_ops.bessel_k0, inputs)
@@ -619,6 +801,9 @@ class BesselTest(test.TestCase, parameterized.TestCase):
     self.assertLess(gradient_checker_v2.max_error(analytical, numerical), 1e-4)
 
   def test_bessely_gradient(self):
+    # [FUNCTION DOC]
+    # At 100 random points in [1, 50], compares analytical and numerical gradients of Y0 and Y1;
+    # maximum errors must be below 1e-4.
     inputs = [np.random.uniform(1., 50., size=int(1e2))]
     analytical, numerical = gradient_checker_v2.compute_gradient(
         special_math_ops.bessel_y0, inputs)
@@ -633,8 +818,19 @@ class BesselTest(test.TestCase, parameterized.TestCase):
 @test_util.run_all_without_tensor_float_32(
     'Tests einsum, which sometimes does a matmul with cuBLAS')
 class EinsumTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests of the Einstein summation op against numpy: unary, binary, ellipsis, broadcasting,
+  # repeated labels, dtypes, many inputs, unknown shapes, numpy inputs, long equations,
+  # caching of the path optimizer, invalid equations, and empty dimensions. Shared fixture is
+  # the private check method. Runs in graph and eager modes with TF32 disabled.
 
   def _check(self, s, *input_shapes, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: shared comparison utility for the einsum forward tests.
+    # Takes an equation string, one shape per input, and optional keyword dtype (default float32;
+    # other keywords are not consumed). Builds seeded random inputs of that dtype (complex types
+    # get a random imaginary part too), computes the reference with numpy and the result with the
+    # TensorFlow einsum on constant tensors, and asserts they are close (tolerance 1e-4).
     dtype = kwargs.pop('dtype', np.float32)
     r = np.random.RandomState(0)
     inputs = []
@@ -649,6 +845,8 @@ class EinsumTest(test.TestCase):
     self.assertAllClose(a, b, atol=1e-4, rtol=1e-4)
 
   def test_invalid_keyword_arguments(self):
+    # [FUNCTION DOC]
+    # Calls einsum with unsupported keyword arguments (besides a name) and expects a type error.
     r = np.random.RandomState(0)
     a = array_ops.placeholder_with_default(r.randn(2, 3), shape=(2, 3))
     b = array_ops.placeholder_with_default(r.randn(3, 4), shape=(3, 4))
@@ -657,6 +855,9 @@ class EinsumTest(test.TestCase):
           'ij,jk->ik', a, b, name='name', invalid1='value1', invalid2='value2')
 
   def test_unary(self):
+    # [FUNCTION DOC]
+    # Single-operand equations: identity, trace, sum, transpose, reductions, empty equations, and
+    # repeated-index (diagonal) cases, each compared against numpy.
     self._check('a', (3,))
     self._check('aa', (3, 3))
     self._check('ab->', (3, 3))
@@ -680,6 +881,9 @@ class EinsumTest(test.TestCase):
     self._check('aabcd->ad', (3, 3, 5, 4, 4))
 
   def test_unary_ellipsis(self):
+    # [FUNCTION DOC]
+    # Single-operand equations using an ellipsis: batch transpose, batch sum, scalars, and
+    # repeated indices combined with an ellipsis, compared against numpy.
     self._check('...->', ())
     self._check('...ijk->...ki', (3, 4, 5))
     self._check('...ijk->...ki', (1, 3, 4, 5))
@@ -699,6 +903,9 @@ class EinsumTest(test.TestCase):
     self._check('i...i->i...', (2, 3, 4, 5, 2))
 
   def test_binary_simple(self):
+    # [FUNCTION DOC]
+    # Two-operand equations without ellipsis (dot, matrix-vector, matrix-matrix, batch, outer
+    # style, and inferred output subscripts), compared against numpy.
     # Binary cases in XLA mode must have either (a) each index appearing exactly
     # once in both the inputs (batch or contraction index), or (b) appearing
     # exactly once in an input and in the output (free index).
@@ -717,10 +924,16 @@ class EinsumTest(test.TestCase):
     self._check('cab,b', (1, 3, 4), (4,))
 
   def test_reduced_indices(self):
+    # [FUNCTION DOC]
+    # Two-operand equations where an index appears in both inputs and is summed away, compared
+    # against numpy.
     self._check('ba,b->', (3, 2), (3,))
     self._check('ab,ab->', (3, 4), (3, 4))
 
   def test_repeated_indices(self):
+    # [FUNCTION DOC]
+    # Two-operand equations with a label repeated within one operand (generalized diagonals),
+    # compared against numpy.
     # Repeated indices.
     self._check('ijj,k->ik', (2, 3, 3), (4,))
     self._check('aba,a->b', (3, 4, 3), (3,))
@@ -729,6 +942,10 @@ class EinsumTest(test.TestCase):
     self._check('aab,bcc->ac', (2, 2, 3), (3, 4, 4))
 
   def test_binary_ellipsis(self):
+    # [FUNCTION DOC]
+    # Two-operand equations with an ellipsis and no broadcasting: batch matmul, empty batch
+    # dimensions, transposed contraction, omitted ellipsis in the output, Hadamard and outer
+    # products; compared against numpy.
     # Batch matmul with ellipsis but without broadcasting.
     self._check('...mk,...kn->...mn', (5, 1, 2, 3), (5, 1, 3, 4))
     # Empty batch dimensions.
@@ -743,6 +960,9 @@ class EinsumTest(test.TestCase):
     self._check('...i,...j->...ij', (5, 2), (5, 3))  # outer product
 
   def test_broadcasting(self):
+    # [FUNCTION DOC]
+    # Two-operand equations whose ellipsis dimensions broadcast, including repeated indices;
+    # compared against numpy.
     # Batch matmul with broadcasting.
     self._check('...ij,...jk->...ik', (1, 2, 3), (3, 5))
     self._check('...ij,...jk->...ik', (2, 3), (1, 3, 5))
@@ -761,6 +981,9 @@ class EinsumTest(test.TestCase):
     self._check('ab...,b->ab...', (2, 3, 1, 1, 5), (3,))
 
   def test_dtypes(self):
+    # [FUNCTION DOC]
+    # Runs several matrix-product equations in float64, float32, complex64 and complex128, each
+    # compared against numpy.
     dtypes = [np.float64, np.float32, np.complex64, np.complex128]
     for dtype in dtypes:
       self._check('ij,jk->ik', (2, 2), (2, 2), dtype=dtype)
@@ -770,6 +993,9 @@ class EinsumTest(test.TestCase):
       self._check('ji,kj->ki', (2, 2), (2, 2), dtype=dtype)
 
   def test_multiple_inputs(self):
+    # [FUNCTION DOC]
+    # Equations with three and four operands, including ones taken from dask, compared against
+    # numpy.
     self._check('ijk,ijl,ikl->i', (1, 2, 3), (1, 2, 4), (1, 3, 4))
     self._check('i,ijk,j->k', (1,), (1, 2, 4), (2,))
     self._check('ij,ij,jk,kl->il', (1, 2), (1, 2), (2, 3), (3, 4))
@@ -779,8 +1005,18 @@ class EinsumTest(test.TestCase):
 
   @test_util.disable_xla('b/131919749')
   def test_placeholder(self):
+    # [FUNCTION DOC]
+    # Checks einsum when inputs have partially or fully unknown static shapes (placeholders with
+    # default values), including unknown rank with ellipsis. Skipped under XLA (bug reference).
+    # The nested helper builds random numpy inputs and placeholders for a list of pairs of actual
+    # shape and placeholder shape, then compares einsum with numpy.
 
     def check(equation, *input_and_placeholder_shapes):
+      # [FUNCTION DOC]
+      # HELPER: local comparison utility for test_placeholder.
+      # Takes an equation and any number of pairs of actual shape and placeholder shape. Creates
+      # seeded random inputs, wraps them in placeholders with the given (possibly unknown) shapes,
+      # and asserts the TensorFlow einsum result is close to numpy's (tolerance 1e-4).
       r = np.random.RandomState(0)
       inputs = []
       input_placeholders = []
@@ -804,6 +1040,9 @@ class EinsumTest(test.TestCase):
     check('...ij,...jk->...ik', ((3, 1, 2, 3), None), ((1, 7, 3, 4), None))
 
   def test_numpy_input(self):
+    # [FUNCTION DOC]
+    # Passes raw numpy arrays (not tensors) to einsum with a three-operand equation and compares
+    # against numpy.
     # In addition to Tensors, we also support raw numpy arrays as inputs.
     r = np.random.RandomState(0)
     s = 'ijk,ijl,ikl->i'
@@ -816,6 +1055,9 @@ class EinsumTest(test.TestCase):
     self.assertAllClose(a, b, atol=1e-4, rtol=1e-4)
 
   def test_long_cases(self):
+    # [FUNCTION DOC]
+    # Long equations (four or five operands, with whitespace, and repeated equations to exercise
+    # the path cache) with dimension sizes derived from letters; compared against numpy.
     cases = [
         'efc,dbc,acf,fd->abe',
         'ea,fb,gc,hd,abcd->efgh',
@@ -836,6 +1078,11 @@ class EinsumTest(test.TestCase):
       self._check(equation, *input_shapes)
 
   def test_opt_einsum_cached(self):
+    # [FUNCTION DOC]
+    # Eager-mode only (returns immediately in graph mode). Wraps the opt_einsum path routine in a
+    # call-counting mock, clears the cache of the module's path helper, and checks the call count
+    # is 1 after the first equation, stays 1 on repeat, becomes 2 for a new equation, and remains
+    # 2 after more repeats.
     # Checks call_count to opt_einsum which are only reflected in eager mode.
     if not context.executing_eagerly():
       return
@@ -873,6 +1120,9 @@ class EinsumTest(test.TestCase):
 
   @test_util.disable_xla('b/131919749')
   def test_long_cases_with_repeated_labels(self):
+    # [FUNCTION DOC]
+    # Long equations with repeated labels (from dask) with dimension sizes derived from letters,
+    # compared against numpy. Skipped under XLA (bug reference).
     cases = [
         # Tests from dask.
         'fdf,cdd,ccd,afe->ae',
@@ -889,6 +1139,11 @@ class EinsumTest(test.TestCase):
   @test_util.disable_xla('b/131919749')
   @test_util.run_in_graph_and_eager_modes
   def test_invalid_equation(self):
+    # [FUNCTION DOC]
+    # Feeds a list of malformed or inconsistent equations (bad format, unknown output label,
+    # wrong rank, mismatched dimensions, repeated output subscripts, too many ellipses, bad
+    # broadcast, missing output ellipsis) and expects a value error or invalid-argument error, both
+    # for static inputs and for placeholders of unknown shape. Skipped under XLA.
     r = np.random.RandomState(0)
     cases = [
         # invalid equation format.
@@ -926,8 +1181,16 @@ class EinsumTest(test.TestCase):
 
   @test_util.disable_xla('b/131919749')
   def test_empty(self):
+    # [FUNCTION DOC]
+    # Checks einsum with zero-sized dimensions (contractions and generalized traces) yields zeros
+    # of the expected output shape. Not compared with numpy. Skipped under XLA.
 
     def check(equation, input_shapes, output_shape):
+      # [FUNCTION DOC]
+      # HELPER: local comparison utility for test_empty.
+      # Takes an equation, a list of input shapes and the expected output shape. Builds seeded random
+      # constant inputs, evaluates einsum, and asserts the output is close to zeros of the output
+      # shape.
       # All these cases result in an output filled with zeros, so we don't call
       # np.einsum. Also np.einsum doesn't support generalized diagonals which
       # are needed for EinsumOp gradients.
@@ -949,8 +1212,17 @@ class EinsumTest(test.TestCase):
 
 @test_util.run_all_in_graph_and_eager_modes
 class EinsumGradTest(test.TestCase):
+  # [CLASS DOC]
+  # Gradient tests for the Einstein summation op using the numerical gradient checker over many
+  # equations (unary, ellipsis, binary, repeated labels, empty and long cases). Shared fixture is
+  # the private gradient check method. Runs in graph and eager modes.
 
   def _check_gradient(self, s, *input_shapes):
+    # [FUNCTION DOC]
+    # HELPER: shared gradient check utility for the einsum gradient tests.
+    # Takes an equation and one shape per input. Builds seeded random double precision inputs, wraps
+    # einsum in a function of the inputs, computes analytical and numerical gradients, and asserts
+    # the maximum error is below 1e-4. Uses a cached session.
     with self.cached_session():
       r = np.random.RandomState(0)
       inputs = [np.array(r.randn(*shape)) for shape in input_shapes]
@@ -962,6 +1234,9 @@ class EinsumGradTest(test.TestCase):
 
   @test_util.disable_xla('b/131919749')
   def test_unary(self):
+    # [FUNCTION DOC]
+    # Gradient checks for single-operand equations: scalar, diagonal, partial diagonal and
+    # transpose. Skipped under XLA (bug reference).
     self._check_gradient('->', ())
     self._check_gradient('aaa->a', (3, 3, 3))
     self._check_gradient('aabcd->ad', (3, 3, 5, 4, 4))
@@ -969,6 +1244,9 @@ class EinsumGradTest(test.TestCase):
 
   @test_util.disable_xla('b/131919749')
   def test_unary_ellipsis(self):
+    # [FUNCTION DOC]
+    # Gradient checks for single-operand equations with an ellipsis, including cases from dask and
+    # batch transposes. Skipped under XLA (bug reference).
     self._check_gradient('...->...', ())
     self._check_gradient('...->', ())
     self._check_gradient('->...', ())
@@ -986,6 +1264,8 @@ class EinsumGradTest(test.TestCase):
     self._check_gradient('ab...cd->da...', (3, 5, 2, 3, 4, 2))
 
   def test_binary_simple(self):
+    # [FUNCTION DOC]
+    # Gradient checks for simple two-operand equations without ellipsis.
     # Binary cases in XLA mode must have either (a) each index appearing
     # exactly once in both the inputs (batch or contraction index), or
     # (b) appearing exactly once in an input and in the output (free index).
@@ -1001,17 +1281,25 @@ class EinsumGradTest(test.TestCase):
     self._check_gradient('sa,shb->shab', (2, 1), (2, 3, 4))
 
   def test_empty(self):
+    # [FUNCTION DOC]
+    # Gradient check for a contraction with zero-sized dimensions (from Transformer XL).
     # From Transformer XL.
     self._check_gradient('ibnd,ijbn->jnd', (1, 0, 5, 10), (1, 1, 0, 5))
 
   @test_util.disable_xla('b/131919749')
   def test_reduced_indices(self):
+    # [FUNCTION DOC]
+    # Gradient checks for two-operand equations in which shared indices are summed away. Skipped
+    # under XLA (bug reference).
     self._check_gradient('ba,b->', (3, 2), (3,))
     self._check_gradient('ab,ab->', (3, 4), (3, 4))
     self._check_gradient('abce,badf->abcd', (1, 2, 3, 4), (2, 1, 4, 3))
 
   @test_util.disable_xla('b/131919749')
   def test_repeated_indices(self):
+    # [FUNCTION DOC]
+    # Gradient checks for equations with labels repeated within one operand (generalized
+    # diagonals). Skipped under XLA (bug reference).
     # Repeated indices.
     self._check_gradient('aba,a->b', (3, 4, 3), (3,))
     self._check_gradient('ijj,k->ik', (2, 3, 3), (4,))
@@ -1022,12 +1310,18 @@ class EinsumGradTest(test.TestCase):
 
   @test_util.disable_xla('b/131919749')
   def test_empty_with_repeated_indices(self):
+    # [FUNCTION DOC]
+    # Gradient checks for repeated-label equations with zero-sized dimensions. Skipped under XLA
+    # (bug reference).
     self._check_gradient('aab,bc->ac', (0, 0, 10), (10, 10))
     self._check_gradient('aab,bc->ac', (1, 1, 0), (0, 10))
     self._check_gradient('aaab,bc->c', (0, 0, 0, 3), (3, 4))
 
   @test_util.disable_xla('b/131919749')
   def test_broadcasting(self):
+    # [FUNCTION DOC]
+    # Gradient checks for equations whose ellipsis dimensions broadcast, including three operands
+    # and cases from dask. Skipped under XLA (bug reference).
     self._check_gradient('...ij,...jk->...ik', (3, 2), (2, 4))
     self._check_gradient('ij...,jk...->ik...', (3, 2, 1), (2, 4))
     self._check_gradient('...ij,...jk->...ik', (3, 1, 3, 2), (1, 5, 2, 4))
@@ -1039,6 +1333,9 @@ class EinsumGradTest(test.TestCase):
     self._check_gradient('...i,...j,...k->...ijk', (1,), (1,), (1,))
 
   def test_long_cases(self):
+    # [FUNCTION DOC]
+    # Gradient checks for long multi-operand equations, with dimension sizes cycling through one,
+    # two, three by letter.
     cases = [
         'abhe,hidj,jgba,hiab,gab->ed',
         # Tests from dask.
@@ -1055,6 +1352,9 @@ class EinsumGradTest(test.TestCase):
 
   @test_util.disable_xla('b/131919749')
   def test_long_cases_with_repeated_labels(self):
+    # [FUNCTION DOC]
+    # Gradient checks for long equations with repeated labels (from dask), with dimension sizes
+    # cycling through one, two, three by letter. Skipped under XLA (bug reference).
     cases = [
         # Tests from dask.
         'fdf,cdd,ccd,afe->ae',
@@ -1071,6 +1371,10 @@ class EinsumGradTest(test.TestCase):
 
 
 class EinsumBenchmark(test.Benchmark):
+  # [CLASS DOC]
+  # Benchmark class for einsum on CPU. Holds a class-level list of cases, each a pair of an
+  # equation and a dimension size applied to every index: unary, matmul, batch matmul, larger
+  # binary contractions, a chain matmul and long path-optimized cases.
   cases = [
       # Unary cases.
       ['ijk->i', 100],
@@ -1100,6 +1404,12 @@ class EinsumBenchmark(test.Benchmark):
   ]
 
   def benchmark_einsum(self):
+    # [FUNCTION DOC]
+    # For each case builds a fresh graph on the CPU, creates random float32 variables of the
+    # requested size per operand, initializes them, and benchmarks the einsum op for at least 50
+    # iterations. Cases with up to two operands run once; larger ones run with the greedy and the
+    # automatic path optimizer. Benchmark names encode equation, optimizer and size. Reports go
+    # through the benchmark framework.
     for equation, dim in self.cases:
       with ops.Graph().as_default(), \
           session.Session(config=benchmark.benchmark_config()) as sess, \

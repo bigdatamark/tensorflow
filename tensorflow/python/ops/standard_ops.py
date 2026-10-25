@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Aggregator module that re-exports the standard TensorFlow ops namespace. It star-imports or
+# selectively imports public names from array, check, clip, math, special math, control flow,
+# data flow, linalg, logging, lookup, parsing, random, ragged, sparse, state, string, tensor
+# array, variable and other op modules, plus vectorized_map and the tensorrt convert module.
+# Import-time side effects: importing the gradient modules (array, cudnn rnn, data flow, manip,
+# math, random, rnn, sparse, state, tensor array) registers gradient functions; ragged
+# dispatch and operator modules are imported to install RaggedTensor operators and then their
+# names are deleted from this namespace. Defines no functions of its own.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Benchmark for the split operation. Builds graphs with 100 repeated splits of a zero tensor
+# for many shapes, with fixed or randomly varying piece sizes, and times them in a session
+# with graph optimizations turned off. Not a library: run directly through the test main
+# entry point. No import-time side effects beyond imports.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,6 +33,13 @@ from tensorflow.python.platform import tf_logging as logging
 
 
 def build_graph(device, input_shape, output_sizes, axis):
+  # [FUNCTION DOC]
+  # HELPER: graph builder for the split benchmark.
+  # KNOWN ISSUE: the docstring says it returns an array of tensors, but it returns a single
+  # grouped no-output operation that depends on all split outputs.
+  # Under the given device (index 0) creates a zeros tensor of input_shape, then repeats 100
+  # times a split along axis into pieces of output_sizes (list of sizes or a count), collecting
+  # all outputs. Returns the grouping op over all of them, so running it executes every split.
   """Build a graph containing a sequence of split operations.
 
   Args:
@@ -49,9 +61,24 @@ def build_graph(device, input_shape, output_sizes, axis):
 
 
 class SplitBenchmark(test.Benchmark):
+  # [CLASS DOC]
+  # Benchmark class measuring forward split performance on many shapes. It has a private helper
+  # that builds and times one graph, and a public benchmark method that sweeps configurations.
+  # Holds no state of its own; created and run by the benchmark framework.
   """Benchmark split!"""
 
   def _run_graph(self, device, output_shape, variable, num_outputs, axis):
+    # [FUNCTION DOC]
+    # HELPER: runs one benchmark configuration for benchmark_split.
+    # KNOWN ISSUE: the docstring says it returns the run duration in seconds, but it returns
+    # nothing; results are only reported through the benchmark harness.
+    # Builds the input shape and split sizes from output_shape, number of outputs and axis. With
+    # variable false all sizes equal the output extent along the axis; with variable true sizes
+    # are random integers near that extent, so input size is their sum. Builds a split graph on
+    # the device, then runs it in a session with graph optimization disabled (level L0), sets
+    # logging verbosity to info, initializes global variables, and records a benchmark with
+    # throughput estimated from the input size plus the shape, variable flag and axis as extras.
+    # Side effects: global logging verbosity changed, random numbers consumed, benchmark output.
     """Run the graph and print its execution time.
 
     Args:
@@ -103,6 +130,13 @@ class SplitBenchmark(test.Benchmark):
           })
 
   def benchmark_split(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the device is hard-coded to gpu, so it fails or is meaningless without a GPU.
+    # Benchmark entry point (takes no arguments, returns nothing). Sweeps a fixed list of nine 2-D
+    # shapes, split along axis 1 only (axis 0 is skipped because it needs no copying), into 100
+    # outputs, each with fixed and then variable output sizes. For every combination it calls the
+    # graph runner on the "gpu" device. Prints a heading line and, via the runner, benchmark
+    # results to the logs.
     print("Forward vs backward concat")
     shapes = [[2000, 8], [8, 2000], [100, 18], [1000, 18], [10000, 18],
               [100, 97], [1000, 97], [10000, 1], [1, 10000]]

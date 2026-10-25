@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Gradient registration module for the variable-mutating ops defined in state_ops. Its only
+# effect, at import time, is to mark the ops Assign, AssignAdd, AssignSub, ScatterAdd,
+# ScatterSub, ScatterMul, ScatterDiv, ScatterNdUpdate, ScatterNdAdd, ScatterNdSub,
+# ScatterNdMul and ScatterNdDiv as not differentiable in the global op registry. Exposes no
+# names; imported by standard_ops for that side effect.
+# KNOWN ISSUE: a source comment admits these ops may actually be differentiable (latent bugs).
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

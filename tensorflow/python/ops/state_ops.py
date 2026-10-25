@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Python wrappers for variable state ops: creating variable ops, initializing, checking
+# initialization, and assign, assign-add, assign-sub, count-up-to and the scatter family
+# (update, add, sub, mul, div, min, max, and their n-dimensional variants), plus a batched
+# scatter update. Each wrapper dispatches between reference-typed (graph v1) variables, using
+# the generated state ops, and resource variables, using their methods or resource ops.
+# Many are exported in the v1 compat API only. Import-time side effects: imports state_grad
+# (registering non-differentiability) and star-imports all generated state ops into this
+# namespace.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,6 +46,11 @@ from tensorflow.python.util.tf_export import tf_export
 # pylint: disable=protected-access,g-doc-return-or-yield,g-doc-args
 def variable_op(shape, dtype, name="Variable", set_shape=True, container="",
                 shared_name=""):
+  # [FUNCTION DOC]
+  # Deprecated predecessor of variable_op_v2. Creates a variable op with the given shape and
+  # dtype, optional name, container and shared_name. When set_shape is false the shape is
+  # replaced by an unknown shape before creation; when true the resulting tensor's static shape
+  # is also set to shape afterwards. Returns the variable tensor.
   """Deprecated. Used variable_op_v2 instead."""
   if not set_shape:
     shape = tensor_shape.unknown_shape()
@@ -50,6 +64,11 @@ def variable_op(shape, dtype, name="Variable", set_shape=True, container="",
 
 
 def variable_op_v2(shape, dtype, name="Variable", container="", shared_name=""):
+  # [FUNCTION DOC]
+  # Creates a graph op that holds a mutable variable tensor of the given shape and dtype, via
+  # the generated variable-v2 op. Optional name, container (resource container, empty means the
+  # default) and shared_name (empty means the node name) are forwarded unchanged. Returns the
+  # variable (reference) tensor.
   """Create a variable Operation.
 
   See also variables.Variable.
@@ -77,6 +96,15 @@ def variable_op_v2(shape, dtype, name="Variable", container="", shared_name=""):
 
 
 def init_variable(v, init, name="init"):
+  # [FUNCTION DOC]
+  # HELPER: internal glue for creating variable initializer ops.
+  # KNOWN ISSUE: the docstring mentions a variable-shape op, but the code uses the static shape
+  # and fails an assertion (not a proper exception) when the shape is not fully defined and the
+  # initializer is callable.
+  # Builds an assign op that sets variable v to init. If init is callable it is called with the
+  # shape list and base dtype of v and the result converted to a tensor; otherwise init is
+  # converted to a tensor. Runs inside name scopes derived from the variable name and the given
+  # name, colocated with v. Returns the assign operation. Does not run it.
   """Initializes variable with "init".
 
   This op does the following:
@@ -112,6 +140,11 @@ def init_variable(v, init, name="init"):
 
 
 def is_variable_initialized(ref, name=None):
+  # [FUNCTION DOC]
+  # Returns a boolean scalar tensor telling whether the variable ref has been initialized.
+  # Reference-typed variables use the is-variable-initialized op with the optional name;
+  # resource variables ask the variable itself via its is-initialized method. Creates a graph
+  # op; no mutation.
   """Checks whether a tensor has been initialized.
 
   Outputs boolean scalar indicating whether the tensor has been initialized.
@@ -132,6 +165,13 @@ def is_variable_initialized(ref, name=None):
 
 @tf_export(v1=["assign_sub"])
 def assign_sub(ref, value, use_locking=None, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: for non-reference (resource) variables use_locking and name are silently
+  # ignored; only the value is passed to the variable's own subtract method.
+  # Subtracts value (same shape and dtype as ref, no broadcasting) from the variable ref and
+  # returns the updated value. Reference-typed variables use the assign-sub op with use_locking
+  # (optional) and name (optional); other variables call their assign-sub method. Side effect:
+  # mutates the variable when run.
   """Update `ref` by subtracting `value` from it.
 
   This operation outputs `ref` after the update is done.
@@ -204,6 +244,13 @@ def assign_sub(ref, value, use_locking=None, name=None):
 
 @tf_export(v1=["assign_add"])
 def assign_add(ref, value, use_locking=None, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: for non-reference (resource) variables use_locking and name are silently
+  # ignored; only the value is passed to the variable's own add method.
+  # Adds value (same shape and dtype as ref, no broadcasting) to the variable ref and returns
+  # the updated value. Reference-typed variables use the assign-add op with use_locking (optional)
+  # and name (optional); other variables call their assign-add method. Side effect: mutates the
+  # variable when run.
   """Update `ref` by adding `value` to it.
 
   This operation outputs `ref` after the update is done.
@@ -276,6 +323,14 @@ def assign_add(ref, value, use_locking=None, name=None):
 
 @tf_export(v1=["assign"])
 def assign(ref, value, validate_shape=None, use_locking=None, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says use_locking defaults to true, but the signature default is
+  # nothing (the op's own default applies). For resource variables validate_shape, use_locking
+  # are ignored and the variable method is used (only name is forwarded).
+  # Assigns value to the variable ref and returns a tensor holding the new value. Inputs: ref
+  # (variable), value (same shape and dtype), validate_shape (optional), use_locking
+  # (optional), name (optional). Reference-typed variables use the assign op with those
+  # options; other variables call their own assign method. Side effect: mutates the variable.
   """Update `ref` by assigning `value` to it.
 
   This operation outputs a Tensor that holds the new value of `ref` after
@@ -359,6 +414,13 @@ def assign(ref, value, validate_shape=None, use_locking=None, name=None):
 @tf_export(v1=["count_up_to"])
 @deprecated(None, "Prefer Dataset.range instead.")
 def count_up_to(ref, limit, name=None):
+  # [FUNCTION DOC]
+  # Deprecated counter: increments a scalar integer variable by one and returns its value before
+  # the increment; once the limit would be exceeded the op fails with an out-of-range error when
+  # run. Inputs: ref (scalar int32 or int64 variable), limit (integer), name (optional).
+  # Reference-typed variables use the count-up-to op; resource variables use the resource
+  # count-up-to op on their handle. Returns a tensor of the same type as ref. Side effect:
+  # mutates the variable when run.
   r"""Increments 'ref' until it reaches 'limit'.
 
   Args:
@@ -382,6 +444,14 @@ def count_up_to(ref, limit, name=None):
 
 @tf_export(v1=["scatter_update"])
 def scatter_update(ref, indices, updates, use_locking=True, name=None):
+  # [FUNCTION DOC]
+  # Sparse in-place overwrite: assigns updates to slices of the variable ref addressed along the
+  # first dimension by indices; with duplicate indices the winning update is undefined.
+  # Inputs: ref (variable), indices (integer tensor), updates (same dtype as ref; shape of
+  # indices plus remaining shape of ref), use_locking (default true), name. Reference-typed
+  # variables use the scatter-update op; resource variables use the resource scatter-update op
+  # with updates converted to the variable dtype and return a lazy read. Returns the updated
+  # variable value. Side effect: mutates the variable when run.
   # pylint: disable=line-too-long
   r"""Applies sparse updates to a variable reference.
 
@@ -436,6 +506,14 @@ def scatter_update(ref, indices, updates, use_locking=True, name=None):
 
 @tf_export(v1=["scatter_nd_update"])
 def scatter_nd_update(ref, indices, updates, use_locking=True, name=None):
+  # [FUNCTION DOC]
+  # Overwrites individual elements or slices of a variable with sparse updates, addressed by
+  # multi-dimensional index tuples in indices (innermost dimension K is at most the rank of ref).
+  # Inputs: ref (variable), indices (integer tensor), updates (same dtype as ref, rank
+  # Q-1+P-K), use_locking (default true), name. Reference-typed variables use the
+  # scatter-nd-update op; resource variables use the resource scatter-nd-update op with updates
+  # converted to the variable dtype and return a lazy read. Returns the updated variable value.
+  # Side effect: mutates the variable when run. Also called by batch_scatter_update.
   r"""Applies sparse `updates` to individual values or slices in a Variable.
 
   `ref` is a `Tensor` with rank `P` and `indices` is a `Tensor` of rank `Q`.
@@ -498,6 +576,14 @@ def scatter_nd_update(ref, indices, updates, use_locking=True, name=None):
 
 @tf_export(v1=["scatter_add"])
 def scatter_add(ref, indices, updates, use_locking=False, name=None):
+  # [FUNCTION DOC]
+  # Sparse in-place addition: adds updates to slices of the variable ref addressed along the
+  # first dimension by indices; duplicate indices accumulate. Inputs: ref (variable), indices
+  # (integer tensor), updates (same dtype as ref; shape of indices plus remaining shape of ref),
+  # use_locking (default false), name. Reference-typed variables use the scatter-add op;
+  # resource variables use the resource scatter-add op with updates converted to the variable
+  # dtype and return a lazy read. Returns the updated variable value. Side effect: mutates the
+  # variable when run.
   # pylint: disable=line-too-long
   r"""Adds sparse updates to the variable referenced by `resource`.
 
@@ -550,6 +636,14 @@ def scatter_add(ref, indices, updates, use_locking=False, name=None):
 
 @tf_export(v1=["scatter_nd_add"])
 def scatter_nd_add(ref, indices, updates, use_locking=False, name=None):
+  # [FUNCTION DOC]
+  # Adds sparse updates to individual elements or slices of a variable, addressed by
+  # multi-dimensional index tuples in indices (innermost dimension K is at most the rank of ref).
+  # Inputs: ref (variable), indices (integer tensor), updates (same dtype as ref, rank
+  # Q-1+P-K), use_locking (default false), name. Reference-typed variables use the scatter-nd-add
+  # op; resource variables use the resource scatter-nd-add op with updates converted to the
+  # variable dtype and return a lazy read. Returns the updated variable value. Side effect:
+  # mutates the variable when run.
   r"""Applies sparse addition to individual values or slices in a Variable.
 
   `ref` is a `Tensor` with rank `P` and `indices` is a `Tensor` of rank `Q`.
@@ -613,6 +707,14 @@ def scatter_nd_add(ref, indices, updates, use_locking=False, name=None):
 
 @tf_export(v1=["scatter_sub"])
 def scatter_sub(ref, indices, updates, use_locking=False, name=None):
+  # [FUNCTION DOC]
+  # Sparse in-place subtraction: subtracts updates from slices of the variable ref addressed
+  # along the first dimension by indices; duplicate indices accumulate their negated
+  # contributions. Inputs: ref (variable), indices (integer tensor), updates (same dtype as ref;
+  # shape of indices plus remaining shape of ref, or scalar), use_locking (default false), name.
+  # Reference-typed variables use the scatter-sub op; resource variables use the resource
+  # scatter-sub op with updates converted to the variable dtype and return a lazy read.
+  # Returns the updated variable value. Side effect: mutates the variable when run.
   r"""Subtracts sparse updates to a variable reference.
 
   ```python
@@ -667,6 +769,16 @@ def scatter_sub(ref, indices, updates, use_locking=False, name=None):
 
 @tf_export(v1=["scatter_nd_sub"])
 def scatter_nd_sub(ref, indices, updates, use_locking=False, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring for use_locking says both "Defaults to False" and "Defaults to
+  # True"; the actual default is false.
+  # Subtracts sparse updates from individual elements or slices of a variable, addressed by
+  # multi-dimensional index tuples in indices (innermost dimension K is at most the rank of ref).
+  # Inputs: ref (variable), indices (integer tensor), updates (same dtype as ref, rank
+  # Q-1+P-K), use_locking (default false), name. Reference-typed variables use the scatter-nd-sub
+  # op; resource variables use the resource scatter-nd-sub op with updates converted to the
+  # variable dtype and return a lazy read. Returns the updated variable value. Side effect:
+  # mutates the variable when run.
   r"""Applies sparse subtraction to individual values or slices in a Variable.
 
   `ref` is a `Tensor` with rank `P` and `indices` is a `Tensor` of rank `Q`.
@@ -731,6 +843,14 @@ def scatter_nd_sub(ref, indices, updates, use_locking=False, name=None):
 
 @tf_export(v1=["scatter_mul"])
 def scatter_mul(ref, indices, updates, use_locking=False, name=None):
+  # [FUNCTION DOC]
+  # Sparse in-place multiplication: multiplies slices of the variable ref, addressed along the
+  # first dimension by indices, by the matching updates; duplicate indices multiply repeatedly.
+  # Inputs: ref (variable), indices (integer tensor), updates (same dtype as ref; shape of
+  # indices plus remaining shape of ref, or scalar), use_locking (default false), name.
+  # Reference-typed variables use the scatter-mul op; resource variables use the resource
+  # scatter-mul op, with updates converted to the variable dtype, and return a lazy read.
+  # Returns the updated variable value. Side effect: mutates the variable when run.
   # pylint: disable=line-too-long
   r"""Multiplies sparse updates into a variable reference.
 
@@ -783,6 +903,14 @@ def scatter_mul(ref, indices, updates, use_locking=False, name=None):
 
 @tf_export(v1=["scatter_div"])
 def scatter_div(ref, indices, updates, use_locking=False, name=None):
+  # [FUNCTION DOC]
+  # Sparse in-place division: divides slices of the variable ref, addressed along the first
+  # dimension by indices, by the matching updates; duplicate indices divide repeatedly.
+  # Inputs: ref (variable), indices (integer tensor), updates (same dtype as ref; shape of
+  # indices plus remaining shape of ref, or scalar), use_locking (default false), name.
+  # Reference-typed variables use the scatter-div op; resource variables use the resource
+  # scatter-div op, with the updates converted to the variable dtype, and return a lazy read.
+  # Returns the updated variable value. Side effect: mutates the variable when run.
   # pylint: disable=line-too-long
   r"""Divides a variable reference by sparse updates.
 
@@ -835,6 +963,15 @@ def scatter_div(ref, indices, updates, use_locking=False, name=None):
 
 @tf_export(v1=["scatter_max"])
 def scatter_max(ref, indices, updates, use_locking=False, name=None):
+  # [FUNCTION DOC]
+  # Sparse update of a variable by element-wise maximum: each addressed slice of ref (indexed
+  # along its first dimension by indices) becomes the maximum of its old value and the matching
+  # update. Inputs: ref (variable), indices (integer tensor), updates (same dtype as ref, shape
+  # of indices plus remaining shape of ref, or scalar), use_locking (default false), name.
+  # For reference-typed variables it creates the scatter-max op; for resource variables it
+  # creates the resource scatter-max op and returns a lazy read of the variable. Returns the
+  # updated variable value. Side effect: mutates the variable when run. Errors come from the
+  # underlying op.
   # pylint: disable=line-too-long
   r"""Reduces sparse updates into a variable reference using the `max` operation.
 
@@ -890,6 +1027,15 @@ def scatter_max(ref, indices, updates, use_locking=False, name=None):
 
 @tf_export(v1=["scatter_min"])
 def scatter_min(ref, indices, updates, use_locking=False, name=None):
+  # [FUNCTION DOC]
+  # Sparse update of a variable by element-wise minimum: each addressed slice of ref (indexed
+  # along its first dimension by indices) becomes the minimum of its old value and the matching
+  # update. Inputs: ref (variable), indices (integer tensor), updates (same dtype as ref, shape
+  # of indices plus remaining shape of ref, or scalar), use_locking (default false), name.
+  # For reference-typed (graph v1) variables it creates the scatter-min op; for resource
+  # variables it creates the resource scatter-min op and returns a lazy read of the variable.
+  # Returns a tensor/op result holding the updated variable. Side effect: mutates the variable
+  # when run. Errors come from the underlying op (dtype or shape mismatch).
   # pylint: disable=line-too-long
   r"""Reduces sparse updates into a variable reference using the `min` operation.
 
@@ -947,6 +1093,16 @@ def scatter_min(ref, indices, updates, use_locking=False, name=None):
 @deprecation.deprecated(
     "2018-11-29", "Use the batch_scatter_update method of Variable instead.")
 def batch_scatter_update(ref, indices, updates, use_locking=True, name=None):
+  # [FUNCTION DOC]
+  # Deprecated (since 2018-11-29) generalization of scatter update for indices with several
+  # leading batch dimensions. Inputs: ref (variable to modify), indices (integer tensor whose
+  # rank must be statically known), updates (values, shape of indices plus the trailing shape
+  # of ref), use_locking (default true), name (optional scope). Within a name scope it converts
+  # indices to a tensor, builds for each leading dimension of indices a range broadcast to the
+  # shape of indices (cast to the indices dtype if needed), appends the original indices as the
+  # last coordinate, concatenates them into full coordinates, and delegates to scatter_nd_update.
+  # Returns the result of that update. Raises a value error when the rank of indices is unknown.
+  # Side effect: modifies the variable in place when the returned op is run.
   """Generalization of `tf.compat.v1.scatter_update` to axis different than 0.
 
   Analogous to `batch_gather`. This assumes that `ref`, `indices` and `updates`
