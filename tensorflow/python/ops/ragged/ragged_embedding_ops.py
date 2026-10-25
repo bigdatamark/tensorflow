@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Ragged-tensor overloads of the embedding lookup APIs. Registers (via the API dispatch
+# mechanism) implementations of embedding_lookup, embedding_lookup_sparse and
+# safe_embedding_lookup_sparse that are used when the ids argument is a RaggedTensor. The lookups
+# delegate to the dense implementations in embedding_ops, applied to the flat values of the ragged
+# ids. Also holds two private helpers pruning invalid ids/weights. Import-time side effect:
+# registration of the three dispatchers.
 """Embedding operations."""
 
 from tensorflow.python.framework import dtypes
@@ -37,6 +44,15 @@ def embedding_lookup(
     validate_indices=True,  # pylint: disable=unused-argument
     max_norm=None,
 ):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring documents an argument named ragged_ids, but the real parameter is
+  # named ids; it also omits validate_indices, which is accepted but ignored.
+  # Ragged overload of embedding_lookup. Inputs: params (embedding tensor, or list of sharded
+  # tensors), ids (ragged tensor of int32/int64 ids), partition_strategy (default mod), name
+  # (optional), validate_indices (ignored), max_norm (optional clipping bound).
+  # Raises a value error when params is nothing or an empty list/tuple, or when the ids dtype is
+  # not int32 or int64. Otherwise, inside a name scope, applies the dense embedding_lookup to the
+  # flat values of ids and returns a ragged tensor with the embedding dimensions appended.
   """Look up the ragged ids in a list of embedding tensors.
 
   Args:
@@ -92,6 +108,21 @@ def embedding_lookup_sparse(
     max_norm=None,
     allow_fast_lookup=False,
 ):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring names the weights argument sparse_weights and sp_ids as a rank-2
+  # ragged tensor, but the weights parameter is sp_weights, and the rank is never checked.
+  # KNOWN ISSUE: the type-mismatch error message uses doubled braces inside a formatted string,
+  # so it prints the literal placeholder text instead of the actual type names.
+  # KNOWN ISSUE: the original sp_weights is passed to the implementation, not the validated
+  # rt_weights alias (same object, so harmless).
+  # Ragged overload of embedding_lookup_sparse. Inputs: params (tensor, list of shards or
+  # partitioned variable), sp_ids (ragged tensor of ids), sp_weights (ragged tensor or nothing),
+  # partition_strategy, name, combiner (mean, sqrtn or sum; nothing means mean), max_norm,
+  # allow_fast_lookup. Raises a value error for an unknown combiner and a type error if weights
+  # are given but are not a ragged tensor; also asserts static shape compatibility of ids and
+  # weights. Partitioned variables are expanded to a list and a single tensor is wrapped in a
+  # list. Inside a name scope it uses the row ids and flat values of sp_ids and calls the shared
+  # sparse lookup implementation. Returns a dense tensor with one combined embedding per row.
   """Looks up embeddings for the given ids and weights from a list of tensors.
 
   This op assumes that there is at least one id for each row in the dense tensor
@@ -228,6 +259,19 @@ def safe_embedding_lookup_sparse(
     max_norm=None,
     allow_fast_lookup=False,
 ):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring calls the ids argument sp_ids, but the parameter is sparse_ids; it
+  # also claims SparseTensor support, though this overload is only for ragged ids.
+  # KNOWN ISSUE: the docstring mentions a default_id of 0 example, but a default_id of nothing
+  # yields zero vectors, and a default_id of 0 is indistinguishable from nothing when filling.
+  # Ragged overload of safe_embedding_lookup_sparse. Inputs: embedding_weights (tensor, list of
+  # shards or partitioned variable), sparse_ids (ragged ids), sparse_weights (ragged or nothing),
+  # combiner (default mean), default_id (id used for empty rows, optional), name,
+  # partition_strategy (default div), max_norm, allow_fast_lookup. Raises a value error if
+  # embedding_weights is nothing or empty. Converts weights to tensors, removes negative ids and
+  # non-positive weights (weights pruning skipped for sum), fills empty rows with the default id
+  # (or 0) and weight 1.0, calls the ragged sparse lookup, and when default_id is nothing zeroes
+  # the result of rows that were empty. Returns the dense combined embeddings.
   """Lookup embedding results, accounting for invalid IDs and empty features.
 
   The partitioned embedding in `embedding_weights` must all be the same shape
@@ -378,6 +422,11 @@ def safe_embedding_lookup_sparse(
 
 
 def _prune_invalid_ids_ragged(ids, weights):
+  # [FUNCTION DOC]
+  # HELPER: used by safe_embedding_lookup_sparse to clean its ragged inputs.
+  # Removes entries whose id is negative from the ragged ids and, if given, the matching entries
+  # of the ragged weights, preserving the row count. Returns the pruned ids and pruned weights
+  # (weights stays nothing if it was nothing).
   """Prune invalid IDs (< 0) from the input ids and weights."""
   is_id_valid = math_ops.greater_equal(ids.values, 0)
   nrows = ids.nrows()
@@ -405,6 +454,13 @@ def _prune_invalid_ids_ragged(ids, weights):
 
 
 def _prune_invalid_weights_ragged(ids, weights):
+  # [FUNCTION DOC]
+  # HELPER: used by safe_embedding_lookup_sparse to clean its ragged inputs.
+  # KNOWN ISSUE: the docstring says weights below zero are pruned, but the code prunes weights
+  # that are not strictly greater than zero, so zero weights are removed too.
+  # When weights is given, removes entries with non-positive weight from both ids and weights,
+  # keeping the row count. Returns the (possibly pruned) ids and weights; with no weights both are
+  # returned unchanged.
   """Prune invalid weights (< 0) from the input ids and weights."""
   if weights is not None:
     is_weights_valid = math_ops.greater(weights.values, 0)

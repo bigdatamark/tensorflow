@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Test module for ragged_array_ops.fill_empty_rows, which inserts a default value into each empty
+# row of a ragged tensor and reports which rows were empty. Covers integer, float (with gradient
+# checks, function tracing), string and no-empty-row inputs. No import-time side effects.
 """Tests tf.ragged.fill_empty_rows."""
 
 import numpy as np
@@ -28,8 +32,16 @@ from tensorflow.python.platform import googletest
 
 
 class RaggedFillEmptyRowsTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case for the ragged fill_empty_rows operation. Each test builds a small ragged tensor
+  # with a default value, runs the op and asserts the filled rows, row lengths, flat values and
+  # the empty-row indicator. No shared fixtures.
 
   def testFillInt(self):
+    # [FUNCTION DOC]
+    # Int32 case on GPU when available: rows [empty, four values, empty, four values, empty]
+    # with default -1. Asserts each empty row becomes a single -1, row lengths are 1,4,1,4,1,
+    # flat values are as expected and the indicator marks rows 0, 2, 4 as empty. Returns nothing.
     with test_util.use_gpu():
       default_value = constant_op.constant(-1, dtype=dtypes.int32)
       ragged_input = ragged_factory_ops.constant(
@@ -50,6 +62,11 @@ class RaggedFillEmptyRowsTest(test_util.TensorFlowTestCase):
 
   @test_util.run_deprecated_v1
   def testFillFloat(self):
+    # [FUNCTION DOC]
+    # Graph-mode (deprecated v1) float64 test. Builds a ragged tensor from float values and row
+    # lengths with default -1.0, asserts row lengths, flat values and empty-row indicator, then
+    # numerically checks the gradient with respect to the values and with respect to the default
+    # value: each error must be positive and below 1e-8. Returns nothing.
     with self.session():
       values = constant_op.constant(
           [1.0, 3.0, 5.0, 7.0, 2.0, 4.0, 6.0, 8.0], dtype=dtypes.float64
@@ -86,8 +103,14 @@ class RaggedFillEmptyRowsTest(test_util.TensorFlowTestCase):
       self.assertLess(default_value_grad_err, 1e-8)
 
   def testFillFloatFunction(self):
+    # [FUNCTION DOC]
+    # Checks fill_empty_rows works inside a compiled function with float64 ragged input: calls it
+    # and asserts the row lengths, flat values and empty-row indicator. Returns nothing.
     @def_function.function
     def func(ragged_input):
+      # [FUNCTION DOC]
+      # HELPER: compiled wrapper for the test. Fills empty rows of the given ragged tensor with
+      # the float64 default -1.0 and returns the filled tensor and the empty-row indicator.
       default_value = constant_op.constant(-1.0, dtype=dtypes.float64)
       return ragged_array_ops.fill_empty_rows(ragged_input, default_value)
 
@@ -104,6 +127,9 @@ class RaggedFillEmptyRowsTest(test_util.TensorFlowTestCase):
     self.assertAllEqual(empty_row_indicator, [True, False, True, False, True])
 
   def testFillString(self):
+    # [FUNCTION DOC]
+    # String case forced onto the CPU: default value "x" fills empty rows; asserts row lengths,
+    # flat byte-string values and the empty-row indicator. Returns nothing.
     with test_util.force_cpu():
       values = constant_op.constant(
           ["a", "c", "e", "g", "b", "d", "f", "h"], dtype=dtypes.string
@@ -126,6 +152,9 @@ class RaggedFillEmptyRowsTest(test_util.TensorFlowTestCase):
       )
 
   def testNoEmptyRows(self):
+    # [FUNCTION DOC]
+    # Int32 input whose rows are all non-empty (two rows of four): asserts the output is
+    # unchanged (same row lengths and values) and the indicator is all false. Returns nothing.
     with test_util.use_gpu():
       values = constant_op.constant(
           [1, 3, 5, 7, 2, 4, 6, 8], dtype=dtypes.int32

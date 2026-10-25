@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Test module checking basic RaggedTensor behavior (conversion to list and string formatting) in
+# eager execution. When run as a script it enables eager execution before starting the tests.
 """Tests for tf.ragged in eager execution mode."""
 
 from absl.testing import parameterized
@@ -25,6 +28,9 @@ from tensorflow.python.platform import googletest
 
 class RaggedTensorTest(test_util.TensorFlowTestCase,
                        parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case for RaggedTensor conversion and printing in eager mode. No shared
+  # fixtures.
 
   @parameterized.parameters([
       dict(pylist=[[b'a', b'b'], [b'c']]),
@@ -32,6 +38,9 @@ class RaggedTensorTest(test_util.TensorFlowTestCase,
       dict(pylist=[[[1, 2], [3, 4]], [[5, 6], [], [7, 8]]], ragged_rank=1),
   ])
   def testRaggedTensorToList(self, pylist, ragged_rank=None):
+    # [FUNCTION DOC]
+    # Builds a ragged constant from a nested list (optional ragged_rank) and asserts that the
+    # tensor compares equal to the original nested list. Returns nothing.
     rt = ragged_factory_ops.constant(pylist, ragged_rank)
     self.assertAllEqual(rt, pylist)
 
@@ -46,6 +55,10 @@ class RaggedTensorTest(test_util.TensorFlowTestCase,
            expected_str='[[[0, 1]],\n [[2, 3, 4, ..., 1997, 1998, 1999]]]'),
   ])
   def testRaggedTensorStr(self, pylist, expected_str):
+    # [FUNCTION DOC]
+    # Builds a ragged constant from a nested list and asserts its string form is the RaggedTensor
+    # prefix followed by the expected text; long rows are abbreviated with an ellipsis.
+    # Returns nothing.
     rt = ragged_factory_ops.constant(pylist)
     self.assertEqual(str(rt), f'<tf.RaggedTensor {expected_str}>')
 

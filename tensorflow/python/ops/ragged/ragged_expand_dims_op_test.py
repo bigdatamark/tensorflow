@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Test module for ragged_array_ops.expand_dims. Checks that inserting a size-1 dimension at each
+# axis of 2-D ragged, 2-D dense-backed and 4-D ragged inputs gives the expected nested values and
+# static shapes. Runs in graph and eager modes. No import-time side effects.
 """Tests for ragged_array_ops.expand_dims."""
 
 from absl.testing import parameterized
@@ -25,6 +29,10 @@ from tensorflow.python.platform import googletest
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedExpandDimsOpTest(test_util.TensorFlowTestCase,
                              parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for expand_dims on ragged tensors, run in graph and eager modes. Holds a shared 4-D
+  # ragged example (class constant) and a mapping from axis to the expected nested result of
+  # expanding that axis, used by the parameterized cases.
 
   # An example 4-d ragged tensor with shape [3, (D2), (D3), 2], and the
   # expected result calling for expand_dims on each axis.  c.f. the table of
@@ -109,6 +117,11 @@ class RaggedExpandDimsOpTest(test_util.TensorFlowTestCase,
                            expected,
                            ragged_rank=None,
                            expected_shape=None):
+    # [FUNCTION DOC]
+    # Parameterized test: builds a ragged constant from a nested list (optional ragged_rank),
+    # expands one dimension at the given axis, and asserts that the rank grew by one, that the
+    # static shape equals expected_shape when one is given, and that the values equal the expected
+    # nested list. Returns nothing.
     rt = ragged_factory_ops.constant(rt_input, ragged_rank=ragged_rank)
     expanded = ragged_array_ops.expand_dims(rt, axis=axis)
     self.assertEqual(expanded.shape.ndims, rt.shape.ndims + 1)

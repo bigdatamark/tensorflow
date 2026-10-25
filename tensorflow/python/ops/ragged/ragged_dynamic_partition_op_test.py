@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Test module for the ragged stack_dynamic_partitions operation in ragged_array_ops.
+# It covers 0-D to 3-D data with partition ids of varying rank and ragged rank, checks results
+# against expected ragged tensors for both int32 and int64 row-splits types, and checks runtime
+# and static error reporting. Runs in graph and eager modes. No import-time side effects.
 """Tests for ragged_array_ops_stack.stack_dynamic_partitions."""
 
 from absl.testing import parameterized
@@ -31,6 +36,10 @@ from tensorflow.python.platform import googletest
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedSegmentStackOpTest(test_util.TensorFlowTestCase,
                                parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case covering stack_dynamic_partitions on ragged tensors. Decorated to run every test in
+  # both graph and eager modes. Uses parameterized tests with dictionaries of data, partition ids,
+  # partition count and expected results; has no shared instance fixtures.
 
   @parameterized.parameters([
       dict(  # empty inputs
@@ -161,6 +170,14 @@ class RaggedSegmentStackOpTest(test_util.TensorFlowTestCase,
                              data_ragged_rank=None,
                              segment_ids_ragged_rank=None,
                              expected_ragged_rank=None):
+    # [FUNCTION DOC]
+    # Parameterized test of stack_dynamic_partitions. Inputs: data (nested list), partitions
+    # (nested list of partition ids), num_partitions (int), expected (nested list), and optional
+    # ragged ranks used when building the data, partition and expected ragged tensors.
+    # For both int32 and int64 row-splits types it builds the ragged tensors, runs the op and
+    # asserts the result equals the expected tensor. When both data and partitions are dense
+    # (ragged rank 0) and the type is int32, it also asserts equality with stacking the output of
+    # the plain dynamic_partition op. Returns nothing.
     for seg_dtype in [dtypes.int32, dtypes.int64]:
       data_tensor = ragged_factory_ops.constant(
           data, row_splits_dtype=seg_dtype, ragged_rank=data_ragged_rank)
@@ -209,6 +226,11 @@ class RaggedSegmentStackOpTest(test_util.TensorFlowTestCase,
           error='data and partitions have incompatible ragged shapes'),
   ])
   def testRuntimeError(self, data, partitions, num_partitions, error):
+    # [FUNCTION DOC]
+    # Parameterized test for errors detected only at run time: negative partition ids, ids not
+    # less than num_partitions, and data/partition ragged shapes that do not match. Builds ragged
+    # constants (partitions as int64), evaluates the op and asserts a value error or
+    # invalid-argument error whose message matches the given pattern. Returns nothing.
     data = ragged_factory_ops.constant(data)
     partitions = ragged_factory_ops.constant(partitions, dtype=dtypes.int64)
     with self.assertRaisesRegex((ValueError, errors.InvalidArgumentError),
@@ -235,12 +257,21 @@ class RaggedSegmentStackOpTest(test_util.TensorFlowTestCase,
           error='must have rank 0'),
   ])
   def testStaticError(self, data, partitions, num_partitions, error):
+    # [FUNCTION DOC]
+    # Parameterized test for errors detectable from static shapes: partitions whose shape does not
+    # match the data prefix, and a non-scalar num_partitions. Calls the op directly on plain lists
+    # and asserts a value error or invalid-argument error matching the message pattern.
+    # Returns nothing.
     with self.assertRaisesRegex((ValueError, errors.InvalidArgumentError),
                                 error):
       ragged_array_ops.stack_dynamic_partitions(data, partitions,
                                                 num_partitions)
 
   def testUnknownRankError(self):
+    # [FUNCTION DOC]
+    # Graph-mode-only test (returns immediately when executing eagerly). Creates an int32
+    # placeholder of unknown rank as partitions and asserts that calling the op raises a value or
+    # invalid-argument error saying partitions must have known rank. Returns nothing.
     if context.executing_eagerly():
       return
     partitions = array_ops.placeholder(dtypes.int32, None)

@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Factory operations for building ragged values from nested Python lists: ragged.constant (a
+# RaggedTensor or dense tensor), the v1-only ragged.constant_value (a RaggedTensorValue or numpy
+# array) and the v1-only ragged.placeholder. Both constant functions share a private
+# implementation parameterized by factory callbacks, plus private helpers that measure nesting
+# depth and infer inner shapes. Import-time side effect: public API export registration and
+# dispatch support on the decorated functions.
 """Operations for constructing RaggedTensors."""
 
 from typing import Union
@@ -43,6 +50,17 @@ def constant(
     name=None,
     row_splits_dtype=dtypes.int64,
 ) -> Union[ragged_tensor.RaggedTensor, ops._EagerTensorBase, ops.Operation]:
+  # [FUNCTION DOC]
+  # Public ragged.constant. Inputs: pylist (nested list, tuple or numpy array whose leaves are
+  # scalars), dtype (optional element type, inferred when omitted), ragged_rank (optional
+  # nonnegative int), inner_shape (optional tuple of ints for dense inner values), name (optional
+  # scope name), row_splits_dtype (int32 or int64, default int64).
+  # Defines a local factory that turns row split lists into constant tensors of the requested
+  # type and wraps values with them, then inside a name scope calls the shared constant builder
+  # with the standard tensor constant function for leaves. Returns a RaggedTensor, or a plain
+  # tensor when the result has no ragged dimension. Raises a value error for inconsistent
+  # nesting or incompatible ragged_rank / inner_shape, and a type error if pylist is already
+  # ragged (raised by the shared builder). Creates constant ops in the current graph/eager context.
   """Constructs a constant RaggedTensor from a nested Python list.
 
   Example:
@@ -84,6 +102,10 @@ def constant(
       depth; or if ragged_rank or inner_shape are incompatible with `pylist`.
   """
   def ragged_factory(values, row_splits):
+    # [FUNCTION DOC]
+    # HELPER: callback passed to the shared constant builder by constant.
+    # Converts a list of row split offsets into a constant tensor of row_splits_dtype and returns
+    # a RaggedTensor made from the given values and those splits, without validation.
     row_splits = constant_op.constant(row_splits, dtype=row_splits_dtype)
     return ragged_tensor.RaggedTensor.from_row_splits(values, row_splits,
                                                       validate=False)
@@ -102,6 +124,14 @@ def constant_value(
     inner_shape=None,
     row_splits_dtype="int64",
 ) -> Union[ragged_tensor_value.RaggedTensorValue, np.ndarray]:
+  # [FUNCTION DOC]
+  # Public v1 ragged.constant_value. Inputs: pylist (nested list, tuple or numpy array), dtype
+  # (optional; a TensorFlow dtype is converted to its numpy type), ragged_rank and inner_shape
+  # (optional, as for constant) and row_splits_dtype (name or type, default int64).
+  # Builds a numpy-backed result by calling the shared constant builder with numpy-based factory
+  # callbacks. Returns a RaggedTensorValue, or a numpy array when no ragged dimension results.
+  # Raises a value error for inconsistent nesting or incompatible ragged_rank / inner_shape.
+  # No graph ops are created.
   """Constructs a RaggedTensorValue from a nested Python list.
 
   Warning: This function returns a `RaggedTensorValue`, not a `RaggedTensor`.
@@ -148,10 +178,19 @@ def constant_value(
     dtype = dtype.as_numpy_dtype
   row_splits_dtype = dtypes.as_dtype(row_splits_dtype).as_numpy_dtype
   def _ragged_factory(values, row_splits):
+    # [FUNCTION DOC]
+    # HELPER: callback passed to the shared constant builder by constant_value.
+    # Converts the row split list to a numpy array of the requested integer type and returns a
+    # RaggedTensorValue wrapping the values and splits.
     row_splits = np.array(row_splits, dtype=row_splits_dtype)
     return ragged_tensor_value.RaggedTensorValue(values, row_splits)
 
   def _inner_factory(pylist, dtype, shape, name=None):  # pylint: disable=unused-argument
+    # [FUNCTION DOC]
+    # HELPER: callback for leaf values, passed to the shared constant builder by constant_value.
+    # Converts the nested list to a numpy array (cast to dtype when a concrete numeric dtype is
+    # given; kept as-is for object or unspecified dtype) and reshapes it to the given shape.
+    # The name argument is accepted for interface compatibility and ignored. Returns the array.
     if dtype is object or dtype is None:
       return np_reshape(np.array(pylist, dtype=dtype), shape)
     else:
@@ -165,6 +204,19 @@ def constant_value(
 def _constant_value(
     ragged_factory, inner_factory, pylist, dtype, ragged_rank, inner_shape
 ):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation behind constant and constant_value.
+  # Inputs: ragged_factory (callback building a ragged value from values and row splits),
+  # inner_factory (callback building a leaf tensor/array from a flat list, dtype, shape and name),
+  # pylist (nested list, tuple or array), dtype, ragged_rank and inner_shape (each may be nothing).
+  # Raises a type error if pylist is already ragged; a value error for negative ragged_rank,
+  # empty-list nesting deeper than scalar nesting, max depth below ragged_rank, or ragged_rank
+  # and inner_shape inconsistent with the depth. A scalar input is returned through the inner
+  # factory (it must have no ragged_rank or inner_shape). If the result needs no ragged
+  # dimension, the whole list goes to the inner factory. Otherwise defaults for inner_shape and
+  # ragged_rank are inferred, the list is flattened one ragged level at a time recording row
+  # split offsets, the flat values are built, and the ragged levels are wrapped innermost first.
+  # Returns the value produced by the factories.
   """Constructs a constant RaggedTensor or RaggedTensorValue.
 
   Args:
@@ -263,6 +315,11 @@ def _constant_value(
 
 
 def _find_scalar_and_max_depth(pylist):
+  # [FUNCTION DOC]
+  # HELPER: depth analysis for the shared constant builder.
+  # Recursively walks a nested list/tuple/array. Returns a pair: the nesting depth of scalar
+  # leaves (nothing if there are no scalars) and the maximum depth including empty lists (a scalar
+  # has depths zero and zero). Raises a value error when scalar leaves occur at different depths.
   """Finds nesting depth of scalar values in pylist.
 
   Args:
@@ -294,9 +351,21 @@ def _find_scalar_and_max_depth(pylist):
 
 
 def _default_inner_shape_for_pylist(pylist, ragged_rank):
+  # [FUNCTION DOC]
+  # HELPER: infers the dense inner shape for the shared constant builder when ragged_rank is given
+  # but inner_shape is not.
+  # Flattens the first ragged_rank nesting levels of pylist, then takes the shape of the leftmost
+  # inner item and verifies every other item matches. Returns the inner shape as a tuple (without
+  # the leading flat-length dimension). Raises a value error if some element at a ragged level is
+  # a scalar (scalar depth too small for ragged_rank) or if the inner values have inconsistent
+  # shapes.
   """Computes a default inner shape for the given python list."""
 
   def get_inner_shape(item):
+    # [FUNCTION DOC]
+    # HELPER: shape probe for the default inner shape computation.
+    # Recursively follows the first element of nested lists. Returns a tuple of lengths: empty
+    # for a scalar, and a single zero for an empty list.
     """Returns the inner shape for a python list `item`."""
     if not isinstance(item, (list, tuple)) and np.ndim(item) == 0:
       return ()
@@ -308,6 +377,11 @@ def _default_inner_shape_for_pylist(pylist, ragged_rank):
     return (0,)
 
   def check_inner_shape(item, shape):
+    # [FUNCTION DOC]
+    # HELPER: validator for the default inner shape computation.
+    # Recursively checks that item is nested exactly as deeply as shape says and that each level
+    # has the expected length. Raises a value error ("inner values have inconsistent shape")
+    # otherwise. Returns nothing.
     """Checks that `item` has a consistent shape matching `shape`."""
     is_nested = isinstance(item, (list, tuple)) or np.ndim(item) != 0
     if is_nested != bool(shape):
@@ -338,6 +412,18 @@ def _default_inner_shape_for_pylist(pylist, ragged_rank):
 @tf_export(v1=["ragged.placeholder"])
 @dispatch.add_dispatch_support
 def placeholder(dtype, ragged_rank, value_shape=None, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it raises a runtime error when eager execution is enabled,
+  # but this function has no explicit check; failure would come from the placeholder op itself.
+  # KNOWN ISSUE: value_shape defaults to nothing, which is only fine for ragged_rank zero or when
+  # concatenation with an unknown shape is acceptable; the resulting flat shape is then unknown.
+  # Creates a v1 graph placeholder for a ragged tensor. Inputs: dtype of the values, ragged_rank
+  # (number of ragged dimensions), value_shape (shape of each flat value, optional), name
+  # (optional). For ragged_rank zero returns a plain placeholder with value_shape. Otherwise, in
+  # a name scope, creates a flat-values placeholder with an unknown leading dimension followed by
+  # value_shape, and one int64 row_splits placeholder per ragged level, wrapping them (innermost
+  # first) into a RaggedTensor without validation. Returns the ragged tensor handle, which must
+  # be fed rather than evaluated. Adds placeholder ops to the current graph.
   """Creates a placeholder for a `tf.RaggedTensor` that will always be fed.
 
   **Important**: This ragged tensor will produce an error if evaluated.
