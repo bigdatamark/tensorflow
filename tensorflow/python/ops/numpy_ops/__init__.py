@@ -1,3 +1,18 @@
+# [PACKAGE DOC]
+# KNOWN ISSUE: a trailing to-do comment in this file says exported symbols should be appended
+# to the docstring, which has not been done, so the docstring does not list the exported API.
+# Package that hosts the TensorFlow NumPy API, exported publicly as the experimental numpy
+# namespace. The package initializer itself contains no code: it consists only of a long
+# module docstring that serves as the user-facing documentation of the namespace (getting
+# started, the array-like type model, the array interface, interoperability with tensors,
+# device placement, graph and eager execution, mutation/variables, and a list of known
+# differences from NumPy). Importing the package performs no registrations and defines no
+# names. The actual functionality lives in sibling modules: np_array_ops (array creation,
+# reductions, reshaping, indexing), np_math_ops (math and arithmetic), np_arrays (the ndarray
+# wrapper and tensor conversion), np_dtypes (dtype and default type handling), np_utils
+# (shared helpers and the doc decorators), np_random (random numbers) and np_config (behavior
+# switches). Those modules register their symbols for export through the TensorFlow export
+# decorators.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

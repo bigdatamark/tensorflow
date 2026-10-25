@@ -1,3 +1,16 @@
+# [MODULE DOC]
+# Core array functions of the TensorFlow NumPy API (the experimental numpy namespace): array
+# creation (empty, zeros, ones, eye, full, array, asarray, arange, diag, tri...), reductions
+# (sum, prod, mean, max, min, var, std, all, any), shape manipulation (reshape, ravel, squeeze,
+# transpose, swapaxes, moveaxis, stack/split families, flip, roll, rot90), selection (take,
+# where, select, compress, nonzero, take_along_axis, pad) and the machinery for NumPy-style
+# indexing and index updates on the ndarray type. Each public function is a thin adaptation of
+# the NumPy function onto TensorFlow ops, is exported under the experimental numpy namespace
+# and gets its documentation derived from NumPy by the np_doc decorators of np_utils.
+# Import-time side effects: defines the newaxis constant, installs the rounding hook, the
+# numpy-style getitem and the four index-update methods (update, add, min, max) onto the
+# ndarray class from np_arrays, and shadows the builtins all, any, sum, max, min and round
+# inside this module (builtins are reached through the builtins module).
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -53,18 +66,31 @@ tf_export.tf_export('experimental.numpy.newaxis', v1=[]).export_constant(
 @tf_export.tf_export('experimental.numpy.empty', v1=[])
 @np_utils.np_doc('empty')
 def empty(shape, dtype=float):  # pylint: disable=redefined-outer-name
+  # [FUNCTION DOC]
+  # Creates an array of the given shape and dtype. Unlike NumPy, the contents are not
+  # uninitialized: this simply delegates to zeros, so every element is zero.
+  # Inputs: shape (list/tuple of dimensions or a scalar), dtype (python, NumPy or TF type;
+  # defaults to the python float type). Returns the new array. Raises whatever zeros raises.
   return zeros(shape, dtype)
 
 
 @tf_export.tf_export('experimental.numpy.empty_like', v1=[])
 @np_utils.np_doc('empty_like')
 def empty_like(a, dtype=None):
+  # [FUNCTION DOC]
+  # Returns an array with the same shape as the array-like input a. Unlike NumPy the values are
+  # not uninitialized; this delegates to zeros_like so all elements are zero. The optional dtype
+  # overrides the result type, otherwise the type of a is used. No side effects.
   return zeros_like(a, dtype)
 
 
 @tf_export.tf_export('experimental.numpy.zeros', v1=[])
 @np_utils.np_doc('zeros')
 def zeros(shape, dtype=float):  # pylint: disable=redefined-outer-name
+  # [FUNCTION DOC]
+  # Creates an array of zeros with the given shape. The dtype (python, NumPy or TF type) is
+  # resolved with NumPy-style type rules; if a false value such as nothing is passed, the
+  # library default float type is used instead. Returns a tensor/ndarray; no side effects.
   dtype = (
       np_utils.result_type(dtype) if dtype else np_dtypes.default_float_type()
   )
@@ -74,6 +100,10 @@ def zeros(shape, dtype=float):  # pylint: disable=redefined-outer-name
 @tf_export.tf_export('experimental.numpy.zeros_like', v1=[])
 @np_utils.np_doc('zeros_like')
 def zeros_like(a, dtype=None):  # pylint: disable=missing-docstring
+  # [FUNCTION DOC]
+  # Returns zeros with the same shape as the array-like a. The result dtype is the requested
+  # dtype if given, otherwise the type inferred from a; it is converted to a TF dtype before
+  # calling the underlying zeros-like op (a workaround for a known bug reference). No side effects.
   dtype = np_utils.result_type_unary(a, dtype)
 
   dtype = dtypes.as_dtype(dtype)  # Work around b/149877262
@@ -83,6 +113,11 @@ def zeros_like(a, dtype=None):  # pylint: disable=missing-docstring
 @tf_export.tf_export('experimental.numpy.ones', v1=[])
 @np_utils.np_doc('ones')
 def ones(shape, dtype=float):  # pylint: disable=redefined-outer-name
+  # [FUNCTION DOC]
+  # Creates an array of ones with the given shape. If dtype is truthy it is resolved with
+  # NumPy-style type rules; if it is a false value (nothing), it is passed through unresolved so
+  # the underlying TF op chooses its own default type (float32), unlike zeros which uses the
+  # library default float type. Returns the new tensor; no side effects.
   if dtype:
     dtype = np_utils.result_type(dtype)
   return array_ops.ones(shape, dtype=dtype)
@@ -91,6 +126,9 @@ def ones(shape, dtype=float):  # pylint: disable=redefined-outer-name
 @tf_export.tf_export('experimental.numpy.ones_like', v1=[])
 @np_utils.np_doc('ones_like')
 def ones_like(a, dtype=None):
+  # [FUNCTION DOC]
+  # Returns an array of ones with the same shape as the array-like a. The result dtype is the
+  # requested dtype if given, otherwise the type inferred from a. No side effects.
   dtype = np_utils.result_type_unary(a, dtype)
   return array_ops.ones_like(a, dtype)
 
@@ -98,6 +136,15 @@ def ones_like(a, dtype=None):
 @tf_export.tf_export('experimental.numpy.eye', v1=[])
 @np_utils.np_doc('eye')
 def eye(N, M=None, k=0, dtype=float):  # pylint: disable=invalid-name,missing-docstring
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the columns argument M is tested for falsiness, so an explicit M of zero is
+  # silently replaced by N instead of producing an array with zero columns as NumPy does.
+  # Builds an N by M matrix with ones on the k-th diagonal (positive k above the main diagonal,
+  # negative below) and zeros elsewhere. M defaults to N, k defaults to 0, dtype defaults to the
+  # python float type. N, M and k are converted to integers. If the diagonal lies completely
+  # outside the matrix a zero matrix is returned. For k equal to zero the TF identity op is
+  # used; otherwise the exact diagonal length is computed and a matrix-diagonal op is applied.
+  # Returns the matrix; no side effects.
   if dtype:
     dtype = np_utils.result_type(dtype)
   if not M:
@@ -130,12 +177,20 @@ def eye(N, M=None, k=0, dtype=float):  # pylint: disable=invalid-name,missing-do
 @tf_export.tf_export('experimental.numpy.identity', v1=[])
 @np_utils.np_doc('identity')
 def identity(n, dtype=float):
+  # [FUNCTION DOC]
+  # Returns the n by n identity matrix of the given dtype (default python float) by delegating
+  # to eye with equal row and column counts. No side effects.
   return eye(N=n, M=n, dtype=dtype)
 
 
 @tf_export.tf_export('experimental.numpy.full', v1=[])
 @np_utils.np_doc('full')
 def full(shape, fill_value, dtype=None):  # pylint: disable=redefined-outer-name
+  # [FUNCTION DOC]
+  # Creates an array of the given shape filled with fill_value. The shape is converted to an
+  # integer (int32 by default) array of at least one dimension, the fill value is converted to an
+  # array of the optional dtype (inferred from the value when nothing), and the value is then
+  # broadcast to the shape. Also used by broadcast_to. Returns the new tensor.
   if not isinstance(shape, np_arrays.ndarray):
     shape = asarray(np_arrays.convert_to_tensor(shape, dtype_hint=np.int32))
   shape = atleast_1d(shape)
@@ -148,6 +203,11 @@ def full(shape, fill_value, dtype=None):  # pylint: disable=redefined-outer-name
 @tf_export.tf_export('experimental.numpy.full_like', v1=[])
 @np_utils.np_doc_only('full_like')
 def full_like(a, fill_value, dtype=None, order='K', subok=True, shape=None):  # pylint: disable=missing-docstring,redefined-outer-name
+  # [FUNCTION DOC]
+  # Returns an array shaped like the array-like a, filled with fill_value converted to dtype
+  # (defaulting to the type inferred from a). The order, subok and shape arguments exist only for
+  # signature compatibility: order must stay the standard value, subok must stay true and shape
+  # must be empty. Raises a value error if any of them is changed. No side effects.
   """order, subok and shape arguments mustn't be changed."""
   if order != 'K':
     raise ValueError('Non-standard orders are not supported.')
@@ -163,6 +223,14 @@ def full_like(a, fill_value, dtype=None, order='K', subok=True, shape=None):  # 
 
 
 def _array_internal(val, dtype=None, copy=True, ndmin=0):  # pylint: disable=redefined-outer-name
+  # [FUNCTION DOC]
+  # HELPER: shared implementation behind array, asarray and the dtype-promotion helpers.
+  # Converts val to a tensor. Non-tensor inputs get their dtype resolved with NumPy rules and are
+  # converted then cast (so incompatible combinations such as a float with an integer dtype are
+  # allowed); tensor inputs are cast only if dtype is given. If copy is true an identity op makes
+  # a new tensor. If ndmin is greater than zero, dimensions of size one are prepended (decided
+  # at run time via a conditional) until the rank is at least ndmin. Raises a value error if ndmin
+  # exceeds 32. Returns the resulting tensor; does not mutate val.
   """Main implementation of np.array()."""
   result_t = val
 
@@ -200,6 +268,10 @@ def _array_internal(val, dtype=None, copy=True, ndmin=0):  # pylint: disable=red
   ndims = array_ops.rank(result_t)
 
   def true_fn():
+    # [FUNCTION DOC]
+    # HELPER: branch of the ndmin conditional in _array_internal.
+    # Takes no arguments. Reshapes the enclosing result tensor by prepending ones to its shape so
+    # that its rank becomes ndmin, and returns the reshaped tensor.
     old_shape = array_ops.shape(result_t)
     new_shape = array_ops.concat(
         [array_ops.ones(ndmin - ndims, dtypes.int32), old_shape], axis=0
@@ -217,6 +289,14 @@ def _array_internal(val, dtype=None, copy=True, ndmin=0):  # pylint: disable=red
 @tf_export.tf_export('experimental.numpy.array', v1=[])
 @np_utils.np_doc_only('array')
 def array(val, dtype=None, copy=True, ndmin=0):  # pylint: disable=redefined-outer-name
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says a copy is made only if val is on a different device, but the
+  # code always inserts an identity op whenever copy is true (the default). The docstring also
+  # begins mid-sentence with a blank line, which is a formatting leftover.
+  # Creates an array from an array-like val (list, scalar, NumPy array, ndarray or tensor).
+  # dtype is optional and resolved with NumPy rules; copy (default true) requests a new tensor;
+  # ndmin (default 0, at most 32) is the minimum rank, padded with leading dimensions of size
+  # one. Returns the new tensor. Raises a value error when ndmin is too large.
   """Since Tensors are immutable, a copy is made only if val is placed on a
 
   different device than the current one. Even if `copy` is False, a new Tensor
@@ -234,6 +314,11 @@ def array(val, dtype=None, copy=True, ndmin=0):  # pylint: disable=redefined-out
 @tf_export.tf_export('experimental.numpy.asarray', v1=[])
 @np_utils.np_doc('asarray')
 def asarray(a, dtype=None):
+  # [FUNCTION DOC]
+  # Converts a to an array without copying when possible. If a is already an ndarray and either
+  # no dtype is requested or it matches, a is returned unchanged; otherwise array is called with
+  # copy disabled (still converting dtype as needed). dtype is optional and resolved with
+  # NumPy rules. Returns the array; no side effects.
   if dtype:
     dtype = np_utils.result_type(dtype)
   if isinstance(a, np_arrays.ndarray) and (
@@ -246,12 +331,19 @@ def asarray(a, dtype=None):
 @tf_export.tf_export('experimental.numpy.asanyarray', v1=[])
 @np_utils.np_doc('asanyarray')
 def asanyarray(a, dtype=None):
+  # [FUNCTION DOC]
+  # Alias of asarray, since subclasses of arrays are not distinguished. Converts a to an array
+  # of the optional dtype and returns it.
   return asarray(a, dtype)
 
 
 @tf_export.tf_export('experimental.numpy.ascontiguousarray', v1=[])
 @np_utils.np_doc('ascontiguousarray')
 def ascontiguousarray(a, dtype=None):
+  # [FUNCTION DOC]
+  # Returns a as an array of the optional dtype with at least one dimension (scalars become
+  # one-element vectors). Storage is always contiguous C order, so this just calls array with a
+  # minimum rank of one (note that array copies by default).
   return array(a, dtype, ndmin=1)
 
 
@@ -259,6 +351,13 @@ def ascontiguousarray(a, dtype=None):
 @tf_export.tf_export('experimental.numpy.arange', v1=[])
 @np_utils.np_doc('arange')
 def arange(start, stop=None, step=1, dtype=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: a to-do in the body notes bugs when start or stop is a float and dtype is an
+  # integer type (the cast of the range may give results different from NumPy).
+  # Returns evenly spaced values from start up to (excluding) stop with the given step. When stop
+  # is nothing, start acts as the stop and counting begins at zero. The dtype defaults to the
+  # promoted type of the numeric arguments. Raises a value error if step is zero. Returns an
+  # empty array when the direction of step cannot reach stop; otherwise a cast TF range.
   """Returns `step`-separated values in the range [start, stop).
 
   Args:
@@ -305,6 +404,12 @@ def arange(start, stop=None, step=1, dtype=None):
 @tf_export.tf_export('experimental.numpy.diag', v1=[])
 @np_utils.np_doc('diag')
 def diag(v, k=0):  # pylint: disable=missing-docstring
+  # [FUNCTION DOC]
+  # Builds or extracts a diagonal. For a one-dimensional v it returns a square matrix with v on
+  # the k-th diagonal (an all-zero square matrix of side abs(k) if v is empty); for a
+  # two-dimensional v it returns the k-th diagonal as a vector (empty when k is out of range).
+  # k defaults to 0. The choice is made at run time with a conditional on the rank. Raises a value
+  # error when the static rank exceeds two and asserts (run-time error) that the rank is 1 or 2.
   """Raises an error if input is not 1- or 2-d."""
   v = asarray(v)
   v_rank = array_ops.rank(v)
@@ -319,6 +424,10 @@ def diag(v, k=0):  # pylint: disable=missing-docstring
   )
 
   def _diag(v, k):
+    # [FUNCTION DOC]
+    # HELPER: vector case of diag.
+    # Given a vector v and offset k, returns a square matrix with v placed on the k-th diagonal,
+    # or an all-zero abs(k) by abs(k) matrix when v is empty.
     return np_utils.cond(
         math_ops.equal(array_ops.size(v), 0),
         lambda: array_ops.zeros([abs(k), abs(k)], dtype=v.dtype),
@@ -326,6 +435,11 @@ def diag(v, k=0):  # pylint: disable=missing-docstring
     )
 
   def _diag_part(v, k):
+    # [FUNCTION DOC]
+    # HELPER: matrix case of diag.
+    # Given a matrix v and offset k, returns the k-th diagonal. If k is outside the matrix bounds
+    # the input is swapped for an empty matrix and offset zero (so shape inference of the
+    # diagonal-part op does not fail), yielding an empty result.
     v_shape = array_ops.shape(v)
     v, k = np_utils.cond(
         np_utils.logical_or(
@@ -347,6 +461,11 @@ def diag(v, k=0):  # pylint: disable=missing-docstring
 @tf_export.tf_export('experimental.numpy.diagonal', v1=[])
 @np_utils.np_doc('diagonal')
 def diagonal(a, offset=0, axis1=0, axis2=1):  # pylint: disable=missing-docstring
+  # [FUNCTION DOC]
+  # Returns the diagonal of a taken over the plane spanned by axis1 and axis2 (defaults 0 and 1)
+  # at the given offset (default 0). Fast path when the rank is static, the offset is zero and the
+  # axes are the last two. Otherwise the axes are moved to the end and the diagonal part is taken;
+  # an out-of-range offset produces an array whose last dimension is zero. Returns the new array.
   a = asarray(a)
 
   maybe_rank = a.shape.rank
@@ -363,6 +482,10 @@ def diagonal(a, offset=0, axis1=0, axis2=1):  # pylint: disable=missing-docstrin
   a_shape = array_ops.shape(a)
 
   def _zeros():  # pylint: disable=missing-docstring
+    # [FUNCTION DOC]
+    # HELPER: out-of-range branch of diagonal.
+    # Takes no arguments; returns a pair of an all-zero array (same leading dimensions as the
+    # input, last dimension zero) and the offset zero, so the diagonal op sees a valid offset.
     return (
         array_ops.zeros(
             array_ops.concat([a_shape[:-1], [0]], 0), dtype=a.dtype
@@ -389,14 +512,25 @@ def diagonal(a, offset=0, axis1=0, axis2=1):  # pylint: disable=missing-docstrin
 @tf_export.tf_export('experimental.numpy.diagflat', v1=[])
 @np_utils.np_doc('diagflat')
 def diagflat(v, k=0):
+  # [FUNCTION DOC]
+  # Flattens v to one dimension and returns a square matrix with the flattened values on the
+  # k-th diagonal (default 0), by delegating to diag. No side effects.
   v = asarray(v)
   return diag(array_ops.reshape(v, [-1]), k)
 
 
 def _promote_dtype(*arrays):
+  # [FUNCTION DOC]
+  # HELPER: dtype unification for functions taking several array inputs (where, select, stack...).
+  # Computes the common NumPy result type of all inputs and returns a list of arrays converted to
+  # it (without copying; arrays already of that type are returned as is).
   dtype = np_utils.result_type(*arrays)
 
   def _fast_asarray(a):
+    # [FUNCTION DOC]
+    # HELPER: per-element conversion for _promote_dtype.
+    # Returns a unchanged if it is an ndarray of the common dtype, otherwise converts it to that
+    # dtype without copying.
     if isinstance(a, np_arrays.ndarray) and dtype == a.dtype.as_numpy_dtype:
       return a
     return _array_internal(a, dtype=dtype, copy=False)
@@ -405,6 +539,10 @@ def _promote_dtype(*arrays):
 
 
 def _promote_dtype_binary(t1, t2):
+  # [FUNCTION DOC]
+  # HELPER: two-argument version of _promote_dtype, used by binary ops and index updates.
+  # Computes the binary result type of t1 and t2 and returns the pair converted to it (no copy;
+  # inputs already ndarrays of that type are returned as they are).
   dtype = np_utils._result_type_binary(t1, t2)  # pylint: disable=protected-access
   if not (
       isinstance(t1, np_arrays.ndarray) and dtype == t1.dtype.as_numpy_dtype
@@ -420,6 +558,10 @@ def _promote_dtype_binary(t1, t2):
 @tf_export.tf_export('experimental.numpy.all', v1=[])
 @np_utils.np_doc('all')
 def all(a, axis=None, keepdims=None):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # Logical AND reduction. Converts a to a boolean array and reduces over axis (nothing means all
+  # axes; integer, sequence or tensor of axes) optionally keeping reduced dimensions (keepdims).
+  # Shadows the Python builtin inside this module. Returns a boolean array.
   a = asarray(a, dtype=bool)
   return math_ops.reduce_all(input_tensor=a, axis=axis, keepdims=keepdims)
 
@@ -427,6 +569,10 @@ def all(a, axis=None, keepdims=None):  # pylint: disable=redefined-builtin
 @tf_export.tf_export('experimental.numpy.any', v1=[])
 @np_utils.np_doc('any')
 def any(a, axis=None, keepdims=None):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # Logical OR reduction. Converts a to a boolean array and reduces over axis (nothing means all
+  # axes) optionally keeping reduced dimensions (keepdims). Shadows the Python builtin inside
+  # this module. Returns a boolean array.
   a = asarray(a, dtype=bool)
   return math_ops.reduce_any(input_tensor=a, axis=axis, keepdims=keepdims)
 
@@ -434,6 +580,13 @@ def any(a, axis=None, keepdims=None):  # pylint: disable=redefined-builtin
 @tf_export.tf_export('experimental.numpy.compress', v1=[])
 @np_utils.np_doc('compress')
 def compress(condition, a, axis=None):  # pylint: disable=redefined-outer-name,missing-function-docstring
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: an out-of-range axis is checked with a plain assertion, so it raises an
+  # assertion error (and is skipped under optimized Python) rather than a proper axis error.
+  # Selects slices of a along axis where the one-dimensional boolean condition is true. A scalar a
+  # is treated as a one-element vector; axis nothing flattens a and uses axis 0; negative axes
+  # count from the end. A condition shorter than the axis is padded with false. Raises a value
+  # error if condition is not one-dimensional. Returns the selected elements.
   condition = asarray(condition, dtype=bool)
   a = asarray(a)
 
@@ -465,10 +618,17 @@ def compress(condition, a, axis=None):  # pylint: disable=redefined-outer-name,m
 @tf_export.tf_export('experimental.numpy.copy', v1=[])
 @np_utils.np_doc('copy')
 def copy(a):
+  # [FUNCTION DOC]
+  # Returns a new array holding the same values as a, always making a copy (via array with copy
+  # enabled). Input is array-like; the original is not modified.
   return array(a, copy=True)
 
 
 def _maybe_promote_to_int(a):
+  # [FUNCTION DOC]
+  # HELPER: shared by cumsum and cumprod.
+  # If the array a has an integer dtype narrower than the default integer type, it is converted
+  # to that wider promoted type (NumPy accumulation behavior); otherwise returned unchanged.
   if dtypes.as_dtype(a.dtype).is_integer:
     # If a is an integer type and its precision is less than that of `int`,
     # the output type will be `int`.
@@ -483,6 +643,10 @@ def _maybe_promote_to_int(a):
 @tf_export.tf_export('experimental.numpy.cumprod', v1=[])
 @np_utils.np_doc('cumprod')
 def cumprod(a, axis=None, dtype=None):  # pylint: disable=missing-docstring
+  # [FUNCTION DOC]
+  # Cumulative product of a along axis. If axis is nothing the input is flattened first; negative
+  # axes count from the end. dtype optionally sets the type of the result; when omitted, small
+  # integer types are promoted to the default integer. Returns the cumulative product array.
   a = asarray(a, dtype=dtype)
 
   if dtype is None:
@@ -500,6 +664,10 @@ def cumprod(a, axis=None, dtype=None):  # pylint: disable=missing-docstring
 @tf_export.tf_export('experimental.numpy.cumsum', v1=[])
 @np_utils.np_doc('cumsum')
 def cumsum(a, axis=None, dtype=None):  # pylint: disable=missing-docstring
+  # [FUNCTION DOC]
+  # Cumulative sum of a along axis. If axis is nothing the input is flattened first; negative
+  # axes count from the end. dtype optionally sets the type of the result; when omitted, small
+  # integer types are promoted to the default integer. Returns the cumulative sum array.
   a = asarray(a, dtype=dtype)
 
   if dtype is None:
@@ -517,6 +685,10 @@ def cumsum(a, axis=None, dtype=None):  # pylint: disable=missing-docstring
 @tf_export.tf_export('experimental.numpy.imag', v1=[])
 @np_utils.np_doc('imag')
 def imag(val):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: NumPy returns a scalar for scalar input, but this always returns an array (a
+  # to-do in the body acknowledges it).
+  # Returns the imaginary part of the array-like val as an array (zeros for real input).
   val = asarray(val)
   # TODO(srbs): np.imag returns a scalar if `val` is a scalar, whereas we always
   # return an ndarray.
@@ -537,6 +709,15 @@ def _reduce(
     tf_bool_fn=None,
     preserve_bool=False,
 ):
+  # [FUNCTION DOC]
+  # HELPER: common engine behind sum, prod, mean, amax, amin, var and std.
+  # Applies the TF reduction function tf_fn to array a over axis (nothing means all) with
+  # keepdims (nothing means false). dtype optionally forces the working type. For boolean work
+  # (requested bool dtype, or bool input with preserve_bool) the alternative tf_bool_fn is used if
+  # given. Without dtype, integer/bool inputs are promoted according to promote_int: the
+  # integer-promotion marker widens to the default (or 32-bit under automatic dtype conversion)
+  # integer width, the float marker casts to the default float, nothing leaves it unchanged.
+  # Tensor axes of types other than int32/int64 are cast to int64. Returns the reduced array.
   """A general reduction function.
 
   Args:
@@ -615,6 +796,12 @@ def _reduce(
 @tf_export.tf_export('experimental.numpy.size', v1=[])
 @np_utils.np_doc('size')
 def size(x, axis=None):  # pylint: disable=missing-docstring
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the axis argument exists for NumPy compatibility but is not supported; passing
+  # anything other than nothing raises an error (see the to-do above the function).
+  # Returns the total number of elements of x. Python/NumPy scalar numbers give 1; for arrays
+  # with a fully known static shape the product of the dimensions is returned as an integer,
+  # otherwise a dynamic size tensor. Raises not-implemented if axis is given.
   if axis is not None:
     raise NotImplementedError(
         'axis argument is not supported in the current `np.size` implementation'
@@ -631,6 +818,11 @@ def size(x, axis=None):  # pylint: disable=missing-docstring
 @tf_export.tf_export('experimental.numpy.sum', v1=[])
 @np_utils.np_doc('sum')
 def sum(a, axis=None, dtype=None, keepdims=None):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # Sum of array elements over axis (nothing means all axes). dtype optionally sets the result
+  # type; small integer and boolean inputs are promoted to the default integer, and a requested
+  # boolean dtype uses logical OR. keepdims keeps reduced dimensions. Shadows the builtin sum in
+  # this module. Returns the reduced array.
   return _reduce(
       math_ops.reduce_sum,
       a,
@@ -644,6 +836,10 @@ def sum(a, axis=None, dtype=None, keepdims=None):  # pylint: disable=redefined-b
 @tf_export.tf_export('experimental.numpy.prod', v1=[])
 @np_utils.np_doc('prod')
 def prod(a, axis=None, dtype=None, keepdims=None):
+  # [FUNCTION DOC]
+  # Product of array elements over axis (nothing means all axes). dtype optionally sets the
+  # result type; small integer and boolean inputs are promoted to the default integer, and a
+  # boolean dtype uses logical AND. keepdims keeps reduced dimensions. Returns the reduced array.
   return _reduce(
       math_ops.reduce_prod,
       a,
@@ -657,6 +853,10 @@ def prod(a, axis=None, dtype=None, keepdims=None):
 @tf_export.tf_export('experimental.numpy.mean', v1=[])
 @np_utils.np_doc('mean', unsupported_params=['out'])
 def mean(a, axis=None, dtype=None, out=None, keepdims=None):
+  # [FUNCTION DOC]
+  # Arithmetic mean over axis (nothing means all axes). Integer and boolean inputs are promoted
+  # to the default float type unless dtype is given. keepdims keeps reduced dimensions. The out
+  # argument is unsupported: a non-null value raises a value error. Returns the mean array.
   if out is not None:
     raise ValueError('Setting out is not supported.')
   return _reduce(
@@ -672,6 +872,10 @@ def mean(a, axis=None, dtype=None, out=None, keepdims=None):
 @tf_export.tf_export('experimental.numpy.amax', v1=[])
 @np_utils.np_doc('amax', unsupported_params=['out'])
 def amax(a, axis=None, out=None, keepdims=None):
+  # [FUNCTION DOC]
+  # Maximum over axis (nothing means all axes), keeping the input dtype; boolean input stays
+  # boolean (computed with logical OR). keepdims keeps reduced dimensions. The out argument is
+  # unsupported and raises a value error when given. Returns the maximum array.
   if out is not None:
     raise ValueError('Setting out is not supported.')
   return _reduce(
@@ -689,6 +893,10 @@ def amax(a, axis=None, out=None, keepdims=None):
 @tf_export.tf_export('experimental.numpy.amin', v1=[])
 @np_utils.np_doc('amin', unsupported_params=['out'])
 def amin(a, axis=None, out=None, keepdims=None):
+  # [FUNCTION DOC]
+  # Minimum over axis (nothing means all axes), keeping the input dtype; boolean input stays
+  # boolean (computed with logical AND). keepdims keeps reduced dimensions. The out argument is
+  # unsupported and raises a value error when given. Returns the minimum array.
   if out is not None:
     raise ValueError('Setting out is not supported.')
   return _reduce(
@@ -706,6 +914,14 @@ def amin(a, axis=None, out=None, keepdims=None):
 @tf_export.tf_export('experimental.numpy.var', v1=[])
 @np_utils.np_doc('var')
 def var(a, axis=None, dtype=None, out=None, ddof=0, keepdims=None):  # pylint: disable=missing-docstring
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: when ddof is non-zero the inner reducer casts its result to dtype even when
+  # dtype is nothing, which is likely to fail; it also compares a possibly multi-valued axis with
+  # zero, so only a single integer axis (or nothing) works for non-zero ddof.
+  # Variance over axis (nothing means all axes). dtype optionally sets the result type; integers
+  # are promoted to float. ddof is the delta degrees of freedom subtracted from the count
+  # (default 0, handled by a manual computation since the TF variance op lacks it). out is
+  # unsupported (value error). keepdims keeps reduced dimensions. Returns the variance array.
   if dtype:
     working_dtype = np_utils.result_type(a, dtype)
   else:
@@ -715,6 +931,11 @@ def var(a, axis=None, dtype=None, out=None, ddof=0, keepdims=None):  # pylint: d
   if ddof != 0:
     # TF reduce_variance doesn't support ddof, so calculate it using raw ops.
     def reduce_fn(input_tensor, axis, keepdims):
+      # [FUNCTION DOC]
+      # HELPER: variance with a delta-degrees-of-freedom correction, used by var when ddof is
+      # non-zero. Takes the tensor, the axis (nothing for all) and keepdims; computes the mean,
+      # the sum of squared deviations (using the modulus for complex input), divides by the
+      # element count minus ddof, and casts to the enclosing dtype. Returns the result tensor.
       means = math_ops.reduce_mean(input_tensor, axis=axis, keepdims=True)
       centered = input_tensor - means
       if input_tensor.dtype in (dtypes.complex64, dtypes.complex128):
@@ -759,6 +980,11 @@ def var(a, axis=None, dtype=None, out=None, ddof=0, keepdims=None):  # pylint: d
 @tf_export.tf_export('experimental.numpy.std', v1=[])
 @np_utils.np_doc('std')
 def std(a, axis=None, keepdims=None):  # pylint: disable=missing-function-docstring
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: unlike NumPy (and unlike var in this module) the signature has no dtype, out or
+  # ddof parameters, so those cannot be passed.
+  # Standard deviation over axis (nothing means all axes); integers are promoted to the default
+  # float. keepdims keeps reduced dimensions. Returns the standard deviation array.
   return _reduce(
       math_ops.reduce_std,
       a,
@@ -772,6 +998,9 @@ def std(a, axis=None, keepdims=None):  # pylint: disable=missing-function-docstr
 @tf_export.tf_export('experimental.numpy.ravel', v1=[])
 @np_utils.np_doc('ravel')
 def ravel(a):  # pylint: disable=missing-docstring
+  # [FUNCTION DOC]
+  # Flattens the array-like a into a one-dimensional array in row-major order. Returns the
+  # reshaped array; the input is not modified.
   a = asarray(a)
   return array_ops.reshape(a, [-1])
 
@@ -779,6 +1008,10 @@ def ravel(a):  # pylint: disable=missing-docstring
 @tf_export.tf_export('experimental.numpy.real', v1=[])
 @np_utils.np_doc('real')
 def real(val):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: NumPy returns a scalar for scalar input, but this always returns an array (a
+  # to-do in the body acknowledges it).
+  # Returns the real part of the array-like val as an array.
   val = asarray(val)
   # TODO(srbs): np.real returns a scalar if val is a scalar, whereas we always
   # return an ndarray.
@@ -788,6 +1021,11 @@ def real(val):
 @tf_export.tf_export('experimental.numpy.repeat', v1=[])
 @np_utils.np_doc('repeat')
 def repeat(a, repeats, axis=None):  # pylint: disable=missing-docstring
+  # [FUNCTION DOC]
+  # Repeats elements of a. repeats is an integer or sequence/array of per-element counts; axis
+  # (nothing means flatten) selects the dimension. When the input shape is fully known the output
+  # static shape is computed on a best-effort basis and set on the result, so shape information
+  # survives. Returns the repeated array; the input is not modified.
   a = asarray(a)
   original_shape = a._shape_as_list()  # pylint: disable=protected-access
   # Best effort recovery of the shape.
@@ -820,6 +1058,11 @@ def repeat(a, repeats, axis=None):  # pylint: disable=missing-docstring
 @tf_export.tf_export('experimental.numpy.around', v1=[])
 @np_utils.np_doc('around')
 def around(a, decimals=0):  # pylint: disable=missing-docstring
+  # [FUNCTION DOC]
+  # Rounds a to the given number of decimals (default 0; may be negative) by scaling by a power
+  # of ten, rounding to nearest-even, and unscaling. Integer inputs are processed in the default
+  # float type and cast back to the original dtype. Also installed as the round hook of the
+  # ndarray class. Returns an array of the input dtype.
   a = asarray(a)
   dtype = a.dtype.as_numpy_dtype
   factor = math.pow(10, decimals)
@@ -843,6 +1086,11 @@ setattr(np_arrays.ndarray, '__round__', around)
 @tf_export.tf_export('experimental.numpy.reshape', v1=[])
 @np_utils.np_doc('reshape')
 def reshape(a, newshape, order='C'):
+  # [FUNCTION DOC]
+  # Gives a new shape to the array-like a. newshape is an integer or a sequence of dimensions
+  # (one may be minus one, to be inferred). order is 'C' (row-major, default) or 'F'
+  # (column-major, implemented by transposing, reshaping with the reversed shape, and
+  # transposing back). Raises a value error for any other order. Returns the reshaped array.
   """order argument can only b 'C' or 'F'."""
   if order not in {'C', 'F'}:
     raise ValueError('Unsupported order argument {}'.format(order))
@@ -862,6 +1110,12 @@ def reshape(a, newshape, order='C'):
 
 
 def _reshape_method_wrapper(a, *newshape, **kwargs):
+  # [FUNCTION DOC]
+  # HELPER: adapts reshape to the method-call style of the ndarray class (dimensions passed
+  # as separate positional arguments or as one sequence).
+  # a is the array; newshape collects the dimensions; the only accepted keyword is order
+  # (default 'C'). A single non-integer positional argument is treated as the whole shape.
+  # Raises a value error if any other keyword is supplied. Returns the reshaped array.
   order = kwargs.pop('order', 'C')
   if kwargs:
     raise ValueError('Unsupported arguments: {}'.format(kwargs.keys()))
@@ -875,6 +1129,9 @@ def _reshape_method_wrapper(a, *newshape, **kwargs):
 @tf_export.tf_export('experimental.numpy.expand_dims', v1=[])
 @np_utils.np_doc('expand_dims')
 def expand_dims(a, axis):
+  # [FUNCTION DOC]
+  # Inserts a new dimension of size one into the shape of array-like a at position axis
+  # (negative counts from the end). Returns the new array.
   a = asarray(a)
   return array_ops.expand_dims(a, axis=axis)
 
@@ -882,6 +1139,10 @@ def expand_dims(a, axis):
 @tf_export.tf_export('experimental.numpy.squeeze', v1=[])
 @np_utils.np_doc('squeeze')
 def squeeze(a, axis=None):
+  # [FUNCTION DOC]
+  # Removes dimensions of size one from the array-like a. axis (nothing for all such dimensions)
+  # may be an integer or sequence selecting which ones to remove; the TF op raises an invalid
+  # argument error if a selected dimension is not of size one. Returns the new array.
   a = asarray(a)
   return array_ops.squeeze(a, axis)
 
@@ -889,6 +1150,10 @@ def squeeze(a, axis=None):
 @tf_export.tf_export('experimental.numpy.flatten', v1=[])
 @np_utils.np_doc('flatten', link=np_utils.NoLink())
 def flatten(a, order='C'):
+  # [FUNCTION DOC]
+  # Returns a one-dimensional copy-like flattening of a. order 'C', 'A' or 'K' flatten in
+  # row-major order; 'F' flattens in column-major order (via transpose). Any other order raises
+  # a value error. Default order is 'C'.
   a = asarray(a)
   if order == 'C' or order == 'A' or order == 'K':
     # Row major.
@@ -905,6 +1170,9 @@ def flatten(a, order='C'):
 @tf_export.tf_export('experimental.numpy.transpose', v1=[])
 @np_utils.np_doc('transpose')
 def transpose(a, axes=None):
+  # [FUNCTION DOC]
+  # Permutes the dimensions of a. axes is an optional permutation of dimension indices; nothing
+  # reverses the order of the dimensions. Returns the transposed array.
   a = asarray(a)
   if axes is not None:
     axes = asarray(axes)
@@ -914,10 +1182,23 @@ def transpose(a, axes=None):
 @tf_export.tf_export('experimental.numpy.swapaxes', v1=[])
 @np_utils.np_doc('swapaxes')
 def swapaxes(a, axis1, axis2):  # pylint: disable=missing-docstring
+  # [FUNCTION DOC]
+  # Interchanges two axes of a. axis1 and axis2 are integers or scalar tensors, negative values
+  # count from the end. When the rank and both axes are static, a static permutation is built
+  # (needed for XLA compile-time constants); otherwise the permutation is computed dynamically.
+  # Returns the transposed array.
   a = asarray(a)
 
   def adjust_axes(axes, rank):
+    # [FUNCTION DOC]
+    # HELPER: normalizes negative axes for swapaxes.
+    # Applies a per-axis fix-up over a (possibly nested) structure of axes using the given rank,
+    # and returns a structure of the same form with non-negative axes.
     def f(x):
+      # [FUNCTION DOC]
+      # HELPER: fix-up for one axis. A negative python integer gets the rank added; for a tensor
+      # axis a conditional select adds the enclosing array's rank (a_rank) when negative.
+      # Returns the adjusted axis.
       if isinstance(x, int):
         if x < 0:
           x = x + rank
@@ -953,6 +1234,15 @@ def swapaxes(a, axis1, axis2):  # pylint: disable=missing-docstring
 @tf_export.tf_export('experimental.numpy.moveaxis', v1=[])
 @np_utils.np_doc('moveaxis')
 def moveaxis(a, source, destination):  # pylint: disable=missing-docstring
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says a value error is raised when source or destination is out of
+  # range, but the code never validates that; it only raises when the two sequences differ in
+  # length. When both are empty or zero-valued (falsy) it returns the input without converting it
+  # to an array.
+  # Moves the axes in source to the positions in destination (integers or sequences; negative
+  # values count from the end), keeping the remaining axes in order. Uses a static permutation
+  # when the rank is known, otherwise builds it dynamically with scatter operations. Returns the
+  # transposed array.
   """Raises ValueError if source, destination not in (-ndim(a), ndim(a))."""
   if not source and not destination:
     return a
@@ -969,6 +1259,8 @@ def moveaxis(a, source, destination):  # pylint: disable=missing-docstring
   a_rank = np_utils._maybe_static(array_ops.rank(a))  # pylint: disable=protected-access
 
   def _correct_axis(axis, rank):
+    # [FUNCTION DOC]
+    # HELPER: for moveaxis. Returns axis plus rank if axis is negative, else axis unchanged.
     if axis < 0:
       return axis + rank
     return axis
@@ -985,6 +1277,10 @@ def moveaxis(a, source, destination):  # pylint: disable=missing-docstring
     r = math_ops.range(a_rank)
 
     def _remove_indices(a, b):
+      # [FUNCTION DOC]
+      # HELPER: for the dynamic-rank path of moveaxis.
+      # Given a one-dimensional tensor a and a sequence of indices b, returns a with the elements
+      # at positions b removed (b is sorted first and the pieces between them concatenated).
       """Remove indices (`b`) from `a`."""
       items = array_ops_stack.unstack(
           sort_ops.sort(array_ops_stack.stack(b)), num=len(b)
@@ -1018,6 +1314,11 @@ def moveaxis(a, source, destination):  # pylint: disable=missing-docstring
 @tf_export.tf_export('experimental.numpy.pad', v1=[])
 @np_utils.np_doc('pad')
 def pad(array, pad_width, mode, **kwargs):  # pylint: disable=redefined-outer-name
+  # [FUNCTION DOC]
+  # Pads an array. array is array-like, pad_width gives before/after counts per dimension
+  # (converted to int32), mode must be 'constant', 'reflect' or 'symmetric' (otherwise a value
+  # error is raised). The only keyword used is constant_values (default 0) for constant mode;
+  # other keywords are silently ignored. Returns the padded array.
   """Only supports modes 'constant', 'reflect' and 'symmetric' currently."""
   constant_values = kwargs.get('constant_values', 0)
   if not (mode == 'constant' or mode == 'reflect' or mode == 'symmetric'):
@@ -1036,6 +1337,12 @@ def pad(array, pad_width, mode, **kwargs):  # pylint: disable=redefined-outer-na
 @tf_export.tf_export('experimental.numpy.take', v1=[])
 @np_utils.np_doc('take')
 def take(a, indices, axis=None, out=None, mode='clip'):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the default mode is 'clip' whereas NumPy defaults to raising on bad indices, and
+  # the 'raise' mode is accepted by validation but then rejected with a value error.
+  # Takes elements of a at indices along axis (nothing flattens a first). mode 'clip' clamps
+  # indices to the valid range, 'wrap' wraps them around. out must be nothing (value error
+  # otherwise); any mode other than raise/clip/wrap is a value error. Returns the gathered array.
   """out argument is not supported, and default mode is clip."""
   if out is not None:
     raise ValueError('out argument is not supported in take.')
@@ -1064,6 +1371,11 @@ def take(a, indices, axis=None, out=None, mode='clip'):
 @tf_export.tf_export('experimental.numpy.where', v1=[])
 @np_utils.np_doc_only('where')
 def where(condition, x=None, y=None):
+  # [FUNCTION DOC]
+  # Chooses elements by a boolean condition. With only condition, returns the indices of true
+  # elements (same as nonzero). With both x and y, promotes them to a common dtype and selects
+  # from x where true and from y elsewhere (broadcasting). Raises a value error if exactly one of
+  # x and y is given.
   """Raises ValueError if exactly one of x or y is not None."""
   condition = asarray(condition, dtype=np.bool_)
   if x is None and y is None:
@@ -1077,6 +1389,10 @@ def where(condition, x=None, y=None):
 @tf_export.tf_export('experimental.numpy.select', v1=[])
 @np_utils.np_doc('select')
 def select(condlist, choicelist, default=0):  # pylint: disable=missing-docstring
+  # [FUNCTION DOC]
+  # Returns an array drawn from choicelist according to condlist: for each element the first
+  # condition that is true picks the corresponding choice, else default (default 0). Values are
+  # promoted to a common dtype. Raises a value error if the lists differ in length or are empty.
   if len(condlist) != len(choicelist):
     msg = 'condlist must have length equal to choicelist ({} vs {})'
     raise ValueError(msg.format(len(condlist), len(choicelist)))
@@ -1100,6 +1416,9 @@ def select(condlist, choicelist, default=0):  # pylint: disable=missing-docstrin
     ),
 )
 def shape(a):
+  # [FUNCTION DOC]
+  # Returns the shape of the array-like a (converted to an array first), as a tensor shape
+  # object. No side effects.
   a = asarray(a)
   return a.shape
 
@@ -1107,6 +1426,9 @@ def shape(a):
 @tf_export.tf_export('experimental.numpy.ndim', v1=[])
 @np_utils.np_doc('ndim', link=np_utils.NoLink())
 def ndim(a):
+  # [FUNCTION DOC]
+  # Returns the number of dimensions (rank) of the array-like a; may be nothing/unknown for
+  # tensors of unknown rank in graph mode. Also used by isscalar.
   a = asarray(a)
   return a.ndim
 
@@ -1114,10 +1436,19 @@ def ndim(a):
 @tf_export.tf_export('experimental.numpy.isscalar', v1=[])
 @np_utils.np_doc('isscalar')
 def isscalar(num):
+  # [FUNCTION DOC]
+  # Returns whether the array-like num has zero dimensions (true for scalar numbers and rank-zero
+  # arrays).
   return ndim(num) == 0
 
 
 def _boundaries_to_sizes(a, boundaries, axis):
+  # [FUNCTION DOC]
+  # HELPER: converts NumPy-style split boundaries into TF-style split sizes for split.
+  # a is the array (its static shape along axis must be known), boundaries is a sequence of
+  # increasing split positions, axis is the dimension. Sizes are clipped to the available length,
+  # and a final remainder size is appended. Raises a value error if axis is out of bounds or a
+  # boundary is smaller than its predecessor. Returns a list of sizes.
   """Converting boundaries of splits to sizes of splits.
 
   Args:
@@ -1152,6 +1483,10 @@ def _boundaries_to_sizes(a, boundaries, axis):
 @tf_export.tf_export('experimental.numpy.split', v1=[])
 @np_utils.np_doc('split')
 def split(ary, indices_or_sections, axis=0):
+  # [FUNCTION DOC]
+  # Splits ary into sub-arrays along axis (default 0). An integer indices_or_sections gives the
+  # number of equal parts; a sequence gives boundary positions (converted to sizes). Returns a
+  # list of arrays. Errors come from the size conversion or the TF split op.
   ary = asarray(ary)
   if not isinstance(indices_or_sections, int):
     indices_or_sections = _boundaries_to_sizes(ary, indices_or_sections, axis)
@@ -1159,8 +1494,16 @@ def split(ary, indices_or_sections, axis=0):
 
 
 def _split_on_axis(np_fun_name, axis):  # pylint: disable=missing-function-docstring
+  # [FUNCTION DOC]
+  # HELPER: factory for vsplit, hsplit and dsplit.
+  # Takes the NumPy function name (used for documentation) and the axis to split on, and returns
+  # a function of an array and indices-or-sections that splits along that axis.
   @np_utils.np_doc(np_fun_name)
   def f(ary, indices_or_sections):
+    # [FUNCTION DOC]
+    # HELPER: the generated splitting function. For axis 1 (horizontal split) a one-dimensional
+    # input is split along axis 0 instead. If an integer section count is given and the static
+    # dimension is not evenly divisible, raises a value error. Returns the list of pieces.
     # for 1-D array, hsplit becomes vsplit
     new_axis = np_utils.cond(
         math_ops.equal(axis, 1),
@@ -1192,12 +1535,21 @@ dsplit = tf_export.tf_export('experimental.numpy.dsplit', v1=[])(
 @tf_export.tf_export('experimental.numpy.broadcast_to', v1=[])
 @np_utils.np_doc('broadcast_to')
 def broadcast_to(array, shape):  # pylint: disable=redefined-outer-name
+  # [FUNCTION DOC]
+  # Broadcasts array to the given shape by delegating to full with the array as the fill value.
+  # Returns the broadcast array; incompatible shapes raise the underlying TF error.
   return full(shape, array)
 
 
 @tf_export.tf_export('experimental.numpy.stack', v1=[])
 @np_utils.np_doc('stack')
 def stack(arrays, axis=0):  # pylint: disable=missing-function-docstring
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the unwrapping list comprehension picks the same element in both branches, so it
+  # is a no-op left over from an earlier ndarray wrapper design.
+  # Joins arrays along a new axis (default 0). If arrays is itself a single array/tensor, it is
+  # treated as already stacked along axis 0 and axes are swapped to place the stacking axis.
+  # Otherwise elements are promoted to a common dtype and stacked. Returns the stacked array.
   if isinstance(arrays, (np_arrays.ndarray, tensor_lib.Tensor)):
     arrays = asarray(arrays)
     if axis == 0:
@@ -1214,6 +1566,12 @@ def stack(arrays, axis=0):  # pylint: disable=missing-function-docstring
 @tf_export.tf_export('experimental.numpy.hstack', v1=[])
 @np_utils.np_doc('hstack')
 def hstack(tup):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the unwrapping list comprehension picks the same element in both branches, so it
+  # is a no-op.
+  # Stacks arrays horizontally: each input gets at least one dimension, dtypes are promoted to
+  # a common type, and the arrays are concatenated along axis 0 when the first has rank one,
+  # otherwise along axis 1 (the choice is made at run time). Returns the combined array.
   arrays = [atleast_1d(a) for a in tup]
   arrays = _promote_dtype(*arrays)  # pylint: disable=protected-access
   unwrapped_arrays = [
@@ -1230,6 +1588,11 @@ def hstack(tup):
 @tf_export.tf_export('experimental.numpy.vstack', v1=[])
 @np_utils.np_doc('vstack')
 def vstack(tup):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the unwrapping list comprehension picks the same element in both branches, so it
+  # is a no-op.
+  # Stacks arrays vertically: each input gets at least two dimensions, dtypes are promoted to a
+  # common type, and they are concatenated along axis 0. Returns the combined array.
   arrays = [atleast_2d(a) for a in tup]
   arrays = _promote_dtype(*arrays)  # pylint: disable=protected-access
   unwrapped_arrays = [
@@ -1241,6 +1604,11 @@ def vstack(tup):
 @tf_export.tf_export('experimental.numpy.dstack', v1=[])
 @np_utils.np_doc('dstack')
 def dstack(tup):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the unwrapping list comprehension picks the same element in both branches, so it
+  # is a no-op.
+  # Stacks arrays depth-wise: each input gets at least three dimensions, dtypes are promoted to
+  # a common type, and they are concatenated along axis 2. Returns the combined array.
   arrays = [atleast_3d(a) for a in tup]
   arrays = _promote_dtype(*arrays)  # pylint: disable=protected-access
   unwrapped_arrays = [
@@ -1250,6 +1618,10 @@ def dstack(tup):
 
 
 def _pad_left_to(n, old_shape):
+  # [FUNCTION DOC]
+  # HELPER: shape-computation callback for atleast_1d and atleast_2d.
+  # Given a target rank n and an old shape (sequence of dimensions), returns an int32 array with
+  # ones prepended so the length is at least n (nothing added if already long enough).
   old_shape = asarray(old_shape, dtype=np.int32)
   new_shape = array_ops.pad(
       old_shape,
@@ -1260,6 +1632,11 @@ def _pad_left_to(n, old_shape):
 
 
 def _atleast_nd(n, new_shape, *arys):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation of atleast_1d, atleast_2d and atleast_3d.
+  # n is the minimal rank, new_shape a callback mapping (n, old shape) to the new shape, arys the
+  # array-like inputs. Each input of lower rank is reshaped (decided at run time); others are
+  # kept. Returns a single array when one input was given, otherwise a list of arrays.
   """Reshape arrays to be at least `n`-dimensional.
 
   Args:
@@ -1273,6 +1650,9 @@ def _atleast_nd(n, new_shape, *arys):
   """
 
   def f(x):
+    # [FUNCTION DOC]
+    # HELPER: per-input conversion for _atleast_nd. Converts x to an array and, when its rank is
+    # below n, reshapes it to the shape from the callback; returns the resulting array.
     # pylint: disable=g-long-lambda
     x = asarray(x)
     return asarray(
@@ -1293,19 +1673,33 @@ def _atleast_nd(n, new_shape, *arys):
 @tf_export.tf_export('experimental.numpy.atleast_1d', v1=[])
 @np_utils.np_doc('atleast_1d')
 def atleast_1d(*arys):
+  # [FUNCTION DOC]
+  # Converts each input to an array with at least one dimension (scalars become one-element
+  # vectors). Returns one array for one input, otherwise a list.
   return _atleast_nd(1, _pad_left_to, *arys)
 
 
 @tf_export.tf_export('experimental.numpy.atleast_2d', v1=[])
 @np_utils.np_doc('atleast_2d')
 def atleast_2d(*arys):
+  # [FUNCTION DOC]
+  # Converts each input to an array with at least two dimensions (ones are prepended to the
+  # shape). Returns one array for one input, otherwise a list.
   return _atleast_nd(2, _pad_left_to, *arys)
 
 
 @tf_export.tf_export('experimental.numpy.atleast_3d', v1=[])
 @np_utils.np_doc('atleast_3d')
 def atleast_3d(*arys):  # pylint: disable=missing-docstring
+  # [FUNCTION DOC]
+  # Converts each input to an array with at least three dimensions following NumPy placement:
+  # a scalar becomes shape 1,1,1; a vector of length N becomes 1,N,1; a matrix gets a trailing
+  # dimension of one. Returns one array for one input, otherwise a list.
   def new_shape(_, old_shape):
+    # [FUNCTION DOC]
+    # HELPER: shape callback for atleast_3d. The first argument (target rank) is ignored.
+    # From the old shape it returns 1,1,1 for rank zero, pads one on both sides for rank one,
+    # and appends a one otherwise.
     # pylint: disable=g-long-lambda
     ndim_ = array_ops.size(old_shape)
     return np_utils.cond(
@@ -1324,6 +1718,10 @@ def atleast_3d(*arys):  # pylint: disable=missing-docstring
 @tf_export.tf_export('experimental.numpy.nonzero', v1=[])
 @np_utils.np_doc('nonzero')
 def nonzero(a):
+  # [FUNCTION DOC]
+  # Returns the indices of nonzero elements of a, as a list with one index vector per dimension.
+  # Scalars are treated as one-element vectors. Raises a value error if the rank of a is unknown
+  # since the number of output arrays cannot be decided.
   a = atleast_1d(a)
   if a.shape.rank is None:
     raise ValueError(
@@ -1338,6 +1736,10 @@ def nonzero(a):
 @tf_export.tf_export('experimental.numpy.diag_indices', v1=[])
 @np_utils.np_doc('diag_indices')
 def diag_indices(n, ndim=2):  # pylint: disable=missing-docstring,redefined-outer-name
+  # [FUNCTION DOC]
+  # Returns the index arrays for the main diagonal of an array with ndim (default 2) dimensions
+  # each of size n: a tuple of ndim identical range vectors from 0 to n minus one. Raises a value
+  # error if n or ndim is negative.
   if n < 0:
     raise ValueError(
         'n argument to diag_indices must be nonnegative, got {}'.format(n)
@@ -1353,6 +1755,10 @@ def diag_indices(n, ndim=2):  # pylint: disable=missing-docstring,redefined-oute
 @tf_export.tf_export('experimental.numpy.tri', v1=[])
 @np_utils.np_doc('tri')
 def tri(N, M=None, k=0, dtype=None):  # pylint: disable=invalid-name,missing-docstring
+  # [FUNCTION DOC]
+  # Builds an N by M matrix (M defaults to N) with ones at and below the k-th diagonal and zeros
+  # elsewhere. dtype defaults to the default float type. Implemented with a band-part op (lower
+  # triangle by inverting an upper band for negative k). Returns the matrix.
   M = M if M is not None else N
   if dtype is not None:
     dtype = np_utils.result_type(dtype)
@@ -1383,6 +1789,10 @@ def tri(N, M=None, k=0, dtype=None):  # pylint: disable=invalid-name,missing-doc
 @tf_export.tf_export('experimental.numpy.tril', v1=[])
 @np_utils.np_doc('tril')
 def tril(m, k=0):  # pylint: disable=missing-docstring
+  # [FUNCTION DOC]
+  # Returns the lower triangle of m (elements on and below the k-th diagonal, default 0), with the
+  # others set to zero, applied to the last two dimensions. Raises a value error if the rank is
+  # unknown, below two, or if the last two dimensions are not statically known.
   m = asarray(m)
   if m.shape.ndims is None:
     raise ValueError('Argument to tril should have known rank')
@@ -1408,6 +1818,10 @@ def tril(m, k=0):  # pylint: disable=missing-docstring
 @tf_export.tf_export('experimental.numpy.triu', v1=[])
 @np_utils.np_doc('triu')
 def triu(m, k=0):  # pylint: disable=missing-docstring
+  # [FUNCTION DOC]
+  # Returns the upper triangle of m (elements on and above the k-th diagonal, default 0), with the
+  # others set to zero, applied to the last two dimensions. Raises a value error if the rank is
+  # unknown, below two, or if the last two dimensions are not statically known.
   m = asarray(m)
   if m.shape.ndims is None:
     raise ValueError('Argument to triu should have known rank')
@@ -1433,6 +1847,9 @@ def triu(m, k=0):  # pylint: disable=missing-docstring
 @tf_export.tf_export('experimental.numpy.flip', v1=[])
 @np_utils.np_doc('flip')
 def flip(m, axis=None):  # pylint: disable=missing-docstring
+  # [FUNCTION DOC]
+  # Reverses the order of elements of m along axis (an integer, negative counts from the end);
+  # nothing reverses all axes. Returns the flipped array.
   m = asarray(m)
 
   if axis is None:
@@ -1446,18 +1863,26 @@ def flip(m, axis=None):  # pylint: disable=missing-docstring
 @tf_export.tf_export('experimental.numpy.flipud', v1=[])
 @np_utils.np_doc('flipud')
 def flipud(m):  # pylint: disable=missing-docstring
+  # [FUNCTION DOC]
+  # Flips m up-down (reverses along axis 0). Returns the flipped array.
   return flip(m, 0)
 
 
 @tf_export.tf_export('experimental.numpy.fliplr', v1=[])
 @np_utils.np_doc('fliplr')
 def fliplr(m):  # pylint: disable=missing-docstring
+  # [FUNCTION DOC]
+  # Flips m left-right (reverses along axis 1). Returns the flipped array.
   return flip(m, 1)
 
 
 @tf_export.tf_export('experimental.numpy.roll', v1=[])
 @np_utils.np_doc('roll')
 def roll(a, shift, axis=None):  # pylint: disable=missing-docstring
+  # [FUNCTION DOC]
+  # Circularly shifts elements of a by shift positions (integer or sequence) along axis. With
+  # axis nothing the array is flattened, rolled, and restored to its original shape. Returns the
+  # rolled array.
   a = asarray(a)
 
   if axis is not None:
@@ -1472,6 +1897,12 @@ def roll(a, shift, axis=None):  # pylint: disable=missing-docstring
 @tf_export.tf_export('experimental.numpy.rot90', v1=[])
 @np_utils.np_doc('rot90')
 def rot90(m, k=1, axes=(0, 1)):  # pylint: disable=missing-docstring
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: m is not converted with the array conversion first (unlike most functions here),
+  # so a plain list input is passed straight to the rank and flip operations.
+  # Rotates m by 90 degrees k times (default 1, taken modulo 4) in the plane given by the two
+  # axes (default the first two). Zero rotations return m itself; two flip both axes; one or
+  # three combine a flip with a transpose. Returns the rotated array.
   m_rank = array_ops.rank(m)
   ax1, ax2 = np_utils._canonicalize_axes(axes, m_rank)  # pylint: disable=protected-access
 
@@ -1493,6 +1924,11 @@ def rot90(m, k=1, axes=(0, 1)):  # pylint: disable=missing-docstring
 @tf_export.tf_export('experimental.numpy.vander', v1=[])
 @np_utils.np_doc('vander')
 def vander(x, N=None, increasing=False):  # pylint: disable=missing-docstring,invalid-name
+  # [FUNCTION DOC]
+  # Builds a Vandermonde matrix from the one-dimensional x: columns are powers of x, N columns
+  # (default the length of x), in decreasing power order unless increasing is true. Raises a
+  # value error for static negative N or non-1-d x; with dynamic values it adds run-time
+  # assertions instead. Returns the matrix.
   x = asarray(x)
 
   x_shape = array_ops.shape(x)
@@ -1534,6 +1970,11 @@ def vander(x, N=None, increasing=False):  # pylint: disable=missing-docstring,in
 @tf_export.tf_export('experimental.numpy.ix_', v1=[])
 @np_utils.np_doc('ix_')
 def ix_(*args):  # pylint: disable=missing-docstring
+  # [FUNCTION DOC]
+  # Builds an open mesh from several one-dimensional sequences, for indexing the cross product.
+  # Each argument must be integer or boolean (boolean converted to the indices of true values);
+  # output i is reshaped to have size -1 along axis i and one elsewhere. Raises a value error for
+  # non-1-d arguments or other dtypes (run-time assertion when rank is dynamic). Returns a list.
   n = len(args)
   output = []
   for i, a in enumerate(args):
@@ -1567,6 +2008,10 @@ def ix_(*args):  # pylint: disable=missing-docstring
 @tf_export.tf_export('experimental.numpy.broadcast_arrays', v1=[])
 @np_utils.np_doc('broadcast_arrays')
 def broadcast_arrays(*args, **kwargs):  # pylint: disable=missing-docstring
+  # [FUNCTION DOC]
+  # Broadcasts several array-likes against each other to a common shape. The only keyword
+  # accepted is subok, which must be false; true or any other keyword raises a value error.
+  # Returns the list of broadcast arrays.
   subok = kwargs.pop('subok', False)
   if subok:
     raise ValueError('subok=True is not supported.')
@@ -1580,6 +2025,13 @@ def broadcast_arrays(*args, **kwargs):  # pylint: disable=missing-docstring
 @tf_export.tf_export('experimental.numpy.sign', v1=[])
 @np_utils.np_doc_only('sign')
 def sign(x, out=None, where=None, **kwargs):  # pylint: disable=missing-docstring,redefined-outer-name
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: out and where are checked by truthiness, so an array-valued argument may be
+  # ambiguous or rejected differently than a simple null test, and an explicit false value is
+  # silently accepted as if unset.
+  # Elementwise sign of x. Unsupported out, where or extra keywords raise a value error. With
+  # NumPy 2 or later the TF sign is returned directly (complex sign is x over its modulus there);
+  # for older NumPy the complex sign is the sign of the real part cast back to complex.
   if out:
     raise ValueError('tf.numpy doesnt support setting out.')
   if where:
@@ -1607,6 +2059,11 @@ def sign(x, out=None, where=None, **kwargs):  # pylint: disable=missing-docstrin
 @tf_export.tf_export('experimental.numpy.take_along_axis', v1=[])
 @np_utils.np_doc('take_along_axis')
 def take_along_axis(arr, indices, axis):  # pylint: disable=missing-docstring
+  # [FUNCTION DOC]
+  # Takes values from arr along axis using the index array indices (same rank), broadcasting the
+  # two against each other except along axis. axis nothing flattens arr first; negative axis
+  # counts from the end; negative indices wrap. Implemented by moving axis last, flattening to a
+  # batched gather and moving back, then restoring the static shape. Returns the gathered array.
   arr = asarray(arr)
   indices = asarray(indices)
 
@@ -1672,18 +2129,27 @@ def take_along_axis(arr, indices, axis):  # pylint: disable=missing-docstring
 @tf_export.tf_export('experimental.numpy.max', v1=[])
 @np_utils.np_doc('max', link=np_utils.AliasOf('amax'))
 def max(a, axis=None, keepdims=None):
+  # [FUNCTION DOC]
+  # Alias of amax: maximum over axis (nothing means all) with optional keepdims. Shadows the
+  # builtin max in this module. Returns the maximum array.
   return amax(a, axis=axis, keepdims=keepdims)
 
 
 @tf_export.tf_export('experimental.numpy.min', v1=[])
 @np_utils.np_doc('min', link=np_utils.AliasOf('amin'))
 def min(a, axis=None, keepdims=None):
+  # [FUNCTION DOC]
+  # Alias of amin: minimum over axis (nothing means all) with optional keepdims. Shadows the
+  # builtin min in this module. Returns the minimum array.
   return amin(a, axis=axis, keepdims=keepdims)
 
 
 @tf_export.tf_export('experimental.numpy.round', v1=[])
 @np_utils.np_doc('round', link=np_utils.AliasOf('around'))
 def round(a, decimals=0):
+  # [FUNCTION DOC]
+  # Alias of around: rounds a to the given number of decimals (default 0). Shadows the builtin
+  # round in this module. Returns the rounded array.
   return around(a, decimals=decimals)
 
 
@@ -1697,6 +2163,16 @@ _SLICE_ERROR = (
 
 
 def _as_index(idx, need_scalar=True):
+  # [FUNCTION DOC]
+  # HELPER: index parsing for _slice_helper.
+  # KNOWN ISSUE: the docstring lists only IndexError, but a boolean index whose rank is not one
+  # raises not-implemented instead.
+  # Parses idx as an index. Python integers and tensor dimensions pass through as scalars.
+  # Otherwise idx is converted to an array; boolean arrays (rank one only) become the indices of
+  # true elements; integer arrays are cast to int32 or int64. If need_scalar (default true) a
+  # non-scalar array is rejected. Raises an index error for non-integer dtypes, non-scalar when
+  # a scalar is needed, or unsupported integer types. Returns a pair of the parsed index and a
+  # flag that is true when the index is known to have rank zero.
   """Helper function to parse idx as an index.
 
   Args:
@@ -1737,6 +2213,11 @@ def _as_index(idx, need_scalar=True):
 
 
 class _UpdateMethod(enum.Enum):
+  # [CLASS DOC]
+  # HELPER: enumeration of how indexed updates combine new values with existing ones, used by
+  # _slice_helper and the index-update methods installed on the ndarray class. Members are
+  # update (replace), add, min (elementwise minimum) and max (elementwise maximum), with values
+  # 0 to 3. No state beyond the members.
   UPDATE = 0
   ADD = 1
   MIN = 2
@@ -1744,6 +2225,17 @@ class _UpdateMethod(enum.Enum):
 
 
 def _slice_helper(tensor, slice_spec, update_method=None, updates=None):
+  # [FUNCTION DOC]
+  # HELPER: core of NumPy-style indexing, used by the getitem hook and the index-update methods.
+  # Reads (update_method nothing) or updates (update_method one of the _UpdateMethod members,
+  # with updates of the same dtype as tensor) the elements of tensor selected by slice_spec, a
+  # sequence of slices, ellipsis, new-axis markers, integers and integer/boolean index arrays.
+  # Basic indices become a strided slice (or a strided slice update); advanced (array) indices
+  # are applied afterwards with gather, or with a scatter-based read-modify-write for updates;
+  # contiguous advanced indices are optimized with a gather along an axis. Negative advanced
+  # indices are wrapped. Raises not-implemented if the rank of advanced indices is unknown for an
+  # update, plus errors from index parsing. Returns the selected values or the updated tensor.
+  # The input tensor is never mutated; updates produce a new tensor.
   """Helper function for __getitem__ and _with_index_update_helper.
 
   This function collects the indices in `slice_spec` into two buckets, which we
@@ -1968,6 +2460,8 @@ def _slice_helper(tensor, slice_spec, update_method=None, updates=None):
             batch_start += len(dims) - batch_size
 
           def range_(start, length):
+            # [FUNCTION DOC]
+            # HELPER: returns the integer range of the given length beginning at start.
             return range(start, start + length)
 
           updates = moveaxis(
@@ -2015,6 +2509,10 @@ def _slice_helper(tensor, slice_spec, update_method=None, updates=None):
       index_scaling = math_ops.cumprod(dim_sizes, reverse=True, exclusive=True)
 
       def _tensordot(a, b):
+        # [FUNCTION DOC]
+        # HELPER: stand-in for a dot product over the last axis, used to flatten multi-dimension
+        # advanced indices into one linear index. Broadcasts b to the shape of a, multiplies and
+        # sums over the last axis; returns the summed tensor.
         # TODO(b/168657656): This function should be replaced by
         # tensordot(axis=1) once MatMul has int32 XLA kernel.
         b = array_ops.broadcast_to(b, array_ops.shape(a))
@@ -2030,6 +2528,12 @@ def _slice_helper(tensor, slice_spec, update_method=None, updates=None):
 
 
 def _as_spec_tuple(slice_spec):
+  # [FUNCTION DOC]
+  # HELPER: normalizes an index expression for _slice_helper.
+  # A list or tuple containing nothing, ellipsis, slices, nested sequences or non-scalar arrays
+  # is treated as a multi-dimensional index and returned as a tuple of its elements; anything
+  # else (including a list of plain scalars, treated as one advanced index) is wrapped in a
+  # one-element tuple.
   """Convert slice_spec to tuple."""
   if isinstance(slice_spec, (list, tuple)) and not isinstance(
       slice_spec, np.ndarray
@@ -2048,6 +2552,11 @@ def _as_spec_tuple(slice_spec):
 
 
 def _getitem(self, slice_spec):
+  # [FUNCTION DOC]
+  # Implementation of NumPy-style indexing on the ndarray class (installed there at import time).
+  # A boolean scalar, boolean tensor or boolean array index selects elements with a boolean mask;
+  # any other index is normalized to a tuple and handled by _slice_helper. self is the array and
+  # slice_spec the index expression. Returns the selected values.
   """Implementation of ndarray.__getitem__."""
   if (
       isinstance(slice_spec, bool)
@@ -2070,6 +2579,13 @@ def _getitem(self, slice_spec):
 
 
 def _with_index_update_helper(update_method, a, slice_spec, updates):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation of the functional index-update methods installed on ndarray
+  # (update, add, min, max); each is this function with the first argument pre-bound.
+  # update_method is an _UpdateMethod member, a the array, slice_spec the index expression
+  # (boolean masks are converted to nonzero indices) and updates the new values. a and updates
+  # are promoted to a common dtype, the update is performed, and the result is cast back to the
+  # original dtype of a. Returns a new array; a is not mutated.
   """Implementation of ndarray._with_index_*."""
   if (
       isinstance(slice_spec, bool)
