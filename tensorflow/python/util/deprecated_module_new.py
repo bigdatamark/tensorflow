@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: test fixture module for the deprecation tests (deprecation_test).
+# Replacement target for the deprecated test module (deprecated_module). It only defines one
+# trivial function so tests can verify that attribute access on the deprecated module is
+# forwarded here. It has no import-time side effects.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,4 +24,8 @@ For testing `deprecation.deprecate_moved_module`.
 
 
 def a():
+  # [FUNCTION DOC]
+  # HELPER: sentinel function for the moved-module deprecation test.
+  # Takes no arguments, has no side effects and always returns the integer one. Tests call it
+  # through the deprecated module to confirm the forwarding reaches this module.
   return 1
