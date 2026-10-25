@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Aggregation module for the public neural network namespace (the nn API). It defines no
+# functions or classes of its own. At import time it imports, for side effects only, the modules
+# that register gradients (nn_grad, the fused batch norm gradient module) and re-exports the
+# public names of the CTC ops, nn_impl, nn_impl_distribute, nn_ops, candidate sampling ops and
+# embedding ops through wildcard imports, plus the sigmoid and tanh math functions. Private
+# aliases of some modules are kept with leading underscores so they are not part of the API.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

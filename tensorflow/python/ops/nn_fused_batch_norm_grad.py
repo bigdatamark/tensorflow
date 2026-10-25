@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Gradient definitions for the fused batch normalization ops. Contains a pure-Python
+# reference computation of the batch norm backward pass (training and inference modes, 4-D and
+# 5-D layouts, half-precision inputs promoted to float32) and registers the second-order
+# gradients for the FusedBatchNormGrad, FusedBatchNormGradV2 and FusedBatchNormGradV3 ops by
+# differentiating that reference computation with a gradient tape. Imported by nn.py for the
+# registration side effect; helper module with no public API.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +36,20 @@ def _BatchNormGrad(grad_y,
                    epsilon,
                    data_format,
                    is_training=True):
+  # [FUNCTION DOC]
+  # HELPER: reference batch norm backward computation used by the second-order gradient functions.
+  # KNOWN ISSUE: the docstring says data_format is either NHWC or NCHW, but the code also handles
+  # NDHWC (5-D channels last) and treats any other value (intended NCDHW) as 5-D channels first.
+  # Also the squeeze of grad_scale in training mode would collapse every dimension when the
+  # channel count is one, and the scale/offset gradients are returned in float32 for half inputs
+  # (only grad_x is cast back).
+  # Inputs: gradient of y, input x (4-D or 5-D), scale vector, population mean and variance
+  # (used only when not training), epsilon added to variance, data format as a byte string, and a
+  # training flag (default true). Half and bfloat16 inputs are computed in float32. In training
+  # mode batch statistics are computed from x by reducing over all non-channel axes; in inference
+  # mode the supplied population statistics are used. Returns a tuple of gradients for x (cast
+  # back to the original dtype), scale and offset. Builds graph or eager ops; no other side
+  # effects.
   """Returns the gradients for the 3 inputs of BatchNorm.
 
   Args:
@@ -118,6 +139,15 @@ def _BatchNormGrad(grad_y,
 
 @ops.RegisterGradient("FusedBatchNormGrad")
 def _FusedBatchNormGradGrad(op: ops.Operation, *grad):
+  # [FUNCTION DOC]
+  # HELPER: registered second-order gradient for the FusedBatchNormGrad op, shared by the V2 and V3
+  # variants.
+  # Reads data format, epsilon and training flag attributes and the five op inputs (grad_y, x,
+  # scale, population mean, population variance). Under a gradient tape that watches grad_y, x and
+  # scale, it recomputes the batch norm backward pass with the reference helper, then
+  # differentiates its three outputs using the incoming gradients (for x, scale and offset) as
+  # initial values. Returns a five-element tuple: gradients for grad_y, x and scale, and nothing
+  # for the mean and variance inputs.
   """Returns the gradients for the 3 inputs of FusedBatchNormGrad.
 
   Args:
@@ -156,11 +186,18 @@ def _FusedBatchNormGradGrad(op: ops.Operation, *grad):
 
 @ops.RegisterGradient("FusedBatchNormGradV2")
 def _FusedBatchNormGradGradV2(op: ops.Operation, *grad):
+  # [FUNCTION DOC]
+  # HELPER: registered second-order gradient for FusedBatchNormGradV2; simply forwards the op and
+  # incoming gradients to the V1 implementation and returns its five-element result unchanged.
   return _FusedBatchNormGradGrad(op, *grad)
 
 
 @ops.RegisterGradient("FusedBatchNormGradV3")
 def _FusedBatchNormGradGradV3(op: ops.Operation, *grad):
+  # [FUNCTION DOC]
+  # HELPER: registered second-order gradient for FusedBatchNormGradV3. Calls the V1 implementation
+  # and returns its three real gradients (grad_y, x, scale) followed by three nothing values,
+  # because the V3 op has six inputs (an extra reserve-space input).
   grad_grad_y, grad_x, grad_scale, _, _ = _FusedBatchNormGradGrad(op, *grad)
   return grad_grad_y, grad_x, grad_scale, None, None, None
 

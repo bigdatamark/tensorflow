@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Unit tests for the fused batch normalization function in nn_impl and its gradient ops. Covers
+# forward results (training and inference, 4-D and 5-D, three dtypes, CPU and GPU, running
+# statistics with exponential averaging), numerical first-order and second-order gradient checks
+# against float32 references, a graph optimizer regression for 5-D batch norm followed by relu,
+# and eager-mode shape validation errors. Its deterministic counterpart is
+# nn_fused_batchnorm_d9m_test.py. Imports the fused batch norm gradient module for the internal
+# reference gradient helper. Runs through the test main entry point.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,8 +41,20 @@ from tensorflow.python.platform import test
 
 
 class BatchNormalizationTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for the fused batch normalization function in nn_impl and the underlying ops, over 4-D
+  # and 5-D inputs, both layouts, half, single and bfloat16 precision, CPU and GPU, training and
+  # inference, with and without exponential averaging of the running statistics. Contains
+  # reference implementations written with elementary ops (used to validate forward results),
+  # numerical gradient checking helpers (including a half-precision-safe variant), second-order
+  # gradient checks, and many scenario tests for shapes, errors and special cases.
 
   def _batch_norm(self, x, mean, var, offset, scale, epsilon):
+    # [FUNCTION DOC]
+    # HELPER: reference batch norm in elementary ops, used because the library function lacks
+    # half-precision support. Computes the inverse standard deviation times scale, casts x to
+    # the scale dtype, applies the affine transform and casts the result back to the dtype of x.
+    # Returns the normalized tensor. Channels must be the last axis.
     # We compute the batch norm manually in this function because
     # nn_impl.batch_normalization does not support float16 yet.
     # TODO(reedwm): Add float16 support to nn_impl.batch_normalization.
@@ -43,6 +63,11 @@ class BatchNormalizationTest(test.TestCase):
     return math_ops.cast(y, x.dtype)
 
   def _inference_ref(self, x, scale, offset, mean, var, epsilon, data_format):
+    # [FUNCTION DOC]
+    # HELPER: reference inference-mode result. Raises a value error for a layout other than the
+    # four supported ones (NHWC, NCHW, NDHWC, NCDHW). Transposes channels-first inputs to
+    # channels-last, applies the reference batch norm with the given statistics, transposes back
+    # and returns the evaluated numpy result.
     if data_format not in ['NHWC', 'NCHW', 'NDHWC', 'NCDHW']:
       raise ValueError('data_format must be NCHW or NHWC for 4D tensors or'
                        'NCDHW or NDHWC for 5D tensors, got %s.' % data_format)
@@ -65,6 +90,12 @@ class BatchNormalizationTest(test.TestCase):
                       use_gpu=True,
                       exponential_avg_factor=1.0,
                       data_format='NHWC'):
+    # [FUNCTION DOC]
+    # HELPER: shared inference-mode forward check. Inputs: shape and dtype of x, shape and dtype
+    # of the per-channel parameters, whether to allow GPU, exponential averaging factor (default
+    # one) and layout (default channels last). Seeds numpy, builds random constants, runs the
+    # fused batch norm with is-training false and the random mean and variance, compares with the
+    # reference, and asserts closeness with a looser tolerance for half and bfloat16.
     np.random.seed(1)
     x_val = np.random.random_sample(x_shape).astype(x_dtype)
     scale_val = np.random.random_sample(scale_shape).astype(scale_dtype)
@@ -100,6 +131,10 @@ class BatchNormalizationTest(test.TestCase):
     self.assertAllClose(y_ref, y_val, atol=atol)
 
   def _running_mean(self, old_mean, new_val, factor):
+    # [FUNCTION DOC]
+    # HELPER: exponential moving average reference. Returns the new value alone when the factor is
+    # exactly one; otherwise returns one minus the factor times the old mean plus the factor
+    # times the new value.
     if factor == 1.0:
       return new_val
     else:
@@ -107,6 +142,14 @@ class BatchNormalizationTest(test.TestCase):
 
   def _training_ref(self, x, scale, offset, old_mean, old_var,
                     exponential_avg_factor, epsilon, data_format):
+    # [FUNCTION DOC]
+    # HELPER: reference training-mode result. Raises a value error for an unsupported layout.
+    # Moves channels last, computes batch mean and variance with the moments function (after
+    # casting to the scale dtype), normalizes, restores layout, applies the sample-size
+    # correction (Bessel) to the variance because the fused op uses it while the moments function
+    # does not, and blends batch statistics with the old running statistics using the averaging
+    # factor. Returns evaluated numpy outputs: normalized values, new running mean and new
+    # running variance.
     if data_format not in ['NHWC', 'NCHW', 'NDHWC', 'NCDHW']:
       raise ValueError('data_format must be NCHW or NHWC for 4D tensors or'
                        'NCDHW or NDHWC for 5D tensors, got %s.' % data_format)
@@ -147,6 +190,12 @@ class BatchNormalizationTest(test.TestCase):
                      use_gpu=True,
                      exponential_avg_factor=1.0,
                      data_format='NHWC'):
+    # [FUNCTION DOC]
+    # HELPER: shared training-mode forward check with the same inputs as the inference check.
+    # Supplies old running statistics only when the averaging factor is not one. Runs the fused
+    # op with is-training true, compares the output, new running mean and new running variance
+    # with the training reference, with tolerances that are looser for half (and loosest for
+    # bfloat16) outputs.
     np.random.seed(1)
     x_val = np.random.random_sample(x_shape).astype(x_dtype)
     scale_val = np.random.random_sample(scale_shape).astype(scale_dtype)
@@ -189,6 +238,11 @@ class BatchNormalizationTest(test.TestCase):
 
   def _compute_gradient_error_float16(self, x, x32, x_shape, y, y32, y_shape,
                                       x_dtype):
+    # [FUNCTION DOC]
+    # HELPER: gradient error for low-precision tensors. Draws a random initial value of the
+    # low-precision dtype, computes the symbolic Jacobian from the low-precision graph and the
+    # numeric Jacobian from the float32 graph (for stability), and returns the maximum absolute
+    # difference, or zero when both Jacobians are empty. Inputs mirror the docstring.
     """Computes the gradient error for float16 inputs and/or outputs.
 
     This returns the same value as gradient_checker.compute_gradient_error. The
@@ -235,6 +289,14 @@ class BatchNormalizationTest(test.TestCase):
                      exponential_avg_factor=1.0,
                      data_format='NHWC',
                      is_training=True):
+    # [FUNCTION DOC]
+    # HELPER: shared first-order gradient check. KNOWN ISSUE: the tolerance selection ends with an
+    # else-if on the bfloat16 dtype object itself, which is always true, so every dtype that is
+    # not half (including single precision) gets the loose bfloat16 tolerance.
+    # Builds random inputs, runs the fused op (with random population statistics unless training
+    # with averaging factor one), and computes the maximum gradient error of the output with
+    # respect to x, scale and offset (numerically against float32 for half/bfloat16 inputs).
+    # Asserts each error is below its tolerance.
     np.random.seed(1)
     x_val = np.random.random_sample(x_shape).astype(x_dtype)
     scale_val = np.random.random_sample(scale_shape).astype(scale_dtype)
@@ -303,6 +365,13 @@ class BatchNormalizationTest(test.TestCase):
                       data_format='NHWC',
                       is_training=True,
                       err_tolerance=1e-3):
+    # [FUNCTION DOC]
+    # HELPER: shared second-order gradient check. Builds the fused op, takes first-order
+    # gradients with a random upstream gradient, and when training also asserts they match the
+    # internal batch norm gradient reference helper within the tolerance. Then computes numerical
+    # errors of those first-order gradients with respect to the upstream gradient, x (only in
+    # training, since in frozen mode the input gradient does not depend on x) and scale, using
+    # float32 reference graphs for half/bfloat16, and asserts all errors are below the tolerance.
     np.random.seed(1)
     x_val = np.random.random_sample(x_shape).astype(x_dtype)
     grad_y_val = np.random.random_sample(x_shape).astype(x_dtype)
@@ -401,6 +470,12 @@ class BatchNormalizationTest(test.TestCase):
 
   def _runtests(self, x_shape, is_training, gradient_test=False,
                 cpu_only=False):
+    # [FUNCTION DOC]
+    # HELPER: driver that sweeps configurations. Chooses layouts by rank (four-dimensional or
+    # five-dimensional), CPU only or CPU plus GPU when available and not restricted, averaging
+    # factors one and six tenths, and the dtypes half, single and bfloat16. For each combination
+    # derives the parameter shape from the layout and calls the gradient check, training check or
+    # inference check as selected by the flags.
     if len(x_shape) == 4:
       data_format_list = ['NHWC', 'NCHW']
     else:
@@ -448,93 +523,144 @@ class BatchNormalizationTest(test.TestCase):
                     exponential_avg_factor=exponential_avg_factor)
 
   def testInferenceShape1(self):
+    # [FUNCTION DOC]
+    # Inference-mode forward check for input shape one by one by six by one (single channel);
+    # runs all dtype, device, layout and averaging factor combinations via the sweep helper.
     x_shape = [1, 1, 6, 1]
     self._runtests(x_shape, False)
 
   def testInferenceShape2(self):
+    # [FUNCTION DOC]
+    # Inference-mode forward check for shape one by one by six by two (two channels).
     x_shape = [1, 1, 6, 2]
     self._runtests(x_shape, False)
 
   def testInferenceShape3(self):
+    # [FUNCTION DOC]
+    # Inference-mode forward check for shape one by two by one by six.
     x_shape = [1, 2, 1, 6]
     self._runtests(x_shape, False)
 
   def testInferenceShape4(self):
+    # [FUNCTION DOC]
+    # Inference-mode forward check for a large shape, twenty-seven by 131 by 127 by six.
     x_shape = [27, 131, 127, 6]
     self._runtests(x_shape, False)
 
   def testInferenceShape5(self):
+    # [FUNCTION DOC]
+    # Inference-mode forward check for an empty batch (zero by 131 by 127 by six); the output
+    # should be empty and match the reference.
     x_shape = [0, 131, 127, 6]
     self._runtests(x_shape, False)
 
   def testInferenceShape6(self):
+    # [FUNCTION DOC]
+    # Inference-mode forward check for a one-by-one-by-one-by-one input, restricted to CPU
+    # because the GPU kernel mishandles inputs whose non-channel dimensions are all one.
     x_shape = [1, 1, 1, 1]
     # GPU kernel doesn't properly handle case where non-channel dimensions are 1
     self._runtests(x_shape, False, cpu_only=True)
 
   def testInferenceShape7(self):
+    # [FUNCTION DOC]
+    # Inference-mode forward check for a five-dimensional input of shape one by two by six by one
+    # by three, using the volumetric layouts.
     x_shape = [1, 2, 6, 1, 3]
     self._runtests(x_shape, False)
 
   def testTrainingShape1(self):
+    # [FUNCTION DOC]
+    # Training-mode forward check (output and running statistics) for shape one by one by six by
+    # one, over all dtype, device, layout and averaging factor combinations.
     x_shape = [1, 1, 6, 1]
     self._runtests(x_shape, True)
 
   def testTrainingShape2(self):
+    # [FUNCTION DOC]
+    # Training-mode forward check for shape one by one by six by two.
     x_shape = [1, 1, 6, 2]
     self._runtests(x_shape, True)
 
   def testTrainingShape3(self):
+    # [FUNCTION DOC]
+    # Training-mode forward check for shape one by two by one by six.
     x_shape = [1, 2, 1, 6]
     self._runtests(x_shape, True)
 
   def testTrainingShape4(self):
+    # [FUNCTION DOC]
+    # Training-mode forward check for a large shape, twenty-seven by 131 by 127 by six.
     x_shape = [27, 131, 127, 6]
     self._runtests(x_shape, True)
 
   @test_util.disable_xla('b/141236973: Empty inputs wrong on CPU.')
   def testTrainingShape5(self):
+    # [FUNCTION DOC]
+    # Training-mode forward check for an empty batch (zero by 131 by 127 by six); disabled under
+    # XLA because empty inputs give wrong results on its CPU backend.
     x_shape = [0, 131, 127, 6]
     self._runtests(x_shape, True)
 
   @test_util.run_deprecated_v1
   def testTrainingShape6(self):
+    # [FUNCTION DOC]
+    # Training-mode forward check for a one-by-one-by-one-by-one input, CPU only because the GPU
+    # kernel mishandles inputs whose non-channel dimensions are all one. Runs in legacy graph mode.
     x_shape = [1, 1, 1, 1]
     # GPU kernel doesn't properly handle case where non-channel dimensions are 1
     self._runtests(x_shape, True, cpu_only=True)
 
   def testTrainingShape7(self):
+    # [FUNCTION DOC]
+    # Training-mode forward check for a five-dimensional input of shape one by two by six by one
+    # by three.
     x_shape = [1, 2, 6, 1, 3]
     self._runtests(x_shape, True)
 
   @test_util.run_deprecated_v1
   def testBatchNormGradInferenceShape1(self):
+    # [FUNCTION DOC]
+    # Gradient check in inference mode for shape one by one by six by one; asserts numerical and
+    # symbolic gradient errors are within tolerance. Runs in legacy graph mode.
     x_shape = [1, 1, 6, 1]
     self._runtests(x_shape, is_training=False, gradient_test=True)
 
   @test_util.run_deprecated_v1
   def testBatchNormGradInferenceShape2(self):
+    # [FUNCTION DOC]
+    # Gradient check in inference mode for shape one by one by six by two.
     x_shape = [1, 1, 6, 2]
     self._runtests(x_shape, is_training=False, gradient_test=True)
 
   @test_util.run_deprecated_v1
   def testBatchNormGradInferenceShape3(self):
+    # [FUNCTION DOC]
+    # Gradient check in inference mode for shape one by two by one by six.
     x_shape = [1, 2, 1, 6]
     self._runtests(x_shape, is_training=False, gradient_test=True)
 
   @test_util.run_deprecated_v1
   def testBatchNormGradInferenceShape4(self):
+    # [FUNCTION DOC]
+    # Gradient check in inference mode for shape five by seven by eleven by four.
     x_shape = [5, 7, 11, 4]
     self._runtests(x_shape, is_training=False, gradient_test=True)
 
   @test_util.run_deprecated_v1
   @test_util.disable_xla('This test never passed for XLA')
   def testBatchNormGradInferenceShape5(self):
+    # [FUNCTION DOC]
+    # Gradient check in inference mode for an empty batch (zero by seven by eleven by four);
+    # disabled under XLA where this case never passed.
     x_shape = [0, 7, 11, 4]
     self._runtests(x_shape, is_training=False, gradient_test=True)
 
   @test_util.run_deprecated_v1
   def testBatchNormGradInferenceShape6(self):
+    # [FUNCTION DOC]
+    # Gradient check in inference mode for a one-by-one-by-one-by-one input, CPU only because the
+    # GPU kernel mishandles such inputs.
     x_shape = [1, 1, 1, 1]
     # GPU kernel doesn't properly handle case where non-channel dimensions are 1
     self._runtests(x_shape, is_training=False, gradient_test=True,
@@ -542,47 +668,74 @@ class BatchNormalizationTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testBatchNormGradInferenceShape7(self):
+    # [FUNCTION DOC]
+    # Gradient check in inference mode for a five-dimensional input of shape one by two by six by
+    # one by three.
     x_shape = [1, 2, 6, 1, 3]
     self._runtests(x_shape, is_training=False, gradient_test=True)
 
   @test_util.run_deprecated_v1
   def testBatchNormGradTrainingShape1(self):
+    # [FUNCTION DOC]
+    # Gradient check in training mode for shape one by one by six by one; asserts gradient errors
+    # for x, scale and offset are within tolerance. Runs in legacy graph mode.
     x_shape = [1, 1, 6, 1]
     self._runtests(x_shape, is_training=True, gradient_test=True)
 
   @test_util.run_deprecated_v1
   def testBatchNormGradTrainingShape2(self):
+    # [FUNCTION DOC]
+    # Gradient check in training mode for shape one by one by six by two.
     x_shape = [1, 1, 6, 2]
     self._runtests(x_shape, is_training=True, gradient_test=True)
 
   @test_util.run_deprecated_v1
   def testBatchNormGradTrainingShape3(self):
+    # [FUNCTION DOC]
+    # Gradient check in training mode for shape one by two by one by six.
     x_shape = [1, 2, 1, 6]
     self._runtests(x_shape, is_training=True, gradient_test=True)
 
   @test_util.run_deprecated_v1
   def testBatchNormGradTrainingShape4(self):
+    # [FUNCTION DOC]
+    # Gradient check in training mode for shape five by seven by eleven by four.
     x_shape = [5, 7, 11, 4]
     self._runtests(x_shape, is_training=True, gradient_test=True)
 
   @test_util.run_deprecated_v1
   @test_util.disable_xla('This test never passed for XLA')
   def testBatchNormGradTrainingShape5(self):
+    # [FUNCTION DOC]
+    # Gradient check in training mode for an empty batch (zero by seven by eleven by four);
+    # disabled under XLA where this case never passed.
     x_shape = [0, 7, 11, 4]
     self._runtests(x_shape, is_training=True, gradient_test=True)
 
   @test_util.run_deprecated_v1
   def testBatchNormGradTrainingShape6(self):
+    # [FUNCTION DOC]
+    # Gradient check in training mode for a one-by-one-by-one-by-one input, CPU only because the
+    # GPU kernel mishandles such inputs.
     x_shape = [1, 1, 1, 1]
     # GPU kernel doesn't properly handle case where non-channel dimensions are 1
     self._runtests(x_shape, is_training=True, gradient_test=True, cpu_only=True)
 
   @test_util.run_deprecated_v1
   def testBatchNormGradTrainingShape7(self):
+    # [FUNCTION DOC]
+    # Gradient check in training mode for a five-dimensional input of shape one by two by six by
+    # one by three.
     x_shape = [1, 2, 6, 1, 3]
     self._runtests(x_shape, is_training=True, gradient_test=True)
 
   def _testBatchNormGradGrad(self, config):
+    # [FUNCTION DOC]
+    # HELPER: shared driver for the second-order gradient tests. Input: a mapping with the input
+    # shape, error tolerance and dtype. Chooses channels-last and channels-first layouts by rank
+    # (four or five dimensions) and takes the channel count from the shape. For training on and
+    # off, runs the second-order check on CPU with both layouts, and also on GPU when one is
+    # available.
     shape = config['shape']
     err_tolerance = config['err_tolerance']
     dtype = config['dtype']
@@ -630,6 +783,9 @@ class BatchNormalizationTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testBatchNormGradGradConfig1(self):
+    # [FUNCTION DOC]
+    # Second-order gradient check for single precision, shape two by three by four by five,
+    # tolerance one hundredth.
     config = {
         'shape': [2, 3, 4, 5],
         'err_tolerance': 1e-2,
@@ -639,6 +795,9 @@ class BatchNormalizationTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testBatchNormGradGradConfig2(self):
+    # [FUNCTION DOC]
+    # Second-order gradient check for single precision, shape two by three by two by two,
+    # tolerance one thousandth.
     config = {
         'shape': [2, 3, 2, 2],
         'err_tolerance': 1e-3,
@@ -648,6 +807,9 @@ class BatchNormalizationTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testBatchNormGradGradConfig3(self):
+    # [FUNCTION DOC]
+    # Second-order gradient check for half precision, shape two by three by four by five,
+    # tolerance two hundredths.
     config = {
         'shape': [2, 3, 4, 5],
         'err_tolerance': 2e-2,
@@ -657,6 +819,9 @@ class BatchNormalizationTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testBatchNormGradGradConfig4(self):
+    # [FUNCTION DOC]
+    # Second-order gradient check for half precision, shape two by three by two by two, tolerance
+    # two thousandths.
     config = {
         'shape': [2, 3, 2, 2],
         'err_tolerance': 2e-3,
@@ -666,6 +831,9 @@ class BatchNormalizationTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testBatchNormGradGradConfig5(self):
+    # [FUNCTION DOC]
+    # Second-order gradient check for single precision on a five-dimensional input of shape two by
+    # three by two by two by two, tolerance two thousandths.
     config = {
         'shape': [2, 3, 2, 2, 2],
         'err_tolerance': 2e-3,
@@ -675,6 +843,9 @@ class BatchNormalizationTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testBatchNormGradGradConfig6(self):
+    # [FUNCTION DOC]
+    # Second-order gradient check for half precision on a five-dimensional input of shape two by
+    # three by two by two by two, tolerance three thousandths.
     config = {
         'shape': [2, 3, 2, 2, 2],
         'err_tolerance': 3e-3,
@@ -683,6 +854,11 @@ class BatchNormalizationTest(test.TestCase):
     self._testBatchNormGradGrad(config)
 
   def test5dBatchNormFollowedByRelu(self):
+    # [FUNCTION DOC]
+    # Regression test for a graph optimizer (remapper) bug with five-dimensional inference batch
+    # norm followed by a relu. Runs fused batch norm in inference mode on random numpy data in
+    # channels-first volumetric layout, applies relu, and asserts the result is close to the
+    # reference batch norm clipped at zero.
     # The remapper grappler pass previously did not properly handle a 5D
     # inference FusedBatchNorm followed by Relu. This asserts that this case is
     # correctly handled.
@@ -711,6 +887,11 @@ class BatchNormalizationTest(test.TestCase):
     self.assertAllClose(y_ref, y_val, atol=1e-3)
 
   def testEagerShapeErrors(self):
+    # [FUNCTION DOC]
+    # In eager mode, calls fused batch norm with mismatched parameter sizes and asserts an
+    # invalid-argument error with the expected message: scale with the wrong element count,
+    # offset with the wrong count, empty mean or variance in inference mode, and empty mean or
+    # variance when the exponential averaging factor is not one.
     with context.eager_mode():
       x = array_ops.ones((2, 2, 2, 2))
       scale = array_ops.ones((3,))
@@ -786,6 +967,11 @@ class BatchNormalizationTest(test.TestCase):
             exponential_avg_factor=0.5)
 
   def testEagerShapeGradErrors(self):
+    # [FUNCTION DOC]
+    # In eager mode, calls the version two fused batch norm gradient op with inconsistent shapes
+    # and asserts an invalid-argument error with the expected message: upstream gradient and x
+    # shapes differing, scale of the wrong size, and each of the two reserve-space inputs of the
+    # wrong size.
     with context.eager_mode():
       y_backprop = array_ops.ones((2, 2, 2, 3))
       x = array_ops.ones((2, 2, 2, 2))

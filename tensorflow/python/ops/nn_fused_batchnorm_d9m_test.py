@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Determinism tests for the fused batch normalization op. Checks that the forward pass and the
+# gradients are bit-for-bit reproducible across repeated runs, and that on GPU the backward pass
+# with training disabled raises an unimplemented-error when deterministic ops are enabled. The
+# main entry point enables op determinism before running the tests. Complements
+# nn_fused_batchnorm_test.py, which runs equivalent cases without determinism. Imports the fused
+# batch norm gradient from nn_grad only to register it.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,6 +39,12 @@ from tensorflow.python.platform import test
 @test_util.run_all_in_graph_and_eager_modes
 class FusedBatchNormalizationDeterministicTest(test.TestCase,
                                                parameterized.TestCase):
+  # [CLASS DOC]
+  # KNOWN ISSUE: the docstring contains a typo (determinsitic); determinism is only enabled when
+  # the file runs as the main program, so under other runners the tests do not exercise
+  # deterministic mode.
+  # Parameterized test case (run in both graph and eager modes) for fused batch norm determinism
+  # on CPU and GPU, for NHWC and NCHW layouts. Provides a parameter generator and two tests.
   """Test determinsitic functionality and exceptions for FusedBatchNorm.
 
   Test that tf.errors.UnimplementedError is thrown, as
@@ -46,6 +59,14 @@ class FusedBatchNormalizationDeterministicTest(test.TestCase,
   """
 
   def _genParams(self, data_format, x_dtype, large_batch):
+    # [FUNCTION DOC]
+    # HELPER: generates random test inputs. Inputs: layout (channels last or channels first), dtype
+    # of x, and a flag selecting a large batch of small images or a small batch of very wide
+    # images. Uses three channels. Returns a tuple of x, scale and offset constants (scale and
+    # offset single precision), mean and variance (numpy random arrays; variance may be negative
+    # since it is drawn from a normal distribution) and upstream gradients with the shape and
+    # dtype of x. Uses numpy randomness so values differ between runs but not between calls to
+    # the op.
     if large_batch:
       batch_size = 5000
       height = width = 4
@@ -75,6 +96,11 @@ class FusedBatchNormalizationDeterministicTest(test.TestCase,
 
   @parameterized.parameters('NHWC', 'NCHW')
   def testForward(self, data_format):
+    # [FUNCTION DOC]
+    # Parameterized over NHWC and NCHW. For both batch configurations, half and single precision,
+    # and training on and off, runs the fused batch norm once, then five more times with the same
+    # inputs and asserts the output is exactly equal each time; when training, also asserts the
+    # running mean and variance outputs are exactly equal.
     with self.cached_session():
       for large_batch in [False, True]:
         for x_dtype in [dtypes.float16, dtypes.float32]:  # skipping bfloat16
@@ -117,6 +143,17 @@ class FusedBatchNormalizationDeterministicTest(test.TestCase,
   @parameterized.parameters('NHWC', 'NCHW')
   @test_util.disable_xla('XLA is deterministic')
   def testBackward(self, data_format):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the in-body comment says only the offset gradient is nondeterministic on GPU
+    # with training off, but the test expects the error for the gradient with respect to x,
+    # scale and offset alike.
+    # Parameterized over NHWC and NCHW; skipped for XLA. Uses single precision only. For both
+    # batch configurations, training on and off, and each of x, scale and offset as the target,
+    # records the op under a persistent gradient tape with an upstream gradient injected. If a GPU
+    # exists and training is off, asserts evaluating the gradient raises an unimplemented error
+    # saying a deterministic GPU implementation of batch norm backprop with training disabled is
+    # unavailable. Otherwise computes the gradient once and three more times and asserts all are
+    # exactly equal.
     with self.cached_session():
       for large_batch in [False, True]:
         # Only run with float32, as float16 is very slow on CPUs
