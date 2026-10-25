@@ -1,3 +1,18 @@
+# [MODULE DOC]
+# Core implementation of the public structure utilities (the nest API) for TensorFlow. It exposes
+# functions to test whether a value is a nested structure, flatten a structure into a list of
+# atoms, pack a flat list back into a structure, check that two structures match, map a function
+# over the atoms of one or more structures, work with "shallow" structures (partial flattening and
+# mapping up to a given depth), and obtain paths (tuples or joined strings) to each atom.
+# Almost every function is a thin wrapper that delegates to the shared helper module nest_util
+# using its "core" modality, or to native extension functions (pywrap nest / pywrap utils).
+# Several functions are registered through the API export decorator under the public nest
+# namespace or the internal nest namespace.
+# Import-time side effects: only API-export registration of decorated functions and the creation
+# of module-level aliases (error message constants and predicate aliases borrowed from nest_util
+# and the native utils module). No flags or global mutable state are created.
+# Not a helper module: it is the main user-facing nest module, also used internally by tf.data,
+# Keras and the function tracing code.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -121,15 +136,30 @@ same_namedtuples = nest_util.same_namedtuples
 
 
 def _yield_value(iterable):
+  # [FUNCTION DOC]
+  # HELPER: private shim over nest_util used when iterating the children of a structure.
+  # Takes one nested structure (iterable) and returns whatever nest_util's value iterator gives
+  # for the core modality: the child values in the canonical order (dictionaries are iterated in
+  # sorted key order). Raises whatever nest_util raises (for example a type error for dictionaries
+  # whose keys cannot be sorted). No side effects.
   return nest_util.yield_value(nest_util.Modality.CORE, iterable)
 
 
 def _yield_sorted_items(iterable):
+  # [FUNCTION DOC]
+  # HELPER: private shim over nest_util used when iterating (key, value) pairs of a structure.
+  # Takes one nested structure (iterable) and returns the iterator produced by nest_util for the
+  # core modality, yielding (key or index, child) pairs in the canonical order (sorted by key for
+  # mappings). Errors from nest_util propagate unchanged. No side effects.
   return nest_util.yield_sorted_items(nest_util.Modality.CORE, iterable)
 
 
 @tf_export("__internal__.nest.is_mapping", v1=[])
 def is_mapping(obj):
+  # [FUNCTION DOC]
+  # Reports whether obj is a mapping (an instance of the standard mapping abstract type, such as
+  # a dictionary). Input: any value. Output: a boolean from the native utils predicate. Never
+  # raises for ordinary values and has no side effects. Exported under the internal nest API.
   """Returns a true if its input is a collections.Mapping."""
   return _is_mapping(obj)
 
@@ -137,12 +167,24 @@ def is_mapping(obj):
 # TODO(b/225045380): Move to a "leaf" library to use in trace_type.
 @tf_export("__internal__.nest.is_attrs", v1=[])
 def is_attrs(obj):
+  # [FUNCTION DOC]
+  # Reports whether obj is an instance of a class decorated with the attrs library's class
+  # decorator. Input: any value. Output: a boolean from the native utils predicate. No exceptions
+  # for ordinary values and no side effects. Exported under the internal nest API.
   """Returns a true if its input is an instance of an attr.s decorated class."""
   return _is_attrs(obj)
 
 
 @tf_export("__internal__.nest.sequence_like", v1=[])
 def _sequence_like(instance, args):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the function has a private (underscore) name yet is registered in the exported
+  # API under the internal name "sequence_like", so the public alias and the module name differ.
+  # Rebuilds a structure of the same kind as instance (tuple, list, named tuple, dictionary,
+  # ordered dictionary, composite tensor or type spec) out of the items in args. Inputs: instance
+  # is the template whose type is copied; args is the sequence of new items. Output: a new
+  # container of instance's type holding args; delegates to nest_util, which raises on
+  # unsupported types or mismatched item counts. No side effects.
   """Converts the sequence `args` to the same type as `instance`.
 
   Args:
@@ -162,6 +204,12 @@ _is_nested_or_composite = _pywrap_utils.IsNestedOrComposite
 
 @tf_export("nest.is_nested")
 def is_nested(seq):
+  # [FUNCTION DOC]
+  # Public predicate telling whether seq is a nested structure (list, tuple, named tuple,
+  # mapping, mapping view, attrs instance, or a class implementing the flatten/unflatten
+  # protocol) rather than an atom. Strings, bytes, sets, tensors and arrays are atoms.
+  # Input: any value. Output: a boolean. Delegates to nest_util with the core modality; no side
+  # effects. Exported as the public nest.is_nested.
   """Returns true if its input is a nested structure.
 
   Refer to [tf.nest](https://www.tensorflow.org/api_docs/python/tf/nest)
@@ -177,6 +225,10 @@ def is_nested(seq):
 
 
 def is_nested_or_composite(seq):
+  # [FUNCTION DOC]
+  # Like is_nested, but also returns true for composite tensors (sparse tensors, ragged tensors
+  # and similar) and type specs, which can be expanded into component tensors.
+  # Input: any value. Output: a boolean from the native predicate. No side effects.
   """Returns true if its input is a nested structure or a composite.
 
   Refer to [tf.nest](https://www.tensorflow.org/api_docs/python/tf/nest)
@@ -192,11 +244,24 @@ def is_nested_or_composite(seq):
 
 
 def is_sequence_or_composite(seq):
+  # [FUNCTION DOC]
+  # HELPER: legacy alias kept for older callers that used the former "sequence" terminology.
+  # KNOWN ISSUE: it has no docstring and duplicates is_nested_or_composite exactly (same native
+  # predicate), despite the name suggesting only sequences are considered.
+  # Input: any value. Output: true if it is a nested structure or composite. No side effects.
   return _is_nested_or_composite(seq)
 
 
 @tf_export("nest.flatten")
 def flatten(structure, expand_composites=False):
+  # [FUNCTION DOC]
+  # Flattens a structure into a plain list of its atoms in a deterministic depth-first order.
+  # Dictionaries (including ordered ones) are traversed in sorted key order. An atom input gives
+  # a one-item list; numpy arrays and strings are atoms.
+  # Inputs: structure is an atom or nested structure; expand_composites (optional, default false)
+  # when true also splits composite tensors into their component tensors.
+  # Output: a new list. Raises a type error if a dictionary in the structure has keys that
+  # cannot be sorted. Delegates to nest_util with the core modality; no side effects.
   """Returns a flat list from a given structure.
 
   Refer to [tf.nest](https://www.tensorflow.org/api_docs/python/tf/nest)
@@ -298,7 +363,16 @@ def flatten(structure, expand_composites=False):
 @tf_export("nest.assert_same_structure")
 def assert_same_structure(nest1, nest2, check_types=True,
                           expand_composites=False):
+  # [FUNCTION DOC]
+  # Validates that two structures have the same nesting layout; atom types and values are not
+  # compared. Inputs: nest1 and nest2 are the structures; check_types (optional, default true)
+  # also requires equal container types at each level (for example list versus tuple, or
+  # different dictionary kinds); expand_composites (optional, default false) treats composite
+  # tensors as structures of their components. Output: returns nothing.
+  # Raises a value error if atom counts or layouts differ, and a type error if container types
+  # differ while check_types is true. Delegates to nest_util; no side effects.
   """Asserts that two structures are nested in the same way.
+
 
   Refer to [tf.nest](https://www.tensorflow.org/api_docs/python/tf/nest)
   for the definition of a structure.
@@ -388,6 +462,14 @@ def assert_same_structure(nest1, nest2, check_types=True,
 
 
 def flatten_dict_items(dictionary):
+  # [FUNCTION DOC]
+  # Flattens both keys and values of a dictionary whose keys and values are nested structures of
+  # identical layout, pairing flattened keys with flattened values into a single flat dictionary.
+  # Input: dictionary, a mapping whose keys and values share the same structure and whose
+  # flattened keys are all unique. Output: a new flat dictionary. Raises a type error if the
+  # input is not a dictionary, and a value error if a key and value differ in layout or the
+  # flattened keys repeat. The work is done by the native nest extension; no side effects.
+  # Not exported through the public API decorator.
   """Returns a dictionary with flattened keys and values.
 
   This function flattens the keys and values of a dictionary, which can be
@@ -422,6 +504,16 @@ def flatten_dict_items(dictionary):
 
 @tf_export("nest.pack_sequence_as")
 def pack_sequence_as(structure, flat_sequence, expand_composites=False):
+  # [FUNCTION DOC]
+  # Inverse of flatten: rebuilds a structure shaped like the template structure from a flat
+  # sequence of atoms. Dictionaries are filled in sorted key order, so a flattened ordered
+  # dictionary can be repacked into a plain dictionary and vice versa.
+  # Inputs: structure is the template (an atom template requires a single-item flat_sequence and
+  # returns that item); flat_sequence is the flat list of atoms; expand_composites (optional,
+  # default false) treats composite tensors as structures of their components.
+  # Output: a new structure of the template's shape holding the supplied atoms.
+  # Raises a value error if the atom count differs from the template, and a type error if a
+  # dictionary has non-sortable keys. Delegates to nest_util; no side effects.
   """Returns a given flattened sequence packed into a given structure.
 
   Refer to [tf.nest](https://www.tensorflow.org/api_docs/python/tf/nest)
@@ -541,6 +633,16 @@ def pack_sequence_as(structure, flat_sequence, expand_composites=False):
 
 @tf_export("nest.map_structure")
 def map_structure(func, *structure, **kwargs):
+  # [FUNCTION DOC]
+  # Applies func to the corresponding atoms of one or more structures and returns a new structure
+  # of the same layout holding the results.
+  # Inputs: func is a callable taking one argument per input structure; structure is one or more
+  # structures with the same arity; keyword options are check_types (default true, require equal
+  # container types) and expand_composites (default false); any other keyword raises a value
+  # error. Output: a new structure with func results in place of the atoms.
+  # Raises a type error if func is not callable or if structures differ in type, and a value
+  # error for wrong keywords or mismatched layouts. Side effects are only those of func.
+  # Delegates to nest_util.
   """Creates a new structure by applying `func` to each atom in `structure`.
 
   Refer to [tf.nest](https://www.tensorflow.org/api_docs/python/tf/nest)
@@ -631,6 +733,15 @@ def map_structure(func, *structure, **kwargs):
 
 
 def map_structure_with_paths(func, *structure, **kwargs):
+  # [FUNCTION DOC]
+  # Like map_structure, but func receives a string path as its first argument: the tuple path to
+  # each atom with its elements converted to text and joined by a slash.
+  # Inputs: func is a callable taking the path string followed by one atom per structure;
+  # structure is one or more compatible structures (the first one defines the layout); keyword
+  # arguments are passed to func except check_types, which controls type matching (default true).
+  # Output: a new structure with the results of func. Raises a type error for non-callable func or
+  # mismatched structures and a value error if no structures are given.
+  # Implemented through the up-to mapping routine in nest_util; side effects are only func's.
   """Applies `func` to each entry in `structure` and returns a new structure.
 
   Applies `func(path, x[0], x[1], ..., **kwargs)` where x[i] is an entry in
@@ -663,6 +774,12 @@ def map_structure_with_paths(func, *structure, **kwargs):
     ValueError: If no structures are provided.
   """
   def wrapper_func(tuple_path, *inputs, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: adapter used by map_structure_with_paths to turn tuple paths into string paths.
+    # Receives the tuple path, the atoms and extra keyword arguments from the mapping routine,
+    # joins the stringified path elements with a slash, and returns the result of calling the
+    # user function with the string path, the atoms and the keyword arguments. Exceptions from the
+    # user function propagate. No other side effects.
     string_path = "/".join(str(s) for s in tuple_path)
     return func(string_path, *inputs, **kwargs)
 
@@ -672,6 +789,14 @@ def map_structure_with_paths(func, *structure, **kwargs):
 
 
 def map_structure_with_tuple_paths(func, *structure, **kwargs):
+  # [FUNCTION DOC]
+  # Like map_structure, but func receives the tuple path (indices and dictionary keys) to each
+  # atom as its first argument, followed by the corresponding atoms of every structure.
+  # Inputs: func is the callable; structure is one or more compatible structures (the first
+  # defines the layout); keyword arguments go to func except check_types (default true), which
+  # controls whether container types must match. Output: a new structure of func results.
+  # Raises a type error for non-callable func or mismatched structures, and a value error if no
+  # structures are given. Delegates to nest_util; side effects are only func's.
   """Applies `func` to each entry in `structure` and returns a new structure.
 
   Applies `func(tuple_path, x[0], x[1], ..., **kwargs)` where `x[i]` is an entry
@@ -713,7 +838,16 @@ def assert_shallow_structure(shallow_tree,
                              input_tree,
                              check_types=True,
                              expand_composites=False):
+  # [FUNCTION DOC]
+  # Checks that input_tree can be obtained from shallow_tree by replacing its leaves with deeper
+  # structures. Inputs: shallow_tree and input_tree are structures; check_types (optional,
+  # default true) requires equal container types where both are structures; expand_composites
+  # (optional, default false) expands composite tensors. Output: returns nothing.
+  # Raises a type error if shallow_tree is a structure but input_tree is not, or if container
+  # types differ while checking types, and a value error if lengths or dictionary keys differ.
+  # Delegates to nest_util; no side effects.
   """Asserts that `shallow_tree` is a shallow structure of `input_tree`.
+
 
   That is, this function tests if the `input_tree` structure can be created from
   the `shallow_tree` structure by replacing its leaf nodes with deeper
@@ -764,6 +898,15 @@ def assert_shallow_structure(shallow_tree,
 @tf_export("__internal__.nest.flatten_up_to", v1=[])
 def flatten_up_to(shallow_tree, input_tree, check_types=True,
                   expand_composites=False):
+  # [FUNCTION DOC]
+  # Partially flattens input_tree, descending only as deep as shallow_tree; anything deeper
+  # stays intact as a sub-structure in the output list. If both are atoms the result is a
+  # one-item list holding input_tree.
+  # Inputs: shallow_tree defines the depth; input_tree is the structure to flatten;
+  # check_types (optional, default true) requires matching container types; expand_composites
+  # (optional, default false) expands composite tensors. Output: a new list.
+  # Raises a type error if shallow_tree is a structure but input_tree is not, or on container
+  # type mismatch, and a value error on length mismatch. Delegates to nest_util; no side effects.
   """Flattens `input_tree` up to `shallow_tree`.
 
   Refer to [tf.nest](https://www.tensorflow.org/api_docs/python/tf/nest)
@@ -853,7 +996,16 @@ def flatten_with_tuple_paths_up_to(shallow_tree,
                                    input_tree,
                                    check_types=True,
                                    expand_composites=False):
+  # [FUNCTION DOC]
+  # Same partial flattening as flatten_up_to, but returns each leaf together with its path.
+  # Inputs: shallow_tree defines the depth; input_tree is the structure flattened; check_types
+  # (optional, default true) requires matching container types; expand_composites (optional,
+  # default false) expands composite tensors. Output: a list of pairs of (tuple path into
+  # input_tree, value); two atoms give a single pair with an empty path. First verifies the
+  # shallow relation, so it raises the same type and value errors as assert_shallow_structure.
+  # No side effects.
   """Flattens `input_tree` up to `shallow_tree`.
+
 
   Any further depth in structure in `input_tree` is retained as structures in
   the partially flattened output.
@@ -959,6 +1111,15 @@ def flatten_with_tuple_paths_up_to(shallow_tree,
 
 @tf_export("__internal__.nest.map_structure_up_to", v1=[])
 def map_structure_up_to(shallow_tree, func, *inputs, **kwargs):
+  # [FUNCTION DOC]
+  # Applies func to inputs that are flattened only up to the depth of shallow_tree, so func may
+  # receive whole sub-structures. Inputs: shallow_tree defines the result layout; func is a
+  # callable taking one argument per input; inputs are one or more structures that have
+  # shallow_tree as a shallow structure; keyword arguments are forwarded to the mapping routine
+  # (for example check_types and expand_composites). Output: a structure shaped like
+  # shallow_tree holding func results. Errors for mismatched structures come from nest_util.
+  # The path argument produced internally is discarded before calling func.
+  # Side effects are only func's.
   """Applies a function or op to a number of partially flattened inputs.
 
   The `inputs` are flattened up to `shallow_tree` before being mapped.
@@ -1041,6 +1202,14 @@ def map_structure_up_to(shallow_tree, func, *inputs, **kwargs):
 
 
 def map_structure_with_tuple_paths_up_to(shallow_tree, func, *inputs, **kwargs):
+  # [FUNCTION DOC]
+  # Like map_structure_up_to, but func gets the tuple path of each shallow leaf as its first
+  # argument, followed by the matching sub-structures of every input.
+  # Inputs: shallow_tree defines depth and result layout; func is the callable; inputs are one
+  # or more structures; keyword arguments (such as check_types and expand_composites) are passed
+  # to the mapping routine. Output: a structure shaped like shallow_tree holding func results.
+  # Raises type or value errors from nest_util for mismatched structures. Side effects are only
+  # func's.
   """Applies a function or op to a number of partially flattened inputs.
 
   Like map_structure_up_to(), except that the 'func' argument takes a path
@@ -1115,6 +1284,18 @@ def map_structure_with_tuple_paths_up_to(shallow_tree, func, *inputs, **kwargs):
 @tf_export("__internal__.nest.get_traverse_shallow_structure", v1=[])
 def get_traverse_shallow_structure(traverse_fn, structure,
                                    expand_composites=False):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: when traverse_fn returns a partial (per-child) structure, the recursive call for
+  # allowed children does not pass expand_composites along, so nested composites are treated with
+  # the default (not expanded) setting at deeper levels.
+  # Builds a shallow structure of booleans telling which parts of structure may be traversed.
+  # Inputs: traverse_fn is a callable given any sub-structure that returns either a single boolean
+  # (traverse all or nothing) or a depth-one structure of booleans for its children; structure is
+  # the structure to examine; expand_composites (optional, default false) expands composites.
+  # Output: a boolean for an atom or a fully allowed/denied structure, else a structure of the
+  # same type holding booleans or nested results.
+  # Raises a type error if traverse_fn returns a non-boolean for an atom, a non-boolean scalar
+  # for a structure, or a depth-one result whose leaves are not booleans. Calls traverse_fn.
   """Generates a shallow structure from a `traverse_fn` and `structure`.
 
   `traverse_fn` must accept any possible subtree of `structure` and return
@@ -1187,6 +1368,12 @@ def get_traverse_shallow_structure(traverse_fn, structure,
 
 @tf_export("__internal__.nest.yield_flat_paths", v1=[])
 def yield_flat_paths(nest, expand_composites=False):
+  # [FUNCTION DOC]
+  # Generator over the paths of all atoms in a structure, in the same order as flatten.
+  # Inputs: nest is the value to inspect; expand_composites (optional, default false) expands
+  # composite tensors. Yields: one tuple of indices and/or dictionary keys per atom (an atom
+  # input yields a single empty tuple). Errors such as non-sortable dictionary keys surface as
+  # the generator is consumed. No side effects.
   """Yields paths for some nested structure.
 
   Refer to [tf.nest](https://www.tensorflow.org/api_docs/python/tf/nest)
@@ -1234,6 +1421,13 @@ def yield_flat_paths(nest, expand_composites=False):
 
 def flatten_with_joined_string_paths(structure, separator="/",
                                      expand_composites=False):
+  # [FUNCTION DOC]
+  # Flattens a structure into a list of pairs of (string path, atom), in the same order as
+  # flatten. Each string path is the path elements converted to text and joined by the separator.
+  # Inputs: structure is the nested structure; separator (optional, default a slash) joins path
+  # elements; expand_composites (optional, default false) expands composite tensors.
+  # Output: a new list of pairs. Errors (for example non-sortable dictionary keys) propagate from
+  # the path and flatten routines. No side effects.
   """Returns a list of (string path, atom) tuples.
 
   The order of tuples produced matches that of `nest.flatten`. This allows you
@@ -1254,6 +1448,10 @@ def flatten_with_joined_string_paths(structure, separator="/",
   """
   flat_paths = yield_flat_paths(structure, expand_composites=expand_composites)
   def stringify_and_join(path_elements):
+    # [FUNCTION DOC]
+    # HELPER: nested formatter for flatten_with_joined_string_paths.
+    # Takes one tuple path, converts each element to text and returns them joined by the
+    # enclosing function's separator. No side effects.
     return separator.join(str(path_element) for path_element in path_elements)
 
   flat_string_paths = (stringify_and_join(path) for path in flat_paths)
@@ -1262,6 +1460,12 @@ def flatten_with_joined_string_paths(structure, separator="/",
 
 
 def flatten_with_tuple_paths(structure, expand_composites=False):
+  # [FUNCTION DOC]
+  # Flattens a structure into a list of pairs of (tuple path, atom), in flatten order.
+  # Inputs: structure is the nested structure; expand_composites (optional, default false)
+  # expands composite tensors. Output: a new list; each tuple path holds the indices and
+  # dictionary keys leading to the atom. Errors propagate from the path and flatten routines.
+  # No side effects.
   """Returns a list of `(tuple_path, atom)` tuples.
 
   The order of pairs produced matches that of `nest.flatten`. This allows you
@@ -1287,6 +1491,13 @@ def flatten_with_tuple_paths(structure, expand_composites=False):
 
 @tf_export("__internal__.nest.list_to_tuple", v1=[])
 def list_to_tuple(structure):
+  # [FUNCTION DOC]
+  # Returns a copy of structure in which every list, at any depth, is replaced by a tuple; other
+  # container types are kept as they are. Used where lists must be treated as atoms-like tuples
+  # (for example before creating datasets from generators).
+  # Input: structure, a nested structure. Output: the rebuilt structure. Flattens the structure
+  # and repacks it with a custom rebuild callback, so errors such as non-sortable dictionary keys
+  # propagate. No side effects.
   """Replace all lists with tuples.
 
   The fork of nest that tf.data uses treats lists as atoms, while
@@ -1301,6 +1512,10 @@ def list_to_tuple(structure):
     structure mapped to replace all lists with tuples.
   """
   def sequence_fn(instance, args):
+    # [FUNCTION DOC]
+    # HELPER: rebuild callback for list_to_tuple. Given the template container instance and its
+    # new items args, returns a tuple if the template is a list, otherwise the container rebuilt
+    # in the template's own type via nest_util. No side effects.
     if isinstance(instance, list):
       return tuple(args)
     return nest_util.sequence_like(instance, args)
