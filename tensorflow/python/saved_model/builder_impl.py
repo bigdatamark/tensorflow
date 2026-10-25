@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Implementation of the TensorFlow 1 style SavedModel builder. Defines the internal base builder
+# (_SavedModelBuilder, exported as an internal API) and the public SavedModelBuilder (exported
+# for v1 only) which adds deprecated main-op and legacy-init-op handling and asset collections,
+# plus module-level helpers that save asset references into a meta graph or graph collection,
+# deduplicate asset file names and copy asset files into the export directory. The public
+# module builder.py re-exports the classes. Import-time effects: API export registration.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -46,6 +53,15 @@ _SAVE_BUILDER_LABEL = "save_v1_builder"
 # internally. Please use tf.compat.v1.saved_model.SavedModelBuilder instead.
 @tf_export("__internal__.saved_model.SavedModelBuilder", v1=[])
 class _SavedModelBuilder(object):
+  # [CLASS DOC]
+  # Builder that accumulates meta graphs (graph, tags, signatures, assets) into a SavedModel
+  # protocol buffer and writes it, along with variables and assets, to an export directory.
+  # State: the SavedModel message being built (schema version set at construction), the export
+  # directory, a flag recording whether variables were saved (the first meta graph must be added
+  # with variables, later ones without) and the set of asset files already copied. The
+  # constructor creates the directory or requires an existing one to be empty. This base class
+  # takes asset lists and init and train ops that are put into signature definitions; the public
+  # subclass changes that interface. Intended for graph mode with sessions.
   """Builds the `SavedModel` protocol buffer and saves variables and assets.
 
   The `SavedModelBuilder` class provides the functionality to build a
@@ -92,6 +108,12 @@ class _SavedModelBuilder(object):
   """
 
   def __init__(self, export_dir):
+    # [FUNCTION DOC]
+    # Creates an empty SavedModel message with the current schema version and prepares the
+    # export directory (a string path). If the path exists and is non-empty raises an assertion
+    # error asking for a different or emptied directory; if it does not exist it is created
+    # recursively. Initializes the flag for saved variables to false and the set of copied
+    # asset files to empty. Side effect: file system directory creation.
     self._saved_model = saved_model_pb2.SavedModel()
     self._saved_model.saved_model_schema_version = (
         constants.SAVED_MODEL_SCHEMA_VERSION)
@@ -115,6 +137,13 @@ class _SavedModelBuilder(object):
     self._saved_asset_files = set()
 
   def _save_and_write_assets(self, meta_graph_def, assets_list=None):
+    # [FUNCTION DOC]
+    # HELPER: asset handling for the add-meta-graph methods of this builder.
+    # Records each asset tensor of assets_list (optional list of constant string tensors holding
+    # file paths) as an asset entry in the given meta graph def, then copies the asset files into
+    # the export directory assets folder, skipping files already copied by this builder. Logs and
+    # returns nothing when there are no assets. May raise a type or value error from asset
+    # validation. Mutates the meta graph def and the builder's copied-files set.
     """Saves asset to the meta graph and writes asset files to disk.
 
     Args:
@@ -135,6 +164,12 @@ class _SavedModelBuilder(object):
                                    self._saved_asset_files)
 
   def _tag_and_add_meta_graph(self, meta_graph_def, tags, signature_def_map):
+    # [FUNCTION DOC]
+    # HELPER: final step shared by the add-meta-graph methods.
+    # Appends every tag to the meta info of the given meta graph def, copies each entry of the
+    # signature def map (mapping from key to signature definition, may be the null value) into
+    # it, then adds a copy of the meta graph def to the SavedModel message. Mutates both the
+    # argument and the builder state; returns nothing.
     """Tags the meta graph def and adds it to the SavedModel.
 
     Tags the meta graph def with the supplied tags, adds signature defs to it if
@@ -157,6 +192,12 @@ class _SavedModelBuilder(object):
     proto_meta_graph_def.CopyFrom(meta_graph_def)
 
   def _validate_tensor_info(self, tensor_info):
+    # [FUNCTION DOC]
+    # HELPER: validation of signature definitions.
+    # Checks a tensor info message: it must not be null, must have an encoding set, and (unless
+    # the encoding is composite, in which case each component is validated recursively) must
+    # have a valid dtype. Raises an assertion error describing the problem otherwise. Returns
+    # nothing.
     """Validates the `TensorInfo` proto.
 
     Checks if the `encoding` (`name` or `coo_sparse` or `type_spec`) and
@@ -188,6 +229,11 @@ class _SavedModelBuilder(object):
           " the SignatureDefs must have the dtype field set.")
 
   def _validate_signature_def_map(self, signature_def_map):
+    # [FUNCTION DOC]
+    # HELPER: validation of the signature definitions passed by the user.
+    # Validates every input and output tensor info of every signature in the mapping (assertion
+    # error if invalid) and then raises a key error if the mapping uses the reserved init op or
+    # train op signature keys. Returns nothing.
     """Validates the `SignatureDef` entries in the signature def map.
 
     Validation of entries in the signature def map includes ensuring that the
@@ -220,6 +266,10 @@ class _SavedModelBuilder(object):
           f"reserved for the train op. Please use a different key.")
 
   def _maybe_create_saver(self, saver=None):
+    # [FUNCTION DOC]
+    # HELPER: default saver factory.
+    # Returns the supplied saver if it is truthy; otherwise creates and returns a sharded saver
+    # using the V2 format over all saveable objects in the current graph, allowing an empty set.
     """Creates a sharded saver if one does not already exist."""
     if not saver:
       # Initialize a saver to generate a sharded output for all saveables in the
@@ -239,6 +289,18 @@ class _SavedModelBuilder(object):
                      init_op=None,
                      train_op=None,
                      saver=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says an assertion error is raised if the graph already contains
+    # legacy init ops, but this method does not check for that; it also mutates the caller's
+    # signature def map when a non-empty mapping is passed, because init and train op entries are
+    # added to it in place.
+    # Adds the current graph as another meta graph, without saving variables. Requires that
+    # variables were already saved through the add-with-variables method, otherwise raises an
+    # assertion error. Inputs: tags (set of tags), optional signature def map, assets list,
+    # clear devices flag, init op and train op (turned into reserved signature entries), and an
+    # optional saver (a sharded default is made when missing). Validates signatures, exports the
+    # meta graph def from the saver (stripping default attributes), writes assets, then tags and
+    # appends it. Returns nothing.
     """Adds the current meta graph to the SavedModel.
 
     Creates a Saver in the current scope and uses the Saver to export the meta
@@ -313,6 +375,17 @@ class _SavedModelBuilder(object):
                                    train_op=None,
                                    strip_default_attrs=False,
                                    saver=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring has no Raises section, but an assertion error is raised if
+    # variables were already saved; the caller's signature def map is mutated in place when a
+    # non-empty mapping is passed.
+    # Adds the current graph as the first meta graph and saves variables from the session. Inputs:
+    # session, tags, optional signature def map, assets list, clear devices flag, init op and
+    # train op (put in reserved signature entries), strip default attributes flag and optional
+    # saver. Raises an assertion error if variables were already saved. Validates signatures,
+    # creates the variables directory, saves variables via the saver without a checkpoint state or
+    # meta graph file, exports the meta graph def, writes assets, tags and appends it, and marks
+    # variables as saved. Returns nothing. Side effects: files written to the export directory.
     # pylint: disable=line-too-long
     """Adds the current meta graph to the SavedModel and saves variables.
 
@@ -398,6 +471,15 @@ class _SavedModelBuilder(object):
 
   def save(self, as_text=False, experimental_image_format=False,
            experimental_image_writer_options=None):
+    # [FUNCTION DOC]
+    # Writes the accumulated SavedModel message to the export directory (created if missing) and
+    # returns the path written. Inputs: as_text writes a text file instead of binary;
+    # experimental_image_format uses the proto splitter to write possibly chunked output (needed
+    # for models above 2 GiB) with optional experimental_image_writer_options. Raises a runtime
+    # error if the splitter is requested but not available (the case in open source builds).
+    # Binary output is serialized deterministically. Records write metrics, logs the path and
+    # returns it (the text and plain binary branches yield a byte string path, the splitter
+    # branch whatever the splitter returns).
     """Writes a `SavedModel` protocol buffer to disk.
 
     The function writes the SavedModel protocol buffer to the export directory
@@ -473,14 +555,29 @@ class _SavedModelBuilder(object):
 
 @tf_export(v1=["saved_model.Builder", "saved_model.builder.SavedModelBuilder"])  # pylint: disable=missing-docstring
 class SavedModelBuilder(_SavedModelBuilder):
+  # [CLASS DOC]
+  # Public v1 builder (exported as the compat v1 saved model builder). Extends the internal
+  # builder with the older interface: assets are given as a graph collection argument, and the
+  # main op (or deprecated legacy init op) and train op are stored in graph collections rather
+  # than signature definitions. Overrides add_meta_graph and add_meta_graph_and_variables and
+  # the asset saving routine. Its class documentation is the base documentation with the asset
+  # argument name replaced; method docs are copied the same way after the class body.
   __doc__ = (_SavedModelBuilder.__doc__ or "").replace(
       "assets_list", "assets_collection"
   )
 
   def __init__(self, export_dir):
+    # [FUNCTION DOC]
+    # Constructor that only forwards the export directory to the base builder constructor, which
+    # validates or creates the directory.
     super(SavedModelBuilder, self).__init__(export_dir=export_dir)
 
   def _add_collections(self, assets_collection, main_op, train_op):
+    # [FUNCTION DOC]
+    # HELPER: groups the graph-collection updates done before exporting a meta graph.
+    # Saves and copies the assets in the given collection (list of constant string tensors or
+    # null), then adds the main op and the train op to their graph collections after validating
+    # them. Returns nothing; may raise type or value errors from those steps.
     """Add asset and op collections to be saved."""
     # Save asset files and write them to disk, if any.
     self._save_and_write_assets(assets_collection)
@@ -490,6 +587,12 @@ class SavedModelBuilder(_SavedModelBuilder):
     self._add_train_op(train_op)
 
   def _save_and_write_assets(self, assets_collection_to_add=None):
+    # [FUNCTION DOC]
+    # HELPER: override of the base asset handling that records assets in the graph collection
+    # rather than in a meta graph def.
+    # Adds each asset to the graph asset collection, and then copies the asset files to the
+    # export directory assets folder (skipping ones already copied). Logs and returns when there
+    # are no assets. Returns nothing.
     """Saves asset to the meta graph and writes asset files to disk.
 
     Args:
@@ -510,6 +613,11 @@ class SavedModelBuilder(_SavedModelBuilder):
                                    self._saved_asset_files)
 
   def _maybe_add_main_op(self, main_op):
+    # [FUNCTION DOC]
+    # HELPER: registers the main op in the graph.
+    # Does nothing if main_op is null. Otherwise raises a type error if it is not an Operation,
+    # a value error if the graph already has ops in either the main op or legacy init op
+    # collection, and finally adds it to the main op collection of the default graph.
     """Adds main op to the SavedModel.
 
     Args:
@@ -538,6 +646,13 @@ class SavedModelBuilder(_SavedModelBuilder):
     ops.add_to_collection(constants.MAIN_OP_KEY, main_op)
 
   def _add_train_op(self, train_op):
+    # [FUNCTION DOC]
+    # HELPER: registers the train op in the graph.
+    # KNOWN ISSUE: the docstring and its error text suggest only an Operation is accepted, but
+    # a Tensor is accepted too.
+    # Does nothing if train_op is null. Raises a type error if it is neither a tensor nor an
+    # operation; otherwise adds it to the train op collection of the default graph (it is stored,
+    # not executed).
     """Add train op to the SavedModel.
 
     Note that this functionality is in development, and liable to be
@@ -568,6 +683,16 @@ class SavedModelBuilder(_SavedModelBuilder):
                      main_op=None,
                      strip_default_attrs=False,
                      saver=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the train op is never accepted here (always passed as null), and the legacy
+    # init op fallback uses a null check while the sibling method uses truthiness.
+    # Public-version override that adds another meta graph without saving variables. Requires
+    # prior add-with-variables (assertion error otherwise). Validates the signature def map,
+    # maps the deprecated legacy init op onto main op when main op is null, registers assets and
+    # the main op in graph collections, creates a default sharded saver if none is given, exports
+    # the meta graph def (with optional device clearing and default attribute stripping) and adds
+    # it with tags and signatures. Returns nothing. The documentation text is copied from the base
+    # class afterwards with the asset argument renamed.
     if not self._has_saved_variables:
       raise AssertionError(
           "Graph state including variables and assets has not been saved yet. "
@@ -613,6 +738,15 @@ class SavedModelBuilder(_SavedModelBuilder):
                                    main_op=None,
                                    strip_default_attrs=False,
                                    saver=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: legacy init op is merged using truthiness (an operation value is truthy, but
+    # this differs from the null check in add_meta_graph).
+    # Public-version override that adds the first meta graph and saves variables from the
+    # session. Raises an assertion error if variables were already saved. Validates signatures,
+    # maps legacy init op onto main op when main op is falsy, registers assets and main op in
+    # collections, saves variables with the saver (no checkpoint state, no meta graph file),
+    # exports the meta graph def, adds it with tags and signatures and marks variables saved.
+    # Returns nothing. Writes files into the export directory.
     if self._has_saved_variables:
       raise AssertionError("Graph state including variables and assets has "
                            "already been saved. Please invoke "
@@ -669,6 +803,13 @@ class SavedModelBuilder(_SavedModelBuilder):
 
 
 def _maybe_save_assets(write_fn, assets_to_add=None):
+  # [FUNCTION DOC]
+  # HELPER: shared asset processing for both builders.
+  # For each asset path tensor in assets_to_add (null means none, returns an empty mapping) it
+  # extracts the file path, picks a unique file name, and calls the write callback with the name
+  # and tensor so the asset is recorded in a meta graph or collection. Returns a mapping from
+  # asset file names to their original full paths. Raises a value error for an invalid path
+  # tensor; logs progress.
   """Saves assets to the meta graph.
 
   Args:
@@ -715,6 +856,11 @@ def _maybe_save_assets(write_fn, assets_to_add=None):
 
 
 def get_asset_filename_to_add(asset_filepath, asset_filename_map):
+  # [FUNCTION DOC]
+  # Chooses the file name under which an asset is stored. Takes the asset's full path and a
+  # mapping from stored names to source paths. Returns the base name if unseen, if the same path
+  # was already added, or if a different path holds identical contents; otherwise returns a
+  # new name made unique with a numeric suffix. May read both files to compare them.
   """Get a unique basename to add to the SavedModel if this file is unseen.
 
   Assets come from users as full paths, and we save them out to the
@@ -754,6 +900,12 @@ def get_asset_filename_to_add(asset_filepath, asset_filename_map):
 
 
 def _get_unique_asset_filename(asset_filename, asset_filename_map):
+  # [FUNCTION DOC]
+  # HELPER: name uniquifier for asset files.
+  # KNOWN ISSUE: it returns a byte string built with the byte-string join, mixing types with
+  # the string names used elsewhere, and has no docstring.
+  # Appends underscore and an increasing integer (starting at one) to the name until it is not a
+  # key of the mapping, and returns the result.
   i = 1
   unique_filename = asset_filename
   while unique_filename in asset_filename_map:
@@ -764,6 +916,10 @@ def _get_unique_asset_filename(asset_filename, asset_filename_map):
 
 
 def _asset_path_from_tensor(path_tensor):
+  # [FUNCTION DOC]
+  # HELPER: extracts an asset file path from a constant tensor.
+  # Raises a type error unless the argument is a tensor produced by a constant op with string
+  # dtype and exactly one value. Returns that single value (the path).
   """Returns the filepath value stored in constant `path_tensor`.
 
   Args:
@@ -790,6 +946,10 @@ def _asset_path_from_tensor(path_tensor):
 
 
 def _add_asset_to_metagraph(meta_graph_def, asset_filename, asset_tensor):
+  # [FUNCTION DOC]
+  # HELPER: write callback for the base builder. Appends a new asset file entry to the meta
+  # graph def, setting its file name and the tensor name of the asset tensor. Mutates the meta
+  # graph def; returns nothing.
   """Builds an asset proto and adds it to the meta graph def.
 
   Args:
@@ -805,6 +965,13 @@ def _add_asset_to_metagraph(meta_graph_def, asset_filename, asset_tensor):
 
 def copy_assets_to_destination_dir(asset_filename_map, destination_dir,
                                    saved_files=None):
+  # [FUNCTION DOC]
+  # Copies asset files into the assets folder of the destination directory (created if
+  # missing). Inputs: mapping of stored names to source paths, destination directory, and
+  # optional set of destination paths already copied (a new set is used when null). A file is
+  # copied (overwriting) only if the source exists, differs from the destination and has not
+  # been copied before; copied destinations are added to the set (mutated). Logs the folder.
+  # Returns nothing.
   """Copy all assets from source path to destination path.
 
   Args:
@@ -840,6 +1007,10 @@ def copy_assets_to_destination_dir(asset_filename_map, destination_dir,
 
 
 def _add_asset_to_collection(asset_filename, asset_tensor):
+  # [FUNCTION DOC]
+  # HELPER: write callback for the public builder. Builds an asset file definition message with
+  # the file name and tensor name, packs it into an any message and adds it to the assets
+  # collection of the default graph. Returns nothing.
   """Builds an asset proto and adds it to the asset collection of the graph.
 
   Args:
@@ -857,5 +1028,8 @@ def _add_asset_to_collection(asset_filename, asset_tensor):
 
 
 def _add_op_to_signature_def_map(signature_def_map, op, key):
+  # [FUNCTION DOC]
+  # HELPER: if op is not null, stores an op signature definition for it under key in the given
+  # mapping (mutated in place). Does nothing for a null op. Returns nothing.
   if op is not None:
     signature_def_map[key] = signature_def_utils.op_signature_def(op, key)

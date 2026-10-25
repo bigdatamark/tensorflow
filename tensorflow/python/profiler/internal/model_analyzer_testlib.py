@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: shared test library for the profiler tests (model analyzer and related tests).
+# Provides functions that build small TensorFlow graphs (a conv model, a conv plus RNN plus
+# optimizer model, and a splittable two-branch conv model), a tree search utility for profile
+# nodes, a context manager that loads a profiler from a profile file, and a helper that strips
+# the documentation header from profile output. Importing it has no side effects beyond imports
+# (the gradient modules are imported only to register gradients).
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,6 +39,12 @@ from tensorflow.python.util import compat
 
 
 def BuildSmallModel():
+  # [FUNCTION DOC]
+  # HELPER: builds a model fragment for profiler tests.
+  # Creates a zero image of shape 2x6x6x3, a scalar variable ScalarW (unused in the output) and
+  # two strided same-padded convolutions with variables DW and DW2 created via the variable
+  # scope (so names clash if called twice in one scope without reuse). Returns the output
+  # tensor of the second convolution. Adds ops and variables to the default graph.
   """Build a small forward conv model."""
   image = array_ops.zeros([2, 6, 6, 3])
   _ = variable_scope.get_variable(
@@ -52,6 +65,12 @@ def BuildSmallModel():
 
 
 def BuildFullModel():
+  # [FUNCTION DOC]
+  # HELPER: builds a larger model for profiler tests.
+  # Builds four small conv models in separate variable scopes, flattens and concatenates them
+  # into a sequence, runs a basic RNN cell with 16 units over it, computes an L2 loss of the
+  # mean difference to an all-ones target, and builds a gradient descent train op with learning
+  # rate 0.01. Returns that training operation. Adds many ops and variables to the default graph.
   """Build the full model with conv,rnn,opt."""
   seq = []
   for i in range(4):
@@ -69,6 +88,11 @@ def BuildFullModel():
 
 
 def BuildSplittableModel():
+  # [FUNCTION DOC]
+  # HELPER: builds a small model whose two branches can be fetched separately in different steps.
+  # Creates a zero image and two convolutions on it (variables DW and DW2 with different
+  # kernel shapes), plus their sum. Returns a tuple of the first branch, second branch and sum
+  # tensors. Adds ops and variables to the default graph.
   """Build a small model that can be run partially in each step."""
   image = array_ops.zeros([2, 6, 6, 3])
 
@@ -89,6 +113,10 @@ def BuildSplittableModel():
 
 
 def SearchTFProfNode(node, name):
+  # [FUNCTION DOC]
+  # HELPER: lookup utility for profile node trees.
+  # Depth-first search starting at the given node for a node whose name equals the given name,
+  # visiting children in order. Returns the first matching node or nothing if none matches.
   """Search a node in the tree."""
   if node.name == name:
     return node
@@ -100,6 +128,13 @@ def SearchTFProfNode(node, name):
 
 @contextlib.contextmanager
 def ProfilerFromFile(profile_file):
+  # [FUNCTION DOC]
+  # HELPER: context manager giving tests a profiler object backed by a profile file.
+  # KNOWN ISSUE: the cleanup call that deletes the native profiler is not in a finally block,
+  # so if the body of the with statement raises, the native profiler is never deleted.
+  # Loads the file (path converted to bytes) into the native profiler, creates a bare Profiler
+  # instance without running its constructor, and yields it. After the body completes it
+  # deletes the native profiler. Side effect: global native profiler state.
   """Initialize a profiler from profile file."""
   print_mdl.ProfilerFromFile(compat.as_bytes(profile_file))
   profiler = model_analyzer.Profiler.__new__(model_analyzer.Profiler)
@@ -108,6 +143,13 @@ def ProfilerFromFile(profile_file):
 
 
 def CheckAndRemoveDoc(profile):
+  # [FUNCTION DOC]
+  # HELPER: strips the documentation header from profile text in tests.
+  # KNOWN ISSUE: the cut position is a hard-coded offset of nine characters after the start of
+  # the profile marker, and if the marker is missing the search result of minus one yields an
+  # offset of eight, silently returning a wrong slice.
+  # Asserts the text contains the documentation marker (assertion error otherwise) and returns
+  # the text following the profile marker plus its trailing newline and space.
   assert 'Doc:' in profile
   start_pos = profile.find('Profile:')
   return profile[start_pos + 9:]

@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# Constants for SavedModel save and restore: directory names (assets, extra assets, variables,
+# debug), collection keys (assets, legacy init op, main op, train op), the schema version,
+# the file names and prefixes of the protocol buffer, chunked and text forms, the variables
+# and debug-info file names, and the init and train signature keys. Every value is read from the
+# native saved model constants module, whose source of truth is the C++ constants header.
+# Many constants are also exported to the public API under the saved_model namespace (and the
+# v1 constants namespace) through export registration at import time; the legacy init op key
+# and main op key are v1 only, while the extra assets directory, train op key, chunked file
+# name, prefix and signature keys are not exported.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Tests that the RunMetadata proto collected during a traced session run is consistent with the
+# profiler's model analysis output. Contains module-level helpers that extract per-device node
+# statistics and that run a matmul model or a looping RNN model with software tracing, plus a
+# test class covering CPU, GPU, loop and gradient-graph scenarios. Uses the shared profiler
+# test library for model construction. Run through the standard TensorFlow test main.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,6 +43,13 @@ builder = option_builder.ProfileOptionBuilder
 
 
 def _extract_node(run_meta, node_name):
+  # [FUNCTION DOC]
+  # HELPER: collects execution statistics for one node from run metadata in tests.
+  # Walks all device statistics in the step stats of the given run metadata, normalizes each
+  # device name to a short form starting at the cpu or gpu portion (host cpu devices are kept
+  # with their full lowercase name), and fails an assertion for unrecognized device names.
+  # Node names are truncated at the first colon. Returns a mapping from normalized device name
+  # to the list of node statistics whose name equals node_name (default-empty lists).
   ret = defaultdict(list)
   for dev_stat in run_meta.step_stats.dev_stats:
     dev = dev_stat.device.lower()
@@ -57,6 +70,12 @@ def _extract_node(run_meta, node_name):
 
 
 def _run_model():
+  # [FUNCTION DOC]
+  # HELPER: runs a simple model under tracing for the tests.
+  # Builds a random 1xSIZE by SIZEx2*SIZE matrix multiplication in the default graph, runs it in
+  # a new session with the arithmetic optimizer turned off and software tracing, then profiles
+  # the graph with the run metadata using time-and-memory options sorted by name with no
+  # output printed. Returns a pair of the profile root node and the collected run metadata.
   x = random_ops.random_normal(shape=[1, SIZE])
   w = random_ops.random_normal(shape=[SIZE, 2 * SIZE])
   y = math_ops.matmul(x, w)
@@ -83,6 +102,12 @@ def _run_model():
 
 
 def _run_loop_model():
+  # [FUNCTION DOC]
+  # HELPER: runs the full RNN training model under tracing for the tests.
+  # Opens a session with the remapper optimization disabled (so matmul is not fused with bias
+  # add), builds the full model from the test library, initializes global variables, runs the
+  # train op once with software tracing, then profiles the graph with time-and-memory options
+  # sorted by name and no output. Returns a pair of the profile root node and the run metadata.
   config = config_pb2.ConfigProto()
   # Grappler might fuse MatMul with BiasAdd in remapper optimizer.
   config.graph_options.rewrite_options.remapping = (
@@ -107,6 +132,11 @@ def _run_loop_model():
 
 
 class RunMetadataTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case verifying that run metadata from traced runs, and the profile built from it,
+  # contain the expected nodes, devices, allocation records and run counts on CPU and GPU, plus
+  # a structural check of gradient op names. GPU tests return early when no GPU is available.
+  # Fixtures are the module-level model runners; graphs are reset at the start of each test.
 
   # This test requires HARDWARE_TRACE or FULL_TRACE to be specified to
   # work as expected. Since we now run this test with SOFTWARE_TRACE
@@ -114,6 +144,12 @@ class RunMetadataTest(test.TestCase):
   # GPU device tracers are not enabled
   @test_util.run_deprecated_v1
   def testGPU(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the comment above says this test should fail with software tracing because GPU
+    # tracers are disabled, yet it asserts success; and it silently passes without a GPU.
+    # Scenario: run the matmul model on the GPU device (returns immediately if no CUDA GPU).
+    # Expected: first child of the profile is named MatMul with execution time above 10
+    # microseconds, and exactly one MatMul statistic exists for device gpu:0.
     if not test.is_gpu_available(cuda_only=True):
       return
 
@@ -129,6 +165,12 @@ class RunMetadataTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testAllocationHistory(self):
+    # [FUNCTION DOC]
+    # Scenario: run the matmul model on the GPU (returns immediately without a CUDA GPU).
+    # Expected for the MatMul node: exactly two allocation records, an allocation followed by a
+    # deallocation with later timestamp, positive then negative bytes summing to zero. For the
+    # random normal node: its allocation happens before the matmul starts and its deallocation
+    # after the matmul started.
     if not test.is_gpu_available(cuda_only=True):
       return
 
@@ -159,6 +201,10 @@ class RunMetadataTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testCPU(self):
+    # [FUNCTION DOC]
+    # Scenario: run the matmul model on cpu:0. Expected: the first child of the profile is
+    # MatMul with positive execution time, exactly one MatMul statistic on device cpu:0, and no
+    # statistics found for the name with a colon-repeated suffix (MatMul:MatMul).
     ops.reset_default_graph()
     with ops.device('/cpu:0'):
       tfprof_node, run_meta = _run_model()
@@ -173,6 +219,11 @@ class RunMetadataTest(test.TestCase):
 
   @test_util.run_v1_only('b/120545219')
   def testLoopCPU(self):
+    # [FUNCTION DOC]
+    # Scenario: run the RNN model on cpu:0 (graph mode only). The while loop makes the RNN cell
+    # matmul execute four times. Expected: four node statistics on cpu:0; the profile node found
+    # by name has run count four and both its cpu and total execution times equal the sum of the
+    # relative op end times from the run metadata.
     ops.reset_default_graph()
     with ops.device('/cpu:0'):
       tfprof_node, run_meta = _run_loop_model()
@@ -192,6 +243,11 @@ class RunMetadataTest(test.TestCase):
       self.assertEqual(mm_node.exec_micros, total_cpu_execs)
 
   def testGradientGraph(self):
+    # [FUNCTION DOC]
+    # Scenario: build the RNN model graph (running it once) and classify operations as backward
+    # if their name contains a gradients scope followed by a grad scope, otherwise forward.
+    # Expected: the forward-op name embedded between those markers in every backward op name
+    # exists among the forward ops. The profiler's code view depends on this naming convention.
     # Note: Please don't just adjust the test to make it pass.
     # The code view logic depends on it.
     ops.reset_default_graph()
@@ -220,6 +276,12 @@ class RunMetadataTest(test.TestCase):
       pred=test.is_built_with_rocm,
       skip_message='Test fails on ROCm when run without FULL_TRACE')
   def testLoopGPU(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the stream assertion is indented inside the loop over nodes, so it runs once
+    # per statistic rather than once, and the comment above says the test should fail with
+    # software tracing while it asserts success. Returns silently if no GPU exists.
+    # Scenario: run the RNN model on GPU 0. Expected: four MatMul statistics on gpu:0 and at
+    # least four entries for the all-streams gpu stream; skipped on ROCm builds.
     if not test.is_gpu_available():
       return
 

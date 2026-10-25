@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test module stub for the native print_model_analysis functionality. Defines a table of
+# default profiler options (TEST_OPTIONS) and a test case with a model-building helper, but
+# no actual test methods, so running it executes no checks. Standard TensorFlow test main
+# is invoked when run as a script.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -46,8 +51,16 @@ TEST_OPTIONS = {
 
 
 class PrintModelAnalysisTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case intended to cover print_model_analysis. KNOWN ISSUE: it contains only a private
+  # model builder and no test methods, so nothing is asserted.
 
   def _BuildSmallModel(self):
+    # [FUNCTION DOC]
+    # HELPER: model builder for tests in this case (currently unused).
+    # Creates a zero image of shape 2x6x6x3, a 6x6x3x6 kernel variable DW with small random
+    # normal initialization, and a strided same-padded convolution. Returns the convolution
+    # output tensor. Adds ops and a variable to the default graph.
     image = array_ops.zeros([2, 6, 6, 3])
     kernel = variable_scope.get_variable(
         'DW', [6, 6, 3, 6],

@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Public entry module for building SavedModels. It only re-exports the builder classes from
+# builder_impl: SavedModelBuilder (the public builder) and _SavedModelBuilder (the private
+# base class). The imports are intentionally unused here (lint disabled) so that users can
+# import them from this path. Defines no functions or classes itself.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

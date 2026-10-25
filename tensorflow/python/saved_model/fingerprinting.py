@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Python API for reading SavedModel fingerprints. Defines the Fingerprint value class
+# (exported as the experimental saved model fingerprint type) and the read_fingerprint
+# function (also exported), both backed by the native fingerprinting binding module and the
+# fingerprint protocol buffer. Import-time side effect: registration of the public API exports.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,6 +32,14 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export("saved_model.experimental.Fingerprint", v1=[])
 class Fingerprint:
+  # [CLASS DOC]
+  # Plain value object holding the fields of a SavedModel fingerprint: saved model checksum,
+  # graph definition program hash, signature definition hash, saved object graph hash,
+  # checkpoint hash and the producer version. Created directly, from a fingerprint proto via
+  # from_proto, or returned by read_fingerprint. Supports equality, string and representation
+  # output, and computing a canonical singleprint identifier.
+  # KNOWN ISSUE: equality and the string forms ignore the version field, and defining equality
+  # without a hash method makes instances unhashable.
   """The SavedModel fingerprint.
 
   Each attribute of this class is named after a field name in the
@@ -51,6 +64,12 @@ class Fingerprint:
       checkpoint_hash: int = None,
       version: int = None,
   ):
+    # [FUNCTION DOC]
+    # Constructor storing the six fingerprint values as attributes of the same names: saved model
+    # checksum, graph definition program hash, signature definition hash, saved object graph
+    # hash, checkpoint hash (all unsigned 64-bit style integers) and version (producer int).
+    # Every parameter is optional and defaults to the null value. No validation is done and
+    # nothing is returned.
     """Initializes the instance based on values in the SavedModel fingerprint.
 
     Args:
@@ -70,6 +89,14 @@ class Fingerprint:
 
   @classmethod
   def from_proto(cls, proto: fingerprint_pb2.FingerprintDef) -> "Fingerprint":
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: it builds a Fingerprint explicitly instead of the class it was called on, so
+    # subclasses get a base instance.
+    # Class method building a Fingerprint from a fingerprint definition message. If the input is
+    # raw bytes it is first parsed into the message type. Copies the six fields in order and
+    # returns the new instance. If the object lacks the expected fields (attribute error), raises
+    # a value error saying the proto could not be deserialized as a fingerprint, with the
+    # original error text appended and the original exception suppressed.
     """Constructs Fingerprint object from protocol buffer message."""
     if isinstance(proto, bytes):
       proto = fingerprint_pb2.FingerprintDef.FromString(proto)
@@ -87,6 +114,13 @@ class Fingerprint:
           f"{e}") from None
 
   def __eq__(self, other: Any) -> bool:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the version field is not compared, so fingerprints differing only in version
+    # are considered equal.
+    # Equality against another Fingerprint or a fingerprint definition message. Compares the
+    # saved model checksum, graph def program hash, signature def hash, saved object graph hash
+    # and checkpoint hash. Returns true when all are equal, false when any differs, when the
+    # other object is of another type, or when an attribute is missing. Never raises.
     if (isinstance(other, Fingerprint) or
         isinstance(other, fingerprint_pb2.FingerprintDef)):
       try:
@@ -101,6 +135,11 @@ class Fingerprint:
     return False
 
   def __str__(self) -> str:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the version field is omitted from the output.
+    # Returns a multi-line human readable string: a title line followed by one indented line for
+    # each of the five hash fields (checksum, graph def program hash, signature def hash, saved
+    # object graph hash, checkpoint hash).
     return "\n".join([
         "SavedModel Fingerprint",
         f"  saved_model_checksum: {self.saved_model_checksum}",
@@ -111,6 +150,10 @@ class Fingerprint:
     ])
 
   def __repr__(self) -> str:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the version field is omitted, so the representation does not contain all
+    # constructor arguments.
+    # Returns a constructor-call style string with the five hash fields in order.
     return (f"Fingerprint({self.saved_model_checksum}, "
             f"{self.graph_def_program_hash}, "
             f"{self.signature_def_hash}, "
@@ -118,6 +161,14 @@ class Fingerprint:
             f"{self.checkpoint_hash})")
 
   def singleprint(self) -> fingerprinting_pywrap.Singleprint:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it returns the string concatenation separated by slashes,
+    # but the code returns the native Singleprint object built from the four hashes (not
+    # necessarily a plain string); also the error message lacks separators between fields.
+    # Builds the canonical identifier of the SavedModel from the graph def program hash,
+    # signature def hash, saved object graph hash and checkpoint hash (checksum excluded as it
+    # is not deterministic). Raises a value error, with the field values and the original error
+    # text, if the native layer raises a type error or a fingerprint error for invalid values.
     """Canonical fingerprinting ID for a SavedModel.
 
     Uniquely identifies a SavedModel based on the regularized fingerprint
@@ -150,6 +201,14 @@ class Fingerprint:
 
 @tf_export("saved_model.experimental.read_fingerprint", v1=[])
 def read_fingerprint(export_dir: str) -> Fingerprint:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says a missing or invalid fingerprint raises file-not-found, but
+  # only the native file-not-found condition does; other native fingerprint errors surface as a
+  # runtime error.
+  # Reads the fingerprint file stored in the given SavedModel export directory (string path)
+  # through the native layer. Returns a Fingerprint built from the parsed message. Raises
+  # file-not-found error when the native layer reports a missing file, and a runtime error for
+  # any other native fingerprint failure. Reads from disk; no other side effects.
   """Reads the fingerprint of a SavedModel in `export_dir`.
 
   Returns a `tf.saved_model.experimental.Fingerprint` object that contains
