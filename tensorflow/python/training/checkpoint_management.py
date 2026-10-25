@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# HELPER: backward-compatibility shim that forwards the old training checkpoint_management path.
+# Deprecated alias module. The real implementation now lives in the checkpoint package's
+# checkpoint_management module. This file only installs a module-level attribute-lookup hook,
+# created by the deprecation utility, that resolves any attribute requested from this module
+# on the new module and emits a deprecation warning naming release 2.9 as the move version.
+# It defines no functions or classes of its own. Import-time side effects: imports the new
+# module and the deprecation utility, and sets the module-level attribute hook.
+# A TODO in the file says it should be deleted once all imports use the new location.
+#
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# Helpers for warm-starting variables from a checkpoint while remapping vocabularies.
+# Provides private functions that build a matrix (typically an embedding or weight matrix) whose
+# rows and/or columns are taken from a stored checkpoint tensor, reordered according to an old
+# and a new vocabulary file, with missing entries and extra out-of-vocabulary rows or columns
+# filled in by an initializer. It wraps the generate-vocab-remapping and load-and-remap-matrix
+# generated ops, and supports partitioned variables that are split along the row axis.
+# Import-time side effect: marks the two wrapped ops as not differentiable.
+# Used by warm-starting and embedding code elsewhere in the training package.
+#
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -40,6 +50,25 @@ def _load_and_remap_matrix(ckpt_path,
                            num_row_oov_buckets=0,
                            num_col_oov_buckets=0,
                            max_rows_in_memory=-1):
+  # [FUNCTION DOC]
+  # HELPER: building block for the matrix initializer used when warm-starting variables.
+  # KNOWN ISSUE: the docstring and one error message refer to contrib paths and to a contrib
+  # checkpoint-initialization function that no longer exist in this code base.
+  # Builds a 2-D tensor of shape (rows to load plus row OOV buckets) by (new column count plus
+  # column OOV buckets). Validates arguments, then for each axis that has both an old and a new
+  # vocabulary file asks the generate-vocab-remapping op for an index mapping and the count of
+  # entries found; without vocab files rows use a plain consecutive range starting at the offset
+  # and columns use an empty mapping. Missing values are drawn from the initializer, called with
+  # the number of missing entries. The load-and-remap op then reads the checkpoint tensor named
+  # by old_tensor_name at ckpt_path (reading at most max_rows_in_memory rows at once when that is
+  # positive). Finally, if requested, extra rows and then extra columns of initializer values are
+  # concatenated for out-of-vocabulary buckets.
+  # Inputs: checkpoint path, old tensor name, row offset and number of rows to load (for
+  # partitions), new column count, initializer callable, optional old row vocab size (-1 means
+  # all), optional old/new row and column vocab files, OOV bucket counts (default 0).
+  # Returns the resulting tensor. Raises a value error if an OOV count is negative, if only one
+  # of an old/new vocab file pair is given, or if neither rows nor columns are remapped.
+  # Side effects: adds ops to the current graph; no files are written.
   """Loads a 2-D (matrix) `Tensor` from checkpoint.
 
   Generates 1D-remappings for rows and columns using the
@@ -212,6 +241,17 @@ def _load_and_remap_matrix_initializer(ckpt_path,
                                        num_col_oov_buckets=0,
                                        initializer=None,
                                        max_rows_in_memory=-1):
+  # [FUNCTION DOC]
+  # HELPER: internal factory for variable initializers that warm-start from a checkpoint.
+  # Returns an initializer function (not a tensor) for a possibly partitioned variable whose full
+  # shape is new row vocab size plus row OOV buckets by new column vocab size plus column OOV
+  # buckets. If initializer is nothing it defaults to a zeros initializer; if it is not callable a
+  # type error is raised immediately. The returned inner function, when invoked per partition,
+  # validates the requested shape and loads the matching row range via the private matrix loader.
+  # Other inputs: checkpoint path, old tensor name, new row and column vocab sizes, optional old
+  # row vocab size (-1 means all), optional old/new vocab files for rows and columns, OOV
+  # bucket counts (default 0), and the max rows read from the checkpoint at once.
+  # Side effects: none at creation other than creating the default initializer.
   r"""Returns a var initializer for loading and remapping a 2-D (matrix) tensor.
 
   The returned initializer loads a 2-D (matrix) `Tensor` with name
@@ -336,6 +376,18 @@ def _load_and_remap_matrix_initializer(ckpt_path,
             initializer, type(initializer)))
 
   def _initializer(shape, dtype=dtypes.float32, partition_info=None):
+    # [FUNCTION DOC]
+    # HELPER: the initializer closure returned by the enclosing matrix-initializer factory.
+    # Produces the initial value for a variable or one partition of it. Inputs: shape (a
+    # two-element shape; the second dimension must equal new column vocab size plus column OOV
+    # buckets), dtype (only 32-bit float is accepted, default), and partition_info (optional;
+    # when given its single offset along the row axis is used, otherwise offset is zero).
+    # Raises a type error for other dtypes, and value errors for a non two-dimensional shape,
+    # a non-positive first dimension, a wrong second dimension, rows exceeding the expected total,
+    # or an offset beyond the vocab size while the partition is not OOV-only.
+    # Partitions lying entirely past the vocabulary return the plain initializer output for that
+    # shape; others load the in-vocab rows from the checkpoint and add the OOV rows needed.
+    # Returns a tensor of the requested shape. Adds ops to the graph.
     """Variable initializer.
 
     Args:
@@ -422,6 +474,16 @@ def _load_embedding_initializer(ckpt_path,
                                 num_oov_buckets=0,
                                 initializer=None,
                                 max_rows_in_memory=-1):
+  # [FUNCTION DOC]
+  # HELPER: embedding-specific convenience wrapper over the private matrix initializer factory.
+  # Returns an initializer function that loads a pre-trained embedding matrix from a checkpoint,
+  # reordering rows by the old and new vocabulary files and appending OOV rows. Columns are never
+  # remapped (the embedding dimension is used as the column count). If initializer is nothing, a
+  # truncated normal initializer with standard deviation one over the square root of the
+  # embedding dimension is used for missing and OOV rows. Inputs: checkpoint path, embedding
+  # tensor name, new vocab size, embedding dimension, old and new vocab files, optional old vocab
+  # size (-1 for all), OOV bucket count (default 0), optional initializer, and max rows read in
+  # memory at once. Errors from the underlying factory propagate. No other side effects.
   """Returns a variable initializer for loading pre-trained embeddings.
 
   Wrapper around `load_and_remap_matrix_initializer()` specialized for loading
