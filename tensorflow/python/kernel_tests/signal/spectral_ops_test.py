@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Unit tests for the spectral signal ops (spectral_ops): stft, inverse_stft, the inverse STFT
+# window function, mdct and inverse_mdct. Tests compare against NumPy reference implementations
+# (Hann window, framing, rfft/irfft, overlap-add), check static shapes, round-trip
+# reconstruction, window gain properties and numerical gradients. Parameterized over signal
+# sizes and float precisions. No import-time side effects beyond the test runner entry point.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,9 +39,18 @@ from tensorflow.python.platform import test
 
 @test_util.run_all_in_graph_and_eager_modes
 class SpectralOpsTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case for spectral_ops, run in both graph and eager modes. Provides static
+  # NumPy reference helpers (periodic Hann window, framing, STFT, inverse STFT, overlap-add)
+  # and a comparison helper used by the tests.
 
   @staticmethod
   def _np_hann_periodic_window(length):
+    # [FUNCTION DOC]
+    # HELPER: NumPy reference window for the STFT tests.
+    # Returns a periodic Hann window of the given integer length as a float array; a length of
+    # one yields a single one. Computed by building a symmetric window of odd length and
+    # dropping the last sample when the requested length is even.
     if length == 1:
       return np.ones(1)
     odd = length % 2
@@ -48,6 +63,11 @@ class SpectralOpsTest(test.TestCase, parameterized.TestCase):
 
   @staticmethod
   def _np_frame(data, window_length, hop_length):
+    # [FUNCTION DOC]
+    # HELPER: NumPy reference framing for the STFT tests.
+    # Takes a one-dimensional array, window length and hop length; returns a read-only strided
+    # view with one row per full frame (no padding, trailing partial frame dropped). The view
+    # shares memory with the input.
     num_frames = 1 + int(np.floor((len(data) - window_length) // hop_length))
     shape = (num_frames, window_length)
     strides = (data.strides[0] * hop_length, data.strides[0])
@@ -55,12 +75,21 @@ class SpectralOpsTest(test.TestCase, parameterized.TestCase):
 
   @staticmethod
   def _np_stft(data, fft_length, hop_length, window_length):
+    # [FUNCTION DOC]
+    # HELPER: NumPy reference STFT for the STFT tests.
+    # Frames the data, multiplies each frame by a periodic Hann window and returns the real FFT
+    # of each frame zero-padded or cropped to fft_length (complex array, frames by bins).
     frames = SpectralOpsTest._np_frame(data, window_length, hop_length)
     window = SpectralOpsTest._np_hann_periodic_window(window_length)
     return np.fft.rfft(frames * window, fft_length)
 
   @staticmethod
   def _np_inverse_stft(stft, fft_length, hop_length, window_length):
+    # [FUNCTION DOC]
+    # HELPER: NumPy reference inverse STFT for the STFT tests.
+    # Applies the inverse real FFT to each frame, crops or zero-pads each frame to
+    # window_length, multiplies by a periodic Hann window and overlap-adds with the hop length.
+    # Returns the reconstructed one-dimensional signal.
     frames = np.fft.irfft(stft, fft_length)
     # Pad or truncate frames's inner dimension to window_length.
     frames = frames[..., :window_length]
@@ -71,6 +100,11 @@ class SpectralOpsTest(test.TestCase, parameterized.TestCase):
 
   @staticmethod
   def _np_overlap_add(stft, hop_length):
+    # [FUNCTION DOC]
+    # HELPER: NumPy reference overlap-add for the inverse STFT reference.
+    # Takes a two-dimensional array of frames and a hop length; returns a one-dimensional array
+    # of length window plus (frames minus one) times hop, where each frame is summed in at its
+    # hop offset.
     num_frames, window_length = np.shape(stft)
     # Output length will be one complete window, plus another hop_length's
     # worth of points for each additional window.
@@ -81,6 +115,12 @@ class SpectralOpsTest(test.TestCase, parameterized.TestCase):
     return output
 
   def _compare(self, signal, frame_length, frame_step, fft_length, tol):
+    # [FUNCTION DOC]
+    # HELPER: shared assertion routine for the STFT/inverse STFT comparison test.
+    # Computes stft and inverse_stft with the ops for a signal both as a constant and via a
+    # placeholder with known shape, evaluates them, asserts that known and placeholder results
+    # agree, and asserts closeness (relative and absolute tolerance tol) to the NumPy reference
+    # STFT and inverse STFT. Returns nothing.
     actual_stft = spectral_ops.stft(
         signal, frame_length, frame_step, fft_length, pad_end=False)
     signal_ph = array_ops.placeholder_with_default(signal, shape=signal.shape)
@@ -114,6 +154,11 @@ class SpectralOpsTest(test.TestCase, parameterized.TestCase):
         expected_inverse_stft, actual_inverse_stft, rtol=tol, atol=tol)
 
   def test_shapes(self):
+    # [FUNCTION DOC]
+    # Checks static and evaluated output shapes of stft for a 512-sample zero signal across
+    # frame lengths, default and explicit fft_length (default is the next power of two of the
+    # frame length), and of inverse_stft for a 32 by 9 complex input (expected length 256).
+    # Returns nothing.
     signal = np.zeros((512,)).astype(np.float32)
 
     # If fft_length is not provided, the smallest enclosing power of 2 of
@@ -161,6 +206,10 @@ class SpectralOpsTest(test.TestCase, parameterized.TestCase):
       (123, 23, 5, 42, np.float64, 1e-8))
   def test_stft_and_inverse_stft(self, signal_length, frame_length,
                                  frame_step, fft_length, np_rtype, tol):
+    # [FUNCTION DOC]
+    # Parameterized over signal length, frame length, frame step, fft length, float type and
+    # tolerance. Generates a random uniform signal of the given type and runs the shared
+    # comparison against the NumPy reference. Returns nothing.
     """Test that spectral_ops.stft/inverse_stft match a NumPy implementation."""
     signal = np.random.random(signal_length).astype(np_rtype)
     self._compare(signal, frame_length, frame_step, fft_length, tol)
@@ -184,6 +233,12 @@ class SpectralOpsTest(test.TestCase, parameterized.TestCase):
   def test_stft_round_trip(self, signal_length, frame_length, frame_step,
                            fft_length, np_rtype, threshold,
                            corrected_threshold):
+    # [FUNCTION DOC]
+    # Parameterized round-trip test. Applies stft then inverse_stft to a white Gaussian signal,
+    # with and without the corrected inverse window, drops frame_length samples at each edge,
+    # and asserts that the scale-normalized plain reconstruction differs from the signal by a
+    # standard deviation below threshold, and the corrected reconstruction below
+    # corrected_threshold. Returns nothing.
     # Generate a random white Gaussian signal.
     signal = np.random.normal(size=signal_length).astype(np_rtype)
 
@@ -226,6 +281,11 @@ class SpectralOpsTest(test.TestCase, parameterized.TestCase):
       (64, 128),
   )
   def test_inverse_stft_window_fn(self, frame_length, frame_step):
+    # [FUNCTION DOC]
+    # Parameterized over frame length and step. Multiplies a Hann window by the window produced
+    # by the inverse STFT window function and asserts the product sums to one at every window
+    # phase (stride of frame_step), skipping phases where both windows are all zero. Returns
+    # nothing.
     """Test that inverse_stft_window_fn has unit gain at each window phase."""
     hann_window = window_ops.hann_window(frame_length, dtype=dtypes.float32)
     inverse_window_fn = spectral_ops.inverse_stft_window_fn(frame_step)
@@ -244,6 +304,10 @@ class SpectralOpsTest(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters((256, 64), (128, 32))
   def test_inverse_stft_window_fn_special_case(self, frame_length, frame_step):
+    # [FUNCTION DOC]
+    # Parameterized with frame length equal to four times the step (75 percent overlap). Asserts
+    # the Hann window equals 1.5 times the inverse window, i.e. the corrected window is the Hann
+    # window divided by the constant gain 1.5. Returns nothing.
     """Test inverse_stft_window_fn in special overlap = 3/4 case."""
     # Cases in which frame_length is an integer multiple of 4 * frame_step are
     # special because they allow exact reproduction of the waveform with a
@@ -259,6 +323,11 @@ class SpectralOpsTest(test.TestCase, parameterized.TestCase):
   @staticmethod
   def _compute_stft_gradient(signal, frame_length=32, frame_step=16,
                              fft_length=32):
+    # [FUNCTION DOC]
+    # HELPER: builds the gradient graph for the gradient test.
+    # Computes the STFT of the given signal tensor (frame length 32, step 16, fft length 32 by
+    # default), sums the magnitudes into a scalar loss and returns the symbolic gradient of the
+    # loss with respect to the signal. Graph-mode only (uses the legacy gradients function).
     """Computes the gradient of the STFT with respect to `signal`."""
     stft = spectral_ops.stft(signal, frame_length, frame_step, fft_length)
     magnitude_stft = math_ops.abs(stft)
@@ -266,6 +335,10 @@ class SpectralOpsTest(test.TestCase, parameterized.TestCase):
     return gradients_impl.gradients([loss], [signal])[0]
 
   def test_gradients(self):
+    # [FUNCTION DOC]
+    # Graph-mode only (returns immediately when eager; the TODO notes eager gradient tests are
+    # not yet written). Asserts the gradient of the summed STFT magnitude is exactly zero for an
+    # all-zero signal and is not all zero for a sinusoid. Returns nothing.
     """Test that spectral_ops.stft has a working gradient."""
     # TODO(rjryan): Update gradient tests for Eager.
     if context.executing_eagerly():
@@ -304,10 +377,17 @@ class SpectralOpsTest(test.TestCase, parameterized.TestCase):
       "(possibly due to peculiarities of rocFFT - investigate)")
   def test_gradients_numerical(self, signal_length, frame_length, frame_step,
                                fft_length, np_rtype, forward_tol, backward_tol):
+    # [FUNCTION DOC]
+    # Parameterized numerical gradient check, skipped on ROCm builds. For a random signal in
+    # [-1, 1), compares theoretical and numerical Jacobians of stft (tolerance forward_tol) and
+    # of inverse_stft applied to the stft output (tolerance backward_tol). Returns nothing.
     # TODO(rjryan): Investigate why STFT gradient error is so high.
     signal = np.random.rand(signal_length).astype(np_rtype) * 2 - 1
 
     def forward(signal):
+      # [FUNCTION DOC]
+      # HELPER: wraps stft (with the enclosing frame settings, no end padding) as a function of
+      # the signal for the gradient checker. Returns the complex STFT tensor.
       return spectral_ops.stft(
           signal, frame_length, frame_step, fft_length, pad_end=False)
     ((f_jacob_t,), (f_jacob_n,)) = gradient_checker_v2.compute_gradient(
@@ -316,6 +396,9 @@ class SpectralOpsTest(test.TestCase, parameterized.TestCase):
                         rtol=forward_tol, atol=forward_tol)
 
     def backward(stft):
+      # [FUNCTION DOC]
+      # HELPER: wraps inverse_stft (with the enclosing frame settings) as a function of the STFT
+      # for the gradient checker. Returns the reconstructed signal tensor.
       return spectral_ops.inverse_stft(
           stft, frame_length, frame_step, fft_length)
 
@@ -335,6 +418,12 @@ class SpectralOpsTest(test.TestCase, parameterized.TestCase):
           (False, True)))
   def test_mdct_round_trip(self, signal_length, frame_length, np_rtype,
                            norm, window_type, pad_end):
+    # [FUNCTION DOC]
+    # Parameterized over float type, normalization (orthonormal or none), window type (vorbis,
+    # Kaiser-Bessel-derived or none) and end padding. Applies mdct then inverse_mdct to a white
+    # Gaussian signal, trims half a frame from each edge and asserts the reconstruction matches
+    # the signal within a tolerance (1e-5 for float32, otherwise 1e-6 for Kaiser-Bessel-derived
+    # and 1e-8 for others). Returns nothing.
     if np_rtype == np.float32:
       tol = 1e-5
     else:

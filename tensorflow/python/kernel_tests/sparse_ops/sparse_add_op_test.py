@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Unit tests and a benchmark for sparse_ops.sparse_add. Tests cover sparse+sparse addition
+# (self, with negation, small-value thresholding), sparse+dense addition in both argument orders
+# and several dtypes, gradients, and rejection of invalid indices or mismatched shapes.
+# The benchmark times sparse_add against converting to dense and adding. Importing the module
+# also imports the sparse gradient registrations (needed for the gradient tests).
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,6 +39,12 @@ from tensorflow.python.platform import test
 
 
 def _sparsify(x, thresh=0.5, index_dtype=np.int64):
+  # [FUNCTION DOC]
+  # HELPER: converts dense random arrays into sparse tensors for the tests and benchmark.
+  # Inputs: a two-dimensional NumPy array x; thresh (default 0.5), values below it are zeroed;
+  # index_dtype (default 64-bit integer) type of the index array. Side effect: x is modified in
+  # place (small entries set to zero). Returns a pair: a SparseTensor holding the remaining
+  # non-zero entries (row-major order), and the count of non-zero values.
   x[x < thresh] = 0
 
   non_zero = np.where(x)
@@ -45,13 +57,25 @@ def _sparsify(x, thresh=0.5, index_dtype=np.int64):
 
 
 class SparseAddTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for sparse_ops.sparse_add covering sparse-sparse and sparse-dense addition,
+  # thresholding, gradients and invalid input handling. Provides fixture builders for small 3x3
+  # sparse tensors and random sparse tensors.
 
   def _randomTensor(self, size, np_dtype, sparse=True):
+    # [FUNCTION DOC]
+    # HELPER: random fixture builder. Takes a pair (rows, columns), a NumPy dtype and a sparse
+    # flag (default true). Draws normal random values; if sparse, returns the pair from
+    # sparsifying them (sparse tensor and nonzero count), otherwise the dense array.
     n, m = size
     x = np.random.randn(n, m).astype(np_dtype)
     return _sparsify(x) if sparse else x
 
   def _SparseTensorValue_3x3(self, negate=False):
+    # [FUNCTION DOC]
+    # HELPER: fixture. Returns a SparseTensorValue (NumPy-backed) of dense shape 3x3 with four
+    # float entries 1, 2, 3, 4 at positions (0,1), (1,0), (2,0), (2,1). If negate is true
+    # (default false) all values are negated.
     # [    1]
     # [2    ]
     # [3   4]
@@ -66,10 +90,17 @@ class SparseAddTest(test.TestCase):
         np.array(val, np.float32), np.array(shape, np.int64))
 
   def _SparseTensor_3x3(self, negate=False):
+    # [FUNCTION DOC]
+    # HELPER: fixture. Wraps the 3x3 sparse value fixture (optionally negated, default false)
+    # into a SparseTensor and returns it.
     return sparse_tensor.SparseTensor.from_value(
         self._SparseTensorValue_3x3(negate))
 
   def _SparseTensor_3x3_v2(self):
+    # [FUNCTION DOC]
+    # HELPER: fixture. Returns a 3x3 SparseTensor built from constants with the same positions as
+    # the basic fixture but values 1, -1.9, 3, -4.2, used so sums with the basic fixture produce
+    # small values that threshold tests can drop.
     # [           1]
     # [-1.9        ]
     # [   3    -4.2]
@@ -82,6 +113,10 @@ class SparseAddTest(test.TestCase):
         constant_op.constant(shape, dtypes.int64))
 
   def testAddSelf(self):
+    # [FUNCTION DOC]
+    # On CPU, adds the 3x3 fixture to itself for all combinations of value and tensor
+    # representations and asserts static shape, dense shape vector shape, indices unchanged and
+    # values doubled (2, 4, 6, 8). Returns nothing.
     with test_util.force_cpu():
       for sp_a in (self._SparseTensorValue_3x3(), self._SparseTensor_3x3()):
         for sp_b in (self._SparseTensorValue_3x3(), self._SparseTensor_3x3()):
@@ -96,6 +131,9 @@ class SparseAddTest(test.TestCase):
           self.assertAllEqual(sum_out.dense_shape, [3, 3])
 
   def testAddSelfAndNegation(self):
+    # [FUNCTION DOC]
+    # On CPU, adds the fixture to its negation with threshold 0.1 and asserts the result has no
+    # entries (empty indices and values) and dense shape 3x3. Returns nothing.
     with test_util.force_cpu():
       sp_a = self._SparseTensor_3x3()
       sp_b = self._SparseTensor_3x3(negate=True)
@@ -109,6 +147,10 @@ class SparseAddTest(test.TestCase):
       self.assertAllEqual(sum_out.dense_shape, [3, 3])
 
   def testSmallValuesShouldVanish(self):
+    # [FUNCTION DOC]
+    # On CPU, adds two different 3x3 fixtures with threshold 0.21 (both small sums, 0.1 and -0.2,
+    # vanish, leaving values 2 and 6) and with threshold 0.11 (only 0.1 vanishes, leaving 2, 6
+    # and -0.2). Asserts indices, values and dense shape. Returns nothing.
     with test_util.force_cpu():
       sp_a = self._SparseTensor_3x3()
       sp_b = self._SparseTensor_3x3_v2()
@@ -138,6 +180,10 @@ class SparseAddTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testGradients(self):
+    # [FUNCTION DOC]
+    # Deprecated-v1 (graph) test with a fixed random seed. For several sizes, adds two random
+    # sparse tensors and asserts the numerical gradient error with respect to both value vectors
+    # is below 1e-3. Uses a CPU-only session. Returns nothing.
     np.random.seed(1618)  # Make it reproducible.
     with self.session(use_gpu=False):
       for n in [10, 31]:
@@ -153,6 +199,10 @@ class SparseAddTest(test.TestCase):
           self.assertLess(err, 1e-3)
 
   def testAddSparseDense(self):
+    # [FUNCTION DOC]
+    # With a fixed seed and random sizes, for several value dtypes and both index dtypes, adds
+    # a sparsified array to a dense constant on CPU, in both argument orders, asserting the
+    # result equals the dense sum and keeps the value dtype. Returns nothing.
     np.random.seed(1618)  # Make it reproducible.
     n, m = np.random.randint(30, size=2)
     for dtype in [np.float32, np.float64, np.int64, np.complex64]:
@@ -175,6 +225,10 @@ class SparseAddTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testSparseTensorDenseAddGradients(self):
+    # [FUNCTION DOC]
+    # Deprecated-v1 (graph) test with a fixed seed. Adds a random sparse tensor to a random
+    # dense constant and asserts the numerical gradient error with respect to the sparse values
+    # and the dense input is below 1e-3. Returns nothing.
     np.random.seed(1618)  # Make it reproducible.
     n, m = np.random.randint(30, size=2)
     rand_vals_np = np.random.randn(n, m).astype(np.float32)
@@ -190,6 +244,10 @@ class SparseAddTest(test.TestCase):
       self.assertLess(err, 1e-3)
 
   def testInvalidSparseTensor(self):
+    # [FUNCTION DOC]
+    # On CPU, adds a dense 2x2 tensor to a sparse value with an out-of-range index (negative or
+    # beyond the shape) and asserts a value error or invalid-argument error whose message
+    # mentions an invalid index. Returns nothing.
     with test_util.force_cpu():
       shape = [2, 2]
       val = [0]
@@ -211,6 +269,12 @@ class SparseAddTest(test.TestCase):
                                     a_shape,
                                     b,
                                     expected_error=""):
+    # [FUNCTION DOC]
+    # HELPER: shared assertion for the invalid-input test. Takes sparse indices, values, dense
+    # shape, a dense tensor b and an expected error message pattern (default empty, matches
+    # anything). Asserts a value error or invalid-argument error is raised both through the
+    # public sparse_add (which builds a SparseTensor) and by calling the generated sparse-dense
+    # add kernel directly, which bypasses SparseTensor validation. Returns nothing.
     # Public API call to sparse-dense add.
     with self.assertRaisesRegex((ValueError, errors_impl.InvalidArgumentError),
                                 expected_error):
@@ -224,6 +288,10 @@ class SparseAddTest(test.TestCase):
               a_indices, a_values, a_shape, b))
 
   def testSparseDenseInvalidInputs(self):
+    # [FUNCTION DOC]
+    # Runs the invalid-input helper for three cases: indices and values with mismatched counts
+    # (17 vs 5), indices of rank 4 against a rank-2 shape, and out-of-range indices (value 7).
+    # Expects the corresponding dimension-incompatible or invalid index errors. Returns nothing.
     self._testSparseDenseInvalidInputs(
         a_indices=constant_op.constant(0, shape=[17, 2], dtype=dtypes.int64),
         a_values=constant_op.constant(0, shape=[5], dtype=dtypes.float32),
@@ -247,6 +315,13 @@ class SparseAddTest(test.TestCase):
 
 
 def _s2d_add_vs_sparse_add(sparsity, n, m, num_iters=50):
+  # [FUNCTION DOC]
+  # HELPER: timing routine for the sparse add benchmark.
+  # Inputs: sparsity threshold (random values below it are zeroed, so larger means sparser),
+  # matrix size n by m, and iteration count (default 50). In a fresh graph and session, builds
+  # a sparse tensor and a dense random matrix, then times converting-to-dense-and-adding versus
+  # sparse_add (after a 3-run warm-up each). Returns a pair of average per-iteration latencies
+  # in milliseconds: dense route first, sparse_add second. Seeds the NumPy generator (fixed).
   np.random.seed(1618)
 
   with session.Session(graph=ops.Graph()) as sess:
@@ -269,8 +344,18 @@ def _s2d_add_vs_sparse_add(sparsity, n, m, num_iters=50):
 
 
 class SparseAddBenchmark(test.Benchmark):
+  # [CLASS DOC]
+  # Benchmark class comparing sparse_add against dense conversion plus addition. Only prints
+  # results; has no state.
 
   def benchmarkSparseAddDense(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the printed header labels the first column as the non-zero percentage, but
+    # the value printed is the thresholding parameter passed to the timing helper (random
+    # values below it are zeroed), so larger numbers mean fewer non-zeros, not more.
+    # Sweeps sparsity thresholds, row counts and column counts, timing both approaches and
+    # printing one line per combination with latencies and speedup (dense time over sparse_add
+    # time). Prints to standard output; returns nothing and reports no benchmark entries.
 
     print("SparseAddDense: add with sparse_to_dense vs. sparse_add")
     print("%nnz \t n \t m \t millis(s2d) \t millis(sparse_add) \t speedup")

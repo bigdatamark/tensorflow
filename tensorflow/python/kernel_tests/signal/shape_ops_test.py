@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Unit tests for the signal framing op (shape_ops.frame). Covers index mapping with and without
+# end padding, argument validation, zero-length signals, static shape inference, mono/stereo/
+# multi-dimensional inputs, the axis argument, windows larger than the signal, dtype
+# preservation, dynamic shapes, numerical gradients and grappler constant folding.
+# Uses the shared signal test_util helper for graph optimization. No import-time side effects
+# beyond the test runner entry point at the bottom.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,8 +38,15 @@ from tensorflow.python.platform import test
 
 @tf_test_util.run_all_in_graph_and_eager_modes
 class FrameTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering shape_ops.frame, which slices a signal into overlapping frames along an
+  # axis. Decorated so every test runs in both graph and eager modes. Holds no shared fixtures.
 
   def test_mapping_of_indices_without_padding(self):
+    # [FUNCTION DOC]
+    # Frames a 1x9152 integer ramp with frame length 512, step 180 and no end padding, and
+    # asserts the output equals the expected index matrix of 49 frames (each frame offset by
+    # a multiple of the step). Returns nothing.
     tensor = constant_op.constant(np.arange(9152), dtypes.int32)
     tensor = array_ops.expand_dims(tensor, 0)
 
@@ -46,6 +60,10 @@ class FrameTest(test.TestCase):
     self.assertAllEqual(expected, result)
 
   def test_mapping_of_indices_with_padding(self):
+    # [FUNCTION DOC]
+    # Frames a 1x10000 integer ramp with frame length 512, step 192 and end padding, and asserts
+    # the result has 53 frames where indices at or beyond the signal length are replaced by the
+    # default pad value zero. Returns nothing.
     tensor = constant_op.constant(np.arange(10000), dtypes.int32)
     tensor = array_ops.expand_dims(tensor, 0)
 
@@ -62,6 +80,10 @@ class FrameTest(test.TestCase):
     self.assertAllEqual(expected, result)
 
   def test_invalid_inputs(self):
+    # [FUNCTION DOC]
+    # Asserts that frame raises a value error for a rank-0 signal, a non-scalar frame length,
+    # a non-scalar frame step, and a non-scalar pad value. In graph mode additionally checks
+    # that a signal of unknown rank does not raise. Returns nothing.
     # Rank 0 input signal.
     with self.assertRaises(ValueError):
       shape_ops.frame(1, 1, 1)
@@ -84,6 +106,10 @@ class FrameTest(test.TestCase):
       shape_ops.frame([1], 1, 1, pad_end=True, pad_value=[1])
 
   def test_length_zero(self):
+    # [FUNCTION DOC]
+    # Frames an empty float signal with frame length 2 and step 1, both with and without end
+    # padding, and asserts the evaluated result has shape zero frames by two samples.
+    # Returns nothing.
     signal = constant_op.constant([], dtype=dtypes.float32)
     frame_length = 2
     frame_step = 1
@@ -97,6 +123,11 @@ class FrameTest(test.TestCase):
     self.assertEqual((0, 2), result.shape)
 
   def test_shape_inference(self):
+    # [FUNCTION DOC]
+    # Graph-mode only (returns immediately when eager). Checks static shape inference of frame
+    # for known and unknown frame length, partially unknown input shapes, different axes and
+    # padding modes, and finally that the inferred static shape matches the evaluated shape
+    # for small signal lengths, frame lengths and both padding settings. Returns nothing.
     if context.executing_eagerly():
       return
     signal = array_ops.zeros((1, 1), dtype=dtypes.int32)
@@ -155,6 +186,10 @@ class FrameTest(test.TestCase):
           self.assertEqual(op.shape.as_list(), list(result.shape))
 
   def test_basic_mono(self):
+    # [FUNCTION DOC]
+    # Frames a six-sample signal (length 3, step 2) reshaped with 0 to 4 leading singleton
+    # dimensions. With padding the last frame is filled with 99; without padding the partial
+    # last frame is dropped. Asserts exact frame contents. Returns nothing.
     signal = np.arange(6)
     frame_length = 3
     frame_step = 2
@@ -179,6 +214,10 @@ class FrameTest(test.TestCase):
       self.assertAllEqual(expected, result)
 
   def test_basic_stereo(self):
+    # [FUNCTION DOC]
+    # Same as the mono test but with a two-channel signal (rows 0..5 and 10..15), checking that
+    # framing is applied independently per channel with and without end padding (pad value 99),
+    # across 0 to 4 leading singleton dimensions. Returns nothing.
     signal = np.vstack([np.arange(6),
                         np.arange(6) + 10])
     frame_length = 3
@@ -207,6 +246,10 @@ class FrameTest(test.TestCase):
       self.assertAllEqual(expected, result)
 
   def test_complex_shape(self):
+    # [FUNCTION DOC]
+    # Frames a signal of shape 2x1x3x1x6 (length 3, step 2) with and without padding and
+    # asserts the nested expected result, confirming leading dimensions are preserved and the
+    # last axis is expanded into frames. Returns nothing.
     signal = np.vstack([np.arange(6),
                         np.arange(6) + 10,
                         np.arange(6) + 20,
@@ -241,6 +284,10 @@ class FrameTest(test.TestCase):
     self.assertAllEqual(expected, result)
 
   def test_axis(self):
+    # [FUNCTION DOC]
+    # Frames a 2x4x2 signal along axis 1 with several frame lengths and steps (padding
+    # enabled) and asserts the evaluated results, including zero padding of trailing frames.
+    # Returns nothing.
     signal = np.reshape(np.arange(16), (2, 4, 2))
     result = shape_ops.frame(signal, frame_length=2, frame_step=2,
                              pad_end=True, axis=1)
@@ -272,6 +319,10 @@ class FrameTest(test.TestCase):
     self.assertAllEqual(expected, self.evaluate(result))
 
   def test_window_larger_than_signal(self):
+    # [FUNCTION DOC]
+    # Frames a 2x2 float signal with frame length 4 (larger than the signal), steps 1 and 2.
+    # With padding, asserts padded frames filled with 99; without padding, asserts an empty
+    # frame dimension (shape 2x0x4). Returns nothing.
     signal = constant_op.constant([[1, 2], [11, 12]], dtype=dtypes.float32)
     frame_length = 4
     frame_step = 1
@@ -295,6 +346,9 @@ class FrameTest(test.TestCase):
     self.assertEqual((2, 0, 4), result.shape)
 
   def test_preserves_type(self):
+    # [FUNCTION DOC]
+    # Frames a float64 range tensor and asserts the output dtype equals the input dtype.
+    # Returns nothing.
     signal = math_ops.range(10, dtype=dtypes.float64)
     frame_length = 2
     frame_step = 3
@@ -303,6 +357,9 @@ class FrameTest(test.TestCase):
     self.assertEqual(result.dtype, signal.dtype)
 
   def test_dynamic_tensor(self):
+    # [FUNCTION DOC]
+    # Graph-mode only. Frames a placeholder whose dimensions are unknown at graph construction
+    # time (fed a 3x4 array, length 2, step 2) and asserts the evaluated frames. Returns nothing.
     if context.executing_eagerly():
       return
     # Show that frame works even when the dimensions of its input are
@@ -321,6 +378,10 @@ class FrameTest(test.TestCase):
                          [[20, 21], [22, 23]]], result)
 
   def test_gradient_numerical(self):
+    # [FUNCTION DOC]
+    # Graph-mode only. Within a session, compares the analytic and numerical gradient of frame
+    # (signal of ones, shape 2x128, length 33, step 9) and asserts the error is below 2e-5.
+    # Returns nothing.
     if context.executing_eagerly():
       return
     with self.session():
@@ -334,6 +395,10 @@ class FrameTest(test.TestCase):
       self.assertLess(error, 2e-5)
 
   def test_constant_folding(self):
+    # [FUNCTION DOC]
+    # Graph-mode only. For both padding settings, builds a graph framing a constant tensor of
+    # ones, runs the grappler optimizer via the test_util helper and asserts the rewritten graph
+    # collapses to a single node, i.e. frame is constant-foldable. Returns nothing.
     """frame should be constant foldable for constant inputs."""
     if context.executing_eagerly():
       return
