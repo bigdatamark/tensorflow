@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Ragged implementations of many array operations: boolean mask, tile, expand dims, size, rank,
+# one-hot, stack/dynamic partition, reverse, split, reshape, broadcast, shape, ones, zeros, fill,
+# bitcast, feature cross (plain and hashed) and fill-empty-rows with its gradient. Most public
+# functions are registered as dispatch overrides of the dense array API so the same top-level
+# calls accept ragged tensors, and some are exported under the ragged namespace. Import-time
+# side effects: export and dispatch registration, and registration of the gradient for the
+# fill-empty-rows kernel. Builds on ragged tensor, dynamic ragged shape and the ragged utilities.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -49,6 +57,20 @@ from tensorflow.python.util.tf_export import tf_export
 @tf_export('ragged.boolean_mask')
 @dispatch.add_dispatch_support
 def boolean_mask(data, mask, name=None):
+  # [FUNCTION DOC]
+  # Keeps the elements of data whose corresponding mask value is true, without flattening the
+  # mask dimensions (unlike the dense boolean mask), so the result is ragged. Inputs: data, a
+  # ragged or dense tensor (or convertible value); mask, a ragged or dense boolean tensor whose
+  # shape is a prefix of data's shape and whose rank is statically known; name, optional scope
+  # name. Both inputs are converted and their row-splits dtypes reconciled. Strategy: a ragged
+  # mask is peeled one ragged level at a time (checking the mask row splits match data's),
+  # the innermost dense mask is applied recursively, and the stripped splits are re-applied;
+  # for a rank-1 mask on ragged data whole rows are selected; a dense mask on ragged data is
+  # first converted to ragged; for two dense tensors the dense mask is applied and ragged
+  # dimensions are rebuilt from per-row counts of kept entries. Returns a tensor of the same rank
+  # as data with ragged rank the larger of data's ragged rank and mask rank minus one. Raises a
+  # value error if the mask rank is unknown or the mask is a scalar; mismatched mask and data
+  # splits fail an assertion at run time. No side effects.
   """Applies a boolean mask to `data` without flattening the mask dimensions.
 
   Returns a potentially ragged tensor that is formed by retaining the elements
@@ -216,6 +238,15 @@ def boolean_mask(data, mask, name=None):
 # ===============================================================================
 @dispatch.dispatch_for_api(array_ops.tile)
 def tile(input: ragged_tensor.Ragged, multiples, name=None):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # Ragged override of the tile operation. Repeats input along each dimension by the matching
+  # entry of multiples. Inputs: input, a ragged tensor (or convertible value; a dense result of
+  # conversion is passed to the dense tile); multiples, a rank-1 integer tensor with one entry
+  # per dimension of input; name, optional scope name. Builds the tiled flat values and the tiled
+  # nested row splits with helper functions and assembles a ragged tensor without validation.
+  # When multiples is statically known, dimensions with multiple one are skipped. Returns a
+  # tensor with the same dtype, rank and ragged rank as input. Raises an error if multiples is not
+  # rank 1. No side effects.
   """Constructs a `RaggedTensor` by tiling a given `RaggedTensor`.
 
   The values of `input` are replicated `multiples[i]` times along the
@@ -258,6 +289,14 @@ def tile(input: ragged_tensor.Ragged, multiples, name=None):  # pylint: disable=
 
 
 def _tile_ragged_values(rt_input, multiples, const_multiples=None):
+  # [FUNCTION DOC]
+  # HELPER: Computes the flat values of the result of the ragged tile operation.
+  # Starting from the indices of the input's flat values, works from the innermost ragged
+  # dimension outward, repeating the index ranges of each row by that dimension's multiple, then
+  # gathers the flat values at those indices and tiles the uniform dimensions. Inputs: rt_input,
+  # the ragged tensor; multiples, rank-1 integer tensor; const_multiples, optional static value
+  # of multiples used to skip dimensions whose multiple is one. Returns a dense tensor with the
+  # dtype and rank of the input's flat values. No side effects.
   """Builds flat_values tensor for a tiled `RaggedTensor`.
 
   Returns a tensor that repeats the values in
@@ -317,6 +356,15 @@ def _tile_ragged_values(rt_input, multiples, const_multiples=None):
 
 
 def _tile_ragged_splits(rt_input, multiples, const_multiples=None):
+  # [FUNCTION DOC]
+  # HELPER: Computes the nested row splits of the result of the ragged tile operation.
+  # For each ragged dimension, takes the input row lengths, multiplies them by the next
+  # dimension's multiple, repeats the length ranges for every outer dimension that is tiled
+  # (using row splits projected onto that dimension), tiles over the outermost uniform dimension,
+  # and converts the lengths back to splits. Inputs: rt_input, the ragged tensor; multiples,
+  # rank-1 integer tensor; const_multiples, optional static value of multiples used to skip
+  # dimensions whose multiple is one. Returns a list of rank-1 integer split tensors, one per
+  # ragged dimension. No side effects.
   """Builds nested_split tensors for a tiled `RaggedTensor`.
 
   Returns a list of split tensors that can be used to construct the
@@ -390,6 +438,15 @@ def _tile_ragged_splits(rt_input, multiples, const_multiples=None):
 
 @dispatch.dispatch_for_api(array_ops.expand_dims_v2)
 def expand_dims(input: ragged_tensor.Ragged, axis, name=None):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # Ragged override of the version-2 expand-dims operation. Inserts a dimension of size one at
+  # position axis. Inputs: input, ragged or dense tensor (dense results of conversion go to the
+  # dense operation); axis, an integer position, negative values counting from the end, valid up
+  # to the rank of input; name, optional scope name. Axis zero wraps the whole tensor in a single
+  # row, axis one gives each outer row a single child using a uniform row length of one, and a
+  # deeper axis recurses into the values. Returns a tensor with the same values and one more
+  # dimension. Raises an error from the axis normalization if axis is out of range. No side
+  # effects.
   """Inserts a dimension with shape 1 into a potentially ragged tensor's shape.
 
   Given a potentially ragged tenor `input`, this operation inserts a
@@ -467,6 +524,11 @@ def _ragged_expand_dims_v1(
     axis=None,
     name=None,
     dim=None):
+  # [FUNCTION DOC]
+  # HELPER: Adapter that registers the ragged expand-dims for the legacy version-1 API.
+  # Accepts the legacy signature (input, axis, name, and the deprecated dim alias). If dim is
+  # given it takes precedence over axis. Then forwards to the version-2 ragged expand-dims and
+  # returns its result. No side effects.
   if dim is not None:
     axis = dim
   return expand_dims(input=input, axis=axis, name=name)
@@ -479,6 +541,12 @@ def _ragged_expand_dims_v1(
 
 @dispatch.dispatch_for_api(array_ops.size_v2)
 def size(input: ragged_tensor.Ragged, out_type=dtypes.int32, name=None):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # Ragged override of the version-2 size operation. Returns the total number of scalar elements
+  # of input as a scalar tensor of dtype out_type (default 32-bit integer). For a ragged input
+  # this is the element count of its flat values; for a dense input the normal size. Inputs:
+  # input (ragged or dense tensor), out_type (numeric dtype), name (optional operation name).
+  # No side effects.
   """Returns the size of a potentially ragged tensor.
 
   The size of a ragged tensor is the size of its inner values.
@@ -507,6 +575,10 @@ def _ragged_size_v1(
     input: ragged_tensor.Ragged,  # pylint: disable=redefined-builtin
     name=None,
     out_type=dtypes.int32):
+  # [FUNCTION DOC]
+  # HELPER: Adapter that registers the ragged size operation for the legacy version-1 API,
+  # whose argument order is input, name, out_type. Forwards to the version-2 ragged size and
+  # returns its scalar result. No side effects.
   return size(input=input, out_type=out_type, name=name)
 
 
@@ -515,6 +587,11 @@ def _ragged_size_v1(
 # ===============================================================================
 @dispatch.dispatch_for_api(array_ops.rank)
 def rank(input: ragged_tensor.Ragged, name=None):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # Ragged override of the rank operation. Returns the number of dimensions of input as a scalar
+  # integer tensor: for a ragged input, its ragged rank plus the rank of its flat values; for a
+  # dense input, the ordinary rank. Inputs: input (ragged or dense tensor), name (optional scope
+  # name). No side effects.
   """Returns the rank of a RaggedTensor.
 
   Returns a 0-D `int32` `Tensor` representing the rank of `input`.
@@ -551,6 +628,16 @@ def ragged_one_hot(indices: ragged_tensor.Ragged,
                    axis=None,
                    dtype=None,
                    name=None):
+  # [FUNCTION DOC]
+  # Ragged override of the one-hot encoding operation. Applies one-hot encoding to the flat
+  # values of a ragged indices tensor and re-wraps the result with the original row structure,
+  # so the output has one extra innermost (or chosen) dense dimension of size depth. Inputs:
+  # indices, ragged tensor of integer indices; depth, scalar size of the new dimension;
+  # on_value and off_value, optional fill values; axis, optional position of the new dimension
+  # (a non-negative axis is shifted down by the ragged rank, minus one means innermost); dtype,
+  # optional output dtype; name, optional scope name (also forwarded to the inner operation).
+  # Raises a value error if a non-negative axis is not greater than the ragged rank of indices.
+  # No side effects.
   """Applies tf.one_hot along the values of a RaggedTensor."""
   # Get the adjusted axis value for the call to array_ops.one_hot.
   # Note: the only negative `axis` value supported by array_ops.one_hot is -1.
@@ -575,6 +662,18 @@ def ragged_one_hot(indices: ragged_tensor.Ragged,
 @tf_export('ragged.stack_dynamic_partitions')
 @dispatch.add_dispatch_support
 def stack_dynamic_partitions(data, partitions, num_partitions, name=None):
+  # [FUNCTION DOC]
+  # Groups slices of data by partition id and returns them as the rows of a ragged tensor with
+  # num_partitions rows. Inputs: data, tensor or ragged tensor to partition; partitions, integer
+  # tensor or ragged tensor of partition ids whose shape is a prefix of data's shape and whose
+  # rank must be statically known; num_partitions, scalar integer count of output rows; name,
+  # optional scope name. Dtypes of partitions and num_partitions are reconciled with data's row
+  # splits dtype. A scalar partitions places the whole of data in one row; a vector sorts
+  # (stable) by partition id and builds rows from value row ids, with run-time assertions that ids
+  # are non-negative and below num_partitions; higher ranks convert both to ragged form, assert
+  # their row splits are equal, and recurse on the values (the name is not passed down). Returns a ragged tensor with the dtype of
+  # data. Raises a value error if the partitions rank is unknown; shape incompatibilities raise
+  # shape errors. No side effects.
   """Stacks dynamic partitions of a Tensor or RaggedTensor.
 
   Returns a RaggedTensor `output` with `num_partitions` rows, where the row
@@ -683,6 +782,13 @@ def stack_dynamic_partitions(data, partitions, num_partitions, name=None):
 # ===============================================================================
 @dispatch.dispatch_for_api(array_ops.reverse)
 def reverse(tensor: ragged_tensor.Ragged, axis, name=None):
+  # [FUNCTION DOC]
+  # Ragged override of the reverse operation. Reverses the order of elements along the given
+  # axes by slicing with a negative step. Inputs: tensor, ragged or dense tensor; axis, a list
+  # or tuple of integers, or a tensor whose value is statically known (negative values count from
+  # the end); name, optional scope name. Returns a tensor of the same structure with the chosen
+  # axes reversed. Raises a type error if axis is neither a list of integers nor a constant
+  # tensor. An empty axis list yields a full-slice copy. No side effects.
   """Reverses a RaggedTensor along the specified axes.
 
   #### Example:
@@ -741,6 +847,12 @@ def reverse(tensor: ragged_tensor.Ragged, axis, name=None):
 @tf_export('ragged.cross')
 @dispatch.add_dispatch_support
 def cross(inputs, name=None):
+  # [FUNCTION DOC]
+  # Generates a feature cross: for every row, all combinations of one value from each input's
+  # row, joined as strings with a separator. Inputs: inputs, a list of rank-2 ragged, dense or
+  # sparse tensors with equal row counts; name, optional operation name. Returns a rank-2 ragged
+  # tensor of strings. Delegates to the internal cross implementation with hashing disabled.
+  # Errors for bad inputs come from the internal function. No side effects.
   """Generates feature cross from a list of tensors.
 
   The input tensors must have `rank=2`, and must all have the same number of
@@ -768,6 +880,15 @@ def cross(inputs, name=None):
 @tf_export('ragged.cross_hashed')
 @dispatch.add_dispatch_support
 def cross_hashed(inputs, num_buckets=0, hash_key=None, name=None):
+  # [FUNCTION DOC]
+  # Generates a hashed feature cross: like the plain cross, but each combination of values is
+  # reduced to a 64-bit integer by hashing the fingerprints of its parts. Inputs: inputs, a list
+  # of rank-2 ragged, dense or sparse tensors with equal row counts; num_buckets, non-negative
+  # integer, when non-zero the hash is taken modulo it (default zero means no bucketing);
+  # hash_key, optional integer key for the fingerprint combination (a default key is used when
+  # nothing is given); name, optional operation name. Returns a rank-2 ragged tensor of 64-bit
+  # integers. Delegates to the internal cross implementation with hashing enabled. No side
+  # effects.
   """Generates hashed feature cross from a list of tensors.
 
   The input tensors must have `rank=2`, and must all have the same number of
@@ -810,6 +931,19 @@ def _cross_internal(inputs,
                     num_buckets=0,
                     hash_key=None,
                     name=None):
+  # [FUNCTION DOC]
+  # HELPER: Shared implementation behind the plain and hashed ragged cross operations.
+  # KNOWN ISSUE: the hash key is wrapped to a signed 64-bit value only when it is strictly
+  # greater than 2 to the power 63, so a key exactly equal to that value is not wrapped.
+  # Inputs: inputs, a list or tuple of ragged (ragged rank one), sparse or dense tensors with
+  # integer or string dtype; hashed_output, whether to emit hashed 64-bit integers instead of
+  # joined strings; num_buckets, modulus for hashed output (zero for none); hash_key, optional
+  # key (default constant used when nothing is given); name, scope and op name. Integer inputs
+  # are cast to 64-bit. The inputs are sorted by kind into ragged, sparse and dense groups, with
+  # their original order recorded as a code string, and passed to the ragged cross kernel. The
+  # output row splits are 32-bit only if every ragged input uses 32-bit splits, else 64-bit.
+  # Returns a rank-2 ragged tensor. Raises a type error if inputs is not a list or tuple, and a
+  # value error for an unsupported dtype or a ragged input whose ragged rank is not one.
   """Generates feature cross from a list of ragged and dense tensors."""
   if not isinstance(inputs, (tuple, list)):
     raise TypeError('Inputs must be a list')
@@ -875,6 +1009,17 @@ def _cross_internal(inputs,
 
 
 def fill_empty_rows(ragged_input, default_value, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the input must have rank 2, but the code never checks the
+  # rank; only the type is validated. The type error message also contains a run of stray
+  # spaces from a mangled string continuation.
+  # Adds one entry holding default_value to every row of a ragged tensor that has no values.
+  # Inputs: ragged_input, a ragged tensor (expected rank 2); default_value, a scalar convertible
+  # to the dtype of ragged_input; name, optional scope name. Calls the fill-empty-rows kernel with
+  # the value row ids, values, and row count, then rebuilds a ragged tensor from the output row
+  # ids and values without validation. Returns a pair: the filled ragged tensor and a boolean
+  # vector marking which input rows were empty. Raises a type error if ragged_input is not a
+  # ragged tensor. No side effects.
   """Fills empty rows in the input `RaggedTensor` with rank 2 with a default
 
   value.
@@ -939,6 +1084,14 @@ def _ragged_fill_empty_rows_grad(
     unused_grad_empty_row_indicator,
     unused_grad_reverse_index_map,
 ):
+  # [FUNCTION DOC]
+  # HELPER: Registered gradient function for the fill-empty-rows operation.
+  # Inputs: op, the forward operation (its fourth output, the reverse index map, is used); the
+  # gradients for the output indices, the empty-row indicator and the reverse index map are
+  # ignored; output_grad_values, the gradient with respect to the output values. Calls the
+  # gradient kernel to split it into a gradient for the input values and for the default value.
+  # Returns a list of four entries: nothing for the value row ids, the values gradient, nothing
+  # for the row count, and the default value gradient. Registration happens at import time.
   """Gradients for RaggedFillEmptyRows."""
   reverse_index_map = op.outputs[3]
 
@@ -958,6 +1111,12 @@ def dynamic_partition(data: ragged_tensor.RaggedOrDense,
                       partitions: ragged_tensor.RaggedOrDense,
                       num_partitions,
                       name=None):
+  # [FUNCTION DOC]
+  # Ragged override of the dynamic partition operation. Inputs: data and partitions, ragged or
+  # dense tensors (partitions' shape a prefix of data's); num_partitions, a plain non-negative
+  # Python integer (tensors are rejected); name, optional name. Stacks the partitions into one
+  # ragged tensor and returns a list of num_partitions tensors, one per partition. Raises a type
+  # error if num_partitions is not a non-negative integer. No side effects.
   """RaggedTensor dispatch override for tf.dynamic_partition."""
   if not isinstance(num_partitions, int) or num_partitions < 0:
     raise TypeError('num_partitions must be a non-negative integer')
@@ -974,6 +1133,18 @@ def split(value: ragged_tensor.Ragged,
           axis=0,
           num=None,
           name=None):
+  # [FUNCTION DOC]
+  # Ragged override of the split operation. Splits a ragged tensor along one non-ragged axis
+  # into a list of pieces. Inputs: value, the ragged tensor; num_or_size_splits, either an
+  # integer count of equal pieces (floor division of the axis size; a count of one returns the
+  # input in a list immediately) or a 1-D list or tensor of piece sizes; axis, integer position
+  # (negative counts from the end, default zero); num, optional number of outputs, needed only
+  # when the length of the sizes tensor is statically unknown; name, optional scope name. Pieces
+  # are taken by slicing the input between running offsets. Run-time assertions check that sizes
+  # are non-negative, that num matches the sizes length, and that the sizes add up exactly to the
+  # axis size. Raises a value error for a ragged axis, an integer count below one, or an
+  # unknown/mismatched num; a type error if the sizes are not rank 1; assertion errors when the
+  # split is not exact. Returns a list of ragged or dense tensors. No side effects.
   """Splits a RaggedTensor `value` into a list of sub RaggedTensors.
 
   If `num_or_size_splits` is an `int`,  then it splits `value` along the
@@ -1136,6 +1307,16 @@ def ragged_reshape(
     tensor: ragged_tensor.RaggedOrDense,
     shape: dynamic_ragged_shape.DenseOrRaggedShape
 ) -> Union[ragged_tensor.RaggedTensor, tensor_lib.Tensor]:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: for a ragged input it reshapes only the immediate values (one level) rather
+  # than the flat values, so a tensor with ragged rank above one gets reshaped from a still
+  # ragged values object, which looks wrong.
+  # Ragged override of the reshape operation. Inputs: tensor, a ragged or dense tensor; shape,
+  # either a ragged dynamic shape or an ordinary dense shape (converted to a tensor). With a
+  # ragged dynamic shape, the values are reshaped to its inner shape and wrapped in its row
+  # partitions without validation, producing a ragged tensor; otherwise the plain reshape of the
+  # values is returned. Returns a ragged tensor or a dense tensor accordingly. Errors come from
+  # the underlying reshape. No side effects.
   """Reshapes a tensor or ragged tensor."""
   tensor = ragged_tensor.convert_to_tensor_or_ragged_tensor(
       tensor, name='tensor')
@@ -1158,6 +1339,12 @@ def broadcast_to(
     input: ragged_tensor.RaggedOrDense,  # pylint: disable=redefined-builtin
     shape: dynamic_ragged_shape.DynamicRaggedShape
 ) -> Union[ragged_tensor.RaggedTensor, tensor_lib.Tensor]:
+  # [FUNCTION DOC]
+  # Ragged override of the broadcast-to operation. Inputs: input, a ragged or dense tensor;
+  # shape, a ragged dynamic shape describing the target. Tiles input as needed so it matches the
+  # shape, by delegating to the dynamic ragged shape module's broadcast. Returns a ragged or
+  # dense tensor with the target shape. Behavior is undefined if input is not broadcast
+  # compatible (errors come from the delegate). No side effects.
   """Broadcasts a potentially ragged tensor to a ragged shape.
 
   Tiles `input` as necessary to match the given shape.
@@ -1182,6 +1369,10 @@ def ragged_shape(
     input: ragged_tensor.Ragged,  # pylint: disable=redefined-builtin
     name: Optional[str] = None,
     out_type=dtypes.int32) -> dynamic_ragged_shape.DynamicRaggedShape:
+  # [FUNCTION DOC]
+  # Ragged override of the shape operation. Returns the shape of a ragged tensor as a dynamic
+  # ragged shape object (not a plain vector). Inputs: input, the ragged tensor; name, optional
+  # scope name; out_type, integer dtype used to encode sizes (default 32-bit). No side effects.
   """Returns the shape of a RaggedTensor.
 
   Args:
@@ -1201,6 +1392,12 @@ def broadcast_dynamic_shape(
     shape_x: dynamic_ragged_shape.DenseOrRaggedShape,
     shape_y: dynamic_ragged_shape.DenseOrRaggedShape
 ) -> dynamic_ragged_shape.DynamicRaggedShape:
+  # [FUNCTION DOC]
+  # Ragged override of the broadcast-dynamic-shape operation. Inputs: shape_x and shape_y, each
+  # a ragged dynamic shape or a dense shape vector (a dense one is wrapped into a dynamic ragged
+  # shape with no row partitions). Returns the dynamic ragged shape resulting from broadcasting
+  # the two together, delegating to the dynamic ragged shape module, which also decides the
+  # dtype. Raises a value error if the shapes are not broadcast compatible. No side effects.
   """Returns the shape formed by broadcasting two shapes to be compatible.
 
   1. If shape_x and shape_y both have row_partitions, then fail if their dtypes
@@ -1232,6 +1429,14 @@ def ones(
     name=None,
     layout=None,
 ) -> ragged_tensor.RaggedOrDense:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says "shaped like x", but the function takes an explicit dynamic
+  # ragged shape, not a tensor to copy the shape from.
+  # Ragged override of the ones operation. Inputs: shape, a dynamic ragged shape; dtype, element
+  # type (default 32-bit float); name, optional operation name; layout, optional distribution
+  # layout, which must be fully replicated. Creates a dense tensor of ones with the shape's inner
+  # shape, then adds the shape's row partitions to make a ragged tensor (or dense if the shape has
+  # none). Raises a value error if the layout is not fully replicated. No other side effects.
   """Returns ones shaped like x."""
   if layout is not None and not layout.is_fully_replicated():
     raise ValueError(
@@ -1250,6 +1455,14 @@ def zeros(
     name=None,
     layout=None,
 ) -> ragged_tensor.RaggedOrDense:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring is copied from the ones operation and wrongly says it returns
+  # ones; the code builds zeros. It is also not "shaped like x" but from an explicit shape.
+  # Ragged override of the zeros operation. Inputs: shape, a dynamic ragged shape; dtype, element
+  # type (default 32-bit float); name, optional operation name; layout, optional distribution
+  # layout, which must be fully replicated. Creates a dense tensor of zeros with the shape's inner
+  # shape and adds the shape's row partitions to produce a ragged (or dense) tensor. Raises a
+  # value error if the layout is not fully replicated. No other side effects.
   """Returns ones shaped like x."""
   if layout is not None and not layout.is_fully_replicated():
     raise ValueError(
@@ -1268,6 +1481,12 @@ def fill(
     name: Optional[str] = None,
     layout=None,
 ) -> ragged_tensor.RaggedOrDense:
+  # [FUNCTION DOC]
+  # Ragged override of the fill operation. Inputs: dims, a dynamic ragged shape; value, a scalar
+  # to fill with; name, optional operation name; layout, optional distribution layout, which must
+  # be fully replicated. Fills a dense tensor of the shape's inner shape with value, then adds
+  # the shape's row partitions to produce a ragged (or dense) tensor. Raises a value error if the
+  # layout is not fully replicated. No other side effects.
   """Creates a tensor with shape `dims` and fills it with `value`."""
   if layout is not None and not layout.is_fully_replicated():
     raise ValueError(
@@ -1287,6 +1506,14 @@ def bitcast(
     input: ragged_tensor.RaggedOrDense,  # pylint: disable=redefined-builtin
     type,  # pylint: disable=redefined-builtin
     name=None) -> ragged_tensor.RaggedOrDense:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the code reads the flat values attribute of the converted input, which a dense
+  # tensor does not have, so a dense input would fail even though the signature admits dense.
+  # Ragged override of the bitcast operation. Reinterprets the bits of the flat values as the
+  # target type, keeping row structure. Inputs: input, a ragged tensor (or convertible value);
+  # type, the target dtype (anything convertible to a dtype); name, optional scope name. Raises a
+  # value error when the source element is smaller than the target and the flat values have rank
+  # below two. Returns a ragged tensor with the new flat values. No side effects.
   """RaggedTensor dispatch override for tf.bitcast."""
   type = dtypes.as_dtype(type)
   with ops.name_scope(name, 'Bitcast', [input]):

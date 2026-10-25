@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Defines batch gather for ragged or dense tensors that substitutes a default value for
+# out-of-range indices instead of failing. It exposes the public gather function and one private
+# helper that builds the shape of the padding tensor for ragged inputs. It imports the ragged
+# dispatch and operator modules only for their side effects (registering ragged overloads).
+# It builds on the ragged array, shape and where operations of this package.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,6 +41,19 @@ def batch_gather_with_default(params,
                               indices,
                               default_value='',
                               name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the out-of-bounds test treats an index equal to the row length as valid (it
+  # only flags indices strictly greater than the upper bound), so such an index gathers past the
+  # padded values or fails instead of receiving the default value as the docstring promises.
+  # Gathers like batch gather, but replaces invalid (negative or too large) indices with a
+  # default value. Inputs: params and indices, ragged or dense tensors (converted if needed)
+  # with statically known rank; default_value, a scalar or rank-1 value convertible to the dtype
+  # of params (default is the empty string); name, optional scope name. Row splits dtypes of the
+  # inputs are reconciled. Method: prepend a padding slice holding the default value along the
+  # first non-batch dimension of params, shift all indices by one, redirect out-of-bounds indices
+  # to position zero (the padding), then batch gather. Returns the gathered tensor. Raises a
+  # value error if default_value is not rank 0 or 1, or if indices or params have unknown rank;
+  # a runtime assertion fails if params rank is lower than indices rank. No state is mutated.
   """Same as `batch_gather` but inserts `default_value` for invalid indices.
 
   This operation is similar to `batch_gather` except that it will substitute
@@ -138,6 +157,14 @@ def batch_gather_with_default(params,
 
 
 def _get_pad_shape(params, indices, row_splits_dtype):
+  # [FUNCTION DOC]
+  # HELPER: Computes the padding shape for the batch gather with default value operation.
+  # Returns a ragged dynamic shape describing a padding tensor that can be concatenated in front
+  # of params along the gather dimension. When params and indices have equal rank, the pad has
+  # params' shape with the last dimension reduced to size one. Otherwise it matches params for
+  # the batch dimensions and has size one in every later dimension. Inputs: params (ragged
+  # tensor), indices (tensor, only its rank is used), row_splits_dtype (integer dtype for sizes).
+  # No side effects.
   """Gets the RaggedTensorDynamicShape for the pad tensor."""
   num_batch_dimensions = indices.shape.ndims - 1
   params_shape = ragged_tensor_shape.RaggedTensorDynamicShape.from_tensor(

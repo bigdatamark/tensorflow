@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Unit tests for the ragged batch gather operation and its variant with a default value for
+# out-of-range indices. One parameterized test class covers gathering over ragged and dense
+# inputs of various ranks, default-value substitution for negative and too-large indices, and
+# the errors raised for rank mismatches, invalid default shapes, unknown rank and batch shape
+# mismatches. Runs in both graph and eager modes; the file ends with the standard test main.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,6 +38,11 @@ from tensorflow.python.platform import googletest
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedBatchGatherOpTest(test_util.TensorFlowTestCase,
                               parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case covering the batch gather operation and the batch gather with default value
+  # operation on ragged and dense tensors. Decorated to run every test in both graph and eager
+  # modes. Tests are driven by parameter lists defined inline above each method; there is no
+  # shared fixture state.
 
   @parameterized.parameters([
       #=========================================================================
@@ -143,6 +154,10 @@ class RaggedBatchGatherOpTest(test_util.TensorFlowTestCase,
               [[[[b'c', b'a'], [b'd', b'd']], [[b'f', b'e']]]], ragged_rank=2)),
   ])
   def testRaggedBatchGather(self, descr, params, indices, expected):
+    # [FUNCTION DOC]
+    # Parameterized scenario: batch gather over params and indices of many rank and ragged-rank
+    # combinations (descr is a human-readable label). Action: call the ragged batch gather with
+    # params and indices. Asserts the result equals expected in values (and ragged structure).
     result = ragged_batch_gather_ops.batch_gather(params, indices)
     self.assertAllEqual(result, expected)
 
@@ -347,6 +362,12 @@ class RaggedBatchGatherOpTest(test_util.TensorFlowTestCase,
   def testRaggedBatchGatherWithDefault(
       self, descr, params, indices, expected, indices_ragged_rank=None,
       expected_ragged_rank=None, ragged_rank=None, default_value='$NONE^'):
+    # [FUNCTION DOC]
+    # Parameterized scenario: batch gather with default value on ragged inputs, including
+    # docstring examples, underbound (negative) and overbound indices. Setup: params and indices
+    # are built as ragged tensors using the given (optional) ragged ranks; default_value defaults
+    # to a placeholder string. Action: call batch gather with default. Asserts the result equals
+    # expected, which is itself built as a ragged tensor with the optional expected ragged rank.
     params = ragged_factory_ops.constant(params, ragged_rank=ragged_rank)
     indices = ragged_factory_ops.constant(
         indices, ragged_rank=indices_ragged_rank or ragged_rank)
@@ -408,6 +429,10 @@ class RaggedBatchGatherOpTest(test_util.TensorFlowTestCase,
   ])
   def testRaggedBatchGatherWithDefaultOnTensors(
       self, descr, params, indices, expected, default_value):
+    # [FUNCTION DOC]
+    # Parameterized scenario: batch gather with default value where params, indices and expected
+    # are plain dense tensors (default_value may be a scalar or a vector). Action: call batch
+    # gather with default. Asserts the result equals expected.
     params = constant_op.constant(params)
     indices = constant_op.constant(indices)
     expected = constant_op.constant(expected)
@@ -429,6 +454,10 @@ class RaggedBatchGatherOpTest(test_util.TensorFlowTestCase,
   ])
   def testRankMismatch(
       self, params, indices, default_value, error):
+    # [FUNCTION DOC]
+    # Parameterized scenario: params has lower rank than indices. Setup: build ragged params and
+    # indices. Action: call batch gather with default. Asserts that an exception of the given
+    # type is raised (a generic exception, because graph and eager modes raise different errors).
     params = ragged_factory_ops.constant(params)
     indices = ragged_factory_ops.constant(indices)
     with self.assertRaises(error):
@@ -457,6 +486,11 @@ class RaggedBatchGatherOpTest(test_util.TensorFlowTestCase,
   def testInvalidDefaultValueRank(
       self, descr, params, indices, default_value, error, ragged_rank=None,
       indices_ragged_rank=None):
+    # [FUNCTION DOC]
+    # Parameterized scenario: the default value has the wrong rank for the params (a scalar
+    # where a vector is needed). Setup: ragged params and indices with optional ragged ranks.
+    # Action: call batch gather with default. Asserts that an exception of the given type is
+    # raised.
     params = ragged_factory_ops.constant(params, ragged_rank=ragged_rank)
     indices = ragged_factory_ops.constant(
         indices, ragged_rank=indices_ragged_rank)
@@ -465,6 +499,11 @@ class RaggedBatchGatherOpTest(test_util.TensorFlowTestCase,
           params, indices, default_value)
 
   def testRaggedBatchGatherUnknownRankError(self):
+    # [FUNCTION DOC]
+    # Scenario: indices (dense or wrapped in a ragged tensor) come from a placeholder with fully
+    # unknown rank. Does nothing in eager mode (placeholders are unavailable). In graph mode,
+    # asserts that batch gather raises a value error saying negative batch dimensions need a
+    # statically known indices rank, for both the dense and the ragged form of the indices.
     if context.executing_eagerly():
       return
     params = [['a', 'b'], ['c', 'd']]
@@ -525,6 +564,11 @@ class RaggedBatchGatherOpTest(test_util.TensorFlowTestCase,
                                        indices,
                                        message=None,
                                        error=ValueError):
+    # [FUNCTION DOC]
+    # Parameterized scenario: statically detectable invalid inputs (batch shape mismatch, rank
+    # mismatch, scalar or too-low-rank params or indices). Action: call batch gather with the
+    # given params and indices. Asserts that an error of the given type (value error by default)
+    # is raised whose message matches the expected pattern message.
     with self.assertRaisesRegex(error, message):
       ragged_batch_gather_ops.batch_gather(params, indices)
 
