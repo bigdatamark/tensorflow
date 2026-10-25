@@ -104,7 +104,6 @@ def _PendingCount(
   # Returns a tuple: the set of to_ops reachable from from_ops, a mapping (default zero) from
   # operation to pending count, and the loop state object or null if there are no while loops.
   """Initialize the pending count for ops between two lists of Operations.
- for ops between two lists of Operations.
 
   'pending_count[op]' indicates the number of backprop inputs
   to this operation.
@@ -344,7 +343,6 @@ def _StopOps(
   # pending_count (mapping from operation to pending backprop count) and xs_set (identity set of
   # tensors being differentiated). Returns the set of stop operations. No mutation of arguments.
   """The set of ops that terminate the gradient computation.
- the gradient computation.
 
   This computes the frontier of the forward graph *before* which backprop
   should stop. Operations in the returned set will not be differentiated.
@@ -389,7 +387,6 @@ def _maybe_colocate_with(  # pylint: disable=invalid-name
   # with op (using the gradient uid to group them); otherwise it simply runs the block unchanged.
   # Yields nothing. Side effect: changes the graph's colocation stack for the duration.
   """Context to colocate with `op` if `colocate_gradients_with_ops`."""
- with `op` if `colocate_gradients_with_ops`."""
   if colocate_gradients_with_ops:
     with ops._colocate_with_for_gradient(op, gradient_uid):  # pylint: disable=protected-access
       yield
@@ -1238,7 +1235,6 @@ def _AggregatedGrads(grads,
   # aggregated by the sparse aggregation helper. Logs the aggregation at verbosity 2. Returns the
   # list of aggregated gradients (the list from the map is modified in place).
   """Get the aggregated gradients for op.
- gradients for op.
 
   Args:
     grads: The map of memoized gradients.

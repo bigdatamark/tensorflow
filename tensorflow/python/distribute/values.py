@@ -82,7 +82,6 @@ def _on_write_update_replica(var, update_fn, value, **kwargs):
   # Returns the update result (updated variable or operation group). Raises a value error for
   # mean aggregation on non-float variables.
   """Updates variables with ON_WRITE synchronization in replica context."""
-  """Updates variables with ON_WRITE synchronization in replica context."""
   if var.aggregation == vs.VariableAggregation.NONE:
     return update_fn(var._get_on_device_or_primary(), value, **kwargs)  # pylint: disable=protected-access
 

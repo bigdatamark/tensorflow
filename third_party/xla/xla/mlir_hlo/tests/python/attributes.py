@@ -12,6 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Script-style test module for the Python bindings of the MHLO dialect attributes. Defines one
+# decorator that runs a test function inside a fresh MLIR context with the mhlo dialect
+# registered, and one test per attribute family: channel handle, comparison direction and type,
+# convolution, dot, gather and scatter dimension numbers, dequantize mode, fft type, fusion
+# kind, output operand alias, precision, rng algorithm and distribution, transpose and type
+# extensions. Each test builds an attribute through its getter and asserts on the accessors
+# and the printed form. Inputs: none (imports the MLIR Python package and its mhlo dialect).
+# Outputs: none; an assertion error aborts the import. Side effects: because the decorator
+# executes each test when the module is imported, merely importing the file runs every test.
 """Test for Python APIs accessing MHLO attributes."""
 
 # pylint: disable=wildcard-import,undefined-variable,missing-function-docstring

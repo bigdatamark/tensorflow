@@ -1017,25 +1017,6 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
       `{'loss': 0.2, 'accuracy': 0.7}`.
     """
     if self.train_function is not None:
-
-    This method can be overridden to support custom training logic.
-    This method is called by `Model.fit` and `Model.train_on_batch`.
-
-    Typically, this method directly controls `tf.function` and
-    `tf.distribute.Strategy` settings, and delegates the actual training
-    logic to `Model.train_step`.
-
-    This function is cached the first time `Model.fit` or
-    `Model.train_on_batch` is called. The cache is cleared whenever
-    `Model.compile` is called.
-
-    Returns:
-      Function. The function created by this method should accept a
-      `tf.data.Iterator`, and return a `dict` containing values that will
-      be passed to `tf.keras.Callbacks.on_train_batch_end`, such as
-      `{'loss': 0.2, 'accuracy': 0.7}`.
-    """
-    if self.train_function is not None:
       return self.train_function
 
     def step_function(model, iterator):

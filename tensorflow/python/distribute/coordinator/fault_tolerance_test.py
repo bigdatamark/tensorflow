@@ -36,8 +36,6 @@ from tensorflow.python.training import server_lib
 
 class MultiWorkerFaultToleranceTest(
     fault_tolerance_test_base.BaseFaultToleranceTest, test.TestCase):
-  """Multi worker fault tolerance tests.
-
   # [CLASS DOC]
   # Runs the shared fault tolerance tests on a cluster of two workers and two parameter servers.
   """Multi worker fault tolerance tests.

@@ -648,7 +648,6 @@ class Functional(training_lib.Model):
     # structure, which is returned. Side effects: sets the mask attribute on input tensors and
     # invokes the layers. Raises an assertion error if an output could not be computed.
     """Computes output tensors for new inputs.
- output tensors for new inputs.
 
     # Note:
         - Can be run on non-Keras tensors.

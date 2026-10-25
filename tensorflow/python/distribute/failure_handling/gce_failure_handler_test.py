@@ -460,7 +460,6 @@ class GceFailureHandlingTest(test.TestCase, parameterized.TestCase):
     # occurred and rerun the worker once.
 
     checkpoint_dir = os.path.join(self.get_temp_dir(), 'fh_ckpt/')
- = os.path.join(self.get_temp_dir(), 'fh_ckpt/')
     if _is_oss():
       rpc_layer = 'grpc'
     else:

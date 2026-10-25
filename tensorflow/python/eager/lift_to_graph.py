@@ -176,7 +176,6 @@ def _copy_source(s, graph, op_map, handle_captures, inverse_captures,
   # makes a plain placeholder with the same dtype, shape, name and device. Copies resource handle
   # shape/type metadata when present. Side effects: records s and its op in op_map. Returns nothing.
   """Create a source in a graph based on a Tensor from a different graph.
- based on a Tensor from a different graph.
 
   This function creates a placeholder analog of `s` in a graph with the
   following behavior:
@@ -258,7 +257,6 @@ def lift_to_graph(tensors,
   # metadata control inputs. Resource variables are mapped to themselves. Raises the unliftable
   # error if a placeholder blocks lifting. Returns the mapping from old ops/tensors to new ones.
   """Copies the tensor and all its inputs recursively to the outer graph.
- and all its inputs recursively to the outer graph.
 
   Args:
     tensors: The Tensors to lift.
