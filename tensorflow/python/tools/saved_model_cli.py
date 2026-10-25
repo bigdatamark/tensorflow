@@ -1,3 +1,16 @@
+# [MODULE DOC]
+# Implementation of the saved_model_cli command-line tool, which inspects and executes graphs
+# stored in a SavedModel directory. It provides sub-commands: show (list tag-sets, signature
+# keys, inputs/outputs, ops and concrete functions), run (feed inputs loaded from files, literal
+# expressions or tf.Example descriptions and print or save the outputs), scan (report ops that
+# appear on a denylist), convert (TensorRT conversion), freeze_model and aot_compile_cpu
+# (ahead-of-time compilation preparation through the saved_model_aot_compile module).
+# Import-time side effects: defines a large set of absl command-line flags (dir, tag_set,
+# signature_def, inputs, input_exprs, outdir, and many more), chooses the default target triple
+# depending on whether the machine is s390x, and builds module-level tables such as the default
+# op denylist and the required-flags-per-command mapping. The main entry point builds an
+# argument parser with one sub-parser per command and runs it through absl.
+# Many helpers here are private and shared between the sub-command implementations.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -235,6 +248,12 @@ command_required_flags = {
 
 
 def _sanitize_nonempty_str_list(xs, name: str):
+  # [FUNCTION DOC]
+  # HELPER: cleans comma-split user input (tag sets, variable names) for the sub-commands.
+  # Takes an iterable of items (xs) and a human-readable field name (name) used in the error.
+  # Skips null items, converts every other item to text and strips surrounding whitespace, and
+  # keeps only the non-empty results in their original order. Returns the new list of strings.
+  # Raises a value error naming the field when nothing non-empty remains. No side effects.
   """Trim items, drop empties/None, require at least one non-empty string."""
   out = []
   for x in xs:
@@ -249,6 +268,12 @@ def _sanitize_nonempty_str_list(xs, name: str):
 
 
 def _show_tag_sets(saved_model_dir):
+  # [FUNCTION DOC]
+  # HELPER: implements the default output of the show command.
+  # Reads every tag-set of the SavedModel found in saved_model_dir (a directory path) and prints
+  # a header line followed by one line per tag-set, with tags sorted inside each set and the
+  # sets sorted. Returns nothing; its only effect is printing to standard output. Errors from
+  # reading the SavedModel propagate.
   """Prints the tag-sets stored in SavedModel directory.
 
   Prints all the tag-sets for MetaGraphs stored in SavedModel directory.
@@ -263,6 +288,10 @@ def _show_tag_sets(saved_model_dir):
 
 
 def _get_ops_in_metagraph(meta_graph_def):
+  # [FUNCTION DOC]
+  # HELPER: shared by the show command variants that list ops.
+  # Takes a MetaGraphDef message and returns a set of the op type names used by its graph
+  # definition (as computed by the meta-graph library). Pure function, no side effects.
   """Returns a set of the ops in the MetaGraph.
 
   Returns the set of all the ops used in the MetaGraphDef indicated by the
@@ -278,6 +307,11 @@ def _get_ops_in_metagraph(meta_graph_def):
 
 
 def _show_ops_in_metagraph_mgd(meta_graph_def):
+  # [FUNCTION DOC]
+  # HELPER: printing half of the op listing, used by the show command and the show-all path.
+  # Takes an already loaded MetaGraphDef, collects its op set and prints one line containing
+  # the meta graph's tags followed by the set of op names. Returns nothing; prints to standard
+  # output. Has no docstring of its own.
   all_ops_set = _get_ops_in_metagraph(meta_graph_def)
   print(
       'The MetaGraph with tag set %s contains the following ops:'
@@ -287,6 +321,12 @@ def _show_ops_in_metagraph_mgd(meta_graph_def):
 
 
 def _show_ops_in_metagraph(saved_model_dir, tag_set):
+  # [FUNCTION DOC]
+  # HELPER: implements the list-ops option of the show command.
+  # Takes the SavedModel directory and a comma-separated tag-set string. Splits and sanitizes
+  # the tags (trimming whitespace and dropping empty items), loads the matching MetaGraphDef and
+  # prints its ops. Returns nothing. Raises a value error if no non-empty tag remains; errors
+  # from loading (for example a missing tag-set) propagate. Prints to standard output.
   """Prints the ops in the MetaGraph.
 
   Prints all the ops used in the MetaGraphDef indicated by the tag_set stored in
@@ -305,6 +345,11 @@ def _show_ops_in_metagraph(saved_model_dir, tag_set):
 
 
 def _show_signature_def_map_keys(saved_model_dir, tag_set):
+  # [FUNCTION DOC]
+  # HELPER: implements the show command when a tag-set but no signature is given.
+  # Loads the signature map for the tag-set (comma-separated string, used as given without
+  # sanitizing) in the SavedModel directory and prints a header plus one line per signature
+  # key, in sorted order. Returns nothing; prints to standard output. Loading errors propagate.
   """Prints the keys for each SignatureDef in the SignatureDef map.
 
   Prints the list of SignatureDef keys from the SignatureDef map specified by
@@ -325,6 +370,11 @@ def _show_signature_def_map_keys(saved_model_dir, tag_set):
 
 def _get_inputs_tensor_info_from_meta_graph_def(meta_graph_def,
                                                 signature_def_key):
+  # [FUNCTION DOC]
+  # HELPER: looks up input descriptions for the show and run paths.
+  # Takes a MetaGraphDef and a signature key string. Returns the mapping from input names to
+  # TensorInfo messages of that signature. Raises a value error listing the available keys if
+  # the signature key is not present. No side effects.
   """Gets TensorInfo for all inputs of the SignatureDef.
 
   Returns a dictionary that maps each input key to its TensorInfo for the given
@@ -350,7 +400,16 @@ def _get_inputs_tensor_info_from_meta_graph_def(meta_graph_def,
 
 def _get_outputs_tensor_info_from_meta_graph_def(meta_graph_def,
                                                  signature_def_key):
+  # [FUNCTION DOC]
+  # HELPER: looks up output descriptions for the show and run paths.
+  # KNOWN ISSUE: the docstring documents only meta_graph_def and omits the signature_def_key
+  # parameter, and unlike the input counterpart it does no validation, so an unknown key
+  # surfaces as a raw key error (or empty default from the protobuf map) rather than a friendly
+  # value error.
+  # Takes a MetaGraphDef and a signature key string and returns the mapping from output names
+  # to TensorInfo messages of that signature. No side effects.
   """Gets TensorInfos for all outputs of the SignatureDef.
+
 
   Returns a dictionary that maps each output key to its TensorInfo for the given
   signature_def_key in the meta_graph_def.
@@ -365,6 +424,13 @@ def _get_outputs_tensor_info_from_meta_graph_def(meta_graph_def,
 
 
 def _show_inputs_outputs_mgd(meta_graph_def, signature_def_key, indent):
+  # [FUNCTION DOC]
+  # HELPER: printing core of the show command for one signature, also used by the show-all path.
+  # Takes a loaded MetaGraphDef, a signature key and an indent level (each level is two spaces).
+  # Prints the inputs (sorted by key) with their dtype, shape and name, then the outputs the
+  # same way, then the signature's method name. Raises a value error if the signature key is
+  # unknown (from the input lookup). Returns nothing; prints to standard output.
+  # Contains a nested printing helper.
   """Prints input and output TensorInfos.
 
   Prints the details of input and output TensorInfos for the SignatureDef mapped
@@ -383,6 +449,9 @@ def _show_inputs_outputs_mgd(meta_graph_def, signature_def_key, indent):
 
   indent_str = '  ' * indent
   def in_print(s):
+    # [FUNCTION DOC]
+    # HELPER: prints one line of output prefixed by the enclosing call's indentation string.
+    # Takes the text s; returns nothing; prints to standard output.
     print(indent_str + s)
 
   in_print('The given SavedModel SignatureDef contains the following input(s):')
@@ -401,6 +470,12 @@ def _show_inputs_outputs_mgd(meta_graph_def, signature_def_key, indent):
 
 
 def _show_inputs_outputs(saved_model_dir, tag_set, signature_def_key, indent=0):
+  # [FUNCTION DOC]
+  # HELPER: implements the show command when both tag-set and signature are given.
+  # Inputs: SavedModel directory, comma-separated tag-set string, signature key, and optional
+  # indent level (default zero). Sanitizes the tags, loads the MetaGraphDef and delegates to
+  # the printing routine. Returns nothing. Raises a value error for an empty tag list or an
+  # unknown signature; loading errors propagate. Prints to standard output.
   """Prints input and output TensorInfos.
 
   Prints the details of input and output TensorInfos for the SignatureDef mapped
@@ -421,6 +496,16 @@ def _show_inputs_outputs(saved_model_dir, tag_set, signature_def_key, indent=0):
 
 
 def _show_defined_functions(saved_model_dir, meta_graphs):
+  # [FUNCTION DOC]
+  # HELPER: prints the object-graph section of the show-all output.
+  # Takes the SavedModel directory and the list of its MetaGraphDef messages. Returns early,
+  # printing nothing, if no meta graph carries an object graph. Otherwise loads the SavedModel
+  # in a fresh graph, skipping checkpoint restoration; if loading fails it prints "N/A" with a
+  # reason (custom ops not registered, or unknown reasons) and returns, swallowing the error.
+  # On success it walks the root object's children sorted by name, and for each concrete or
+  # polymorphic function prints its name and, per concrete function, the numbered option with
+  # its positional and named arguments via the argument printer. Non-function children are
+  # skipped. Uses private framework APIs. Side effects: prints, and loads the model.
   """Prints the callable concrete and polymorphic functions of the Saved Model.
 
   Args:
@@ -479,6 +564,15 @@ def _show_defined_functions(saved_model_dir, meta_graphs):
 
 
 def _print_args(arguments, argument_type='Argument', indent=0):
+  # [FUNCTION DOC]
+  # HELPER: formats function argument descriptions for _show_defined_functions.
+  # Takes a sequence of arguments (strings, tensor specs, iterables, dictionaries or anything
+  # else), a label such as "Argument" or "Named Argument", and an indent level. For each element
+  # it prints, when the indent level is exactly four, a numbered heading; then strings as-is,
+  # tensor specs as name and representation, iterables and dictionaries as type name plus the
+  # listed values, and other values as type name plus text. Returns nothing; prints to standard
+  # output, using backspace characters to erase the trailing separator.
+  # Contains two nested helpers.
   """Formats and prints the argument of the concrete functions defined in the model.
 
   Args:
@@ -490,10 +584,16 @@ def _print_args(arguments, argument_type='Argument', indent=0):
   indent_str = '  ' * indent
 
   def _maybe_add_quotes(value):
+    # [FUNCTION DOC]
+    # HELPER: renders a value as text, wrapping it in single quotes only when it is a string.
+    # Takes any value and returns the resulting text. No side effects.
     is_quotes = '\'' * isinstance(value, str)
     return is_quotes + str(value) + is_quotes
 
   def in_print(s, end='\n'):
+    # [FUNCTION DOC]
+    # HELPER: prints text s prefixed by the indentation string, ending with the given
+    # terminator (default newline). Returns nothing; prints to standard output.
     print(indent_str + s, end=end)
 
   for index, element in enumerate(arguments, 1):
@@ -522,6 +622,12 @@ def _print_args(arguments, argument_type='Argument', indent=0):
 
 
 def _print_tensor_info(tensor_info, indent=0):
+  # [FUNCTION DOC]
+  # HELPER: prints one tensor description for the signature listing.
+  # Takes a TensorInfo message and an indent level (two spaces per level, default zero).
+  # Prints three lines: dtype (symbolic type name looked up from the numeric enum), shape (a
+  # parenthesized comma-separated list of dimension sizes, or the word unknown_rank), and the
+  # tensor name. Returns nothing; prints to standard output. Contains a nested print helper.
   """Prints details of the given tensor_info.
 
   Args:
@@ -530,6 +636,9 @@ def _print_tensor_info(tensor_info, indent=0):
   """
   indent_str = '  ' * indent
   def in_print(s):
+    # [FUNCTION DOC]
+    # HELPER: prints text s prefixed by the enclosing call's indentation string.
+    # Returns nothing; prints to standard output.
     print(indent_str + s)
 
   in_print('    dtype: ' +
@@ -547,6 +656,12 @@ def _print_tensor_info(tensor_info, indent=0):
 
 
 def _show_all(saved_model_dir):
+  # [FUNCTION DOC]
+  # HELPER: implements the all option of the show command.
+  # Reads the whole SavedModel in saved_model_dir and, for every meta graph sorted by its tags,
+  # prints the tag-set heading, then for each signature key (sorted) the signature's inputs and
+  # outputs at indent level one, then the op listing; finally prints the defined concrete
+  # functions section. Returns nothing; prints to standard output. Read errors propagate.
   """Prints tag-set, ops, SignatureDef, and Inputs/Outputs of SavedModel.
 
   Prints all tag-set, ops, SignatureDef and Inputs/Outputs information stored in
@@ -574,6 +689,11 @@ def _show_all(saved_model_dir):
 
 
 def get_meta_graph_def(saved_model_dir, tag_set):
+  # [FUNCTION DOC]
+  # Deprecated public wrapper kept for backward compatibility. Forwards both arguments (the
+  # SavedModel directory and a comma-separated tag-set string) unchanged to the saved-model
+  # utilities function of the same name and returns the matching MetaGraphDef. Errors (for
+  # example a missing tag-set) come from the delegate, not from this function. No side effects.
   """DEPRECATED: Use saved_model_utils.get_meta_graph_def instead.
 
   Gets MetaGraphDef from SavedModel. Returns the MetaGraphDef for the given
@@ -596,6 +716,11 @@ def get_meta_graph_def(saved_model_dir, tag_set):
 
 
 def get_signature_def_map(saved_model_dir, tag_set):
+  # [FUNCTION DOC]
+  # Loads the MetaGraphDef for the comma-separated tag_set from the SavedModel directory
+  # (without trimming or validating the tag string) and returns its signature map, a mapping
+  # from signature key strings to SignatureDef messages. Loading errors propagate.
+  # No side effects beyond reading the model.
   """Gets SignatureDef map from a MetaGraphDef in a SavedModel.
 
   Returns the SignatureDef map for the given tag-set in the SavedModel
@@ -615,6 +740,11 @@ def get_signature_def_map(saved_model_dir, tag_set):
 
 
 def _get_op_denylist_set(op_denylist):
+  # [FUNCTION DOC]
+  # HELPER: parses the value of the op denylist flag for the scan command.
+  # Takes a comma-separated string of op names, strips whitespace from each item and discards
+  # empty items, so an empty string means an empty denylist. Returns a set of op names.
+  # Has no docstring of its own; pure function.
   # Note: Discard empty ops so that "" can mean the empty denylist set.
   set_of_denylisted_ops = {
       op.strip() for op in op_denylist.split(',') if op and op.strip()
@@ -623,6 +753,13 @@ def _get_op_denylist_set(op_denylist):
 
 
 def scan_meta_graph_def(meta_graph_def, op_denylist):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the "does not contain" message always says "default denylisted ops" even when
+  # the caller supplied a custom denylist.
+  # Computes the ops used by the meta graph's graph definition, intersects them with the given
+  # set of denylisted op names, and prints either the offending ops (with the meta graph's tags)
+  # or a success message that echoes the whole denylist. Returns nothing; prints to standard
+  # output. A TODO in the body notes that richer warnings are not yet printed.
   """Scans meta_graph_def and reports if there are ops on denylist.
 
   Print ops if they are on denylist, or print success if no denylisted ops
@@ -656,7 +793,24 @@ def run_saved_model_with_feed_dict(saved_model_dir,
                                    init_tpu=False,
                                    use_tfrt=False,
                                    tf_debug=False):
+  # [FUNCTION DOC]
+  # Executes one signature of a SavedModel in a TF1-style session and reports the results.
+  # Inputs: saved_model_dir (directory), tag_set (comma-separated string, sanitized here),
+  # signature_def_key, input_tensor_key_feed_dict (mapping from input keys to array values),
+  # outdir (directory for saved outputs, or empty/null to skip saving), overwrite_flag (allow
+  # replacing existing output files), and optional worker (session target, default none),
+  # init_tpu (initialize the TPU system first, default false), use_tfrt (request a TFRT session
+  # through the config, default false) and tf_debug (wrap the session in the command-line
+  # debugger, default false).
+  # Behavior: loads the meta graph, verifies every supplied input key exists in the signature,
+  # translates keys to tensor names, loads the SavedModel into a new session on a fresh graph,
+  # runs all outputs (ordered by sorted output key) and prints each result. If outdir is set it
+  # creates the directory when needed and writes one array file per output named after the key.
+  # Raises a value error for an invalid input key, and a runtime error when an output file
+  # exists and overwrite is not enabled (earlier outputs may already have been written).
+  # Side effects: creates a session, may initialize TPUs, prints, logs and writes files.
   """Runs SavedModel and fetch all outputs.
+
 
   Runs the input dictionary through the MetaGraphDef within a SavedModel
   specified by the given tag_set and SignatureDef. Also save the outputs to file
@@ -762,6 +916,12 @@ def run_saved_model_with_feed_dict(saved_model_dir,
 
 
 def preprocess_inputs_arg_string(inputs_str):
+  # [FUNCTION DOC]
+  # Parses the value of the inputs flag. The string holds entries separated by semicolons, each
+  # either key equals filename or key equals filename followed by a bracketed variable name.
+  # Empty entries are skipped. Returns a mapping from input key to a pair of filename and
+  # variable name (the variable name is null when no brackets were given). Raises a runtime
+  # error naming the entry when it matches neither format. Pure; touches no files.
   """Parses input arg into dictionary that maps input to file/variable tuple.
 
   Parses input string in the format of, for example,
@@ -809,6 +969,18 @@ def preprocess_inputs_arg_string(inputs_str):
 
 
 def preprocess_input_exprs_arg_string(input_exprs_str, safe=True):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the format check tests whether an equals sign occurs anywhere in the whole
+  # input string rather than in the current entry, so an entry lacking one is not rejected when
+  # another entry has one; the split then fails with an unhelpful unpacking error. Also, the
+  # flag help promises numpy access, but the only callers in this file use the default safe
+  # mode, which accepts literals only.
+  # Parses semicolon-separated key equals expression entries (empty entries skipped). Splits each
+  # entry at the first equals sign. With safe true (default) the expression is evaluated as a
+  # literal only; failures raise a runtime error chained to the cause. With safe false the
+  # expression is evaluated with arbitrary code execution (numpy available), which is a
+  # code-injection risk. Returns a mapping from input key to evaluated value. Raises a runtime
+  # error when the string lacks any equals sign.
   """Parses input arg into dictionary that maps input key to python expression.
 
   Parses input string in the format of 'input_key=<python expression>' into a
@@ -847,6 +1019,12 @@ def preprocess_input_exprs_arg_string(input_exprs_str, safe=True):
 
 
 def preprocess_input_examples_arg_string(input_examples_str):
+  # [FUNCTION DOC]
+  # Parses the input examples flag. Reuses the expression parser in safe literal mode to turn
+  # each key's text into a list of feature dictionaries, then converts every dictionary into a
+  # serialized tf.Example byte string. Returns a mapping from input key to list of serialized
+  # examples. Raises a value error when a key's value is not a list; errors for bad feature
+  # values come from the example builder. Pure apart from building protocol buffers.
   """Parses input into dict that maps input keys to lists of tf.Example.
 
   Parses input string in the format of 'input_key1=[{feature_name:
@@ -879,6 +1057,14 @@ def preprocess_input_examples_arg_string(input_examples_str):
 
 
 def _create_example_string(example_dict):
+  # [FUNCTION DOC]
+  # HELPER: builds the serialized examples for the input examples flag.
+  # Takes a mapping from feature names to non-empty lists of values. The type of the first
+  # element of each list picks the feature kind: float gives a float list, text gives a byte
+  # list (UTF-8 encoded), bytes gives a byte list, integer gives an int64 list. Returns the
+  # serialized tf.Example bytes. Raises a value error when a value is not a list or the first
+  # element has an unsupported type; an empty list causes an index error. Note that booleans
+  # count as integers.
   """Create a serialized tf.example from feature dictionary."""
   example = example_pb2.Example()
   for feature_name, feature_list in example_dict.items():
@@ -906,7 +1092,19 @@ def _create_example_string(example_dict):
 
 def load_inputs_from_input_arg_string(inputs_str, input_exprs_str,
                                       input_examples_str):
+  # [FUNCTION DOC]
+  # Builds the feed mapping for the run command from the three input flags: inputs_str (files
+  # to load with numpy, optionally selecting a variable inside an archive or pickle),
+  # input_exprs_str (literal expressions) and input_examples_str (feature lists to convert to
+  # serialized examples). Files are opened through the TensorFlow file layer with pickle loading
+  # allowed, which can execute code from untrusted files. A variable name given for a single
+  # array file is ignored with a warning; for archives or pickles it selects the entry, and a
+  # missing entry raises a runtime error. Without a variable name an archive must contain
+  # exactly one array, otherwise a runtime error is raised. Expressions override file inputs and
+  # examples override both, each logging a warning on conflict. Returns a mapping from input key
+  # to value. Parsing errors from the helper parsers propagate. Reads files and logs warnings.
   """Parses input arg strings and create inputs feed_dict.
+
 
   Parses '--inputs' string for inputs to be loaded from file, and parses
   '--input_exprs' string for inputs to be evaluated from python expression.
@@ -1008,6 +1206,12 @@ def load_inputs_from_input_arg_string(inputs_str, input_exprs_str,
 
 
 def show():
+  # [FUNCTION DOC]
+  # Handler for the show command; takes no arguments and reads the parsed flags. With the all
+  # flag it prints everything. Otherwise, without a tag-set it prints all tag-sets (and a hint
+  # if list-ops was requested); with a tag-set it optionally prints the ops, then either the
+  # signature keys (no signature given) or the inputs and outputs of the named signature.
+  # Returns nothing; prints to standard output; errors from the helpers propagate.
   """Function triggered by show command."""
   # If all tag is specified, display all information.
   if _SMCLI_ALL.value:
@@ -1034,6 +1238,14 @@ def show():
 
 
 def run():
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the error occurs when neither inputs nor input expressions
+  # are passed, but the code also accepts input examples as sufficient.
+  # Handler for the run command; takes no arguments and reads flags. Raises an attribute error if
+  # none of the inputs, input expressions or input examples flags is set. Otherwise builds the
+  # feed mapping from those flags and executes the model with the directory, tag-set, signature,
+  # output directory, overwrite, worker, TPU, TFRT and debugger flags. Returns nothing; side
+  # effects are those of the execution routine (session, prints, files).
   """Function triggered by run command.
 
   Raises:
@@ -1066,6 +1278,15 @@ def run():
 
 
 def scan():
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the denylist flag help says an empty string means an empty denylist, but the
+  # code tests the flag value for truthiness, so an empty string is treated like an unset flag
+  # and the default denylist is used.
+  # Handler for the scan command; takes no arguments and reads flags. If a tag-set is given
+  # (sanitized and rejoined) only that meta graph is scanned, otherwise every meta graph in the
+  # SavedModel is scanned. The denylist is the parsed flag value when non-empty, else the
+  # default set (write file, read file, print). Returns nothing; prints findings. Errors from
+  # loading or sanitizing propagate.
   """Function triggered by scan command."""
   if _SMCLI_TAG_SET.value and _SMCLI_OP_DENYLIST.value:
     tags = ','.join(
@@ -1095,6 +1316,15 @@ def scan():
 
 
 def convert_with_tensorrt():
+  # [FUNCTION DOC]
+  # Handler for the convert tensorrt command; takes no arguments and reads flags. Imports the
+  # TensorRT conversion module lazily because it fails when TensorRT is missing. For a TF2
+  # model (default) it builds conversion parameters from the workspace size, precision and
+  # minimum segment size flags, converts with the V2 converter and saves to the output
+  # directory; any conversion failure is re-raised as a runtime error suggesting the TF1 flag.
+  # For a TF1 model it calls the legacy inference graph creation with dynamic ops and batch size
+  # one. Tags come from the sanitized tag-set flag (a null tag-set would fail). Returns nothing;
+  # writes a converted SavedModel.
   """Function triggered by 'convert tensorrt' command."""
   # Import here instead of at top, because this will crash if TensorRT is
   # not installed
@@ -1136,6 +1366,13 @@ def convert_with_tensorrt():
 
 
 def freeze_model():
+  # [FUNCTION DOC]
+  # Handler for the freeze_model command; takes no arguments and reads flags. Chooses the
+  # checkpoint path (flag, or the model's variables file by default) and the variables to feed:
+  # none when the flag is empty, all (represented as null, resolved later) when it is the word
+  # all in any case, otherwise the sanitized comma-separated list. Loads the meta graph for the
+  # sanitized tag-set and asks the AOT compile module to freeze it for the signature key,
+  # writing outputs under the output prefix. Returns nothing; writes files.
   """Function triggered by freeze_model command."""
   checkpoint_path = (
       _SMCLI_CHECKPOINT_PATH.value
@@ -1166,6 +1403,15 @@ def freeze_model():
 
 
 def aot_compile_cpu():
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the required-flags table only demands the C++ class name for this command, yet
+  # the directory, tag-set and output prefix are used unconditionally; omitting them fails later
+  # with an unhelpful error.
+  # Handler for the aot_compile_cpu command; takes no arguments and reads flags. Resolves the
+  # checkpoint path and variables to feed exactly like the freeze handler, then calls the AOT
+  # compile module with the meta graph for the sanitized tag-set, signature key, output prefix,
+  # target triple, target CPU, C++ class name and a multithreading boolean (false when the flag
+  # text is f, false or 0 in any case). Returns nothing; writes generated headers and objects.
   """Function triggered by aot_compile_cpu command."""
   checkpoint_path = (
       _SMCLI_CHECKPOINT_PATH.value
@@ -1202,6 +1448,11 @@ def aot_compile_cpu():
 
 
 def add_show_subparser(subparsers):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the help text says multiple tags are separated by semicolons, but the code
+  # splits the tag-set on commas (and the example itself uses a comma).
+  # Registers the show sub-parser on the given sub-parsers object, with a raw-text usage
+  # description, and binds the show handler as its default function. Returns nothing.
   """Add parser for `show`."""
   show_msg = (
       'Usage examples:\n'
@@ -1231,6 +1482,11 @@ def add_show_subparser(subparsers):
 
 
 def add_run_subparser(subparsers):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the usage example invokes the show command instead of run, and separates
+  # multiple inputs with a comma although the parser splits on semicolons.
+  # Registers the run sub-parser on the given sub-parsers object with its raw-text usage
+  # description and binds the run handler as default function. Returns nothing.
   """Add parser for `run`."""
   run_msg = ('Usage example:\n'
              'To run input tensors from files through a MetaGraphDef and save'
@@ -1251,6 +1507,9 @@ def add_run_subparser(subparsers):
 
 
 def add_scan_subparser(subparsers):
+  # [FUNCTION DOC]
+  # Registers the scan sub-parser on the given sub-parsers object with its raw-text usage
+  # description and binds the scan handler as default function. Returns nothing.
   """Add parser for `scan`."""
   scan_msg = ('Usage example:\n'
               'To scan for default denylisted ops in SavedModel:\n'
@@ -1267,6 +1526,11 @@ def add_scan_subparser(subparsers):
 
 
 def add_convert_subparser(subparsers):
+  # [FUNCTION DOC]
+  # Registers the convert sub-parser on the given sub-parsers object, and nested under it a
+  # tensorrt conversion method sub-parser whose default function is the TensorRT handler.
+  # Only the nested parser binds a handler, so convert without a method has no function.
+  # Returns nothing.
   """Add parser for `convert`."""
   convert_msg = ('Usage example:\n'
                  'To convert the SavedModel to one that have TensorRT ops:\n'
@@ -1291,6 +1555,9 @@ def add_convert_subparser(subparsers):
 
 
 def add_freeze_model_subparser(subparsers):
+  # [FUNCTION DOC]
+  # Registers the freeze_model sub-parser on the given sub-parsers object with a usage
+  # description (built by joining lines) and binds the freeze handler. Returns nothing.
   """Add parser for `freeze_model`."""
   compile_msg = '\n'.join(
       ['Usage example:',
@@ -1309,6 +1576,12 @@ def add_freeze_model_subparser(subparsers):
 
 
 def add_aot_compile_cpu_subparser(subparsers):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the usage example passes an output directory flag, but the command actually
+  # reads the output prefix flag.
+  # Registers the aot_compile_cpu sub-parser on the given sub-parsers object, with a usage
+  # description that also explains XLA compilation options and the XLA flags environment
+  # variable, and binds the AOT compile handler. Returns nothing.
   """Add parser for `aot_compile_cpu`."""
   compile_msg = '\n'.join(
       ['Usage example:',
@@ -1343,6 +1616,12 @@ def add_aot_compile_cpu_subparser(subparsers):
 
 
 def create_parser():
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it returns a namespace of parsed arguments, but it returns
+  # the argument parser object itself without parsing anything.
+  # Builds the top-level absl-aware argument parser (conflicting options resolved in favor of
+  # later ones, version option 0.1.0) and registers the show, run, scan, convert, aot_compile_cpu
+  # and freeze_model sub-parsers. Takes no arguments; returns the parser.
   """Creates a parser that parse the command line arguments.
 
   Returns:
@@ -1377,9 +1656,17 @@ def create_parser():
 
 
 def main():
+  # [FUNCTION DOC]
+  # Program entry point. Sets the logging verbosity to info and runs the absl application with
+  # the nested main routine. Takes no arguments; the process exits through absl.
   logging.set_verbosity(logging.INFO)
 
   def smcli_main(argv):
+    # [FUNCTION DOC]
+    # Real command dispatcher run by absl with the command-line argument list. Builds the
+    # parser, errors out when fewer than two arguments are present, marks the flags required by
+    # the chosen command (the second argument; an unknown command name causes a key error) as
+    # required, parses the arguments and calls the selected handler. Returns nothing.
     parser = create_parser()
     if len(argv) < 2:
       parser.error('Too few arguments.')
