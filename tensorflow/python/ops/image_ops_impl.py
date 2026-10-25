@@ -1,3 +1,15 @@
+# [MODULE DOC]
+# Implementation module for TensorFlow's image operations, exported mostly under the public
+# image namespace (flip, rotate, crop, pad, resize, color adjustments, JPEG/PNG/GIF/BMP
+# encode and decode, bounding-box utilities, non-max suppression, SSIM/PSNR/MS-SSIM metrics,
+# gradients, sobel edges, random and stateless-random variants, and so on).
+# Most public functions are decorated with export and dispatch registration, and many have
+# deprecated v1 aliases. Underscore-prefixed functions validate shapes or implement shared
+# logic for the public ones.
+# Import-time side effects: marks several image ops (random crop, HSV to RGB, bounding box
+# drawing and sampling, glimpse extraction, non-max suppression variants, box proposal
+# generation) as not differentiable in the op registry.
+# Heavily relies on generated image op kernels, math, array and control flow ops.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -70,6 +82,12 @@ ops.NotDifferentiable('GenerateBoundingBoxProposals')
 
 # pylint: disable=invalid-name
 def _assert(cond, ex_type, msg):
+  # [FUNCTION DOC]
+  # HELPER: shared validation utility for static-or-dynamic checks in this module.
+  # Polymorphic assertion. Inputs: cond (python boolean or tensor), ex_type (exception class
+  # used for static failures), msg (error message). If cond is a tensor or variable, returns a
+  # list holding one graph assert op carrying the message. Otherwise a falsy cond raises
+  # ex_type with msg, and a truthy cond returns an empty list. No other side effects.
   """A polymorphic assert, works with tensors and boolean expressions.
 
   If `cond` is not a tensor, behave like an ordinary assert statement, except
@@ -94,6 +112,9 @@ def _assert(cond, ex_type, msg):
 
 
 def _is_tensor(x):
+  # [FUNCTION DOC]
+  # HELPER: type check used by the assertion helper.
+  # Input x is any object. Returns true if it is a tensor or a variable, false otherwise.
   """Returns `True` if `x` is a symbolic tensor-like object.
 
   Args:
@@ -106,6 +127,12 @@ def _is_tensor(x):
 
 
 def _ImageDimensions(image, rank):
+  # [FUNCTION DOC]
+  # HELPER: shape utility mixing static and dynamic dimensions for image ops.
+  # Inputs: image (tensor), rank (expected number of dimensions). If the static shape is fully
+  # defined, returns it as a list of integers. Otherwise the static shape is coerced to the
+  # given rank (raises a value error if the rank is incompatible) and each unknown entry is
+  # replaced by the matching scalar tensor from the dynamic shape. Returns a list.
   """Returns the dimensions of an image tensor.
 
   Args:
@@ -128,6 +155,13 @@ def _ImageDimensions(image, rank):
 
 
 def _Check3DImage(image, require_static=True):
+  # [FUNCTION DOC]
+  # HELPER: shape validation for 3-D image inputs.
+  # Inputs: image (tensor expected to be height, width, channels) and require_static (default
+  # true; demands a fully defined shape). Raises a value error if the rank is not 3, if
+  # require_static is set and the shape is not fully defined, or if any dimension is zero.
+  # Returns an empty list when the shape is fully defined, otherwise a list with one assert op
+  # checking at run time that all dimensions are positive.
   """Assert that we are working with a properly shaped image.
 
   Args:
@@ -163,6 +197,11 @@ def _Check3DImage(image, require_static=True):
 
 
 def _Assert3DImage(image):
+  # [FUNCTION DOC]
+  # HELPER: validation wrapper for 3-D image inputs.
+  # Input image is a tensor. Runs the 3-D check without requiring a static shape and returns
+  # the image with control dependencies on any resulting run-time assert ops (the image itself
+  # when statically verified). Raises a value error for non rank-3 or zero-sized shapes.
   """Assert that we are working with a properly shaped image.
 
   Performs the check statically if possible (i.e. if the shape
@@ -185,6 +224,11 @@ def _Assert3DImage(image):
 
 
 def _AssertAtLeast3DImage(image):
+  # [FUNCTION DOC]
+  # HELPER: validation wrapper used by most public image ops.
+  # Input image is a tensor with at least three dimensions (batch dimensions optional).
+  # Runs the at-least-3D check without requiring a static shape and returns the image with
+  # control dependencies on any run-time asserts. Raises a value error for static violations.
   """Assert that we are working with a properly shaped image.
 
   Performs the check statically if possible (i.e. if the shape
@@ -207,6 +251,13 @@ def _AssertAtLeast3DImage(image):
 
 
 def _CheckAtLeast3DImage(image, require_static=True):
+  # [FUNCTION DOC]
+  # HELPER: shape validation for images with three or more dimensions.
+  # Inputs: image (tensor) and require_static (default true, demands fully defined shape).
+  # Unknown rank is treated as requiring rank 3. Raises a value error if the rank is below 3,
+  # if a static shape is required but not fully defined, or if any of the inner three
+  # dimensions is zero. Returns an empty list when the inner three dimensions are known,
+  # otherwise a list of two assert ops (inner dimensions positive, rank at least 3).
   """Assert that we are working with a properly shaped image.
 
   Args:
@@ -250,6 +301,11 @@ def _CheckAtLeast3DImage(image, require_static=True):
 
 
 def _AssertGrayscaleImage(image):
+  # [FUNCTION DOC]
+  # HELPER: validation wrapper for grayscale inputs.
+  # Input image is a tensor of at least two dimensions whose last dimension is 1. Returns the
+  # image with control dependencies on any run-time asserts. Raises a value error on static
+  # violations (rank below 2 or last dimension not 1).
   """Assert that we are working with a properly shaped grayscale image.
 
   Performs the check statically if possible (i.e. if the shape
@@ -273,6 +329,14 @@ def _AssertGrayscaleImage(image):
 
 
 def _CheckGrayscaleImage(image, require_static=True):
+  # [FUNCTION DOC]
+  # HELPER: shape validation for grayscale images.
+  # KNOWN ISSUE: the dynamic rank assertion requires rank at least 3 although the message and
+  # the static check say a grayscale image only needs two dimensions.
+  # Inputs: image (tensor) and require_static (default true). Raises a value error if rank is
+  # below 2, if a static shape is required but unknown, or if the fully known last dimension is
+  # not 1. For partially unknown shapes returns two assert ops (last dimension equals 1, rank
+  # check); otherwise returns an empty list.
   """Assert that we are working with properly shaped grayscale image.
 
   Args:
@@ -316,6 +380,11 @@ def _CheckGrayscaleImage(image, require_static=True):
 
 
 def fix_image_flip_shape(image, result):
+  # [FUNCTION DOC]
+  # HELPER: shape fix-up for flip and transform ops on single images.
+  # Inputs: image (original tensor) and result (transformed tensor). Mutates the static shape
+  # of result: if the original shape is completely unknown, sets it to three unknown
+  # dimensions, otherwise copies the original shape. Returns result.
   """Set the shape to 3 dimensional if we don't know anything else.
 
   Args:
@@ -337,6 +406,12 @@ def fix_image_flip_shape(image, result):
 @tf_export('image.random_flip_up_down')
 @dispatch.add_dispatch_support
 def random_flip_up_down(image, seed=None):
+  # [FUNCTION DOC]
+  # Public op: with probability one half flips the image vertically (along height). Inputs:
+  # image (3-D or 4-D tensor; in a batch each image is flipped independently) and seed
+  # (optional integer for the stateful uniform random generator). Returns a tensor of the same
+  # type and shape. Raises a value error if the rank is not 3 or 4. Delegates to the shared
+  # random flip helper with the stateful generator.
   """Randomly flips an image vertically (upside down).
 
   With a 1 in 2 chance, outputs the contents of `image` flipped along the first
@@ -384,6 +459,11 @@ def random_flip_up_down(image, seed=None):
 @tf_export('image.random_flip_left_right')
 @dispatch.add_dispatch_support
 def random_flip_left_right(image, seed=None):
+  # [FUNCTION DOC]
+  # Public op: with probability one half flips the image horizontally (along width). Inputs:
+  # image (3-D or 4-D tensor; batch items flipped independently) and seed (optional integer
+  # for the stateful generator). Returns a tensor of the same type and shape. Raises a value
+  # error for unsupported ranks. Delegates to the shared random flip helper.
   """Randomly flip an image horizontally (left to right).
 
   With a 1 in 2 chance, outputs the contents of `image` flipped along the
@@ -432,6 +512,11 @@ def random_flip_left_right(image, seed=None):
 @tf_export('image.stateless_random_flip_left_right', v1=[])
 @dispatch.add_dispatch_support
 def stateless_random_flip_left_right(image, seed):
+  # [FUNCTION DOC]
+  # Public deterministic op: randomly flips horizontally using a stateless generator. Inputs:
+  # image (3-D or 4-D tensor) and seed (tensor of shape two, int32 or int64). Same seed gives
+  # the same result regardless of global seed or call count. Returns a tensor of the same type
+  # and shape. Raises a value error for unsupported ranks.
   """Randomly flip an image horizontally (left to right) deterministically.
 
   Guarantees the same results given the same `seed` independent of how many
@@ -463,6 +548,11 @@ def stateless_random_flip_left_right(image, seed):
 @tf_export('image.stateless_random_flip_up_down', v1=[])
 @dispatch.add_dispatch_support
 def stateless_random_flip_up_down(image, seed):
+  # [FUNCTION DOC]
+  # Public deterministic op: randomly flips vertically using a stateless generator. Inputs:
+  # image (3-D or 4-D tensor) and seed (tensor of shape two, int32 or int64). Deterministic for
+  # a given seed. Returns a tensor of the same type and shape. Raises a value error for
+  # unsupported ranks.
   """Randomly flip an image vertically (upside down) deterministically.
 
   Guarantees the same results given the same `seed` independent of how many
@@ -492,6 +582,14 @@ def stateless_random_flip_up_down(image, seed):
 
 
 def _random_flip(image, flip_index, random_func, scope_name):
+  # [FUNCTION DOC]
+  # HELPER: common implementation behind the stateful and stateless random flip ops.
+  # Inputs: image (3-D or 4-D tensor), flip_index (0 vertical, 1 horizontal), random_func
+  # (callable producing uniform random values given shape, minimum and maximum) and scope_name.
+  # Converts and validates the image, then for rank 3 draws one number and flips on a
+  # conditional (below one half), for rank 4 draws one number per batch item, rounds to a
+  # 0/1 mask and blends flipped and original images; unknown rank chooses at run time.
+  # Raises a value error for ranks other than 3 or 4. Returns the image-shaped tensor.
   """Randomly (50% chance) flip an image along axis `flip_index`.
 
   Args:
@@ -515,6 +613,11 @@ def _random_flip(image, flip_index, random_func, scope_name):
     shape = image.get_shape()
 
     def f_rank3():
+      # [FUNCTION DOC]
+      # HELPER: rank-3 branch of the random flip.
+      # Takes no arguments (uses the enclosing image, flip axis and random function). Draws one
+      # uniform number and, if below one half, reverses the image along the flip axis. Returns
+      # the resulting tensor with its static shape fixed up.
       uniform_random = random_func(shape=[], minval=0, maxval=1.0)
       mirror_cond = math_ops.less(uniform_random, .5)
       result = tf_cond.cond(
@@ -525,6 +628,11 @@ def _random_flip(image, flip_index, random_func, scope_name):
       return fix_image_flip_shape(image, result)
 
     def f_rank4():
+      # [FUNCTION DOC]
+      # HELPER: rank-4 (batched) branch of the random flip.
+      # Takes no arguments. Draws one uniform number per batch item, rounds it to a 0/1 flip
+      # mask, and returns the per-image blend of the flipped (along the axis shifted by one for
+      # the batch dimension) and original images, preserving dtype.
       batch_size = array_ops.shape(image)[0]
       uniform_random = random_func(shape=[batch_size], minval=0, maxval=1.0)
       flips = math_ops.round(
@@ -548,6 +656,10 @@ def _random_flip(image, flip_index, random_func, scope_name):
 @tf_export('image.flip_left_right')
 @dispatch.add_dispatch_support
 def flip_left_right(image):
+  # [FUNCTION DOC]
+  # Public op: deterministically flips an image (or every image of a batch) along the width
+  # axis. Input image is a 3-D or 4-D tensor. Returns a tensor of the same type and shape.
+  # Raises a value error for unsupported ranks. Delegates to the shared flip helper.
   """Flip an image horizontally (left to right).
 
   Outputs the contents of `image` flipped along the width dimension.
@@ -583,6 +695,10 @@ def flip_left_right(image):
 @tf_export('image.flip_up_down')
 @dispatch.add_dispatch_support
 def flip_up_down(image):
+  # [FUNCTION DOC]
+  # Public op: deterministically flips an image (or every image of a batch) along the height
+  # axis. Input image is a 3-D or 4-D tensor. Returns a tensor of the same type and shape.
+  # Raises a value error for unsupported ranks. Delegates to the shared flip helper.
   """Flip an image vertically (upside down).
 
   Outputs the contents of `image` flipped along the height dimension.
@@ -616,6 +732,12 @@ def flip_up_down(image):
 
 
 def _flip(image, flip_index, scope_name):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation of the deterministic flip ops.
+  # KNOWN ISSUE: the error message for bad ranks lacks a space before the word must.
+  # Inputs: image (3-D or 4-D tensor), flip_index (0 vertical, 1 horizontal), scope_name.
+  # Converts and validates the image, then reverses along the proper axis (shifted by one for
+  # batches); unknown rank is resolved at run time. Raises a value error for other ranks.
   """Flip an image either horizontally or vertically.
 
   Outputs the contents of `image` flipped along the dimension `flip_index`.
@@ -640,9 +762,15 @@ def _flip(image, flip_index, scope_name):
     shape = image.get_shape()
 
     def f_rank3():
+      # [FUNCTION DOC]
+      # HELPER: rank-3 branch of the flip. No arguments; reverses the enclosing image along
+      # the flip axis and returns it with its static shape fixed up.
       return fix_image_flip_shape(image, array_ops.reverse(image, [flip_index]))
 
     def f_rank4():
+      # [FUNCTION DOC]
+      # HELPER: rank-4 branch of the flip. No arguments; reverses the enclosing batched image
+      # along the flip axis shifted by one (to skip the batch dimension) and returns it.
       return array_ops.reverse(image, [flip_index + 1])
 
     if shape.ndims is None:
@@ -660,6 +788,11 @@ def _flip(image, flip_index, scope_name):
 @tf_export('image.rot90')
 @dispatch.add_dispatch_support
 def rot90(image, k=1, name=None):
+  # [FUNCTION DOC]
+  # Public op: rotates an image or batch counter-clockwise by k quarter turns. Inputs: image
+  # (3-D or 4-D tensor), k (scalar integer, may be negative or a tensor; taken modulo four),
+  # name (optional operation name). Returns a rotated tensor of the same type; height and
+  # width swap for odd turns. Raises a value error for unsupported ranks.
   """Rotate image(s) by 90 degrees.
 
 
@@ -708,9 +841,15 @@ def rot90(image, k=1, name=None):
       rank = array_ops.rank(image)
 
       def f_rank3():
+        # [FUNCTION DOC]
+        # HELPER: rank-3 branch of rot90 used when the rank is only known at run time.
+        # No arguments; rotates the enclosing image by the enclosing k and scope, returns it.
         return _rot90_3D(image, k, scope)
 
       def f_rank4():
+        # [FUNCTION DOC]
+        # HELPER: rank-4 branch of rot90 used when the rank is only known at run time.
+        # No arguments; rotates the enclosing image batch and returns the result.
         return _rot90_4D(image, k, scope)
 
       return tf_cond.cond(math_ops.equal(rank, 3), f_rank3, f_rank4)
@@ -724,6 +863,12 @@ def rot90(image, k=1, name=None):
 
 
 def _rot90_3D(image, k, name_scope):
+  # [FUNCTION DOC]
+  # HELPER: single-image implementation of rot90.
+  # Inputs: image (3-D tensor), k (scalar integer, already reduced modulo four), name_scope
+  # (name for the resulting case op). Selects among identity, 90, 180 and 270 degree rotations
+  # with an exclusive case op, defaulting to the unchanged image. Sets the static shape to
+  # unknown height and width with the known channel count. Returns the rotated tensor.
   """Rotate image counter-clockwise by 90 degrees `k` times.
 
   Args:
@@ -737,12 +882,21 @@ def _rot90_3D(image, k, name_scope):
   """
 
   def _rot90():
+    # [FUNCTION DOC]
+    # HELPER: case branch for one quarter turn of a single image: mirrors width, then swaps
+    # height and width. No arguments; returns the rotated tensor.
     return array_ops.transpose(array_ops.reverse_v2(image, [1]), [1, 0, 2])
 
   def _rot180():
+    # [FUNCTION DOC]
+    # HELPER: case branch for a half turn of a single image: reverses height and width.
+    # No arguments; returns the rotated tensor.
     return array_ops.reverse_v2(image, [0, 1])
 
   def _rot270():
+    # [FUNCTION DOC]
+    # HELPER: case branch for three quarter turns of a single image: swaps height and width,
+    # then reverses width. No arguments; returns the rotated tensor.
     return array_ops.reverse_v2(array_ops.transpose(image, [1, 0, 2]), [1])
 
   cases = [(math_ops.equal(k, 1), _rot90), (math_ops.equal(k, 2), _rot180),
@@ -755,6 +909,14 @@ def _rot90_3D(image, k, name_scope):
 
 
 def _rot90_4D(images, k, name_scope):
+  # [FUNCTION DOC]
+  # HELPER: batch implementation of rot90.
+  # KNOWN ISSUE: the docstring says images has shape height, width, channels, but the code
+  # requires a 4-D batch tensor.
+  # Inputs: images (4-D tensor), k (scalar integer reduced modulo four), name_scope (name for
+  # the case op). Chooses among identity and 90, 180, 270 degree rotations of every image via
+  # an exclusive case op. Resets the static shape keeping only batch and channel sizes.
+  # Returns the rotated batch.
   """Rotate batch of images counter-clockwise by 90 degrees `k` times.
 
   Args:
@@ -768,12 +930,21 @@ def _rot90_4D(images, k, name_scope):
   """
 
   def _rot90():
+    # [FUNCTION DOC]
+    # HELPER: case branch for one quarter turn of a batch: mirrors width, swaps height and
+    # width. No arguments; returns the rotated batch.
     return array_ops.transpose(array_ops.reverse_v2(images, [2]), [0, 2, 1, 3])
 
   def _rot180():
+    # [FUNCTION DOC]
+    # HELPER: case branch for a half turn of a batch: reverses height and width.
+    # No arguments; returns the rotated batch.
     return array_ops.reverse_v2(images, [1, 2])
 
   def _rot270():
+    # [FUNCTION DOC]
+    # HELPER: case branch for three quarter turns of a batch: swaps height and width, then
+    # reverses width. No arguments; returns the rotated batch.
     return array_ops.reverse_v2(array_ops.transpose(images, [0, 2, 1, 3]), [2])
 
   cases = [(math_ops.equal(k, 1), _rot90), (math_ops.equal(k, 2), _rot180),
@@ -789,6 +960,12 @@ def _rot90_4D(images, k, name_scope):
 @tf_export('image.transpose', v1=['image.transpose', 'image.transpose_image'])
 @dispatch.add_dispatch_support
 def transpose(image, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring claims a float tensor is returned and repeats the usage
+  # example section; the output actually keeps the input dtype.
+  # Public op: swaps the height and width axes of an image or batch. Inputs: image (3-D or 4-D
+  # tensor) and name (optional operation name). Returns the transposed tensor. Raises a value
+  # error for ranks other than 3 or 4; unknown rank is resolved at run time.
   """Transpose image(s) by swapping the height and width dimension.
 
   Usage Example:
@@ -841,9 +1018,15 @@ def transpose(image, name=None):
       rank = array_ops.rank(image)
 
       def f_rank3():
+        # [FUNCTION DOC]
+        # HELPER: rank-3 branch of transpose. No arguments; swaps height and width of the
+        # enclosing image and returns it.
         return array_ops.transpose(image, [1, 0, 2], name=name)
 
       def f_rank4():
+        # [FUNCTION DOC]
+        # HELPER: rank-4 branch of transpose. No arguments; swaps height and width of every
+        # image in the enclosing batch and returns it.
         return array_ops.transpose(image, [0, 2, 1, 3], name=name)
 
       return tf_cond.cond(math_ops.equal(rank, 3), f_rank3, f_rank4)
@@ -859,6 +1042,16 @@ def transpose(image, name=None):
 @tf_export('image.central_crop')
 @dispatch.add_dispatch_support
 def central_crop(image, central_fraction):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: when central_fraction is not a compile-time constant, the run-time check
+  # combines the two bounds with logical or instead of and, so it can never fail for any
+  # real value; out-of-range fractions are therefore not caught dynamically.
+  # Public op: crops the centered region of an image or batch. Inputs: image (3-D or 4-D
+  # tensor) and central_fraction (float in the range zero exclusive to one inclusive, python
+  # number or tensor). A fraction of exactly one returns the image unchanged. Crop offsets are
+  # computed statically when possible, else dynamically, then a slice is taken and the static
+  # shape restored. Raises a value error for an out-of-range constant fraction or rank other
+  # than 3 or 4. Returns the cropped tensor.
   """Crop the central region of the image(s).
 
   Remove the outer parts of an image but retain the central region of the image
@@ -936,6 +1129,10 @@ def central_crop(image, central_fraction):
     # Helper method to return the `idx`-th dimension of `tensor`, along with
     # a boolean signifying if the dimension is dynamic.
     def _get_dim(tensor, idx):
+      # [FUNCTION DOC]
+      # HELPER: dimension lookup for central_crop. Inputs: tensor and axis index. Returns a
+      # pair: the dimension size (integer if statically known, else a scalar tensor) and a
+      # flag saying whether that size is dynamic.
       static_shape = tensor.get_shape().dims[idx].value
       if static_shape is not None:
         return static_shape, False
@@ -1007,6 +1204,13 @@ def central_crop(image, central_fraction):
 @dispatch.add_dispatch_support
 def pad_to_bounding_box(image, offset_height, offset_width, target_height,
                         target_width):
+  # [FUNCTION DOC]
+  # Public op: pads an image or batch with zeros to a target size, placing the original at the
+  # given offset. Inputs: image (3-D or 4-D tensor), offset_height and offset_width (rows
+  # and columns of zeros to add above and left; non-negative integers or scalar tensors),
+  # target_height and target_width (output size). Always performs dimension checks by
+  # delegating to the internal version with checks enabled. Raises a value error for
+  # incompatible sizes or negative offsets. Returns the padded tensor.
   """Pad `image` with zeros to the specified `height` and `width`.
 
   Adds `offset_height` rows of zeros on top, `offset_width` columns of
@@ -1075,6 +1279,15 @@ def pad_to_bounding_box(image, offset_height, offset_width, target_height,
 # b/204377079#comment6 for more context.
 def pad_to_bounding_box_internal(image, offset_height, offset_width,
                                  target_height, target_width, check_dims):
+  # [FUNCTION DOC]
+  # HELPER: implementation behind the public pad op, kept separate so callers can skip assert
+  # ops (which can slow multi-device programs).
+  # Inputs: image (3-D, 4-D or unknown-rank tensor), offsets and target sizes (integers or
+  # scalar tensors), check_dims (when true adds asserts for non-negative offsets and enough
+  # room for the image). A rank-3 image is temporarily batched, padded with zeros on height
+  # and width only, given a best-effort static shape and unbatched again. Raises a value error
+  # for ranks other than 3 or 4 and, with check_dims, for invalid offsets or sizes.
+  # Returns the padded tensor.
   """Pad `image` with zeros to the specified `height` and `width`.
 
   Adds `offset_height` rows of zeros on top, `offset_width` columns of
@@ -1171,6 +1384,13 @@ def pad_to_bounding_box_internal(image, offset_height, offset_width,
 @dispatch.add_dispatch_support
 def crop_to_bounding_box(image, offset_height, offset_width, target_height,
                          target_width):
+  # [FUNCTION DOC]
+  # Public op: cuts a rectangle out of an image or batch. Inputs: image (3-D, 4-D or
+  # unknown-rank tensor), offset_height and offset_width (top-left corner), target_height and
+  # target_width (box size, must be positive); all integers or scalar tensors. Adds asserts
+  # (static or run-time) that offsets are non-negative, sizes positive and the box fits inside
+  # the image. Returns the cropped tensor with the input dtype. Raises a value error for
+  # invalid rank or violated constraints.
   """Crops an `image` to a specified bounding box.
 
   This op cuts a rectangular bounding box out of `image`. The top-left corner
@@ -1279,6 +1499,13 @@ def crop_to_bounding_box(image, offset_height, offset_width, target_height,
     v1=['image.resize_with_crop_or_pad', 'image.resize_image_with_crop_or_pad'])
 @dispatch.add_dispatch_support
 def resize_image_with_crop_or_pad(image, target_height, target_width):
+  # [FUNCTION DOC]
+  # Public op: centrally crops dimensions that are too large and zero-pads dimensions that are
+  # too small so the result has the target size. Inputs: image (3-D or 4-D tensor),
+  # target_height and target_width (positive integers or scalar tensors). Validates targets
+  # are positive, crops first and pads second, then re-asserts the resulting size. Raises a
+  # value error for bad rank, non-positive targets or a mismatching result. Returns the
+  # resized tensor (unbatched if the input was a single image).
   """Crops and/or pads an image to a target width and height.
 
   Resizes an image to a target width and height by either centrally
@@ -1374,18 +1601,27 @@ def resize_image_with_crop_or_pad(image, target_height, target_width):
                                                         target_width)
 
     def max_(x, y):
+      # [FUNCTION DOC]
+      # HELPER: maximum that works for python numbers or tensors. Inputs x and y; returns a
+      # tensor maximum if either is a tensor, else the plain maximum.
       if _is_tensor(x) or _is_tensor(y):
         return math_ops.maximum(x, y)
       else:
         return max(x, y)
 
     def min_(x, y):
+      # [FUNCTION DOC]
+      # HELPER: minimum that works for python numbers or tensors. Inputs x and y; returns a
+      # tensor minimum if either is a tensor, else the plain minimum.
       if _is_tensor(x) or _is_tensor(y):
         return math_ops.minimum(x, y)
       else:
         return min(x, y)
 
     def equal_(x, y):
+      # [FUNCTION DOC]
+      # HELPER: equality that works for python numbers or tensors. Inputs x and y; returns a
+      # boolean tensor if either is a tensor, else a plain boolean.
       if _is_tensor(x) or _is_tensor(y):
         return math_ops.equal(x, y)
       else:
@@ -1433,6 +1669,10 @@ def resize_image_with_crop_or_pad(image, target_height, target_width):
 
 @tf_export(v1=['image.ResizeMethod'])
 class ResizeMethodV1:
+  # [CLASS DOC]
+  # Version 1 enumeration of resize interpolation methods, exported under the v1 image
+  # namespace. Plain constants (no instances needed): bilinear 0, nearest neighbor 1,
+  # bicubic 2 and area 3, all integers.
   """See `v1.image.resize` for details."""
   BILINEAR = 0
   NEAREST_NEIGHBOR = 1
@@ -1442,6 +1682,11 @@ class ResizeMethodV1:
 
 @tf_export('image.ResizeMethod', v1=[])
 class ResizeMethod:
+  # [CLASS DOC]
+  # Version 2 enumeration of resize interpolation methods, exported under the main image
+  # namespace. Constants are lowercase strings: bilinear, nearest, bicubic, area, lanczos3,
+  # lanczos5, gaussian and mitchellcubic. Never instantiated; used as names for the method
+  # argument of resize.
   """See `tf.image.resize` for details."""
   BILINEAR = 'bilinear'
   NEAREST_NEIGHBOR = 'nearest'
@@ -1455,6 +1700,16 @@ class ResizeMethod:
 
 def _resize_images_common(images, resizer_fn, size, preserve_aspect_ratio, name,
                           skip_resize_if_same):
+  # [FUNCTION DOC]
+  # HELPER: shared core of the version 1 and version 2 resize functions.
+  # Inputs: images (3-D or 4-D tensor of known rank), resizer_fn (callable taking batched
+  # images and the size tensor and returning resized images), size (two elements: new height,
+  # new width), preserve_aspect_ratio (if true shrinks or grows the size so the aspect ratio
+  # is kept and the result fits within size), name (operation scope), skip_resize_if_same
+  # (return the input untouched when static sizes already match). Raises a value error for
+  # unknown rank, bad rank, or a size that is not a two-element integer vector. Sets the
+  # static output height and width when known and removes the temporary batch dimension for
+  # single images. Returns the resized tensor.
   """Core functionality for v1 and v2 resize functions."""
   with ops.name_scope(name, 'resize', [images, size]):
     images = ops.convert_to_tensor(images, name='images')
@@ -1539,6 +1794,14 @@ def resize_images(images,
                   align_corners=False,
                   preserve_aspect_ratio=False,
                   name=None):
+  # [FUNCTION DOC]
+  # Public version 1 resize op. Inputs: images (3-D or 4-D tensor), size (two integers: new
+  # height, new width), method (enumeration value, default bilinear; also accepts the version
+  # 2 enumeration values for the four legacy methods), align_corners (default false; aligns
+  # corner pixel centers), preserve_aspect_ratio (default false) and name (optional).
+  # Uses the legacy kernels without half-pixel centers and skips the resize when the static
+  # size already matches (so the input dtype may be kept). Output is float32 except for
+  # nearest neighbor. Raises a value error for bad shapes, bad size or an unsupported method.
   """Resize `images` to `size` using the specified `method`.
 
   Resized images will be distorted if their original aspect ratio is not
@@ -1591,6 +1854,12 @@ def resize_images(images,
   """
 
   def resize_fn(images_t, new_size):
+    # [FUNCTION DOC]
+    # HELPER: legacy resizer callback handed to the common resize routine.
+    # Inputs: images_t (batched 4-D tensor) and new_size (two-element size tensor). Dispatches
+    # on the enclosing method to the bilinear, nearest neighbor, bicubic or area kernel using
+    # the enclosing align_corners flag. Raises a value error for any other method.
+    # Returns the resized batch.
     """Legacy resize core function, passed to _resize_images_common."""
     if method == ResizeMethodV1.BILINEAR or method == ResizeMethod.BILINEAR:
       return gen_image_ops.resize_bilinear(
@@ -1625,6 +1894,15 @@ def resize_images_v2(images,
                      preserve_aspect_ratio=False,
                      antialias=False,
                      name=None):
+  # [FUNCTION DOC]
+  # Public version 2 resize op. Inputs: images (3-D or 4-D tensor), size (two integers: new
+  # height, new width), method (enumeration value or equivalent string, default bilinear),
+  # preserve_aspect_ratio (default false; size becomes a maximum), antialias (default false;
+  # filter when downsampling, no effect for nearest or area) and name (optional). Uses half
+  # pixel centers; bilinear and bicubic with antialias, and the lanczos, gaussian and
+  # mitchell methods, go through the scale-and-translate kernel. Never skips the resize.
+  # Output is float32 except nearest neighbor. Raises a value error for bad shapes, bad size
+  # or an unsupported method.
   """Resize `images` to `size` using the specified `method`.
 
   Resized images will be distorted if their original aspect ratio is not
@@ -1753,6 +2031,12 @@ def resize_images_v2(images,
   """
 
   def resize_fn(images_t, new_size):
+    # [FUNCTION DOC]
+    # HELPER: resizer callback for the version 2 resize, handed to the common resize routine.
+    # Inputs: images_t (batched tensor) and new_size (two-element size tensor). Picks the
+    # kernel by the enclosing method and antialias flag (half-pixel bilinear, nearest, bicubic,
+    # area, or scale-and-translate for filter-based methods). Raises a value error for an
+    # unsupported method. Returns the resized batch.
     """Resize core function, passed to _resize_images_common."""
     scale_and_translate_methods = [
         ResizeMethod.LANCZOS3, ResizeMethod.LANCZOS5, ResizeMethod.GAUSSIAN,
@@ -1760,6 +2044,11 @@ def resize_images_v2(images,
     ]
 
     def resize_with_scale_and_translate(method):
+      # [FUNCTION DOC]
+      # HELPER: runs the scale-and-translate resize kernel. Input method is the kernel type
+      # name (for example triangle or keyscubic, or one of the filter method strings). Scale
+      # is the ratio of new size to current size, with zero translation, and the enclosing
+      # antialias flag. Returns the resized batch.
       scale = (
           math_ops.cast(new_size, dtype=dtypes.float32) /
           math_ops.cast(array_ops.shape(images_t)[1:3], dtype=dtypes.float32))
@@ -1804,6 +2093,14 @@ def resize_images_v2(images,
 
 def _resize_image_with_pad_common(image, target_height, target_width,
                                   resize_fn):
+  # [FUNCTION DOC]
+  # HELPER: shared core of the version 1 and 2 resize-with-pad ops.
+  # Inputs: image (3-D, 4-D or unknown-rank tensor), target_height and target_width (positive
+  # integers or tensors) and resize_fn (callable taking image batch and new size). Asserts
+  # targets are positive, computes the largest size preserving aspect ratio that fits the
+  # target, resizes with resize_fn, then pads with zeros centered to the target size.
+  # Raises a value error for bad rank, non-positive targets or unknown result shape.
+  # Returns the padded tensor, unbatched if the input was a single image.
   """Core functionality for v1 and v2 resize_image_with_pad functions."""
   with ops.name_scope(None, 'resize_image_with_pad', [image]):
     image = ops.convert_to_tensor(image, name='image')
@@ -1830,6 +2127,9 @@ def _resize_image_with_pad_common(image, target_height, target_width,
     image = control_flow_ops.with_dependencies(assert_ops, image)
 
     def max_(x, y):
+      # [FUNCTION DOC]
+      # HELPER: maximum that works for python numbers or tensors. Inputs x and y; returns a
+      # tensor maximum if either is a tensor, else the plain maximum.
       if _is_tensor(x) or _is_tensor(y):
         return math_ops.maximum(x, y)
       else:
@@ -1884,6 +2184,12 @@ def resize_image_with_pad_v1(image,
                              target_width,
                              method=ResizeMethodV1.BILINEAR,
                              align_corners=False):
+  # [FUNCTION DOC]
+  # Public version 1 op: resizes keeping aspect ratio and pads with zeros to the target size.
+  # Inputs: image (3-D or 4-D tensor), target_height, target_width, method (version 1 resize
+  # method, default bilinear) and align_corners (default false). Delegates to the common
+  # resize-with-pad core using the version 1 resize. Raises a value error for non-positive
+  # targets. Returns the resized and padded tensor.
   """Resizes and pads an image to a target width and height.
 
   Resizes an image to a target width and height by keeping
@@ -1914,6 +2220,9 @@ def resize_image_with_pad_v1(image,
   """
 
   def _resize_fn(im, new_size):
+    # [FUNCTION DOC]
+    # HELPER: adapter passing the enclosing method and align_corners to the version 1 resize.
+    # Inputs: im (image batch) and new_size (height and width). Returns the resized batch.
     return resize_images(im, new_size, method, align_corners=align_corners)
 
   return _resize_image_with_pad_common(image, target_height, target_width,
@@ -1927,6 +2236,12 @@ def resize_image_with_pad_v2(image,
                              target_width,
                              method=ResizeMethod.BILINEAR,
                              antialias=False):
+  # [FUNCTION DOC]
+  # Public version 2 op: resizes keeping aspect ratio and pads with zeros to the target size.
+  # Inputs: image (3-D or 4-D tensor), target_height, target_width, method (version 2 resize
+  # method, default bilinear) and antialias (default false). Delegates to the common
+  # resize-with-pad core using the version 2 resize. Raises a value error for non-positive
+  # targets. Returns the resized and padded tensor.
   """Resizes and pads an image to a target width and height.
 
   Resizes an image to a target width and height by keeping
@@ -1955,6 +2270,9 @@ def resize_image_with_pad_v2(image,
   """
 
   def _resize_fn(im, new_size):
+    # [FUNCTION DOC]
+    # HELPER: adapter passing the enclosing method and antialias flag to the version 2 resize.
+    # Inputs: im (image batch) and new_size (height and width). Returns the resized batch.
     return resize_images_v2(im, new_size, method, antialias=antialias)
 
   return _resize_image_with_pad_common(image, target_height, target_width,
@@ -1964,6 +2282,13 @@ def resize_image_with_pad_v2(image,
 @tf_export('image.per_image_standardization')
 @dispatch.add_dispatch_support
 def per_image_standardization(image):
+  # [FUNCTION DOC]
+  # Public op: standardizes every image to zero mean and unit variance. Input image is a
+  # tensor with at least three dimensions, the last three being height, width and channels.
+  # Casts to float32, subtracts the per-image mean and divides by the standard deviation
+  # floored at one over the square root of the pixel count (avoids division by zero for
+  # uniform images). Raises a value error for fewer than three dimensions. Returns a float32
+  # tensor of the same shape.
   """Linearly scales each image in `image` to have mean 0 and variance 1.
 
   For each 3-D image `x` in `image`, computes `(x - mean) / adjusted_stddev`,
@@ -2024,6 +2349,11 @@ def per_image_standardization(image):
 @dispatch.register_unary_elementwise_api
 @dispatch.add_dispatch_support
 def random_brightness(image, max_delta, seed=None):
+  # [FUNCTION DOC]
+  # Public op: adds a random brightness offset to an image. Inputs: image (image or images),
+  # max_delta (non-negative float) and seed (optional integer for the stateful generator).
+  # Draws one offset uniformly between minus and plus max_delta and applies the brightness
+  # adjustment. Raises a value error if max_delta is negative. Returns the adjusted image.
   """Adjust the brightness of images by a random factor.
 
   Equivalent to `adjust_brightness()` using a `delta` randomly picked in the
@@ -2068,6 +2398,11 @@ def random_brightness(image, max_delta, seed=None):
 @dispatch.register_unary_elementwise_api
 @dispatch.add_dispatch_support
 def stateless_random_brightness(image, max_delta, seed):
+  # [FUNCTION DOC]
+  # Public deterministic op: random brightness offset from a stateless generator. Inputs:
+  # image, max_delta (non-negative float) and seed (tensor of shape two, int32 or int64).
+  # Same seed gives the same offset. Raises a value error if max_delta is negative. Returns
+  # the brightness-adjusted image.
   """Adjust the brightness of images by a random factor deterministically.
 
   Equivalent to `adjust_brightness()` using a `delta` randomly picked in the
@@ -2114,6 +2449,11 @@ def stateless_random_brightness(image, max_delta, seed):
 @tf_export('image.random_contrast')
 @dispatch.add_dispatch_support
 def random_contrast(image, lower, upper, seed=None):
+  # [FUNCTION DOC]
+  # Public op: applies a random contrast factor. Inputs: image (at least 3-D), lower and upper
+  # (float bounds of the factor; upper must exceed lower and lower must be non-negative) and
+  # seed (optional integer). Draws the factor uniformly in the range and applies the contrast
+  # adjustment. Raises a value error for violated bounds. Returns the adjusted image.
   """Adjust the contrast of an image or images by a random factor.
 
   Equivalent to `adjust_contrast()` but uses a `contrast_factor` randomly
@@ -2160,6 +2500,11 @@ def random_contrast(image, lower, upper, seed=None):
 @tf_export('image.stateless_random_contrast', v1=[])
 @dispatch.add_dispatch_support
 def stateless_random_contrast(image, lower, upper, seed):
+  # [FUNCTION DOC]
+  # Public deterministic op: random contrast factor from a stateless generator. Inputs: image
+  # (at least 3-D), lower and upper (float bounds; upper greater than lower, lower
+  # non-negative) and seed (tensor of shape two). Raises a value error for violated bounds.
+  # Returns the contrast-adjusted image.
   """Adjust the contrast of images by a random factor deterministically.
 
   Guarantees the same results given the same `seed` independent of how many
@@ -2208,6 +2553,12 @@ def stateless_random_contrast(image, lower, upper, seed):
 @dispatch.register_unary_elementwise_api
 @dispatch.add_dispatch_support
 def adjust_brightness(image, delta):
+  # [FUNCTION DOC]
+  # Public op: adds a constant to every pixel component. Inputs: image (RGB or grayscale
+  # image tensor) and delta (scalar; for normal images between minus one and one). Non-float16
+  # and non-float32 images are first converted to float32 with scaling; after the addition the
+  # result is converted back to the original dtype with saturation. Returns a tensor of the
+  # same shape and dtype as image.
   """Adjust the brightness of RGB or Grayscale images.
 
   This is a convenience method that converts RGB images to float
@@ -2260,6 +2611,12 @@ def adjust_brightness(image, delta):
 @tf_export('image.adjust_contrast')
 @dispatch.add_dispatch_support
 def adjust_contrast(images, contrast_factor):
+  # [FUNCTION DOC]
+  # Public op: scales each channel around its mean. Inputs: images (tensor of at least three
+  # dimensions, last three are height, width, channels) and contrast_factor (float multiplier,
+  # any real number). Converts to float32 if needed, applies the contrast kernel per channel
+  # per image, and converts back to the original dtype with saturation. Returns a tensor of
+  # the same shape and dtype.
   """Adjust contrast of RGB or grayscale images.
 
   This is a convenience method that converts RGB images to float
@@ -2320,6 +2677,13 @@ def adjust_contrast(images, contrast_factor):
 @dispatch.register_unary_elementwise_api
 @dispatch.add_dispatch_support
 def adjust_gamma(image, gamma=1, gain=1):
+  # [FUNCTION DOC]
+  # Public op: gamma (power law) correction, output equals gain times input to the power gamma.
+  # Inputs: image (image tensor), gamma (non-negative scalar or tensor, default one) and gain
+  # (constant multiplier, default one). Converts to float32 when needed, applies the formula
+  # and converts back to the original dtype with saturation. Raises a value error if a
+  # statically known gamma is negative; for tensor gamma adds a run-time assertion.
+  # Returns a tensor of the same shape and dtype.
   """Performs [Gamma Correction](http://en.wikipedia.org/wiki/Gamma_correction).
 
   on the input image.
@@ -2386,6 +2750,15 @@ def adjust_gamma(image, gamma=1, gain=1):
 @dispatch.register_unary_elementwise_api
 @dispatch.add_dispatch_support
 def convert_image_dtype(image, dtype, saturate=False, name=None):
+  # [FUNCTION DOC]
+  # Public op: converts an image to another numeric dtype, rescaling values. Inputs: image
+  # (tensor), dtype (target floating or integer type), saturate (default false; clip before
+  # risky casts) and name (optional). Integer to integer: scales by the ratio of ranges
+  # (dividing when narrowing, multiplying after casting when widening). Float to float: plain
+  # cast. Integer to float: cast then multiply by one over the integer maximum. Float to
+  # integer: multiply by maximum plus one half, then cast (or saturating cast). Same dtype
+  # returns an identity copy. Raises an attribute error if either dtype is neither floating
+  # nor integer. Returns the converted tensor.
   """Convert `image` to `dtype`, scaling its values if needed.
 
   The operation supports data types (for `image` and `dtype`) of
@@ -2570,6 +2943,11 @@ def convert_image_dtype(image, dtype, saturate=False, name=None):
 @tf_export('image.rgb_to_grayscale')
 @dispatch.add_dispatch_support
 def rgb_to_grayscale(images, name=None):
+  # [FUNCTION DOC]
+  # Public op: converts RGB images to single-channel luma. Inputs: images (tensor whose last
+  # dimension is 3) and name (optional). Converts to float32, takes the weighted sum of the
+  # channels using luma weights, keeps a trailing size-one dimension and converts back to the
+  # original dtype. Returns a tensor of the same rank and dtype with last dimension 1.
   """Converts one or more images from RGB to Grayscale.
 
   Outputs a tensor of the same `DType` and rank as `images`.  The size of the
@@ -2606,6 +2984,11 @@ def rgb_to_grayscale(images, name=None):
 @tf_export('image.grayscale_to_rgb')
 @dispatch.add_dispatch_support
 def grayscale_to_rgb(images, name=None):
+  # [FUNCTION DOC]
+  # Public op: replicates a single channel into three. Inputs: images (tensor of at least two
+  # dimensions whose last dimension is 1) and name (optional). Validates the grayscale shape
+  # (value error if invalid statically), tiles the last dimension three times and sets the
+  # static shape. Returns a tensor of the same dtype with last dimension 3.
   """Converts one or more images from Grayscale to RGB.
 
   Outputs a tensor of the same `DType` and rank as `images`.  The size of the
@@ -2643,6 +3026,11 @@ def grayscale_to_rgb(images, name=None):
 @tf_export('image.random_hue')
 @dispatch.add_dispatch_support
 def random_hue(image, max_delta, seed=None):
+  # [FUNCTION DOC]
+  # Public op: random hue rotation. Inputs: image (RGB image or images), max_delta (float in
+  # the range zero to one half) and seed (optional integer). Draws the hue offset uniformly
+  # between minus and plus max_delta and applies the hue adjustment. Raises a value error if
+  # max_delta exceeds one half or is negative. Returns the adjusted image.
   """Adjust the hue of RGB images by a random factor.
 
   Equivalent to `adjust_hue()` but uses a `delta` randomly
@@ -2692,6 +3080,10 @@ def random_hue(image, max_delta, seed=None):
 @tf_export('image.stateless_random_hue', v1=[])
 @dispatch.add_dispatch_support
 def stateless_random_hue(image, max_delta, seed):
+  # [FUNCTION DOC]
+  # Public deterministic op: random hue rotation from a stateless generator. Inputs: image
+  # (RGB), max_delta (float between zero and one half) and seed (tensor of shape two).
+  # Raises a value error if max_delta is out of range. Returns the hue-adjusted image.
   """Adjust the hue of RGB images by a random factor deterministically.
 
   Equivalent to `adjust_hue()` but uses a `delta` randomly picked in the
@@ -2743,6 +3135,14 @@ def stateless_random_hue(image, max_delta, seed):
 @tf_export('image.adjust_hue')
 @dispatch.add_dispatch_support
 def adjust_hue(image, delta, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the range check on delta (must be within minus one and one) is only done in
+  # eager mode; in graph mode an out-of-range delta is not rejected here.
+  # Public op: rotates the hue of RGB images. Inputs: image (RGB image or images, last
+  # dimension 3), delta (float added to the hue channel) and name (optional). Converts to
+  # float32 if needed, applies the hue kernel (which fails with an invalid-argument error for
+  # bad channel count or rank) and converts back to the original dtype. Raises a value error
+  # in eager mode for delta out of range. Returns the adjusted image.
   """Adjust hue of RGB images.
 
   This is a convenience method that converts an RGB image to float
@@ -2819,6 +3219,12 @@ def adjust_hue(image, delta, name=None):
 @tf_export('image.random_jpeg_quality')
 @dispatch.add_dispatch_support
 def random_jpeg_quality(image, min_jpeg_quality, max_jpeg_quality, seed=None):
+  # [FUNCTION DOC]
+  # Public op: re-encodes the image as JPEG at a random quality to add compression noise.
+  # Inputs: image (3-D image with 1 or 3 channels), min_jpeg_quality and max_jpeg_quality
+  # (integers within 0 to 100, min strictly below max) and seed (optional integer). Draws an
+  # integer quality from the range (upper bound exclusive) and applies the quality adjustment.
+  # Raises a value error for out-of-range or misordered bounds. Returns the adjusted image.
   """Randomly changes jpeg encoding quality for inducing jpeg noise.
 
   `min_jpeg_quality` must be in the interval `[0, 100]` and less than
@@ -2876,6 +3282,11 @@ def stateless_random_jpeg_quality(image,
                                   min_jpeg_quality,
                                   max_jpeg_quality,
                                   seed):
+  # [FUNCTION DOC]
+  # Public deterministic op: random JPEG quality from a stateless generator. Inputs: image
+  # (3-D, 1 or 3 channels), min_jpeg_quality and max_jpeg_quality (integers in 0 to 100, min
+  # below max) and seed (tensor of shape two). Raises a value error for bad bounds. Returns
+  # the quality-adjusted image.
   """Deterministically radomize jpeg encoding quality for inducing jpeg noise.
 
   Guarantees the same results given the same `seed` independent of how many
@@ -2929,6 +3340,14 @@ def stateless_random_jpeg_quality(image,
 @tf_export('image.adjust_jpeg_quality')
 @dispatch.add_dispatch_support
 def adjust_jpeg_quality(image, jpeg_quality, dct_method='', name=None):
+  # [FUNCTION DOC]
+  # Public op: round-trips an image through lossy JPEG compression. Inputs: image (3-D image,
+  # last dimension unknown, 1 or 3), jpeg_quality (integer or int32 tensor, 0 to 100),
+  # dct_method (optional string naming the decompression DCT method, empty means fast integer)
+  # and name (optional). Converts to uint8 with saturation, encodes with variable quality,
+  # decodes with the original channel count and converts back to the original dtype. Invalid
+  # quality or channel count surface as invalid-argument errors from the kernels. Returns the
+  # adjusted image with the same shape and dtype.
   """Adjust jpeg encoding quality of an image.
 
   This is a convenience method that converts an image to uint8 representation,
@@ -3013,6 +3432,10 @@ def adjust_jpeg_quality(image, jpeg_quality, dct_method='', name=None):
 @tf_export('image.random_saturation')
 @dispatch.add_dispatch_support
 def random_saturation(image, lower, upper, seed=None):
+  # [FUNCTION DOC]
+  # Public op: random saturation scaling. Inputs: image (RGB), lower and upper (float bounds
+  # of the factor, upper greater than lower, lower non-negative) and seed (optional integer).
+  # Raises a value error for bad bounds. Returns the saturation-adjusted image.
   """Adjust the saturation of RGB images by a random factor.
 
   Equivalent to `adjust_saturation()` but uses a `saturation_factor` randomly
@@ -3065,6 +3488,13 @@ def random_saturation(image, lower, upper, seed=None):
 @tf_export('image.stateless_random_saturation', v1=[])
 @dispatch.add_dispatch_support
 def stateless_random_saturation(image, lower, upper, seed=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: seed defaults to nothing, but a seed is required by the stateless generator
+  # and the docstring describes it as a required tensor; calling without a seed fails.
+  # Public deterministic op: random saturation scaling from a stateless generator. Inputs:
+  # image (RGB), lower and upper (float bounds, upper greater than lower, lower non-negative)
+  # and seed (tensor of shape two). Raises a value error for bad bounds. Returns the
+  # saturation-adjusted image.
   """Adjust the saturation of RGB images by a random factor deterministically.
 
   Equivalent to `adjust_saturation()` but uses a `saturation_factor` randomly
@@ -3115,6 +3545,12 @@ def stateless_random_saturation(image, lower, upper, seed=None):
 @tf_export('image.adjust_saturation')
 @dispatch.add_dispatch_support
 def adjust_saturation(image, saturation_factor, name=None):
+  # [FUNCTION DOC]
+  # Public op: scales the HSV saturation channel of RGB images. Inputs: image (RGB image or
+  # images, last dimension 3), saturation_factor (non-negative float multiplier) and name
+  # (optional). Converts to float32 if needed, applies the saturation kernel (invalid-argument
+  # error if the channel count is not 3) and converts back to the original dtype. Returns the
+  # adjusted image with the same shape and dtype.
   """Adjust saturation of RGB images.
 
   This is a convenience method that converts RGB images to float
@@ -3169,6 +3605,11 @@ def adjust_saturation(image, saturation_factor, name=None):
 
 @tf_export('io.is_jpeg', 'image.is_jpeg', v1=['io.is_jpeg', 'image.is_jpeg'])
 def is_jpeg(contents, name=None):
+  # [FUNCTION DOC]
+  # Public helper op: checks the magic bytes of encoded data. Input contents is a scalar
+  # string tensor of encoded image bytes; name is optional. Compares the first three bytes to
+  # the common JPEG signature (covers plain and EXIF JPEGs). Returns a scalar boolean tensor;
+  # may give false positives.
   r"""Convenience function to check if the 'contents' encodes a JPEG image.
 
   Args:
@@ -3188,6 +3629,11 @@ def is_jpeg(contents, name=None):
 
 
 def _is_png(contents, name=None):
+  # [FUNCTION DOC]
+  # HELPER: format sniffing used when decoding generic images.
+  # Input contents is a scalar string tensor of encoded bytes; name is optional. Compares the
+  # first three bytes with the PNG signature prefix. Returns a scalar boolean tensor; may give
+  # false positives.
   r"""Convenience function to check if the 'contents' encodes a PNG image.
 
   Args:
@@ -3255,6 +3701,12 @@ extract_jpeg_shape = tf_export(
 @tf_export('io.encode_png', 'image.encode_png')
 @dispatch.add_dispatch_support
 def encode_png(image, compression=-1, name=None):
+  # [FUNCTION DOC]
+  # Public op: PNG-encodes an image. Inputs: image (uint8 or uint16 tensor of rank at least 3,
+  # batch dimensions then height, width, channels with 1 to 4 channels), compression (integer
+  # zlib level, minus one for the encoder default or 0 to 9; default minus one) and name
+  # (optional). Converts the input to a tensor and calls the generated encoder op.
+  # Returns a string tensor of encoded bytes.
   r"""PNG-encode an image.
 
   `image` is a rank-N Tensor of type uint8 or uint16 with shape `batch_dims +
@@ -3292,6 +3744,15 @@ def decode_image(contents,
                  dtype=dtypes.uint8,
                  name=None,
                  expand_animations=True):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it wraps only the bmp, gif, jpeg and png decoders, but it
+  # calls the generic decode kernel which also handles webp and jpeg xl.
+  # Public op: decodes encoded image bytes of any supported format. Inputs: contents (scalar
+  # string tensor), channels (optional integer, none means keep the file's channel count),
+  # dtype (output type, default uint8; float32, uint8 and uint16 are decoded directly, other
+  # types are decoded as uint16 then converted), name (optional) and expand_animations
+  # (default true; animated formats give a 4-D frames tensor, otherwise only the first frame
+  # is returned as 3-D with its static rank/channels set). Returns the decoded tensor.
   """Function for `decode_bmp`, `decode_gif`, `decode_jpeg`, and `decode_png`.
 
   Detects whether an image is a BMP, GIF, JPEG, JPEG XL, WebP or PNG, and
@@ -3364,6 +3825,12 @@ def decode_image(contents,
 @tf_export('image.total_variation')
 @dispatch.add_dispatch_support
 def total_variation(images, name=None):
+  # [FUNCTION DOC]
+  # Public op: anisotropic total variation, a noise measure usable as a loss. Inputs: images
+  # (3-D tensor of one image or 4-D batch; rank must be statically known) and name. Sums the
+  # absolute differences between vertically and horizontally neighboring pixels, over all axes
+  # for a single image or per image for a batch. Raises a value error for any other rank.
+  # Returns a scalar for a 3-D input, or a vector of length batch for a 4-D input.
   """Calculate and return the total variation for one or more images.
 
   The total variation is the sum of the absolute differences for neighboring
@@ -3444,6 +3911,17 @@ def sample_distorted_bounding_box_v2(image_size,
                                      max_attempts=None,
                                      use_image_if_no_bounding_boxes=None,
                                      name=None):
+  # [FUNCTION DOC]
+  # Public op (version 2): samples one random crop box that satisfies coverage and shape
+  # constraints. Inputs: image_size (1-D integer tensor: height, width, channels),
+  # bounding_boxes (float32 tensor, batch by N by 4, normalized y-min, x-min, y-max, x-max),
+  # seed (integer, default zero; non-zero seeds both generator seeds via the global seeding
+  # rules), min_object_covered (fraction of any box the crop must contain, default 0.1),
+  # aspect_ratio_range and area_range (optional ranges, kernel defaults used when missing),
+  # max_attempts (optional; after that many failures the whole image is returned),
+  # use_image_if_no_bounding_boxes (optional; treat the whole image as a box when none are
+  # given) and name. Raises a value error when seed is zero and op determinism is enabled.
+  # Returns a triple: begin offsets, size (both usable with slice) and a box for drawing.
   """Generate a single randomly distorted bounding box for an image.
 
   Bounding box annotations are often supplied in addition to ground-truth labels
@@ -3570,6 +4048,13 @@ def stateless_sample_distorted_bounding_box(image_size,
                                             max_attempts=None,
                                             use_image_if_no_bounding_boxes=None,
                                             name=None):
+  # [FUNCTION DOC]
+  # Public deterministic op: same as the version 2 box sampler but driven by a stateless seed.
+  # Inputs: image_size (1-D integer tensor), bounding_boxes (float32, batch by N by 4), seed
+  # (tensor of shape two, int32 or int64), min_object_covered (default 0.1),
+  # aspect_ratio_range, area_range, max_attempts, use_image_if_no_bounding_boxes (all optional,
+  # kernel defaults when missing) and name. Same seed gives the same box. Returns a triple:
+  # begin offsets, size, and a box tensor for drawing.
   """Generate a randomly distorted bounding box for an image deterministically.
 
   Bounding box annotations are often supplied in addition to ground-truth labels
@@ -3699,6 +4184,14 @@ def sample_distorted_bounding_box(image_size,
                                   max_attempts=None,
                                   use_image_if_no_bounding_boxes=None,
                                   name=None):
+  # [FUNCTION DOC]
+  # Deprecated public version 1 box sampler (a deprecation warning is logged on use; the
+  # seed2 argument is deprecated in favor of the version 2 function). Inputs: image_size,
+  # bounding_boxes, seed and seed2 (optional integers; non-zero values seed the generator),
+  # min_object_covered (default 0.1), aspect_ratio_range, area_range, max_attempts,
+  # use_image_if_no_bounding_boxes and name. Raises a value error if both seeds are unset
+  # and op determinism is enabled. Passes the seeds straight to the kernel without applying
+  # the global seed derivation. Returns a triple: begin, size and a drawing box.
   """Generate a single randomly distorted bounding box for an image.
 
   Bounding box annotations are often supplied in addition to ground-truth labels
@@ -3815,6 +4308,13 @@ def non_max_suppression(boxes,
                         iou_threshold=0.5,
                         score_threshold=float('-inf'),
                         name=None):
+  # [FUNCTION DOC]
+  # Public op: greedy non-max suppression. Inputs: boxes (float tensor, num_boxes by 4),
+  # scores (1-D float, one per box), max_output_size (scalar integer), iou_threshold (default
+  # 0.5; overlap above which boxes are pruned), score_threshold (default negative infinity;
+  # boxes scoring lower are dropped) and name. Repeatedly picks the highest scoring box and
+  # removes boxes overlapping it too much. Returns a 1-D integer tensor of selected indices
+  # (at most max_output_size).
   """Greedily selects a subset of bounding boxes in descending order of score.
 
   Prunes away boxes that have high intersection-over-union (IOU) overlap
@@ -3869,6 +4369,15 @@ def non_max_suppression_with_scores(boxes,
                                     score_threshold=float('-inf'),
                                     soft_nms_sigma=0.0,
                                     name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring example calls a padded variant that does not match this
+  # function's name; the real function returns unpadded results.
+  # Public op: non-max suppression that can also do Soft-NMS. Inputs: boxes (num_boxes by 4),
+  # scores (1-D), max_output_size (scalar integer), iou_threshold (default 0.5, ignored when
+  # soft_nms_sigma is positive), score_threshold (default negative infinity), soft_nms_sigma
+  # (default zero meaning hard NMS; positive enables Gaussian score decay) and name. Calls the
+  # version 5 kernel without padding. Returns a pair: selected indices and their (possibly
+  # decayed) scores.
   """Greedily selects a subset of bounding boxes in descending order of score.
 
   Prunes away boxes that have high intersection-over-union (IOU) overlap
@@ -3958,6 +4467,14 @@ def non_max_suppression_with_overlaps(overlaps,
                                       overlap_threshold=0.5,
                                       score_threshold=float('-inf'),
                                       name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring example uses an iou threshold name and a boxes tensor that are
+  # not parameters of this function; the real threshold parameter is overlap_threshold.
+  # Public op: non-max suppression driven by a precomputed overlap matrix. Inputs: overlaps
+  # (square float matrix of pairwise overlap values), scores (1-D), max_output_size (scalar
+  # integer), overlap_threshold (default 0.5), score_threshold (default negative infinity;
+  # passed to the kernel without conversion) and name. Returns a 1-D integer tensor of
+  # selected indices.
   """Greedily selects a subset of bounding boxes in descending order of score.
 
   Prunes away boxes that have high overlap with previously selected boxes.
@@ -4007,6 +4524,11 @@ _rgb_to_yiq_kernel = [[0.299, 0.59590059, 0.2115],
 @tf_export('image.rgb_to_yiq')
 @dispatch.add_dispatch_support
 def rgb_to_yiq(images):
+  # [FUNCTION DOC]
+  # Public op: color space conversion from RGB to YIQ via a fixed 3 by 3 matrix. Input images
+  # is a tensor of known rank at least two with last dimension 3, values expected in the range
+  # zero to one. Multiplies the last axis by the module-level kernel (cast to the image dtype).
+  # Fails if the rank is not statically known. Returns a tensor of the same shape.
   """Converts one or more images from RGB to YIQ.
 
   Outputs a tensor of the same shape as the `images` tensor, containing the YIQ
@@ -4041,6 +4563,11 @@ _yiq_to_rgb_kernel = [[1, 1, 1], [0.95598634, -0.27201283, -1.10674021],
 @tf_export('image.yiq_to_rgb')
 @dispatch.add_dispatch_support
 def yiq_to_rgb(images):
+  # [FUNCTION DOC]
+  # Public op: color space conversion from YIQ to RGB via a fixed 3 by 3 matrix. Input images
+  # is a tensor of known rank at least two with last dimension 3. Contracts the last axis
+  # with the module-level kernel cast to the image dtype. Fails if the rank is not statically
+  # known. Returns a tensor of the same shape.
   """Converts one or more images from YIQ to RGB.
 
   Outputs a tensor of the same shape as the `images` tensor, containing the RGB
@@ -4070,6 +4597,11 @@ _rgb_to_yuv_kernel = [[0.299, -0.14714119, 0.61497538],
 @tf_export('image.rgb_to_yuv')
 @dispatch.add_dispatch_support
 def rgb_to_yuv(images):
+  # [FUNCTION DOC]
+  # Public op: color space conversion from RGB to YUV via a fixed 3 by 3 matrix. Input images
+  # is a tensor of known rank at least two with last dimension 3, float values in zero to one.
+  # Contracts the last axis with the module-level kernel cast to the image dtype. Fails if
+  # the rank is not statically known. Returns a tensor of the same shape.
   """Converts one or more images from RGB to YUV.
 
   Outputs a tensor of the same shape as the `images` tensor, containing the YUV
@@ -4100,6 +4632,11 @@ _yuv_to_rgb_kernel = [[1, 1, 1], [0, -0.394642334, 2.03206185],
 @tf_export('image.yuv_to_rgb')
 @dispatch.add_dispatch_support
 def yuv_to_rgb(images):
+  # [FUNCTION DOC]
+  # Public op: color space conversion from YUV to RGB via a fixed 3 by 3 matrix. Input images
+  # is a tensor of known rank at least two with last dimension 3 (Y in zero to one, U and V in
+  # minus to plus one half). Contracts the last axis with the module-level kernel cast to the
+  # image dtype. Fails if the rank is not statically known. Returns a tensor of the same shape.
   """Converts one or more images from YUV to RGB.
 
   Outputs a tensor of the same shape as the `images` tensor, containing the RGB
@@ -4147,6 +4684,13 @@ def yuv_to_rgb(images):
 
 
 def _verify_compatible_image_shapes(img1, img2):
+  # [FUNCTION DOC]
+  # HELPER: shape compatibility check shared by the PSNR and SSIM metrics.
+  # Inputs: img1 and img2 (image batch tensors, rank at least three). Statically verifies the
+  # ranks, that the last three dimensions are compatible, and that leading batch dimensions are
+  # broadcast-compatible (a value error is raised otherwise). Returns a triple: the dynamic
+  # shape of each image and a list of two run-time assert ops (rank at least three, last three
+  # dimensions equal).
   """Checks if two image tensors are compatible for applying SSIM or PSNR.
 
   This function checks if two sets of images have ranks at least 3, and if the
@@ -4194,6 +4738,16 @@ def _verify_compatible_image_shapes(img1, img2):
 @tf_export('image.psnr')
 @dispatch.add_dispatch_support
 def psnr(a, b, max_val, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the result has shape batch size by one, but the mean is
+  # reduced over the last three axes only, so the result has one value per batch element
+  # without a trailing dimension.
+  # Public op: peak signal-to-noise ratio between two image sets. Inputs: a and b (image
+  # tensors, last three dims height, width, depth), max_val (dynamic range of the images) and
+  # name. Converts to float32 with dtype-aware scaling, computes the mean squared error per
+  # image and returns twenty log10 of max_val minus ten log10 of the error, after verifying
+  # the shapes are compatible (value error statically, assert ops at run time). Returns a
+  # float32 tensor.
   """Returns the Peak Signal-to-Noise Ratio between a and b.
 
   This is intended to be used on signals (or images). Produces a PSNR value for
@@ -4247,6 +4801,14 @@ def psnr(a, b, max_val, name=None):
 
 
 def _ssim_helper(x, y, reducer, max_val, compensation=1.0, k1=0.01, k2=0.03):
+  # [FUNCTION DOC]
+  # HELPER: shared SSIM math for the plain and multiscale similarity metrics.
+  # Inputs: x and y (image batches), reducer (callable computing local weighted averages of
+  # an image batch), max_val (dynamic range), compensation (covariance bias correction,
+  # default one), k1 and k2 (stability constants, defaults 0.01 and 0.03). Computes the
+  # luminance term from local means and the contrast-structure term from local second
+  # moments, with stabilizers derived from max_val. Returns a pair: luminance and
+  # contrast-structure tensors (their product is the local SSIM).
   r"""Helper function for computing SSIM.
 
   SSIM estimates covariances with weighted sums.  The default parameters
@@ -4305,6 +4867,12 @@ def _ssim_helper(x, y, reducer, max_val, compensation=1.0, k1=0.01, k2=0.03):
 
 
 def _fspecial_gauss(size, sigma):
+  # [FUNCTION DOC]
+  # HELPER: window builder for the SSIM metrics.
+  # Inputs: size (integer width of the square window) and sigma (float standard deviation).
+  # Builds a normalized (softmax over squared coordinates, summing to one) two-dimensional
+  # Gaussian kernel mimicking the MATLAB special-filter function. Returns a tensor of shape
+  # size by size by one by one.
   """Function to mimic the 'fspecial' gaussian MATLAB function."""
   size = ops.convert_to_tensor(size, dtypes.int32)
   sigma = ops.convert_to_tensor(sigma)
@@ -4329,6 +4897,16 @@ def _ssim_per_channel(img1,
                       k1=0.01,
                       k2=0.03,
                       return_index_map=False):
+  # [FUNCTION DOC]
+  # HELPER: per-channel SSIM computation shared by ssim and multiscale ssim.
+  # Inputs: img1 and img2 (float image batches, last three dims height, width, channels),
+  # max_val (dynamic range, default 1), filter_size (Gaussian window width, default 11),
+  # filter_sigma (default 1.5), k1 and k2 (stability constants) and return_index_map (when true
+  # keep the local map instead of averaging over height and width). Adds run-time asserts that
+  # the images are at least as large as the filter, convolves with a depthwise Gaussian kernel
+  # with VALID padding (no unbiased covariance compensation, to match MATLAB), and averages the
+  # result over spatial axes unless the map is requested. Returns a pair: SSIM values and
+  # contrast-structure values, each with a trailing channel dimension.
   """Computes SSIM index between img1 and img2 per color channel.
 
   This function matches the standard SSIM implementation from:
@@ -4389,6 +4967,11 @@ def _ssim_per_channel(img1,
   # TODO(sjhwang): Gaussian kernel is separable in space. Consider applying
   #   1-by-n and n-by-1 Gaussian filters instead of an n-by-n filter.
   def reducer(x):
+    # [FUNCTION DOC]
+    # HELPER: local weighted average used by the SSIM helper. Input x is an image batch with
+    # possible extra leading dimensions. Flattens leading dims to a batch, applies the
+    # enclosing Gaussian kernel with a depthwise valid-padding convolution, and restores the
+    # leading dimensions. Returns the smoothed (spatially smaller) tensor.
     shape = array_ops.shape(x)
     x = array_ops.reshape(x, shape=array_ops.concat([[-1], shape[-3:]], 0))
     y = nn_impl.depthwise_conv2d(
@@ -4419,6 +5002,15 @@ def ssim(img1,
          k1=0.01,
          k2=0.03,
          return_index_map=False):
+  # [FUNCTION DOC]
+  # Public op: structural similarity index between two image batches. Inputs: img1 and img2
+  # (image tensors with last dims height, width, channels, non-negative values; leading batch
+  # dimensions broadcast), max_val (dynamic range), filter_size (default 11), filter_sigma
+  # (default 1.5), k1, k2 (stability constants, defaults 0.01 and 0.03) and return_index_map
+  # (default false; return the per-pixel map). Verifies shape compatibility (value error
+  # statically, asserts at run time), converts to float32 with dtype-aware scaling, computes
+  # SSIM per channel and averages channels. Images must be at least as large as the filter.
+  # Returns a float32 tensor, one value per image (or per pixel when the map is requested).
   """Computes SSIM index between img1 and img2.
 
   This function is based on the standard SSIM implementation from:
@@ -4517,6 +5109,16 @@ def ssim_multiscale(img1,
                     filter_sigma=1.5,
                     k1=0.01,
                     k2=0.03):
+  # [FUNCTION DOC]
+  # Public op: multiscale structural similarity (MS-SSIM). Inputs: img1 and img2 (image
+  # batches of equal rank, non-negative values), max_val (dynamic range), power_factors
+  # (sequence of per-scale weights; its length sets the number of scales, default the five
+  # published weights), filter_size, filter_sigma, k1 and k2 (same meaning as plain SSIM).
+  # Converts to float32, then at each scale computes per-channel SSIM, keeping the
+  # rectified contrast-structure term for all but the last scale and the rectified SSIM for
+  # the last; between scales images are padded symmetrically if odd-sized and average pooled
+  # by two. Combines scales as a weighted geometric mean and averages channels. Shape problems
+  # raise value errors or run-time assertion failures. Returns a tensor with one value per image.
   """Computes the MS-SSIM between img1 and img2.
 
   This function assumes that `img1` and `img2` are image batches, i.e. the last
@@ -4581,6 +5183,11 @@ def ssim_multiscale(img1,
     divisor_tensor = constant_op.constant(divisor[1:], dtype=dtypes.int32)
 
     def do_pad(images, remainder):
+      # [FUNCTION DOC]
+      # HELPER: symmetric padding step before downsampling in multiscale SSIM. Inputs: images
+      # (list of flattened image batches) and remainder (per-axis leftover sizes after dividing
+      # by the pooling factor). Pads each spatial axis at the end by the leftover amount using
+      # symmetric padding. Returns the list of padded image batches.
       padding = array_ops.expand_dims(remainder, -1)
       padding = array_ops.pad(padding, [[1, 0], [1, 0]])
       return [array_ops.pad(x, padding, mode='SYMMETRIC') for x in images]
@@ -4639,6 +5246,12 @@ def ssim_multiscale(img1,
 @tf_export('image.image_gradients')
 @dispatch.add_dispatch_support
 def image_gradients(image):
+  # [FUNCTION DOC]
+  # Public op: finite-difference vertical and horizontal image gradients. Input image is a
+  # 4-D tensor (batch, height, width, depth). Each gradient is the next pixel minus the
+  # current one, padded with zeros so the output keeps the input shape (last row of the
+  # vertical gradient and last column of the horizontal gradient are zero). Raises a value
+  # error if the rank is not statically 4. Returns a pair (dy, dx).
   """Returns image gradients (dy, dx) for each color channel.
 
   Both output tensors have the same shape as the input: [batch_size, h, w,
@@ -4713,6 +5326,12 @@ def image_gradients(image):
 @tf_export('image.sobel_edges')
 @dispatch.add_dispatch_support
 def sobel_edges(image):
+  # [FUNCTION DOC]
+  # Public op: Sobel edge maps per channel. Input image is a float32 or float64 tensor of
+  # shape batch, height, width, depth (at least 2 by 2 spatially). Pads by reflection by one
+  # pixel, applies the vertical and horizontal Sobel kernels as a depthwise convolution, and
+  # reshapes to expose the two filter responses. Returns a tensor of shape batch, height,
+  # width, depth, 2 with the vertical response first and horizontal second.
   """Returns a tensor holding Sobel edge maps.
 
   Example usage:
@@ -4792,6 +5411,11 @@ def resize_bicubic(images,
                    align_corners=False,
                    name=None,
                    half_pixel_centers=False):
+  # [FUNCTION DOC]
+  # Deprecated public version 1 wrapper (logs a deprecation warning) around the bicubic resize
+  # kernel; use the general resize with the bicubic method instead. Inputs: images (4-D
+  # tensor), size (two integers), align_corners and half_pixel_centers (booleans, default
+  # false) and name. Returns the resized tensor. No docstring exists for it.
   return gen_image_ops.resize_bicubic(
       images=images,
       size=size,
@@ -4813,6 +5437,11 @@ def resize_bilinear(images,
                     align_corners=False,
                     name=None,
                     half_pixel_centers=False):
+  # [FUNCTION DOC]
+  # Deprecated public version 1 wrapper (logs a deprecation warning) around the bilinear
+  # resize kernel; use the general resize with the bilinear method instead. Inputs: images
+  # (4-D tensor), size (two integers), align_corners and half_pixel_centers (booleans, default
+  # false) and name. Returns the resized tensor.
   return gen_image_ops.resize_bilinear(
       images=images,
       size=size,
@@ -4835,6 +5464,11 @@ def resize_nearest_neighbor(images,
                             align_corners=False,
                             name=None,
                             half_pixel_centers=False):
+  # [FUNCTION DOC]
+  # Deprecated public version 1 wrapper (logs a deprecation warning) around the nearest
+  # neighbor resize kernel; use the general resize with the nearest method instead. Inputs:
+  # images (4-D tensor), size (two integers), align_corners and half_pixel_centers (booleans,
+  # default false) and name. Returns the resized tensor.
   return gen_image_ops.resize_nearest_neighbor(
       images=images,
       size=size,
@@ -4863,6 +5497,14 @@ def crop_and_resize_v2(image,
                        method='bilinear',
                        extrapolation_value=.0,
                        name=None):
+  # [FUNCTION DOC]
+  # Public version 2 op: extracts box crops from a batch and resizes each to a common size.
+  # Inputs: image (4-D tensor, positive height and width), boxes (num_boxes by 4 normalized
+  # y1, x1, y2, x2; may lie outside zero-one or be flipped), box_indices (1-D int32, which
+  # batch image each box refers to), crop_size (two positive integers: height, width), method
+  # (string, bilinear default or nearest), extrapolation_value (default 0.0, fill outside the
+  # image) and name. Delegates to the generated kernel; invalid arguments are reported by it.
+  # Returns a tensor of shape num_boxes, crop height, crop width, depth.
   """Extracts crops from the input image tensor and resizes them.
 
   Extracts crops from the input image tensor and resizes them using bilinear
@@ -4977,6 +5619,15 @@ def crop_and_resize_v1(  # pylint: disable=missing-docstring
     extrapolation_value=0,
     name=None,
     box_indices=None):
+  # [FUNCTION DOC]
+  # Public version 1 crop-and-resize with a deprecated argument name. Inputs: image (4-D
+  # tensor), boxes (normalized num_boxes by 4), box_ind (deprecated name of the batch index
+  # vector), crop_size (two positive integers), method (bilinear default or nearest),
+  # extrapolation_value (default 0), name, and box_indices (replacement for box_ind). Resolves
+  # which of the two index arguments was supplied (the deprecation helper raises an error if
+  # both are given, and a deprecation warning is logged for the old name), then calls the
+  # generated kernel. Its documentation text is replaced by the kernel's after definition.
+  # Returns a tensor of shape num_boxes, crop height, crop width, depth.
   box_ind = deprecation.deprecated_argument_lookup('box_indices', box_indices,
                                                    'box_ind', box_ind)
   return gen_image_ops.crop_and_resize(image, boxes, box_ind, crop_size, method,
@@ -4996,6 +5647,15 @@ def extract_glimpse(
     normalized=True,
     uniform_noise=True,
     name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring describes offsets as an integer tensor although it is float32,
+  # and the version 1 and version 2 variants interpret offsets differently in their examples.
+  # Public version 1 op: extracts fixed-size glimpse windows from a batch. Inputs: input (4-D
+  # float32 tensor), size (two integers: glimpse height, width), offsets (batch by 2 window
+  # centers, y then x), centered (default true; zero is the image center), normalized (default
+  # true; coordinates relative to image size), uniform_noise (default true; uniform rather
+  # than Gaussian noise for areas outside the image) and name. Delegates to the generated
+  # kernel. Returns a float32 tensor of shape batch, glimpse height, glimpse width, channels.
   """Extracts a glimpse from the input tensor.
 
   Returns a set of windows called glimpses extracted at location
@@ -5082,6 +5742,14 @@ def extract_glimpse_v2(
     normalized=True,
     noise='uniform',
     name=None):
+  # [FUNCTION DOC]
+  # Public version 2 op: extracts glimpse windows from a batch of images. Inputs: input (4-D
+  # float32 tensor), size (two integers: glimpse height, width), offsets (batch by 2 window
+  # centers), centered (default true), normalized (default true), noise (string: uniform,
+  # gaussian or zero; default uniform) for areas outside the image, and name. Always passes
+  # the legacy uniform-noise flag as false and lets the noise string decide. Delegates to the
+  # version 2 generated kernel. Returns a float32 tensor of shape batch, glimpse height,
+  # glimpse width, channels.
   """Extracts a glimpse from the input tensor.
 
   Returns a set of windows called glimpses extracted at location
@@ -5170,6 +5838,16 @@ def combined_non_max_suppression(boxes,
                                  pad_per_class=False,
                                  clip_boxes=True,
                                  name=None):
+  # [FUNCTION DOC]
+  # Public op: batched, multi-class non-max suppression. Inputs: boxes (batch by num_boxes by
+  # q by 4; q of one shares boxes across classes, otherwise q equals the class count), scores
+  # (batch by num_boxes by num_classes), max_output_size_per_class (scalar integer),
+  # max_total_size (int32 scalar cap over all classes; converted without forcing a dtype so
+  # int32 overflow is caught by the op), iou_threshold and score_threshold (floats, converted to
+  # float32 tensors), pad_per_class (default false; pad per class instead of to the total
+  # size), clip_boxes (default true; clip coordinates to zero-one) and name. Returns four
+  # tensors: selected boxes, their scores, their classes, and the count of valid detections per
+  # batch item (remaining entries are zero padding).
   """Greedily selects a subset of bounding boxes in descending order of score.
 
   This operation performs non_max_suppression on the inputs per batch, across
@@ -5245,6 +5923,12 @@ def combined_non_max_suppression(boxes,
 
 
 def _bbox_overlap(boxes_a, boxes_b):
+  # [FUNCTION DOC]
+  # HELPER: pairwise box overlap used by the tiled non-max suppression implementation.
+  # Inputs: boxes_a (batch by N by 4) and boxes_b (batch by M by 4), coordinates in ymin,
+  # xmin, ymax, xmax order. Computes intersection and union areas for every pair (a small
+  # epsilon is added to the union to avoid division by zero). Returns a tensor batch by N by M
+  # of intersection over union values.
   """Calculates the overlap (iou - intersection over union) between boxes_a and boxes_b.
 
   Args:
@@ -5291,6 +5975,14 @@ def _bbox_overlap(boxes_a, boxes_b):
 
 
 def _self_suppression(iou, _, iou_sum, iou_threshold):
+  # [FUNCTION DOC]
+  # HELPER: loop body for suppressing boxes inside one tile in tiled non-max suppression.
+  # Inputs: iou (batch by boxes by boxes matrix of overlaps within the tile), an ignored
+  # loop-condition slot, iou_sum (per-batch sum of overlaps before this step) and
+  # iou_threshold (scalar). Finds boxes not suppressed by any other and uses them to zero out
+  # overlap rows of boxes they suppress. Returns a list of four items: the updated overlap
+  # matrix, a flag saying whether anything changed this step (continue looping), the new
+  # overlap sum, and the unchanged threshold.
   """Suppress boxes in the same tile.
 
      Compute boxes that cannot be suppressed by others (i.e.,
@@ -5329,6 +6021,13 @@ def _self_suppression(iou, _, iou_sum, iou_threshold):
 
 
 def _cross_suppression(boxes, box_slice, iou_threshold, inner_idx, tile_size):
+  # [FUNCTION DOC]
+  # HELPER: loop body for suppressing a tile by earlier tiles in tiled non-max suppression.
+  # Inputs: boxes (batch by padded boxes by 4), box_slice (the current tile, batch by tile
+  # size by 4), iou_threshold (scalar), inner_idx (index of the earlier tile being applied) and
+  # tile_size (integer boxes per tile). Zeroes boxes in box_slice that overlap the selected
+  # earlier tile at or above the threshold. Returns a tuple: the unchanged boxes, the updated
+  # slice, the unchanged threshold, and the next tile index.
   """Suppress boxes between different tiles.
 
   Args:
@@ -5357,6 +6056,14 @@ def _cross_suppression(boxes, box_slice, iou_threshold, inner_idx, tile_size):
 
 
 def _suppression_loop_body(boxes, iou_threshold, output_size, idx, tile_size):
+  # [FUNCTION DOC]
+  # HELPER: outer loop body of tiled non-max suppression.
+  # Inputs: boxes (batch by anchors by 4, sorted by score), iou_threshold, output_size (per
+  # batch count of boxes kept so far), idx (index of the tile being processed) and tile_size.
+  # Suppresses the tile first with all earlier tiles (inner while loop), then within itself
+  # (second while loop with the self-suppression step), writes the surviving boxes back into
+  # the full box tensor and adds the count of survivors to output_size. Returns a tuple of
+  # updated boxes, the threshold, updated output_size and idx plus one.
   """Process boxes in the range [idx*tile_size, (idx+1)*tile_size).
 
   Args:
@@ -5379,6 +6086,10 @@ def _suppression_loop_body(boxes, iou_threshold, output_size, idx, tile_size):
     batch_size = array_ops.shape(boxes)[0]
 
     def cross_suppression_func(boxes, box_slice, iou_threshold, inner_idx):
+      # [FUNCTION DOC]
+      # HELPER: adapter binding the enclosing tile size to the cross suppression step so it can
+      # be used as a while loop body. Inputs: boxes, box_slice, iou_threshold, inner_idx as in
+      # the cross suppression step. Returns that step's tuple of loop variables.
       return _cross_suppression(boxes, box_slice, iou_threshold, inner_idx,
                                 tile_size)
 
@@ -5439,6 +6150,18 @@ def non_max_suppression_padded(boxes,
                                sorted_input=False,
                                canonicalized_coordinates=False,
                                tile_size=512):
+  # [FUNCTION DOC]
+  # Public op: tiled non-max suppression with optional zero padding, for single images or
+  # batches. Inputs: boxes (rank two or more, ... by num_boxes by 4), scores (... by
+  # num_boxes), max_output_size (scalar integer), iou_threshold (default 0.5), score_threshold
+  # (default negative infinity), pad_to_max_output_size (default false; must be true for
+  # batched input), name, sorted_input (default false; inputs already sorted by descending
+  # score), canonicalized_coordinates (default false; boxes already in min/max corner order)
+  # and tile_size (default 512; boxes per tile). Raises a value error if padding is disabled
+  # while boxes statically have rank above two. Delegates to the compiled version 2 function;
+  # without padding the result is trimmed to the valid indices of the single image, with
+  # padding it is reshaped to the batch dimensions plus the maximum output size.
+  # Returns a pair: selected indices and the number of valid entries.
   """Greedily selects a subset of bounding boxes in descending order of score.
 
   Performs algorithmically equivalent operation to tf.image.non_max_suppression,
@@ -5532,6 +6255,22 @@ def non_max_suppression_padded_v2(boxes,
                                   sorted_input=False,
                                   canonicalized_coordinates=False,
                                   tile_size=512):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: when canonicalizing coordinates, the choice of which corner is the minimum is
+  # made by looking only at the first coordinate of the first box in the first batch item and
+  # applied to every box, so inputs mixing coordinate orders are not handled correctly. The
+  # docstring also lists a value error that this function never raises (that check lives in the
+  # public wrapper), and its pseudo-code refers to helper names that do not exist.
+  # Internal compiled implementation (wrapped as a graph function tagged as an implementation
+  # of padded non-max suppression) of tiled non-max suppression. Inputs as in the public
+  # padded op minus name and padding flag: boxes, scores, max_output_size, iou_threshold
+  # (default 0.5), score_threshold (default negative infinity; scores at or below it are zeroed
+  # along with their boxes), sorted_input, canonicalized_coordinates and tile_size. Flattens
+  # batch dims, optionally canonicalizes corners and sorts by score, pads boxes to a multiple
+  # of the tile size, runs the tile-by-tile suppression loop until enough boxes are found or
+  # all tiles are processed, and recovers indices of surviving boxes (mapped back through the
+  # sort order, invalid slots set to zero). Returns a pair: indices of shape batch by
+  # max_output_size and the count of valid entries per batch item.
   """Non-maximum suppression.
 
   Prunes away boxes that have high intersection-over-union (IOU) overlap
@@ -5634,6 +6373,11 @@ def non_max_suppression_padded_v2(boxes,
     ValueError: When set pad_to_max_output_size to False for batched input.
   """
   def _sort_scores_and_boxes(scores, boxes):
+    # [FUNCTION DOC]
+    # HELPER: ordering step of padded non-max suppression. Inputs: scores (batch by num_boxes)
+    # and boxes (batch by num_boxes by 4). Sorts each batch item by descending score and
+    # gathers boxes and scores in that order. Returns a triple: sorted scores, sorted boxes,
+    # and the sorting indices.
     """Sort boxes based their score from highest to lowest.
 
     Args:
@@ -5710,11 +6454,19 @@ def non_max_suppression_padded_v2(boxes,
   num_boxes_after_padding = num_boxes + pad
   num_iterations = num_boxes_after_padding // tile_size
   def _loop_cond(unused_boxes, unused_threshold, output_size, idx):
+    # [FUNCTION DOC]
+    # HELPER: while loop condition for tiled suppression. Inputs: boxes and threshold (unused),
+    # output_size (per-batch count of boxes kept) and idx (current tile). Returns true while
+    # some batch item still has fewer than the maximum outputs and tiles remain.
     return math_ops.logical_and(
         math_ops.reduce_min(output_size) < max_output_size,
         idx < num_iterations)
 
   def suppression_loop_body(boxes, iou_threshold, output_size, idx):
+    # [FUNCTION DOC]
+    # HELPER: adapter binding the enclosing tile size to the module-level suppression loop body
+    # so it matches the while loop signature. Inputs: boxes, iou_threshold, output_size, idx.
+    # Returns the updated loop variables of the module-level body.
     return _suppression_loop_body(
         boxes, iou_threshold, output_size, idx, tile_size)
 
@@ -5769,6 +6521,14 @@ def non_max_suppression_padded_v1(boxes,
                                   score_threshold=float('-inf'),
                                   pad_to_max_output_size=False,
                                   name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: this function is not exported under any public name here and its docstring
+  # example calls the public padded op, not this one; it is the older single-image variant.
+  # Single-image non-max suppression with optional padding using the version 4 kernel. Inputs:
+  # boxes (num_boxes by 4), scores (1-D), max_output_size (scalar integer), iou_threshold
+  # (default 0.5), score_threshold (default negative infinity), pad_to_max_output_size
+  # (default false) and name. Thresholds are converted to tensors. Returns a pair: selected
+  # indices (padded to the maximum output size if requested) and a scalar count of valid ones.
   """Greedily selects a subset of bounding boxes in descending order of score.
 
   Performs algorithmically equivalent operation to tf.image.non_max_suppression,
@@ -5820,6 +6580,12 @@ def non_max_suppression_padded_v1(boxes,
 @tf_export('image.draw_bounding_boxes', v1=[])
 @dispatch.add_dispatch_support
 def draw_bounding_boxes_v2(images, boxes, colors, name=None):
+  # [FUNCTION DOC]
+  # Public version 2 op: draws box outlines on a copy of a batch of images. Inputs: images
+  # (4-D float32 or half tensor), boxes (batch by num_boxes by 4 normalized ymin, xmin, ymax,
+  # xmax; may extend outside the image), colors (2-D list of colors to cycle through, or
+  # nothing to use the kernel default palette) and name. Calls the version without colors when
+  # colors is nothing. Returns a tensor of the same type as images.
   """Draw bounding boxes on a batch of images.
 
   Outputs a copy of `images` but draws on top of the pixels zero or more
@@ -5875,6 +6641,13 @@ def draw_bounding_boxes_v2(images, boxes, colors, name=None):
 @tf_export(v1=['image.draw_bounding_boxes'])
 @dispatch.add_dispatch_support
 def draw_bounding_boxes(images, boxes, name=None, colors=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring example passes the colors as the third positional argument,
+  # which in this signature is the operation name, so colors would be ignored.
+  # Public version 1 op: draws box outlines on a copy of a batch of images. Inputs: images
+  # (4-D float32 or half), boxes (batch by num_boxes by 4, normalized), name (optional) and
+  # colors (optional 2-D color list, note it comes after name). Forwards to the version 2
+  # function. Returns a tensor of the same type as images.
   """Draw bounding boxes on a batch of images.
 
   Outputs a copy of `images` but draws on top of the pixels zero or more
@@ -5936,6 +6709,15 @@ def generate_bounding_box_proposals(scores,
                                     min_size=16,
                                     post_nms_topn=300,
                                     name=None):
+  # [FUNCTION DOC]
+  # Public op: turns anchor-relative box encodings into region proposals (as in region
+  # proposal networks). Inputs: scores (num_images by height by width by num_anchors,
+  # unsorted), bbox_deltas (same grid with 4 times num_anchors channels, dy, dx, dh, dw),
+  # image_info (num_images by 5: height, width, scale and so on), anchors (num_anchors by 4,
+  # y1, x1, y2, x2), nms_threshold (default 0.7), pre_nms_topn (default 6000 boxes kept before
+  # suppression), min_size (default 16; smaller boxes discarded), post_nms_topn (default 300
+  # maximum output boxes) and name. Delegates to the generated kernel. Returns a pair: the
+  # proposal boxes sorted by score and their scores.
   """Generate bounding box proposals from encoded bounding boxes.
 
   Args:
