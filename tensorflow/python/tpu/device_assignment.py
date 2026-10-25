@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Library of TPU device assignment helpers. Exposes the device order mode enumeration, the
+# DeviceAssignment class (mapping replicas and logical cores to physical topology
+# coordinates, device names and ordinals), and the device_assignment function that computes
+# such a mapping for a topology, plus private ring-ordering helpers and a constant for the
+# single-core assignment. Public classes are exported to the experimental TPU API at import
+# time through the export decorator; otherwise only constants are defined.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,6 +37,13 @@ SINGLE_CORE_ASSIGNMENT = [[[0, 0, 0, 0]]]
 
 
 def _compute_task_and_cores_to_replicas(core_assignment, topology):
+  # [FUNCTION DOC]
+  # HELPER: builds the lookup table used by DeviceAssignment.lookup_replicas.
+  # Inputs: core_assignment, a rank 3 integer array indexed by replica, logical core and
+  # coordinate; topology, a Topology object able to map coordinates to task ordinals.
+  # Output: a nested mapping from task ordinal to a mapping from logical core index to the
+  # sorted list of replica indices whose that logical core lives on that task.
+  # No side effects and no explicit exceptions (errors from the topology lookup propagate).
   """Computes a nested dict which maps task and logical core to replicas."""
   task_and_cores_to_replicas = {}
   for replica in range(core_assignment.shape[0]):
@@ -56,6 +70,10 @@ def _compute_task_and_cores_to_replicas(core_assignment, topology):
 
 @tf_export("tpu.experimental.DeviceOrderMode")
 class DeviceOrderMode(enum.IntEnum):
+  # [CLASS DOC]
+  # Integer enumeration of how devices are ordered when computing a device assignment:
+  # automatic (zero, the library forms rings when possible), ring (one) and mesh (two).
+  # Exported publicly as part of the experimental TPU API. Holds no state beyond members.
   """The way of determining device orders when computing device assignment."""
   # By default the mode is set to AUTO, the library will choose to form rings
   # when that is possible.
@@ -68,6 +86,13 @@ class DeviceOrderMode(enum.IntEnum):
 
 @tf_export("tpu.experimental.DeviceAssignment")
 class DeviceAssignment(object):
+  # [CLASS DOC]
+  # Immutable description of how each logical core of each replica of a computation maps to
+  # physical coordinates in a TPU topology. Holds the topology, the rank 3 core assignment
+  # array (replicas by cores per replica by topology rank), replica and core counts, and a
+  # precomputed table from task and logical core to replica ids. Usually created through the
+  # build class method (which calls the module level device_assignment function) and queried
+  # for coordinates, ordinals and device names. Exported as part of the experimental TPU API.
   """Mapping from logical cores in a computation to the physical TPU topology.
 
   Prefer to use the `DeviceAssignment.build()` helper to construct a
@@ -76,6 +101,13 @@ class DeviceAssignment(object):
   """
 
   def __init__(self, topology: Topology, core_assignment: np.ndarray):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: topology, a Topology object; core_assignment, an array-like of
+    # integers convertible to a rank 3 int32 array whose last dimension equals the topology
+    # mesh rank. Stores the topology, the converted array, the replica count (first dimension),
+    # cores per replica (second dimension) and the task/core to replicas table.
+    # Raises a value error if topology is not a Topology, if the assignment is not rank 3, or
+    # if its last dimension differs from the topology mesh rank. Returns nothing.
     """Constructs a `DeviceAssignment` object.
 
     Args:
@@ -114,21 +146,32 @@ class DeviceAssignment(object):
 
   @property
   def topology(self) -> Topology:
+    # [FUNCTION DOC]
+    # Read-only property returning the Topology object this assignment was built for.
     """A `Topology` that describes the TPU topology."""
     return self._topology
 
   @property
   def num_cores_per_replica(self) -> int:
+    # [FUNCTION DOC]
+    # Read-only property returning the number of logical cores in each replica (the second
+    # dimension of the core assignment array).
     """The number of cores per replica."""
     return self._num_cores_per_replica
 
   @property
   def num_replicas(self) -> int:
+    # [FUNCTION DOC]
+    # Read-only property returning the number of replicas (the first dimension of the core
+    # assignment array).
     """The number of replicas of the computation."""
     return self._num_replicas
 
   @property
   def core_assignment(self) -> np.ndarray:
+    # [FUNCTION DOC]
+    # Read-only property returning the stored rank 3 int32 array mapping (replica, logical
+    # core) to physical topology coordinates. The array itself is returned, not a copy.
     """The logical to physical core mapping.
 
     Returns:
@@ -139,10 +182,19 @@ class DeviceAssignment(object):
     return self._core_assignment
 
   def coordinates(self, replica: int, logical_core: int) -> Tuple:  # pylint:disable=g-bare-generic
+    # [FUNCTION DOC]
+    # Inputs: replica index and logical core index (integers). Returns the physical topology
+    # coordinates of that core as a tuple of integers (one per mesh dimension). Raises an index
+    # error from the array lookup when either index is out of range.
     """Returns the physical topology coordinates of a logical core."""
     return tuple(self.core_assignment[replica, logical_core, :])
 
   def lookup_replicas(self, task_id: int, logical_core: int) -> List[int]:
+    # [FUNCTION DOC]
+    # Inputs: task_id, the TensorFlow task number; logical_core, the logical core index.
+    # Returns the sorted list of replica ids whose given logical core is attached to that task,
+    # taken from the precomputed table. Raises a value error if the task or the core within the
+    # task has no entry (the underlying missing key error is converted).
     """Lookup replica ids by task number and logical core.
 
     Args:
@@ -163,6 +215,10 @@ class DeviceAssignment(object):
           format(task_id, logical_core))
 
   def tpu_ordinal(self, replica: int = 0, logical_core: int = 0) -> int:
+    # [FUNCTION DOC]
+    # Inputs: replica and logical core indices (both default to zero). Looks up the core's
+    # physical coordinates and returns the ordinal of the TPU device at those coordinates
+    # within its host, as given by the topology. Raises on out-of-range indices.
     """Returns the ordinal of the TPU device assigned to a logical core."""
     coordinates = self.coordinates(replica, logical_core)
     return self._topology.tpu_device_ordinal_at_coordinates(coordinates)
@@ -171,6 +227,10 @@ class DeviceAssignment(object):
                   replica: int = 0,
                   logical_core: int = 0,
                   job: Optional[str] = None) -> str:
+    # [FUNCTION DOC]
+    # Inputs: replica and logical core indices (default zero) and an optional job name (null
+    # means use the topology default). Returns the device name string of the CPU host attached
+    # to that core's coordinates, as produced by the topology. Raises on out-of-range indices.
     """Returns the CPU device attached to a logical core."""
     coordinates = self.coordinates(replica, logical_core)
     return self._topology.cpu_device_name_at_coordinates(coordinates, job=job)
@@ -179,6 +239,10 @@ class DeviceAssignment(object):
                  replica: int = 0,
                  logical_core: int = 0,
                  job: Optional[str] = None) -> str:
+    # [FUNCTION DOC]
+    # Inputs: replica and logical core indices (default zero) and an optional job name (null
+    # means use the topology default). Returns the TPU device name string at that core's
+    # coordinates, as produced by the topology. Raises on out-of-range indices.
     """Returns the name of the TPU device assigned to a logical core."""
     coordinates = self.coordinates(replica, logical_core)
     return self._topology.tpu_device_name_at_coordinates(coordinates, job=job)
@@ -192,6 +256,12 @@ class DeviceAssignment(object):
       num_replicas: int = 1,
       device_order_mode: DeviceOrderMode = DeviceOrderMode.AUTO,
   ) -> "DeviceAssignment":
+    # [FUNCTION DOC]
+    # Class method factory. Forwards all arguments unchanged to the module level
+    # device_assignment function: topology (Topology), optional computation shape and stride
+    # arrays (null means ones per dimension), number of replicas (default one) and the device
+    # order mode (default automatic). Returns the resulting DeviceAssignment; raises the
+    # value errors documented for that function. The class argument itself is unused.
     return device_assignment(
         topology=topology,
         computation_shape=computation_shape,
@@ -203,6 +273,12 @@ class DeviceAssignment(object):
 
 def _open_ring_2d(x_size: int, y_size: int,
                   z_coord: int) -> List[Tuple[int, int, int]]:
+  # [FUNCTION DOC]
+  # HELPER: builds a 2D ring ordering for device assignment (used by the 3D ring builder).
+  # Inputs: x_size and y_size, mesh extents (documented as larger than one), z_coord, the fixed
+  # third coordinate. Returns a list of (x, y, z) triples that snake through the grid and come
+  # back along the x equals zero column, excluding the starting chip at the origin. The snake
+  # logic assumes an even y_size. No side effects.
   """Ring-order of a X by Y mesh, with a fixed Z coordinate.
 
   For example, in a 4x4 mesh, this returns the following order.
@@ -240,6 +316,13 @@ def _open_ring_2d(x_size: int, y_size: int,
 
 def _ring_3d(x_size: int, y_size: int,
              z_size: int) -> List[Tuple[int, int, int]]:
+  # [FUNCTION DOC]
+  # HELPER: builds the chip ordering used for ring device order in 3D tiling.
+  # Inputs: x_size, y_size, z_size, the mesh extents. Returns a list of (x, y, z) triples.
+  # Cases: two extents equal to one give a straight line; any odd extent greater than one logs
+  # a warning and returns plain row-major order; a single extent of one gives a flat 2D ring
+  # starting at the origin; otherwise 2D rings are stacked along z (alternating direction) and
+  # closed by walking back down the origin column. Side effect: may log a warning.
   """Ring-order of a X by Y by Z mesh.
 
   Constructs the 3d ring from 2d rings that are stacked in the Z dimension and
@@ -347,6 +430,21 @@ def device_assignment(
     num_replicas: int = 1,
     device_order_mode: DeviceOrderMode = DeviceOrderMode.AUTO,
 ) -> DeviceAssignment:
+  # [FUNCTION DOC]
+  # Computes which physical cores of a TPU topology run each logical core of each replica.
+  # Inputs: topology (a Topology object or serialized bytes that are parsed into one);
+  # computation_shape and computation_stride (optional integer arrays with one entry per
+  # topology dimension, null means all ones); num_replicas (default one); device_order_mode
+  # (automatic, ring or mesh). Returns a DeviceAssignment.
+  # Without missing devices: picks a replica grid shape close to a cube, then either uses the
+  # 3D ring tiling (only for rank 4 topologies with full replication, no stride and a
+  # computation spanning the last dimension; forced when ring mode is requested) or lays
+  # replicas out by offsets and expands each into its block of cores. With missing devices:
+  # ignores stride and assigns devices sequentially in task order.
+  # Raises value errors for a non-Topology input, wrongly shaped or non-positive shape/stride,
+  # a footprint larger than the mesh, too many replicas, or ring mode when tiling is unusable.
+  # Internal consistency problems and the degraded-slice stride or capacity checks are plain
+  # assertions.
   """Computes a device_assignment of a computation across a TPU topology.
 
   Attempts to choose a compact grid of cores for locality.
@@ -452,6 +550,9 @@ def device_assignment(
             mesh_shape))
 
   def ceil_of_ratio(n, m):
+    # [FUNCTION DOC]
+    # HELPER: integer ceiling division. Inputs: numerator n and denominator m (positive
+    # integers). Returns the smallest integer not less than n divided by m. Pure.
     return (n + m - 1) // m
 
   if topology.missing_devices.size == 0:

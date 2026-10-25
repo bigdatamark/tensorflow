@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Tests for the TPU feature column module: embedding_column and shared_embedding_columns
+# construction (defaults, all arguments, denylisted and custom categorical columns) and dense
+# tensor lookups in graph mode. Defines a small shared helper that returns an initialized
+# session. No import-time side effects beyond imports; runs under the TensorFlow test main.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,6 +36,10 @@ from tensorflow.python.tpu import feature_column as tpu_fc
 
 
 def _initialized_session():
+  # [FUNCTION DOC]
+  # HELPER: shared test utility. Creates a new session, runs the global variables initializer
+  # and the lookup tables initializer in it, and returns the session. Side effects: initializes
+  # variables and tables in the default graph.
   sess = session.Session()
   sess.run(variables_lib.global_variables_initializer())
   sess.run(lookup_ops.tables_initializer())
@@ -38,8 +47,17 @@ def _initialized_session():
 
 
 class EmbeddingColumnTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the single embedding column factory of the TPU feature column module:
+  # defaults, denylisted and custom categorical columns, full constructor arguments and dense
+  # tensor lookup. No shared fixtures.
 
   def test_defaults(self):
+    # [FUNCTION DOC]
+    # Test: creates a TPU embedding column from an identity column with only a dimension.
+    # Asserts the column keeps the categorical column and dimension, the combiner defaults to
+    # mean, name and scope name are the column key plus an embedding suffix, the variable shape
+    # is the dimension, and the parse specification is a variable length int64 feature.
     categorical_column = fc_lib.categorical_column_with_identity(
         key='aaa', num_buckets=3)
     embedding_dimension = 2
@@ -56,6 +74,9 @@ class EmbeddingColumnTest(test.TestCase):
     }, embedding_column._parse_example_spec)
 
   def test_denylisted_column(self):
+    # [FUNCTION DOC]
+    # Test: a hashed categorical column is on the denylist, so the TPU embedding column factory
+    # must raise a type error for it.
     # HashedCategoricalColumn is denylisted and so will raise an exception.
     categorical_column = fc_lib.categorical_column_with_hash_bucket(
         key='aaa', hash_bucket_size=3)
@@ -64,6 +85,11 @@ class EmbeddingColumnTest(test.TestCase):
       tpu_fc.embedding_column(categorical_column, dimension=embedding_dimension)
 
   def test_custom_column(self):
+    # [FUNCTION DOC]
+    # Test: an identity categorical column (a subclass of the v2 categorical column, hence
+    # accepted although not on an explicit allowlist) can be wrapped by the TPU embedding column
+    # factory. Asserts the column keeps categorical column, dimension, default mean combiner,
+    # name, scope name, variable shape and parse specification.
     # This column is not in any allowlist but should succeed because
     # it inherits from V2 CategoricalColumn.
     categorical_column = fc_lib.categorical_column_with_identity(
@@ -81,6 +107,10 @@ class EmbeddingColumnTest(test.TestCase):
                      embedding_column._parse_example_spec)
 
   def test_all_constructor_args(self):
+    # [FUNCTION DOC]
+    # Test: creates a TPU embedding column passing a custom combiner and initializer. Asserts
+    # the column keeps the categorical column, dimension, combiner, name, scope name, variable
+    # shape and parse specification (variable length int64 feature).
     categorical_column = fc_lib.categorical_column_with_identity(
         key='aaa', num_buckets=3)
     embedding_dimension = 2
@@ -101,6 +131,12 @@ class EmbeddingColumnTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def test_get_dense_tensor(self):
+    # [FUNCTION DOC]
+    # Graph-mode test: builds one identity column (three buckets) and a TPU embedding column
+    # with a custom initializer returning fixed values. Looks up the dense tensor for a sparse
+    # input with four examples (one empty) through a lazy builder. Asserts exactly one embedding
+    # variable exists, and after initialization that it holds the initializer values and the
+    # lookup equals the mean of selected rows (empty row gives zeros).
     # Inputs.
     vocabulary_size = 3
     sparse_input = sparse_tensor.SparseTensorValue(
@@ -121,6 +157,10 @@ class EmbeddingColumnTest(test.TestCase):
     )
 
     def _initializer(shape, dtype, partition_info):
+      # [FUNCTION DOC]
+      # HELPER: variable initializer for the test. Takes shape, dtype and partition info; asserts
+      # the shape equals vocabulary size by embedding dimension, dtype is float32 and no
+      # partition info is given, then returns the fixed embedding values.
       self.assertAllEqual((vocabulary_size, embedding_dimension), shape)
       self.assertEqual(dtypes.float32, dtype)
       self.assertIsNone(partition_info)
@@ -162,9 +202,18 @@ class EmbeddingColumnTest(test.TestCase):
 
 
 class SharedEmbeddingColumnTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the shared embedding columns factory of the TPU feature column module:
+  # default and fully specified construction and dense tensor lookup. No shared fixtures.
 
   @test_util.deprecated_graph_mode_only
   def test_defaults(self):
+    # [FUNCTION DOC]
+    # Graph-mode test: creates shared TPU embedding columns for two identity columns (passed in
+    # reverse name order) with only a dimension. Asserts the returned columns keep input order,
+    # default combiner is mean, an initializer is set, the shared collection name is the sorted
+    # names joined plus a suffix, per-column names, scope names, variable shapes and parse
+    # specifications are as expected.
     categorical_column_a = fc_lib.categorical_column_with_identity(
         key='aaa', num_buckets=3)
     categorical_column_b = fc_lib.categorical_column_with_identity(
@@ -202,6 +251,12 @@ class SharedEmbeddingColumnTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def test_all_constructor_args(self):
+    # [FUNCTION DOC]
+    # Graph-mode test: creates shared TPU embedding columns for two identity columns passing a
+    # custom combiner, initializer and shared collection name. Asserts each column keeps its
+    # categorical column, dimension, combiner, initializer (callable returns the custom value),
+    # the shared collection name, per-column names, variable scope name (the collection name),
+    # variable shape and parse specification (variable length int64 feature).
     categorical_column_a = fc_lib.categorical_column_with_identity(
         key='aaa', num_buckets=3)
     categorical_column_b = fc_lib.categorical_column_with_identity(
@@ -240,6 +295,13 @@ class SharedEmbeddingColumnTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def test_get_dense_tensor(self):
+    # [FUNCTION DOC]
+    # Graph-mode test: builds two identity categorical columns with three buckets and makes
+    # shared TPU embedding columns with a custom initializer returning fixed values. Looks up
+    # dense tensors for dense id arrays (negative ids ignored) for both columns via a lazy
+    # builder. Asserts exactly one embedding variable exists (shared), and after variable and
+    # table initialization that it holds the initializer values and that each lookup equals
+    # the mean of the selected rows (empty rows give zeros).
     # Inputs.
     vocabulary_size = 3
     # -1 values are ignored.
@@ -262,6 +324,10 @@ class SharedEmbeddingColumnTest(test.TestCase):
     )
 
     def _initializer(shape, dtype, partition_info):
+      # [FUNCTION DOC]
+      # HELPER: variable initializer for the test. Takes shape, dtype and partition info; asserts
+      # the shape equals vocabulary size by embedding dimension, dtype is float32 and no
+      # partition info is given, then returns the fixed embedding values.
       self.assertAllEqual((vocabulary_size, embedding_dimension), shape)
       self.assertEqual(dtypes.float32, dtype)
       self.assertIsNone(partition_info)

@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# TPU feature column library. Provides factory functions that build TPU-compatible embedding
+# columns and shared embedding columns from categorical feature columns, plus the internal
+# column classes (base mixin, embedding, shared embedding) that wrap the core feature column
+# types so that, when building for TPU, lookups are left to the TPU embedding engine and the
+# variable names and scopes are recorded in a graph collection. Also holds the supported and
+# denylisted categorical column type lists and a helper to name sequence length features.
+# Import time: only defines module constants (no registrations).
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -56,6 +64,18 @@ def embedding_column(categorical_column,
                      max_sequence_length=0,
                      learning_rate_fn=None,
                      use_safe_embedding_lookup=True):
+  # [FUNCTION DOC]
+  # Factory creating a TPU embedding column from a categorical column. Inputs:
+  # categorical_column, a supported categorical column; dimension, a positive integer;
+  # combiner (default mean); initializer, optional callable (default truncated normal with
+  # standard deviation one over the square root of the dimension); max_sequence_length,
+  # non-negative integer (positive for sequence columns, zero otherwise); learning_rate_fn,
+  # optional; use_safe_embedding_lookup, flag (default true).
+  # Builds a layer-creator closure and the TPU embedding column, then attaches the initializer
+  # to a private attribute because the creator hides it. Returns the column.
+  # Raises a type error for denylisted or unsupported categorical column types, and value
+  # errors for a missing or non-positive dimension, a non-callable initializer, or inconsistent
+  # sequence length.
   """TPU embedding_column for `tf.feature_column.embedding_column`.
 
   Note that the interface for TPU embedding_column is different from the non-TPU
@@ -127,6 +147,12 @@ def embedding_column(categorical_column,
   embedding_shape = categorical_column._num_buckets, dimension  # pylint: disable=protected-access
 
   def _creator(weight_collections, scope):
+    # [FUNCTION DOC]
+    # HELPER: layer creator handed to the embedding column. Inputs: weight_collections, the
+    # collections for the new weights, and scope, the variable scope. Builds an embedding
+    # column layer for the captured table shape and initializer (trainable, fixed layer name),
+    # calls it with no input in the given scope, and returns the result. Side effect: creates
+    # the embedding variable.
     embedding_column_layer = fc._EmbeddingColumnLayer(
         embedding_shape=embedding_shape,
         initializer=initializer,
@@ -163,6 +189,22 @@ def shared_embedding_columns(categorical_columns,
                              max_sequence_lengths=None,
                              learning_rate_fn=None,
                              use_safe_embedding_lookup=True):
+  # [FUNCTION DOC]
+  # Factory creating one TPU shared embedding column per categorical column, all sharing a
+  # single embedding table. Inputs: categorical_columns, a list of supported categorical
+  # columns with identical bucket counts; dimension, a positive integer; combiner (default
+  # mean); initializer, optional callable (default truncated normal with standard deviation
+  # one over the square root of the dimension); shared_embedding_collection_name, optional
+  # name (default: sorted column names joined plus a shared embedding suffix);
+  # max_sequence_lengths, optional list matching the columns (null or empty means all zero);
+  # learning_rate_fn, optional; use_safe_embedding_lookup, flag (default true).
+  # Returns a list of shared TPU embedding columns in input order.
+  # Raises a type error for denylisted or unsupported column types, and value errors for a
+  # length mismatch, invalid dimension, non-callable initializer, differing bucket counts, or
+  # sequence length inconsistencies detected by the column constructor.
+  # KNOWN ISSUE: the docstring says it returns a single TPU embedding column type, but the
+  # function returns a list of shared embedding columns; its Raises section also omits the type
+  # errors raised for unsupported column types.
   """List of dense columns that convert from sparse, categorical input.
 
   Note that the interface for TPU embedding_column is different from the non-TPU
@@ -290,12 +332,25 @@ def shared_embedding_columns(categorical_columns,
 
 
 class _TPUBaseEmbeddingColumn(object):
+  # [CLASS DOC]
+  # HELPER: mixin base for the TPU embedding column types.
+  # Stores the wrapped categorical column, the maximum sequence length and the optional
+  # learning rate function, validates sequence length consistency, and declares abstract
+  # accessors (combiner, table size, feature key, weight key, variable name, initializer,
+  # weighted check) that concrete subclasses implement. Used by the TPU embedding configuration
+  # code to read column properties.
   """Base class for TPU Embedding Column."""
 
   def __init__(self,
                categorical_column,
                max_sequence_length=0,
                learning_rate_fn=None):
+    # [FUNCTION DOC]
+    # Initializer. Inputs: categorical_column, the wrapped categorical column; max_sequence_length,
+    # a non-negative integer (default zero, required positive for sequence columns and zero
+    # otherwise); learning_rate_fn, optional function from global step to learning rate.
+    # Stores all three. Raises a value error if a sequence column has a length below one or a
+    # non-sequence column has a non-zero length.
     self._tpu_categorical_column = categorical_column
     self._max_sequence_length = max_sequence_length
     self._learning_rate_fn = learning_rate_fn
@@ -310,22 +365,37 @@ class _TPUBaseEmbeddingColumn(object):
                                                     categorical_column.name))
 
   def get_combiner(self):
+    # [FUNCTION DOC]
+    # Abstract accessor for the combiner name; subclasses override it. This version always
+    # raises a not-implemented error.
     """Returns the embedding combiner."""
     raise NotImplementedError('not implemented')
 
   def get_embedding_table_size(self):
+    # [FUNCTION DOC]
+    # Abstract accessor for the table size (vocabulary size and dimension); subclasses override
+    # it. This version always raises a not-implemented error.
     """Returns the embedding table size, tuple of vocab size and dimension."""
     raise NotImplementedError('not implemented')
 
   def get_feature_key_name(self):
+    # [FUNCTION DOC]
+    # Abstract accessor for the input feature name; subclasses override it. This version always
+    # raises a not-implemented error.
     """Returns the feature key name in the features dict."""
     raise NotImplementedError('not impl')
 
   def get_weight_key_name(self):
+    # [FUNCTION DOC]
+    # Abstract accessor for the weight feature name; subclasses override it. This version
+    # always raises a not-implemented error.
     """Return the key name for weights."""
     raise NotImplementedError('not impl')
 
   def get_embedding_var_name(self):
+    # [FUNCTION DOC]
+    # Abstract accessor for the embedding table variable name; subclasses override it. This
+    # version always raises a not-implemented error.
     """Returns the embedding variable name.
 
     Feature key name and embedding variable name are usually one-to-one mapping.
@@ -334,29 +404,52 @@ class _TPUBaseEmbeddingColumn(object):
     raise NotImplementedError('not impl')
 
   def get_initializer(self):
+    # [FUNCTION DOC]
+    # Abstract accessor for the initializer; subclasses override it. This version always raises
+    # a not-implemented error.
     """Returns the initializer."""
     raise NotImplementedError('not impl')
 
   def is_categorical_column_weighted(self):
+    # [FUNCTION DOC]
+    # Abstract predicate for whether the categorical column is weighted; subclasses override
+    # it. This version always raises a not-implemented error.
     """Check if the categorical column of the embedding column is weighted."""
     raise NotImplementedError('not impl')
 
   def is_sequence_column(self):
+    # [FUNCTION DOC]
+    # Returns true if the wrapped categorical column is one of the supported sequence
+    # categorical column types, otherwise false.
     return isinstance(self._tpu_categorical_column, _SUPPORTED_SEQUENCE_COLUMNS)
 
   def get_max_sequence_length(self):
+    # [FUNCTION DOC]
+    # Returns the maximum sequence length given at construction (zero for non-sequence columns).
     return self._max_sequence_length
 
   def get_learning_rate_fn(self):
+    # [FUNCTION DOC]
+    # Returns the learning rate function given at construction, or the null value if none.
     return self._learning_rate_fn
 
   def get_sequence_length_feature_key_name(self):
+    # [FUNCTION DOC]
+    # Returns the feature key of the companion sequence length feature, derived from this
+    # column's feature key name by appending the sequence length suffix.
     """Get the key for the associated sequence length feature."""
     return get_sequence_length_feature_key_name_from_feature_key_name(
         self.get_feature_key_name())
 
 
 class _TPUEmbeddingColumn(_TPUBaseEmbeddingColumn, fc._EmbeddingColumn):
+  # [CLASS DOC]
+  # HELPER: internal column type created by the embedding column factory.
+  # TPU variant of the core embedding column combining the TPU base mixin with the parent
+  # embedding column. Holds the sequence length, learning rate function, a scope validation
+  # bypass flag and (attached later by the factory) the initializer. Overrides the dense and
+  # sequence tensor methods so that, in TPU mode, the lookup is done by the TPU embedding
+  # engine and only the variable name and scope are recorded.
   """Core Embedding Column."""
 
   def __new__(cls,
@@ -372,6 +465,12 @@ class _TPUEmbeddingColumn(_TPUBaseEmbeddingColumn, fc._EmbeddingColumn):
               learning_rate_fn=None,
               use_safe_embedding_lookup=True,
               bypass_scope_validation=False):
+    # [FUNCTION DOC]
+    # Allocation method. Forwards the embedding configuration (categorical column, dimension,
+    # combiner, layer creator, unsupported checkpoint and norm options, trainable and safe
+    # lookup flags) to the parent embedding column allocator, using this class as the type.
+    # The bypass scope validation flag is deleted here (handled by the initializer), and the
+    # sequence length and learning rate arguments are not forwarded. Returns the new instance.
     # Note, args ckpt_to_load_from, tensor_name_in_ckpt, max_norm and trainable
     # are not supported on TPU. They are solely for matching the signature of
     # __new__ of parent class fc._EmbeddingColumn.
@@ -402,6 +501,12 @@ class _TPUEmbeddingColumn(_TPUBaseEmbeddingColumn, fc._EmbeddingColumn):
                learning_rate_fn=None,
                use_safe_embedding_lookup=True,
                bypass_scope_validation=False):
+    # [FUNCTION DOC]
+    # Initializer. Passes categorical_column, max_sequence_length and learning_rate_fn to the
+    # base initializer (which validates the sequence length against the column kind and may
+    # raise a value error), resets the key to null and stores the scope validation bypass flag
+    # (when true the same column may be used under several variable scopes). Other arguments
+    # were consumed by the allocation method and are ignored here.
     _TPUBaseEmbeddingColumn.__init__(
         self,
         categorical_column,
@@ -414,32 +519,54 @@ class _TPUEmbeddingColumn(_TPUBaseEmbeddingColumn, fc._EmbeddingColumn):
     self._bypass_scope_validation = bypass_scope_validation
 
   def get_combiner(self):
+    # [FUNCTION DOC]
+    # Returns the combiner name (how multiple ids in a row are reduced) stored on the column.
     return self.combiner
 
   def get_embedding_table_size(self):
+    # [FUNCTION DOC]
+    # Returns a pair of the number of buckets of the wrapped categorical column (vocabulary
+    # size) and the embedding dimension.
     """Returns num_ids and width."""
     return (self.categorical_column._num_buckets, self.dimension)
 
   def get_feature_key_name(self):
+    # [FUNCTION DOC]
+    # Returns the name of the input feature that feeds this column: the inner categorical
+    # column's name when the column is weighted, else the categorical column's own name.
     """get_feature_key_name."""
     if self.is_categorical_column_weighted():
       return self.categorical_column.categorical_column.name
     return self.categorical_column.name
 
   def get_weight_key_name(self):
+    # [FUNCTION DOC]
+    # Returns the feature key holding the per-id weights if the categorical column is weighted,
+    # otherwise returns the null value.
     """get_weight_key_name."""
     if self.is_categorical_column_weighted():
       return self.categorical_column.weight_feature_key
     return None
 
   def get_embedding_var_name(self):
+    # [FUNCTION DOC]
+    # Returns the name of the embedding table variable, which is the wrapped categorical
+    # column's name (one table per column).
     """get_embedding_var_name."""
     return self.categorical_column.name
 
   def get_initializer(self):
+    # [FUNCTION DOC]
+    # Returns the initializer stored in the private TPU initializer attribute. That attribute
+    # is attached by the embedding column factory function after construction.
+    # KNOWN ISSUE: the attribute is not set by the constructor, so calling this on a column
+    # created directly (not via the factory) raises an attribute error.
     return self._tpu_initializer
 
   def is_categorical_column_weighted(self):
+    # [FUNCTION DOC]
+    # Returns true if the wrapped categorical column is a weighted categorical column (old or
+    # new style), otherwise false.
     """Check if the categorical column of the embedding column is weighted."""
     if isinstance(
         self.categorical_column,
@@ -450,8 +577,20 @@ class _TPUEmbeddingColumn(_TPUBaseEmbeddingColumn, fc._EmbeddingColumn):
     return False
 
   def _get_dense_tensor(self, inputs, weight_collections=None, trainable=None):
+    # [FUNCTION DOC]
+    # Produces the dense embedding tensor for this column. Inputs: inputs, the lazy feature
+    # builder; weight_collections and trainable, passed to the parent on CPU paths. Under TPU
+    # inference the parent computation runs on the host through outside compilation; on CPU
+    # the parent implementation is used directly. In TPU training mode it returns the
+    # already looked-up tensor fetched from inputs by feature key and records the embedding
+    # variable name and variable scope in a graph collection (honoring the scope validation
+    # bypass flag). Side effect: mutates that graph collection; may raise a value error on a
+    # scope mismatch.
     if tpu.under_tpu_inference_context():
       def host_computation():
+        # [FUNCTION DOC]
+        # HELPER: host-side closure that calls the parent embedding column dense tensor logic
+        # with the captured arguments and returns its tensor.
         return fc._EmbeddingColumn._get_dense_tensor(
             self, inputs, weight_collections, trainable)
 
@@ -475,8 +614,19 @@ class _TPUEmbeddingColumn(_TPUBaseEmbeddingColumn, fc._EmbeddingColumn):
 
   def _get_sequence_dense_tensor(
       self, inputs, weight_collections=None, trainable=None):
+    # [FUNCTION DOC]
+    # Produces the sequence embedding result for this column. Inputs as for the dense variant.
+    # Under TPU inference or on CPU it defers to the parent implementation (on the host via
+    # outside compilation for inference). In TPU training mode it fetches the embedding tensor
+    # and the sequence length tensor by feature key, removes the trailing singleton dimension
+    # that the lazy builder added to the lengths, records the embedding variable name and scope
+    # in a graph collection, and returns a pair of dense tensor and sequence length. Side
+    # effect: mutates the graph collection; may raise a value error on a scope mismatch.
     if tpu.under_tpu_inference_context():
       def host_computation():
+        # [FUNCTION DOC]
+        # HELPER: host-side closure that calls the parent embedding column sequence logic with
+        # the captured arguments and returns its result.
         return fc._EmbeddingColumn._get_sequence_dense_tensor(
             self, inputs, weight_collections, trainable)
 
@@ -505,6 +655,13 @@ class _TPUEmbeddingColumn(_TPUBaseEmbeddingColumn, fc._EmbeddingColumn):
 
 class _TPUSharedEmbeddingColumn(_TPUBaseEmbeddingColumn,
                                 fc._SharedEmbeddingColumn):
+  # [CLASS DOC]
+  # HELPER: internal column type created by the shared embedding columns factory.
+  # TPU variant of the core shared embedding column combining the TPU base mixin with the
+  # parent shared column. Several instances share one embedding table identified by the shared
+  # collection name. Provides accessors used when configuring TPU embedding tables and
+  # overrides the dense and sequence tensor methods so that, in TPU mode, the lookup is done by
+  # the TPU embedding engine and only the variable name and scope are recorded.
   """Core Shared Embedding Column."""
 
   def __new__(cls,
@@ -520,6 +677,12 @@ class _TPUSharedEmbeddingColumn(_TPUBaseEmbeddingColumn,
               max_sequence_length=0,
               learning_rate_fn=None,
               use_safe_embedding_lookup=True):
+    # [FUNCTION DOC]
+    # Allocation method. Forwards the embedding configuration (categorical column, dimension,
+    # combiner, initializer, shared collection name, unsupported checkpoint and norm options,
+    # trainable and safe lookup flags) to the parent shared embedding column allocator, using
+    # this class as the type. The max sequence length and learning rate function are not
+    # forwarded; they are handled by the initializer. Returns the new column instance.
     return fc._SharedEmbeddingColumn.__new__(
         cls,
         categorical_column,
@@ -546,6 +709,12 @@ class _TPUSharedEmbeddingColumn(_TPUBaseEmbeddingColumn,
                max_sequence_length=0,
                learning_rate_fn=None,
                use_safe_embedding_lookup=True):
+    # [FUNCTION DOC]
+    # Initializer for the shared column. Takes the same arguments as the constructor-time
+    # factory; only categorical_column, max_sequence_length and learning_rate_fn are used here
+    # (passed to the base class initializer, which validates sequence length), and the key is
+    # reset to null. The other arguments were consumed by the allocation method. Raises a value
+    # error if the sequence length is inconsistent with the column kind.
 
     _TPUBaseEmbeddingColumn.__init__(
         self,
@@ -555,32 +724,51 @@ class _TPUSharedEmbeddingColumn(_TPUBaseEmbeddingColumn,
     self._key = None
 
   def get_combiner(self):
+    # [FUNCTION DOC]
+    # Returns the combiner name (how multiple ids in a row are reduced) stored on the column.
     return self.combiner
 
   def get_embedding_table_size(self):
+    # [FUNCTION DOC]
+    # Returns a pair of the number of buckets of the wrapped categorical column (vocabulary
+    # size) and the embedding dimension.
     """Returns num_ids and width."""
     return (self.categorical_column._num_buckets, self.dimension)
 
   def get_feature_key_name(self):
+    # [FUNCTION DOC]
+    # Returns the name of the input feature that feeds this column: the inner categorical
+    # column's name when the column is weighted, else the categorical column's own name.
     """get_feature_key_name."""
     if self.is_categorical_column_weighted():
       return self.categorical_column.categorical_column.name
     return self.categorical_column.name
 
   def get_weight_key_name(self):
+    # [FUNCTION DOC]
+    # Returns the feature key holding the per-id weights if the categorical column is weighted,
+    # otherwise returns the null value.
     """get_weight_key_name."""
     if self.is_categorical_column_weighted():
       return self.categorical_column.weight_feature_key
     return None
 
   def get_embedding_var_name(self):
+    # [FUNCTION DOC]
+    # Returns the name of the embedding table variable. For shared columns this is the shared
+    # collection name, so many columns map to one table.
     """get_embedding_var_name."""
     return self.shared_embedding_collection_name
 
   def get_initializer(self):
+    # [FUNCTION DOC]
+    # Returns the initializer function that was given to this shared column's constructor.
     return self.initializer
 
   def is_categorical_column_weighted(self):
+    # [FUNCTION DOC]
+    # Returns true if the wrapped categorical column is a weighted categorical column (old or
+    # new style), otherwise false.
     """Check if the categorical column of the embedding column is weighted."""
     if isinstance(
         self.categorical_column,
@@ -591,8 +779,19 @@ class _TPUSharedEmbeddingColumn(_TPUBaseEmbeddingColumn,
     return False
 
   def _get_dense_tensor(self, inputs, weight_collections=None, trainable=None):
+    # [FUNCTION DOC]
+    # Produces the dense embedding tensor for this shared column. Inputs: inputs, the lazy
+    # feature builder; weight_collections and trainable, passed to the parent on CPU paths.
+    # Under TPU inference the parent computation is run on the host through outside
+    # compilation; when running on CPU the parent implementation is used directly. In TPU
+    # training mode it returns the already looked-up tensor fetched from inputs by feature key
+    # and records the embedding variable name and scope (marked as shared) in a graph
+    # collection for later table creation. Side effect: mutates that graph collection.
     if tpu.under_tpu_inference_context():
       def host_computation():
+        # [FUNCTION DOC]
+        # HELPER: host-side closure that calls the parent shared column dense tensor logic with
+        # the captured inputs, weight collections and trainable flag; returns its tensor.
         return fc._SharedEmbeddingColumn._get_dense_tensor(
             self, inputs, weight_collections, trainable)
 
@@ -615,8 +814,21 @@ class _TPUSharedEmbeddingColumn(_TPUBaseEmbeddingColumn,
 
   def _get_sequence_dense_tensor(
       self, inputs, weight_collections=None, trainable=None):
+    # [FUNCTION DOC]
+    # Produces the sequence embedding result for this shared column. Inputs as for the dense
+    # variant. Under TPU inference or on CPU it defers to the parent implementation (on the
+    # host via outside compilation for inference). In TPU training mode it fetches the
+    # embedding tensor and the sequence length tensor by their feature keys and records the
+    # shared embedding variable name and scope in a graph collection. Returns the parent's
+    # result, or a pair of dense tensor and sequence length. Side effect: mutates the graph
+    # collection.
+    # KNOWN ISSUE: unlike the non-shared column, the TPU path does not squeeze the trailing
+    # dimension of the length tensor, so lengths may keep a rank that differs from CPU output.
     if tpu.under_tpu_inference_context():
       def host_computation():
+        # [FUNCTION DOC]
+        # HELPER: host-side closure that calls the parent shared column sequence logic with the
+        # captured arguments and returns its result.
         return fc._SharedEmbeddingColumn._get_sequence_dense_tensor(
             self, inputs, weight_collections, trainable)
 
@@ -643,6 +855,16 @@ def _record_variable_scope_and_name(embedding_var_name,
                                     embedding_var_name_in_fc,
                                     is_shared_embedding=False,
                                     bypass_scope_validation=False):
+  # [FUNCTION DOC]
+  # HELPER: records, in a default-graph collection, which variable scope and column-internal
+  # name each embedding variable uses, so TPU embedding tables can be created later.
+  # Inputs: embedding_var_name, the table name; embedding_var_name_in_fc, the name used inside
+  # the feature column; is_shared_embedding (default false) and bypass_scope_validation
+  # (default false), either of which skips the scope-mismatch check.
+  # Side effects: creates the collection entry (a mapping from name to scope name and inner
+  # name) if missing, and adds a new entry if the name is unseen. Returns nothing.
+  # Raises a value error if the name was seen before under a different variable scope (unless
+  # skipped) or with a different inner name.
   """Add embedding variable name and scope to collection."""
   g = ops.get_default_graph()
   collection = g.get_collection_ref(_TPU_FC_TO_SCOPE)
@@ -674,11 +896,19 @@ def _record_variable_scope_and_name(embedding_var_name,
 
 
 def _is_running_on_cpu():
+  # [FUNCTION DOC]
+  # HELPER: tells whether the current TPU context has no shards, meaning the model is built
+  # for CPU execution. Takes no inputs; returns true when the number of shards is null,
+  # otherwise false.
   """Returns True if the current context is CPU model."""
   return tpu_function.get_tpu_context().number_of_shards is None
 
 
 def get_sequence_length_feature_key_name_from_feature_key_name(feature_name):
+  # [FUNCTION DOC]
+  # Input: feature_name, the key of a sequence feature (string). Returns the key of its
+  # companion sequence length feature: the name with the sequence length suffix appended.
+  # Pure; no side effects.
   """Gets the name of the sequence length feature from that of the base feature.
 
   Args:
