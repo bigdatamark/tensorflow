@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Public set operations module (exposed as the sets API). A thin facade that re-exports every
+# public symbol from the sets implementation module via a wildcard import; defines nothing of its
+# own and has no import-time side effects beyond that import.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

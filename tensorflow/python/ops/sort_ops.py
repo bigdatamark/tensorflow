@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Support for sorting tensors: public sort and argsort along a constant axis in ascending or
+# descending direction, implemented on top of top-k (with transposition for non-last axes and
+# order reversal tricks for ascending). Defines a module-level table mapping direction names to
+# implementations. No other import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +34,12 @@ from tensorflow.python.util.tf_export import tf_export
 @tf_export('sort')
 @dispatch.add_dispatch_support
 def sort(values, axis=-1, direction='ASCENDING', name=None):
+  # [FUNCTION DOC]
+  # Public sort (exported). Inputs: a numeric tensor, the axis to sort along (default last), the
+  # direction string, either ascending (default) or descending, and an optional op name scope.
+  # Delegates to the shared implementation requesting sorted values. Raises a value error for an
+  # invalid direction or a non-constant, non-scalar axis; the kernel raises invalid-argument for
+  # unsupported dtypes. Returns a tensor of the same shape and dtype with sorted elements.
   """Sorts a tensor.
 
   Usage:
@@ -86,6 +97,14 @@ def sort(values, axis=-1, direction='ASCENDING', name=None):
 @tf_export('argsort')
 @dispatch.add_dispatch_support
 def argsort(values, axis=-1, direction='ASCENDING', stable=False, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the stable argument is deleted and ignored; the docstring says unstable sort is
+  # not implemented, which is consistent, but passing false has no distinct effect.
+  # Public argsort (exported). Inputs: numeric tensor, axis (default last), direction (ascending
+  # default or descending), the ignored stable flag, and an optional name scope. Delegates to the
+  # shared implementation requesting indices. Raises a value error for a bad direction or a
+  # non-constant non-scalar axis. Returns an int32 tensor of the same shape holding the indices
+  # that sort each slice.
   """Returns the indices of a tensor that give its sorted order along an axis.
 
   >>> values = [1, 10, 26.9, 2.8, 166.32, 62.3]
@@ -151,6 +170,12 @@ def argsort(values, axis=-1, direction='ASCENDING', stable=False, name=None):
 
 
 def _sort_or_argsort(values, axis, direction, return_argsort):
+  # [FUNCTION DOC]
+  # HELPER: shared validation and dispatch for sort and argsort. Raises a value error for a
+  # direction not in the implementation table (listing valid ones) or an axis that is not a
+  # constant scalar. Converts axis to a Python integer and values to a tensor, then calls the
+  # direction specific implementation. Returns sorted values, or indices when return_argsort
+  # is true.
   """Internal sort/argsort implementation.
 
   Args:
@@ -184,6 +209,14 @@ def _sort_or_argsort(values, axis, direction, return_argsort):
 
 
 def _descending_sort(values, axis, return_argsort=False):
+  # [FUNCTION DOC]
+  # HELPER: descending sort built on top-k with k equal to the axis length. KNOWN ISSUE: the
+  # docstring says it returns the sorted values, but with return_argsort true it returns the
+  # sorting indices instead.
+  # Inputs: tensor, integer axis (may be negative), flag choosing indices over values. If the
+  # axis is not the last, swaps it with the last axis (using a constant permutation when the rank
+  # is static, else computed from tensors), runs top-k, and swaps back (the permutation is its
+  # own inverse).
   """Sorts values in reverse using `top_k`.
 
   Args:
@@ -239,6 +272,13 @@ def _descending_sort(values, axis, return_argsort=False):
 
 
 def _ascending_sort(values, axis, return_argsort=False):
+  # [FUNCTION DOC]
+  # HELPER: ascending sort implemented through the descending one. KNOWN ISSUE: the docstring
+  # says it returns the sorted values, but with return_argsort true it returns indices.
+  # Unsigned integers are reversed by subtracting from the dtype maximum, signed integers by
+  # negating and subtracting one (avoids overflow-prone negation of the minimum only partially;
+  # the minimum value still overflows on negation), floats by negation. For value results the
+  # transform is undone; index results are returned directly.
   """Sorts values in ascending order.
 
   Args:

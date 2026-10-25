@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Script language operators: lets Python callables run inside TensorFlow graphs and functions.
+# Exposes the public py_function (eager execution of a Python function, differentiable once),
+# numpy_function and the legacy v1 py_func (numpy based, not differentiable), plus the
+# internal registry and glue they share. A global registry of weakly held callables is keyed by
+# unique string tokens; the native PyFunc / EagerPyFunc kernels call back into it through a
+# trampoline. Import-time side effects: creates the global registry, initializes the native
+# py trampoline with it, registers the gradient for EagerPyFunc, and marks PyFunc and
+# PyFuncStateless as not differentiable.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -56,6 +65,12 @@ tape_cache = {}
 
 
 def _maybe_copy_to_context_device(tensor, device_name):
+  # [FUNCTION DOC]
+  # HELPER: used by EagerFunc to place py_func outputs on the kernel's device.
+  # Takes an eager tensor and a device name string. If the tensor's backing device already equals
+  # the name, it is returned unchanged; otherwise a copy is made on the current context device
+  # (bypassing the placer, so small int tensors may land on GPU). Returns the tensor or its copy.
+  # Uses a protected tensor copy method; no other side effects.
   """Copy an EagerTensor to the current device if it's not on `device_name`."""
   in_device = tensor.backing_device
   if device_name == in_device:
@@ -69,9 +84,21 @@ def _maybe_copy_to_context_device(tensor, device_name):
 
 
 class EagerFunc:
+  # [CLASS DOC]
+  # HELPER: internal glue between the EagerPyFunc kernel and user Python functions.
+  # Callable wrapper that runs a user function eagerly, converts each result to a tensor of the
+  # expected dtype, copies results to the op's device, and (when gradients may be needed) records
+  # a gradient tape into the module-level tape cache keyed by the op token. Holds the wrapped
+  # function, the list of expected output dtypes, whether it is itself a gradient function, and
+  # a flag enabling graph-mode gradient support. Created by the internal py_func builder and
+  # stored in the function registry.
   """A wrapper for a function owned by an EagerPyFunc."""
 
   def __init__(self, func, Tout, is_grad_func):
+    # [FUNCTION DOC]
+    # Constructor. Stores the function to wrap, the list of output dtypes (empty when the function
+    # returns nothing), and whether this wrapper is the gradient of another EagerPyFunc.
+    # Graph-mode gradient support starts disabled. Returns nothing; no other side effects.
     """Constructs an EagerFunc.
 
     Args:
@@ -87,6 +114,9 @@ class EagerFunc:
     self._support_graph_mode_gradient = False
 
   def set_support_graph_mode_gradient(self):
+    # [FUNCTION DOC]
+    # Turns on the flag that makes later calls always record a gradient tape and stash it in the
+    # tape cache, so graph-mode gradient computation can find it. Takes no inputs, returns nothing.
     """Indicates the object shall support gradient ops.
 
     This function is internally used by _EagerPyFuncGrad to support
@@ -95,6 +125,12 @@ class EagerFunc:
     self._support_graph_mode_gradient = True
 
   def _convert(self, value, dtype):
+    # [FUNCTION DOC]
+    # HELPER: converts one returned value of the wrapped function into a tensor.
+    # Inputs: the value and the required dtype. Raises a runtime error if the value is a resource
+    # variable. If the value is null and this is a gradient function, returns a scalar zero of the
+    # given dtype (note: a scalar, not shaped like the missing gradient). Otherwise converts to a
+    # tensor of that dtype and returns it.
     """Converts `value` to a tensor of type `dtype`, with error checking.
 
     Args:
@@ -129,6 +165,13 @@ class EagerFunc:
     return ops.convert_to_tensor(value, dtype=dtype)
 
   def __call__(self, device, token, args):
+    # [FUNCTION DOC]
+    # Invoked by the registry. Inputs: device name (or null for CPU), the op token, and the list
+    # of argument tensors. If gradients may be needed (graph-mode gradient support enabled or a
+    # tape could be recording), runs the function under a new gradient tape that watches all
+    # trainable input tensors and stores (tape, args, outputs) in the global tape cache under the
+    # byte-encoded token; otherwise just runs it. Returns the converted outputs (list, single
+    # tensor or null). Side effect: writes to the tape cache.
     """Calls `self._func` in eager mode, recording the tape if needed."""
     use_tape_cache = (
         self._support_graph_mode_gradient or record.could_possibly_record())
@@ -147,6 +190,13 @@ class EagerFunc:
     return outputs
 
   def _call(self, device, args):
+    # [FUNCTION DOC]
+    # HELPER: executes the wrapped function eagerly for __call__.
+    # Enters eager mode, calls the function with the arguments, then (under the given device,
+    # null meaning the CPU) converts each result to the expected dtype and copies it to that
+    # device. A list or tuple result is converted element-wise against the output dtypes; a null
+    # result yields null; any other result is converted with the first output dtype. Returns
+    # the resulting list, tensor or null. Errors from the user function or conversion propagate.
     """Passes `args` to `self._func`, which is executed eagerly."""
     with context.eager_mode():
       ret = self._func(*args)
@@ -172,6 +222,13 @@ class EagerFunc:
 
 
 class FuncRegistry:
+  # [CLASS DOC]
+  # HELPER: registry that the native PyFunc kernels call back into.
+  # Maps unique string tokens ("pyfunc_" plus a counter) to callables, holding them only weakly
+  # (the graph keeps the strong reference). Thread-safe token generation via a lock. When called
+  # with a token, device and arguments it dispatches to the callable: eager wrappers run
+  # directly, plain callables get numpy arguments and their results are normalized to numpy
+  # arrays. A single module-level instance is used.
   """A helper class to keep track of registered py functions.
 
   FuncRegistry keeps a map from unique tokens (string) to python
@@ -179,6 +236,9 @@ class FuncRegistry:
   """
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor: creates the lock, the token counter starting at zero, and an empty mapping
+    # that holds registered functions by weak reference. Takes no inputs, returns nothing.
     self._lock = threading.Lock()
     self._unique_id = 0  # GUARDED_BY(self._lock)
     # Only store weakrefs to the functions. The strong reference is stored in
@@ -187,12 +247,21 @@ class FuncRegistry:
 
   @property
   def _ctx(self):
+    # [FUNCTION DOC]
+    # HELPER: property giving the native eager context handle.
+    # KNOWN ISSUE: nothing in this module reads this property; it may be dead code or used only
+    # by native code.
+    # Intended so GPU tensors can be moved to CPU for numpy APIs. Ensures the eager context is
+    # initialized (side effect) and returns its protected handle object.
     # N.B. This is needed to support calling py_func with GPU tensors,
     # which must be transferred to CPU if used in any of the NumPy APIs.
     context.ensure_initialized()
     return context.context()._handle  # pylint: disable=protected-access
 
   def insert(self, func):
+    # [FUNCTION DOC]
+    # Registers a callable under a freshly generated unique token and returns that token string.
+    # Only a weak reference is stored, so the caller must keep the callable alive elsewhere.
     """Registers `func` and returns a unique token for this entry."""
     token = self._next_unique_token()
     # Store a weakref to the function
@@ -200,15 +269,28 @@ class FuncRegistry:
     return token
 
   def remove(self, token):
+    # [FUNCTION DOC]
+    # Removes the entry for the given token if present; silently does nothing if absent.
+    # Returns nothing. Mutates the registry.
     """Removes the registered function corresponding to `token`."""
     self._funcs.pop(token, None)
 
   def get(self, token, default=None):
+    # [FUNCTION DOC]
+    # Looks up the callable for a token. Returns it, or the optional default (null if not given)
+    # when the token is unknown or the weakly held function has been collected. No side effects.
     """Gets the registered function corresponding to `token`."""
     return self._funcs.get(token, default)
 
   @staticmethod
   def _convert(value, dtype=None):
+    # [FUNCTION DOC]
+    # HELPER: static method that turns a callback result into a numpy array for the kernel.
+    # Inputs: any array-like value and an optional numpy dtype. Converts in C order; if that
+    # produced a fixed-width byte string array from a non-array input it redoes the conversion
+    # as an object array (avoiding zero padding); unicode arrays from non-array input are encoded
+    # to utf-8 bytes in an object array; unicode arrays that are the input itself are cast to
+    # bytes. Otherwise returns the plain conversion. No side effects.
     """Converts an arg to numpy, avoiding dangerous string and unicode dtypes.
 
     Numpy pads with zeros when using string and unicode dtypes if different
@@ -237,6 +319,14 @@ class FuncRegistry:
       return result
 
   def __call__(self, token, device, args):
+    # [FUNCTION DOC]
+    # Entry point used by the native trampoline. Inputs: token, device name (used only for eager
+    # wrappers) and the argument list. Raises a value error if no function is registered for the
+    # token. Eager wrappers are called with device, token and args and their result returned
+    # as is. Other callables are called with the arguments; a bytes result is wrapped in a list,
+    # list or tuple results are converted element-wise to numpy arrays, single results converted
+    # to one array. Side effects: whatever the user function does (and tape cache writes for
+    # eager wrappers).
     """Calls the registered function for `token` with args.
 
     Args:
@@ -279,10 +369,15 @@ class FuncRegistry:
         return self._convert(ret)
 
   def size(self):
+    # [FUNCTION DOC]
+    # Returns the number of entries currently in the registry (collected functions drop out).
     """Returns how many functions are currently registered."""
     return len(self._funcs)
 
   def _next_unique_token(self):
+    # [FUNCTION DOC]
+    # HELPER: produces registry tokens. Under the lock, takes and increments the counter and
+    # returns a string made of the prefix "pyfunc_" and the counter value.
     """Returns a unique token."""
     with self._lock:
       uid = self._unique_id
@@ -303,6 +398,17 @@ def _internal_py_func(func,
                       use_eager_py_func=False,
                       is_grad_func=False,
                       name=None):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation behind py_function, numpy_function and the v1 py_func.
+  # Inputs: the callable (raises a value error if not callable), the list of input tensors, Tout
+  # (a dtype or type spec, or a list/tuple of them), optional stateful flag (only for the numpy
+  # style op), a flag choosing the eager op over the plain op, a flag marking gradient functions,
+  # and an optional op name. Wraps the callable to skip autograph conversion, converts variables
+  # in the inputs to tensors, handles composite tensors by flattening, wraps in an eager wrapper
+  # if requested, registers it in the global registry and keeps a strong reference on the
+  # outermost graph (and on the original function when it is a plain function). Creates the
+  # eager, stateful or stateless py op. Returns the op's outputs: a list, or a single tensor
+  # when Tout was not a list/tuple. Mutates the default graph and global registry.
   """See documentation for py_func and eager_py_func."""
   if not callable(func):
     raise ValueError(
@@ -392,11 +498,23 @@ def _internal_py_func(func,
 # TODO(akshayka): Implement higher-order derivatives.
 @ops.RegisterGradient("EagerPyFunc")
 def _EagerPyFuncGrad(op, *dy):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient function for the EagerPyFunc op.
+  # Inputs: the forward op and the upstream gradients. Builds another eager py op that, when run,
+  # pops the saved tape from the tape cache (by the op's token) and asks it for gradients of the
+  # recorded outputs with respect to the recorded inputs. In graph mode it also tells the forward
+  # eager wrapper to record tapes. Returns the gradient op outputs. Only first-order gradients
+  # are supported. Side effects: adds ops to the graph, consumes tape cache entries at run time.
   """Computes the gradient of an EagerPyFunc."""
 
   token = op.get_attr("token")
 
   def eagerly_executed_grad(*dy):
+    # [FUNCTION DOC]
+    # HELPER: nested callback run eagerly at gradient time. Takes upstream gradients, removes the
+    # saved (tape, inputs, outputs) entry for the forward token from the tape cache (a missing
+    # entry raises a key error), and returns the tape's gradients of the outputs with respect to
+    # the inputs using the given upstream gradients.
     tape, eager_inputs, eager_outputs = tape_cache.pop(compat.as_bytes(token))
     return tape.gradient(eager_outputs, eager_inputs, output_gradients=dy)
 
@@ -421,6 +539,13 @@ def _EagerPyFuncGrad(op, *dy):
 def _check_args_and_maybe_make_decorator(
     script_op, script_op_name, func=None, inp=None, Tout=None, **kwargs
 ):
+  # [FUNCTION DOC]
+  # HELPER: argument validation shared by py_function and numpy_function.
+  # Inputs: the op-building function, its display name, and the user's func, inp, Tout and extra
+  # keyword options. Raises a type error if Tout is missing, if func is null but inp is given, or
+  # if func is given but inp is missing. When func is null returns a decorator factory result:
+  # a decorator that wraps a function so calling it passes its positional arguments as inputs to
+  # the op builder with the given Tout and options. Otherwise returns null (arguments are valid).
   """Checks the arguments and returns a decorator if func is None."""
   if Tout is None:
     raise TypeError(
@@ -438,8 +563,15 @@ def _check_args_and_maybe_make_decorator(
       )
 
     def py_function_decorator(fun):
+      # [FUNCTION DOC]
+      # HELPER: the decorator returned to the user. Takes the function to decorate and returns
+      # a wrapper (preserving its metadata) that forwards calls to the op builder.
       @functools.wraps(fun)
       def py_function_wrapper(*args):
+        # [FUNCTION DOC]
+        # HELPER: wrapper produced by the decorator. Takes positional arguments, passes them as
+        # the input list together with the captured Tout and options to the op builder, and
+        # returns its result (tensors).
         return script_op(fun, inp=args, Tout=Tout, **kwargs)
 
       return py_function_wrapper
@@ -460,6 +592,16 @@ def _check_args_and_maybe_make_decorator(
 @tf_export("py_function")
 @dispatch.add_dispatch_support
 def eager_py_func(func=None, inp=None, Tout=None, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring contains a garbled phrase ("nofunc=None, inp=None, Tout=None
+  # tensorflow code") where it should say "use TensorFlow code"; the behavior is unaffected.
+  # Public py_function (exported). Runs a Python function eagerly inside a graph or function.
+  # Inputs: func (callable, null when used as a decorator), inp (list or single tensor or
+  # composite tensor; must be null when decorating), Tout (dtype, type spec, empty list for no
+  # result, or a list of those; required), name (optional). Validates arguments (type error on
+  # misuse); returns a decorator when func is null, otherwise returns the output tensor(s). When
+  # eager execution is active outside functions the op is placed on the host address space
+  # device. Side effects: registers the function and adds an op to the current graph.
   # TODO(b/338268835): Remove "pyformat: disable" and the "pyformat: enable"
   # line below if this feature request is implemented.
   # pyformat: disable
@@ -646,6 +788,13 @@ def eager_py_func(func=None, inp=None, Tout=None, name=None):
 
 
 def py_func_common(func, inp, Tout, stateful=True, name=None):
+  # [FUNCTION DOC]
+  # HELPER: common implementation of the numpy-style py_func and numpy_function.
+  # Inputs: func taking numpy arrays, inp list of tensors, Tout dtype(s), stateful flag (default
+  # true) and optional name. When executing eagerly it simply calls func on numpy copies of the
+  # inputs, flattens and converts non-null results to tensors, and unwraps a single result.
+  # In graph mode it builds a py op (stateful or stateless), placed on the host address space
+  # device when eager is enabled outside functions. Returns tensor(s) the function computes.
   """Wraps a python function and uses it as a TensorFlow op.
 
   Given a python function `func`, which takes numpy arrays as its
@@ -798,6 +947,10 @@ def py_func_common(func, inp, Tout, stateful=True, name=None):
 @tf_export(v1=["py_func"])
 @dispatch.add_dispatch_support
 def py_func(func, inp, Tout, stateful=True, name=None):
+  # [FUNCTION DOC]
+  # Deprecated v1 public py_func. Thin forwarder to the common implementation with the same
+  # inputs (function, input tensors, output types, stateful flag, name); returns its result.
+  # Its docstring is assigned from the common implementation after the definition.
   return py_func_common(func, inp, Tout, stateful, name=name)
 
 
@@ -807,6 +960,12 @@ py_func.__doc__ = "%s" % py_func_common.__doc__
 @tf_export("numpy_function")
 @dispatch.add_dispatch_support
 def numpy_function(func=None, inp=None, Tout=None, stateful=True, name=None):
+  # [FUNCTION DOC]
+  # Public numpy_function (exported). Wraps a function taking and returning numpy arrays as an op.
+  # Inputs: func (null when decorating), inp (list of tensors; null when decorating), Tout
+  # (required), stateful flag (default true), name. Raises a type error on bad argument
+  # combinations. Returns a decorator when func is null, otherwise the output tensor(s).
+  # Not differentiable. Registers the function and adds an op to the graph.
   """Wraps a python function and uses it as a TensorFlow op.
 
   Given a python function `func` wrap this function as an operation in a
@@ -949,10 +1108,19 @@ def numpy_function(func=None, inp=None, Tout=None, stateful=True, name=None):
 
 
 def _as_dtype_or_type_spec(t):
+  # [FUNCTION DOC]
+  # HELPER: normalizes one output specification. Type specs are returned unchanged; anything
+  # else is converted to a dtype (which may raise a type error for invalid values).
   return t if isinstance(t, type_spec.TypeSpec) else dtypes.as_dtype(t)
 
 
 def _wrap_for_composites(func, inp, Tout):
+  # [FUNCTION DOC]
+  # HELPER: lets py_function handle composite tensors. Inputs: the user function, the input
+  # list and the output specs. Flattens composite inputs into plain tensors, flattens Tout to
+  # dtypes (tensor specs become their dtype), and builds a wrapper that repacks inputs, calls
+  # the function, validates results and flattens them. Returns a tuple of the wrapper, flattened
+  # inputs, flattened output dtypes and the original output structure.
   """Wraps user inputs to support composite tensors for `py_function`.
 
   1. Flattens `inp` to a list of Tensors (by flattening any composite tensors).
@@ -985,6 +1153,13 @@ def _wrap_for_composites(func, inp, Tout):
   ]
 
   def wrapped_func(*flat_inp):
+    # [FUNCTION DOC]
+    # HELPER: nested wrapper run by the py op. Takes flattened input tensors, repacks them into
+    # the original structure, calls the user function, and returns a flat list of outputs
+    # (empty if no output expected; a single value is treated as a one element list). For outputs
+    # expected to be composite (non-plain type specs) it checks compatibility and flattens them;
+    # for plain tensor outputs it rejects composite values. Raises a value error with a
+    # description of the mismatch when a result does not match the expected output types.
     structured_inp = nest.pack_sequence_as(
         in_structure, flat_inp, expand_composites=True)
     out = func(*structured_inp)

@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: shape utilities shared by random and other ops. Provides conversion of shape values to
+# integer shape tensors and a workaround that sets static shapes of tensors created inside
+# function graphs from constant shape tensors captured from an outer graph. Holds one module
+# level switch used only for testing. No import-time side effects.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +26,12 @@ from tensorflow.python.framework import tensor_util
 
 
 def shape_tensor(shape):  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # HELPER: converts a shape description to a tensor named "shape". Input is a tuple, list,
+  # tensor or other convertible value. An empty tuple or list gets int32 dtype; for a non-empty
+  # tuple or list, any Dimension objects are unwrapped to plain integers or nothing-values first
+  # (avoiding mixed v1/v2 content); otherwise dtype is inferred. Returns the tensor. Raises
+  # whatever tensor conversion raises for unconvertible input. No side effects.
   """Convert to an int32 or int64 tensor, defaulting to int32 if empty."""
   dtype = None
   if isinstance(shape, (tuple, list)):
@@ -40,6 +51,13 @@ _ENABLE_MAYBE_SET_STATIC_SHAPE = True
 
 
 def maybe_set_static_shape(tensor, shape):  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # HELPER: workaround for shape inference across function boundaries. Inputs: a tensor and a
+  # shape tensor. Only when the testing switch is on, execution is graph mode inside a function
+  # being built, the tensor's shape is not fully defined, and the shape argument is a tensor:
+  # it converts the shape to a tensor, computes its constant value as a partial shape by
+  # looking through function graph boundaries, and sets that as the tensor's static shape
+  # (mutating the tensor's shape metadata). Otherwise does nothing. Returns nothing.
   """Sets the shape of `tensor` to the `shape`'s constant value, if inferrable.
 
   This is a temporary workaround to fix shape inference across functional op

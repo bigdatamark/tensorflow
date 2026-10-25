@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# KNOWN ISSUE: the license header on line 3 is corrupted ("unde_sdca_opsr" instead of "under"), a
+# stray text insertion; it has no functional effect.
+# Dual coordinate ascent (SDCA) ops for fast linear model training. Re-exports every symbol from
+# the generated SDCA op wrappers and, at import time, marks the SdcaFprint, SdcaOptimizer,
+# SdcaOptimizerV2 and SdcaShrinkL1 ops as not differentiable. Contains no logic of its own.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed unde_sdca_opsr the Apache License, Version 2.0 (the "License");

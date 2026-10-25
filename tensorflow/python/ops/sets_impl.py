@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Implementation of the public set operations (size, intersection, difference, union) over the
+# last dimension of dense or sparse tensors. Builds on the generated set ops and sparse tensor
+# conversion; the public sets module re-exports these. Import-time side effects: defines the
+# set of supported element dtypes and marks the four set op kernels as not differentiable.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,6 +35,12 @@ _VALID_DTYPES = frozenset([
 @tf_export("sets.size", v1=["sets.size", "sets.set_size"])
 @dispatch.add_dispatch_support
 def set_size(a, validate_indices=True):
+  # [FUNCTION DOC]
+  # Public set size op. Input a: a sparse tensor (or convertible) with row-major sorted indices;
+  # validate_indices (default true) asks the kernel to check index order and range. Raises a type
+  # error if a is not a sparse tensor or its element dtype is unsupported (small integer types,
+  # unsigned 8 and 16 bit, or string). Returns an int32 tensor of the number of unique values
+  # along the last dimension (rank one lower than a).
   """Compute number of unique elements along last dimension of `a`.
 
   Args:
@@ -66,6 +77,12 @@ ops.NotDifferentiable("SparseToSparseSetOperation")
 
 
 def _convert_to_tensors_or_sparse_tensors(a, b):
+  # [FUNCTION DOC]
+  # HELPER: input normalization for the binary set operations. Converts both inputs to tensors
+  # or sparse tensors (named a and b). Raises a type error if a has an unsupported dtype or the
+  # two dtypes differ. If a is sparse and b is dense, swaps them because only dense-first is
+  # supported. Returns a triple of the (possibly swapped) first, second and a flag telling
+  # whether they were swapped.
   """Convert to tensor types, and flip order if necessary.
 
   Args:
@@ -93,6 +110,12 @@ def _convert_to_tensors_or_sparse_tensors(a, b):
 
 
 def _set_operation(a, b, set_operation, validate_indices=True):
+  # [FUNCTION DOC]
+  # HELPER: dispatches a binary set operation to the matching generated kernel. Inputs: a and b
+  # (dense or sparse), the operation name string (intersection, union, a-b or b-a), and the
+  # validate_indices flag (default true). Sparse-sparse uses the sparse kernel, dense-sparse the
+  # mixed kernel, dense-dense the dense kernel. Raises a value error if a is sparse and b dense.
+  # Returns a sparse tensor built from the kernel's indices, values and shape.
   """Compute set operation of elements in last dimension of `a` and `b`.
 
   All but the last dimension of `a` and `b` must match.
@@ -138,6 +161,12 @@ def _set_operation(a, b, set_operation, validate_indices=True):
     "sets.intersection", v1=["sets.intersection", "sets.set_intersection"])
 @dispatch.add_dispatch_support
 def set_intersection(a, b, validate_indices=True):
+  # [FUNCTION DOC]
+  # Public intersection of the sets along the last dimension of a and b. Inputs: two tensors or
+  # sparse tensors of the same dtype (indices sorted if sparse), and validate_indices (default
+  # true). Converts and possibly reorders inputs (type errors for bad dtypes or mismatches), then
+  # runs the intersection operation. Returns a sparse tensor of the same rank. The flip does not
+  # matter because intersection is symmetric.
   """Compute set intersection of elements in last dimension of `a` and `b`.
 
   All but the last dimension of `a` and `b` must match.
@@ -208,6 +237,14 @@ def set_intersection(a, b, validate_indices=True):
 @tf_export("sets.difference", v1=["sets.difference", "sets.set_difference"])
 @dispatch.add_dispatch_support
 def set_difference(a, b, aminusb=True, validate_indices=True):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says a value error is raised when a is sparse and b is dense, but
+  # the inputs are swapped by the conversion helper first, so that combination actually works
+  # (the direction of the subtraction is inverted to compensate).
+  # Public set difference along the last dimension. Inputs: a and b (tensors or sparse tensors
+  # of equal dtype), aminusb (default true: elements of a not in b; false: elements of b not in
+  # a), validate_indices (default true). Raises type errors for bad or mismatched dtypes. Returns
+  # a sparse tensor of the same rank.
   """Compute set difference of elements in last dimension of `a` and `b`.
 
   All but the last dimension of `a` and `b` must match.
@@ -289,6 +326,11 @@ def set_difference(a, b, aminusb=True, validate_indices=True):
 @tf_export("sets.union", v1=["sets.union", "sets.set_union"])
 @dispatch.add_dispatch_support
 def set_union(a, b, validate_indices=True):
+  # [FUNCTION DOC]
+  # Public union of the sets along the last dimension of a and b. Inputs: two tensors or sparse
+  # tensors of the same dtype (indices sorted if sparse), and validate_indices (default true).
+  # Converts and possibly reorders the inputs (type errors for bad dtypes or mismatches), then
+  # runs the union operation. Returns a sparse tensor of the same rank.
   """Compute set union of elements in last dimension of `a` and `b`.
 
   All but the last dimension of `a` and `b` must match.
