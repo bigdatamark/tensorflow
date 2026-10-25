@@ -1,3 +1,17 @@
+# [MODULE DOC]
+# Tensor Tracer (version 1): a debugging utility that instruments a TensorFlow graph so that the
+# values (or statistics of the values) of intermediate tensors are recorded while the graph runs,
+# mainly on TPUs but also on CPUs and GPUs. It is disabled by default and is enabled either by the
+# TENSOR_TRACER_FLAGS environment variable or by the set_parameters function.
+# Exposes: set_parameters (writes the flags environment variable), op_priority (maps an op type to
+# a trace level), read_tensor_tracer_event_file (reads back full-tensor event files),
+# trace_tensor and keras_layer_tracepoint (programmatic tracepoints stored in a graph collection),
+# the TensorTracer class (which rewrites a graph for tracing on TPU or CPU), the public summary
+# collection name for summary writers, and a usage gauge for monitoring.
+# It relies on tensor_tracer_flags (parameter parsing), tensor_tracer_report (graph sorting and
+# report creation) and tpu_replication / tpu_ops for outside compilation and cross-core ops.
+# Import-time side effects: creates a boolean monitoring gauge for API usage; nothing else is
+# registered. Module-level constants hold trace reason strings, file names and collection names.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -115,6 +129,11 @@ tt_gauge = monitoring.BoolGauge('/tensorflow/api/tensor_tracer/v1',
 
 
 def _graph_summary_tag(graph):
+  # [FUNCTION DOC]
+  # HELPER: builds the per-graph tag used to name summaries and report proto files.
+  # Computes an md5 hash of the textual representation of the given graph object and returns the
+  # hexadecimal digest string. Input: a graph; raises a runtime error if it is nothing/null.
+  # No side effects.
   """Generates and returns a summary tag name for the given graph."""
 
   if graph is None:
@@ -127,6 +146,13 @@ def _graph_summary_tag(graph):
 
 
 def set_parameters(tensor_tracer_params=None):
+  # [FUNCTION DOC]
+  # Enables tensor tracer programmatically by writing the flags environment variable.
+  # Input: an optional mapping from flag names to values. Builds a flag string that always starts
+  # with the enable flag set to one, then appends one "name=value" entry per mapping item, and
+  # stores it in the process environment variable that tensor_tracer_flags reads later.
+  # Returns nothing. Side effect: overwrites that environment variable (any earlier value is
+  # lost). Values are not validated here; they are parsed when TTParameters is constructed.
   """Enables tensor tracer and sets its parameters.
 
   Example usage:
@@ -222,6 +248,12 @@ def set_parameters(tensor_tracer_params=None):
 
 
 def op_priority(op_type):
+  # [FUNCTION DOC]
+  # Maps an operation type name (string) to an integer priority from 1 to 7. An op is traced when
+  # the configured trace level is at least its priority. Constants, shapes, fills and similar ops
+  # get 7; identity-like and reshaping ops 6; concat/slice/pack style ops 5; pad, random-int and
+  # greater-equal 4; sums and adds 3; negation and subtraction 2; multiplication, matmul, mean,
+  # exp and similar numeric ops 1. Any unknown op type gets 2. Pure function, no side effects.
   """Returns the priority of the op.
 
   If the priority of the op is k, it will be traced if trace_level>=k.
@@ -267,6 +299,17 @@ def op_priority(op_type):
 
 
 def read_tensor_tracer_event_file(event_file):
+  # [FUNCTION DOC]
+  # Reads a tensor tracer event file (full_tensor_summary mode) and rebuilds the traced tensors.
+  # Input: path of the event file. Iterates over its events, skipping those without a summary
+  # (such as the file-version event). Each event must hold exactly one summary value, otherwise a
+  # value error is raised. Events are grouped by step; the n-th time a step number shows up it
+  # goes to the n-th occurrence dictionary, so repeated traces of the same step ranges are kept
+  # apart. The tensor content bytes are decoded using the recorded dtype and reshaped to the
+  # recorded shape, and stored under step and tag name.
+  # Returns a list with one mapping per occurrence, each from step number to a mapping from
+  # tensor name to numpy array. Raises a value error on an unexpected occurrence index.
+  # Reads the file only; nothing is modified.
   """Reads the event file written by tensor tracer.
 
   This can be used to read the full tensors written into binary event files by
@@ -335,6 +378,12 @@ def read_tensor_tracer_event_file(event_file):
 
 
 def trace_tensor(tensor, tracepoint_name=None):
+  # [FUNCTION DOC]
+  # Registers a tensor as an explicit tracepoint. Inputs: the tensor, and an optional tracepoint
+  # name (defaults to the tensor name). Appends a (tensor, name) pair to the tensor tracer
+  # collection of the tensor's graph; when any tracepoint exists, only those tensors are traced.
+  # Returns the same tensor unchanged. Side effect: mutates the graph collection.
+  # The preceding read of the collection has no effect (its result is discarded).
   """Programmatic interface to trace a tensor with Tensor Tracer.
 
   Tensor Tracer, by default, traces all tensors in the execution. This function
@@ -365,6 +414,16 @@ def trace_tensor(tensor, tracepoint_name=None):
 
 
 def keras_layer_tracepoint(layer, checkpoint_name):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: in the multi-output branch the loop checks whether the whole outputs object is a
+  # tensor (it is not, or the first branch would have run) instead of checking each output
+  # tensor, so individual outputs are never registered; the index counter is also advanced
+  # regardless. As written, only layers with a single tensor output are actually traced.
+  # Registers the output(s) of a keras layer as tracepoints. Inputs: a keras layer and a string
+  # checkpoint name. A single tensor output is traced under the checkpoint name; multiple
+  # outputs would be named with the checkpoint name plus an index. Attribute errors (layer has
+  # no output, e.g. not yet built) and runtime errors (layer has multiple inbound nodes) are
+  # silently ignored. Returns the layer unchanged. Side effect: adds to a graph collection.
   """An interface for adding the tensor outputs of a keras layer.
 
   Encapsulates trace_tensor.
@@ -396,6 +455,17 @@ def keras_layer_tracepoint(layer, checkpoint_name):
 
 
 class TensorTracer:
+  # [CLASS DOC]
+  # Rewrites a TensorFlow graph so that selected intermediate tensors are traced during
+  # execution on TPU (via outside compilation) or on CPU/GPU. Instances are created without
+  # arguments and used by calling trace_tpu or trace_cpu with a graph and the fetches; the
+  # TPU rewrite hook calls it automatically when enabled. Per-instance state: parameters read
+  # from the flags, a device configuration (device type, replica and host counts), the replica
+  # id tensor, caches of tensor values and histories per graph, temporary caches, the host call
+  # description, the set of traced op names and the report proto with its path.
+  # Class-level state: a set of graphs already rewritten, so a graph is only traced once.
+  # Most methods are private helpers that decide which ops/tensors to trace, compute statistics,
+  # and build the ops that store and flush the trace; a few static methods classify ops.
   """A software construct for tracing tensor values in a TF graph.
 
   This utility is disabled by default. It is hooked into tpu.rewrite, so it can
@@ -436,6 +506,11 @@ class TensorTracer:
 
   @staticmethod
   def is_enabled():
+    # [FUNCTION DOC]
+    # Static method telling whether tensor tracer is enabled by the flags. Builds a fresh
+    # parameters object from the environment flags and asks it. When enabled, records usage in
+    # the monitoring gauge. If flag processing raises a value or runtime error, a warning is
+    # logged and True is returned (assume enabled so the error surfaces later).
     """Returns True if TensorTracer is enabled."""
     try:
       enable = tensor_tracer_flags.TTParameters().is_enabled()
@@ -452,6 +527,9 @@ class TensorTracer:
 
   @staticmethod
   def check_device_type(device_type):
+    # [FUNCTION DOC]
+    # Validates a device type string. Only the tpu and cpu constants are accepted; anything else
+    # raises a value error. Returns nothing.
     """Checks if the given device type is valid."""
 
     if device_type not in (_DEVICE_TYPE_TPU, _DEVICE_TYPE_CPU):
@@ -459,6 +537,10 @@ class TensorTracer:
 
   @staticmethod
   def check_trace_mode(device_type, trace_mode):
+    # [FUNCTION DOC]
+    # Verifies the trace mode is usable on the device. Inputs: device type and trace mode
+    # strings. The full-tensor-summary mode is only supported on TPU; requesting it on any
+    # other device raises a value error. All other combinations pass. Returns nothing.
     """Checks if the given trace mode work on the given device type.
 
     Args:
@@ -474,10 +556,17 @@ class TensorTracer:
 
   @staticmethod
   def loop_cond_op(op):
+    # [FUNCTION DOC]
+    # HELPER: used by while_loop_op and the execution path filter to spot loop condition ops.
+    # Returns True if the operation type is the loop-condition op or its reference variant.
     return op.type in ('LoopCond', 'RefLoopCond')
 
   @staticmethod
   def while_loop_op(op):
+    # [FUNCTION DOC]
+    # HELPER: classifies ops so that while-loop plumbing is never traced.
+    # Returns True when the operation is a loop switch, merge, enter, exit, loop-condition or
+    # next-iteration op (including reference variants). Input: one operation. No side effects.
     """Returns true if op is one of the special ops of in a while loop.
 
     Args:
@@ -497,6 +586,11 @@ class TensorTracer:
 
   @staticmethod
   def control_flow_op(op):
+    # [FUNCTION DOC]
+    # HELPER: classifies ops so that conditional plumbing is never traced.
+    # KNOWN ISSUE: the docstring is copied from the while-loop check and lists enter, exit,
+    # next-iteration and loop-condition ops; the code only tests for switch and merge ops.
+    # Returns True when the operation is a switch or a merge op. Input: one operation.
     """Returns true if op is one of the special ops of in a while loop.
 
     Args:
@@ -512,6 +606,10 @@ class TensorTracer:
 
   @staticmethod
   def unsafe_op(op):
+    # [FUNCTION DOC]
+    # HELPER: filter used when choosing ops to trace.
+    # Returns True only for assign ops, which produce incorrect results when traced on CPU;
+    # False for every other op. Input: one operation.
     """Returns True if this op is not safe to be traced."""
 
     # Reasons for not including following op types:
@@ -522,6 +620,12 @@ class TensorTracer:
 
   @staticmethod
   def device_mismatch(device_type, op):
+    # [FUNCTION DOC]
+    # HELPER: filter used when choosing ops to trace.
+    # Inputs: device type string and an operation. When tracing for TPU, returns True if the op
+    # does not carry the TPU replicate attribute (so it is not part of the TPU computation and
+    # must be skipped). Reads a protected attribute name from the replication module. For other
+    # device types always returns False.
     if device_type == _DEVICE_TYPE_TPU:
       # pylint: disable=protected-access
       return tpu_replication._TPU_REPLICATE_ATTR not in op.node_def.attr
@@ -530,6 +634,12 @@ class TensorTracer:
 
   @staticmethod
   def unsafe_scalar_trace(op):
+    # [FUNCTION DOC]
+    # HELPER: filter used when scalar tracing is turned on.
+    # Returns True if a scalar output of the given op must not be traced: loop-condition, enter,
+    # merge, constant, switch, less and read-variable ops (tracing them creates graph cycles on
+    # TPU), and variable handle, iterator, dataset, placeholder and strided-slice ops (casting
+    # or compilation problems). Returns False for all other ops.
     """Return true if scalar output tensor from Op is not safe to be traced."""
 
     # Tracing the following causes cycle in the graph on TPU.
@@ -548,16 +658,30 @@ class TensorTracer:
     return False
 
   def _is_interesting_op(self, op):
+    # [FUNCTION DOC]
+    # HELPER: trace level filter for choosing ops.
+    # KNOWN ISSUE: the docstring says it returns True if the op is NOT interesting; the code
+    # returns True when the op IS interesting (its priority is not above the trace level).
+    # Input: an operation. Compares the op priority of its type with the configured level.
     """Returns True if the given op is not an interesting one to be traced."""
     return op_priority(op.type) <= self._parameters.trace_level
 
   @staticmethod
   def reason(op_idx, details):
+    # [FUNCTION DOC]
+    # HELPER: formats the text recorded in the report for each traced or skipped op.
+    # Returns a string made of the op index, a space and the details (reason constant) text.
     """Returns reason why the Op at op_idx is traced or not."""
 
     return '%d %s'%(op_idx, details)
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor, takes no arguments. Creates an empty tracer: no replica id, a default device
+    # configuration object, parameters parsed from the current flags, empty host call mapping,
+    # empty per-graph caches (value cache, history cache, temporary cache), empty set of traced
+    # op names, no report proto, empty report path and no outermost control flow context.
+    # Reads the flags environment variable (through the parameters object); no other effects.
     """Initializes a TensorTracer.
 
     Sets the various member fields from the flags (if given) or the defaults.
@@ -579,6 +703,9 @@ class TensorTracer:
     self._outmost_context = None
 
   def report_proto(self):
+    # [FUNCTION DOC]
+    # Returns the report proto built during tracing. Only available after tracing ran in summary
+    # or full-tensor-summary mode; otherwise raises a value error.
     """Getter for tensor_tracer.proto object for summary and full_tensor_summary modes.
 
     Returns:
@@ -595,6 +722,9 @@ class TensorTracer:
                        'trace_mode=[summary|full_tensor_summary]')
 
   def report_proto_path(self):
+    # [FUNCTION DOC]
+    # Returns the path string where the report proto is (or will be) written; empty string until
+    # tracing in summary modes has computed it.
     """Getter for path where tensor_tracer.proto object should be written.
 
     Returns:
@@ -603,9 +733,16 @@ class TensorTracer:
     return self._report_proto_path
 
   def _escape_namescopes(self, variable_name):
+    # [FUNCTION DOC]
+    # HELPER: makes cache names usable as variable names.
+    # Returns the input string with every slash and colon replaced by an underscore.
     return variable_name.replace('/', '_').replace(':', '_')
 
   def _cache_variable_for_graph(self, graph):
+    # [FUNCTION DOC]
+    # HELPER: accessor for the per-graph cache registry.
+    # Returns the mapping from cache name to cache variable for the given graph, creating an
+    # empty mapping and storing it in the tracer when the graph is seen for the first time.
     if graph not in self._cache_variables:
       self._cache_variables[graph] = {}
     return self._cache_variables[graph]
@@ -615,6 +752,15 @@ class TensorTracer:
                                                  graph,
                                                  shape=None,
                                                  dtype=dtypes.float32):
+    # [FUNCTION DOC]
+    # HELPER: creates the storage used by the history trace mode.
+    # Inputs: cache name, graph, shape (list of dimensions, required only when the cache does not
+    # exist yet) and dtype (default float32). Returns the existing history cache variable for
+    # that graph and name, or creates one: a non-trainable resource variable named with a history
+    # prefix and the escaped cache name, initialized to the compact-trace init value (as an
+    # integer for integer dtypes), placed in the graph's base name scope and added to the
+    # tensor tracer storage and local variables collections. Raises a value error when the graph
+    # is nothing, or when the shape is missing at creation. Side effect: creates a variable.
     """Creates a variable as the cache to store historic intermediate tensor values.
 
     Args:
@@ -661,6 +807,14 @@ class TensorTracer:
 
   def _create_or_get_tensor_values_cache(self, cache_name, graph,
                                          shape=None, dtype=dtypes.float32):
+    # [FUNCTION DOC]
+    # HELPER: creates the storage for compact trace results (one row per traced tensor).
+    # Inputs: cache name, graph, shape (list of dimensions, required only on first creation) and
+    # dtype (default float32). Looks the name up in the per-graph cache registry; if missing,
+    # creates a non-trainable resource variable (snapshot prefix plus escaped name), initialized
+    # to the compact-trace init value (integer for integer dtypes), in the graph's base name scope,
+    # registered in the storage and local variables collections and in the registry.
+    # Returns the variable. Raises a value error for a null graph or a missing shape at creation.
     """Creates a variable as the cache to store intermediate tensor values.
 
     Args:
@@ -700,6 +854,12 @@ class TensorTracer:
     return graph_cache_var[cache_name]
 
   def _add_replica_id_to_graph(self):
+    # [FUNCTION DOC]
+    # HELPER: prepares the replica id used to label traces per core.
+    # When the number of replicas is known, adds a replicated-input op carrying the numbers
+    # zero to replicas minus one (created without control dependencies so it runs outside TPU
+    # rewrites) and stores it as the replica id tensor. Otherwise stores the string unknown.
+    # Returns nothing; mutates the tracer state and adds an op to the current graph.
     """Adds nodes for computing the replica ID to the graph."""
 
     if self._tt_config.num_replicas:
@@ -712,6 +872,10 @@ class TensorTracer:
       self._replica_id = 'unknown'
 
   def _inside_op_range(self, idx):
+    # [FUNCTION DOC]
+    # HELPER: op range filter. Input: topological index of an op. Returns True when the index is
+    # at least the range start and either the range end is negative (unbounded) or the index is
+    # at most the range end.
     """Return True if the given index is inside the selected range."""
 
     if idx < self._parameters.op_range[0]:
@@ -720,6 +884,12 @@ class TensorTracer:
             idx <= self._parameters.op_range[1])
 
   def _is_user_included_op(self, op):
+    # [FUNCTION DOC]
+    # HELPER: user filter for choosing ops and tensors.
+    # KNOWN ISSUE: the docstring says ops within some hops before or after an included op are
+    # also included; the code only checks the op name and op type against the included patterns.
+    # Returns True if the op name matches any included name pattern or the op type matches any
+    # included type pattern (matching from the start of the string); otherwise False.
     """Checks whether the op is included in the tensor tracer flags.
 
     Args:
@@ -742,6 +912,10 @@ class TensorTracer:
     return False
 
   def _is_user_excluded_op(self, op):
+    # [FUNCTION DOC]
+    # HELPER: user filter for choosing ops and tensors.
+    # Returns True if the op name matches any excluded name pattern or the op type matches any
+    # excluded type pattern (matching from the start of the string); otherwise False.
     for opname_re in self._parameters.excluded_opname_re_list:
       if opname_re.match(op.name):
         return True
@@ -751,6 +925,11 @@ class TensorTracer:
     return False
 
   def _signature_types(self):
+    # [FUNCTION DOC]
+    # HELPER: describes the layout of the compact cache columns.
+    # Returns a mapping from signature name to column index. For nan-inf, norm, history and
+    # max-abs modes it is a single entry (the mode name at column zero); for summary mode it is
+    # the configured summary signatures; for all other modes an empty mapping.
     """Returns a dictionary holding the order of signatures in the cache for the selected trace mode."""
     if self._parameters.trace_mode in set([
         tensor_tracer_flags.TRACE_MODE_NAN_INF,
@@ -763,9 +942,17 @@ class TensorTracer:
     return {}
 
   def _num_signature_dimensions(self):
+    # [FUNCTION DOC]
+    # HELPER: returns the number of statistics (cache columns) collected per tensor, which is
+    # the size of the signature mapping for the current trace mode (zero for non-compact modes).
     return len(self._signature_types())
 
   def _use_temp_cache(self):
+    # [FUNCTION DOC]
+    # HELPER: decides how compact results are held.
+    # Returns True when per-tensor statistics should be kept as graph tensors stacked at the end
+    # (a temporary cache) instead of a variable. Always False when the whole tensor is buffered
+    # or when no compact cache is used; otherwise follows the temp-cache-variable parameter.
     """Returns true if the intermediate values should be stacked instead of being stored in a tf.Variable.
 
     Returns:
@@ -783,15 +970,27 @@ class TensorTracer:
       return False
 
   def _use_tensor_values_cache(self):
+    # [FUNCTION DOC]
+    # HELPER: returns True when the compact trace parameter is set, meaning intermediate results
+    # are first saved to a cache instead of being printed straight away.
     """Returns True if immediate tensors should be first saved to a cache."""
     return self._parameters.use_compact_trace
 
   def _use_tensor_buffer(self):
+    # [FUNCTION DOC]
+    # HELPER: returns True only in full-tensor-summary mode, where whole tensors are snapshotted
+    # into variables and written out as summaries.
     """Returns true if the whole tensor needs to be cached/buffered in memory."""
     return (self._parameters.trace_mode ==
             tensor_tracer_flags.TRACE_MODE_FULL_TENSOR_SUMMARY)
 
   def _merge_tensor_signatures(self, signatures):
+    # [FUNCTION DOC]
+    # HELPER: combines the statistics of one traced tensor into one row for the cache.
+    # Input: mapping from signature name to a one-element tensor. With several signature columns,
+    # the values are ordered by their configured column index and stacked into one tensor; with
+    # exactly one, that value is returned directly (no stacking op). With zero columns raises a
+    # value error telling the user to check the signatures flag. Adds a stack op to the graph.
     """Returns a tensor that merges the given signatures.
 
     Args:
@@ -820,6 +1019,14 @@ class TensorTracer:
     return updates
 
   def _save_tensor_value_to_tmp_cache(self, cache_idx, updates, graph):
+    # [FUNCTION DOC]
+    # HELPER: stores one tensor's statistics in the temporary cache.
+    # KNOWN ISSUE: the docstring claims it returns an op, but the function returns nothing; it
+    # only replaces an entry of the in-memory list.
+    # Inputs: cache index of the tensor, mapping of signature updates, and the graph. Merges the
+    # signatures, reshapes the result to a vector with one element per signature, and stores it
+    # at the given position of the graph's temporary cache list. Raises a runtime error when the
+    # graph has no temporary cache or the index is out of range.
     """Returns an op that will save the given updates to an entry in the cache.
 
     Args:
@@ -843,6 +1050,11 @@ class TensorTracer:
     self._temp_cache_var[graph][cache_idx] = updates
 
   def _save_tensor_value_to_cache_op(self, cache_idx, updates, graph):
+    # [FUNCTION DOC]
+    # HELPER: stores one tensor's statistics in the variable-based compact cache.
+    # Inputs: cache index (row), mapping of signature updates and the graph. Merges signatures
+    # into one row, reshapes it to one row by number of signatures, and scatter-updates that row
+    # of the cache variable (created on demand under the summary tag). Returns the update op.
     """Returns an op that will save the given updates to an entry in the cache.
 
     Args:
@@ -863,6 +1075,11 @@ class TensorTracer:
     return state_ops.scatter_update(cache, indices, updates).op
 
   def _snapshot_tensor(self, tensor):
+    # [FUNCTION DOC]
+    # HELPER: used by the full-tensor-summary mode to buffer whole tensors.
+    # Input: a tensor with a fully known shape. Creates (or reuses) a variable named after the
+    # tensor with the same shape and dtype, and returns the op that assigns the tensor value to
+    # it. Side effect: creates a variable in the tensor's graph.
     """Creates a new tf.Variable and a new tf.Operation that assigns the value of the tensor to this variable.
 
     Args:
@@ -877,6 +1094,16 @@ class TensorTracer:
     return state_ops.assign(snapshot_variable, tensor).op
 
   def _preprocess_traced_tensor(self, tensor):
+    # [FUNCTION DOC]
+    # Builds the graph ops that reduce a traced tensor to what must be recorded, according to
+    # the trace mode; on TPU this runs on the device before data goes to the host.
+    # Input: the tensor to trace. Returns a mapping from signature (or mode) name to a tensor:
+    # nan-inf gives a one-element 1/0 flag; part-tensor, full-tensor and full-tensor-summary
+    # give the tensor itself; norm and history give its norm as a one-element vector; max-abs
+    # gives the maximum absolute value; summary mode gives one scalar statistic per configured
+    # signature (norm, max, max-abs, min, sparsity, size, mean, variance), with mean and variance
+    # computed once. Raises a value error for an unknown summary signature and a runtime error
+    # for an unsupported trace mode. Side effect: adds ops to the current graph.
     """Computes NAN/Norm/Max on TPUs before sending to CPU.
 
     Args:
@@ -888,6 +1115,11 @@ class TensorTracer:
     """
 
     def _detect_nan_inf(tensor):
+      # [FUNCTION DOC]
+      # HELPER: nan-inf statistic for _preprocess_traced_tensor.
+      # For a floating tensor, returns a one-element float tensor that is 1 when any element is
+      # NaN or infinite and 0 otherwise (via a conditional); for non-floating tensors returns a
+      # constant one-element zero. Adds ops to the graph.
       """Trace function for detecting any NaN/Inf in the tensor."""
 
       if tensor.dtype.is_floating:
@@ -903,6 +1135,11 @@ class TensorTracer:
       return output_tensor
 
     def _compute_signature(tensor, tf_op, cast_to_f32=True):
+      # [FUNCTION DOC]
+      # HELPER: shared by the statistic functions of _preprocess_traced_tensor.
+      # Inputs: tensor, a reduction callable, and a flag (default true) to cast the tensor to
+      # float32 first. Applies the callable and, if the resulting shape is not fully known,
+      # reshapes it to a scalar. Returns the scalar-like result tensor.
       if cast_to_f32:
         tensor = math_ops.cast(tensor, dtypes.float32)
       output_tensor = tf_op(tensor)
@@ -913,6 +1150,10 @@ class TensorTracer:
       return output_tensor
 
     def _show_size(tensor):
+      # [FUNCTION DOC]
+      # HELPER: size statistic for summary mode. Returns the element count of the tensor
+      # (computed at run time, so unknown static sizes and per-replica differences are handled),
+      # cast to float32 so it fits in the shared cache.
       # In order to check the size of a tensor.
       # Not all sizes are known at the compile time, also, different replicas
       # sometimes get different sizes of tensors.
@@ -923,20 +1164,37 @@ class TensorTracer:
       return math_ops.cast(tsize, dtypes.float32)
 
     def _show_max(tensor, cast_to_f32=True):
+      # [FUNCTION DOC]
+      # HELPER: maximum statistic for summary mode. Returns the maximum element as a scalar
+      # (negative infinity for an empty tensor); optional float32 cast, default on.
       # returns -inf for empty tensor
       return _compute_signature(tensor, math_ops.reduce_max, cast_to_f32)
 
     def _show_min(tensor, cast_to_f32=True):
+      # [FUNCTION DOC]
+      # HELPER: minimum statistic for summary mode. Returns the minimum element as a scalar
+      # (positive infinity for an empty tensor); optional float32 cast, default on.
       # returns inf for empty tensor
       return _compute_signature(tensor, math_ops.reduce_min, cast_to_f32)
 
     def _show_norm(tensor, cast_to_f32=True):
+      # [FUNCTION DOC]
+      # HELPER: norm statistic for norm, history and summary modes. Returns the norm of the
+      # tensor as a scalar (zero for an empty tensor); optional float32 cast, default on.
       # returns 0 for empty tensor
       return _compute_signature(tensor, linalg_ops.norm, cast_to_f32)
 
     def _show_sparsity(tensor, cast_to_f32=True, tolerance=1e-06):
+      # [FUNCTION DOC]
+      # HELPER: sparsity statistic for summary mode. Returns the fraction of elements whose
+      # absolute value is below the tolerance (default one millionth) as a scalar; NaN elements
+      # count as non-zero and an empty tensor gives NaN. Optional float32 cast, default on.
       # returns nan for empty tensor and treats nans as non-zero numbers
       def sparsity_fn(tensor):
+        # [FUNCTION DOC]
+        # HELPER: reduction callable passed to the signature computation. Marks elements that are
+        # at least the tolerance in magnitude or NaN as non-zero and returns the zero fraction
+        # of that mask as a scalar tensor.
         non_zeros = math_ops.greater_equal(math_ops.abs(tensor), tolerance)
         nans = math_ops.is_nan(tensor)
         return nn_impl.zero_fraction(math_ops.logical_or(non_zeros, nans))
@@ -944,6 +1202,11 @@ class TensorTracer:
       return _compute_signature(tensor, sparsity_fn, cast_to_f32)
 
     def _show_mean_and_variance(tensor, cast_to_f32=True):
+      # [FUNCTION DOC]
+      # HELPER: mean and variance statistics for summary mode. Optionally casts to float32
+      # (default on), flattens the tensor and computes moments over it. Returns a pair of
+      # scalars (mean, variance), reshaping each to a scalar if its shape is not fully known;
+      # both are NaN for an empty tensor.
       """Returns the mean and variance of the given tensor."""
       if cast_to_f32:
         tensor = math_ops.cast(tensor, dtypes.float32)
@@ -957,6 +1220,9 @@ class TensorTracer:
       return mean, var
 
     def _show_max_abs(tensor, cast_to_f32=True):
+      # [FUNCTION DOC]
+      # HELPER: max-abs statistic for max-abs and summary modes. Returns the maximum absolute
+      # value of the tensor as a scalar; optional float32 cast, default on.
       return _compute_signature(
           tensor, lambda t: math_ops.reduce_max(math_ops.abs(t)), cast_to_f32)
 
@@ -1016,6 +1282,13 @@ class TensorTracer:
         % self._parameters.trace_mode)
 
   def _make_tensor_trace_fun(self, tensor_name, tensor_trace_order):
+    # [FUNCTION DOC]
+    # Builds the callback that prints one traced tensor, used directly on CPU and wrapped in
+    # outside compilation on TPU for non-compact modes.
+    # Inputs: tensor name, and the trace order object that maps tensor names to cache indexes.
+    # Returns a function taking a tensor: for part-tensor mode it prints the first few elements
+    # (a fixed small count), for nan-inf, norm, full-tensor, max-abs, summary and history modes it
+    # prints the whole (already reduced) tensor. Raises a runtime error for any other mode.
     """Makes the tensor tracing function called by outside compilation.
 
     Args:
@@ -1029,6 +1302,15 @@ class TensorTracer:
     """
 
     def _print_tensor(tensor_name, num_elements, tensor, output_tensor):
+      # [FUNCTION DOC]
+      # HELPER: shared printing routine of the trace callbacks.
+      # KNOWN ISSUE: the tensor argument is only used in an error message; the docstring says it
+      # is returned but the function returns the print op.
+      # Builds a print op that writes a label (the cache index in brief mode, the quoted tensor
+      # name otherwise), the shape, the replica id and the tensor values, to a trace file in the
+      # trace directory (with a remote file suffix when needed) or to standard error when no
+      # directory is set. num_elements limits the printed elements (negative prints all).
+      # Raises a value error in brief mode if the name has no cache index.
       """Prints a tensor value to a file.
 
       Args:
@@ -1068,12 +1350,18 @@ class TensorTracer:
                                   output_stream=output_stream)
 
     def _show_part_tensor(tensor):
+      # [FUNCTION DOC]
+      # Trace callback for part-tensor mode: returns the print op for the first few elements
+      # (a fixed small number) of the given tensor under the enclosing tensor name.
       """Trace function for printing part of the tensor."""
 
       return _print_tensor(tensor_name, _TRACE_MODE_PART_TENSOR_SIZE,
                            tensor, tensor)
 
     def _show_full_tensor(tensor):
+      # [FUNCTION DOC]
+      # Trace callback for the other printing modes: returns the print op that prints every
+      # element of the given tensor under the enclosing tensor name.
       """Trace function for printing the entire tensor."""
 
       return _print_tensor(tensor_name, -1, tensor, tensor)
@@ -1099,6 +1387,11 @@ class TensorTracer:
                        %self._parameters.trace_mode)
 
   def _is_in_control_flow(self, op):
+    # [FUNCTION DOC]
+    # HELPER: control flow filter used by _skip_op.
+    # KNOWN ISSUE: the docstring says conditional or while loop, but the code only asks whether
+    # the op is inside a conditional context; being inside a while loop is not checked here.
+    # Input: an operation. Returns a boolean.
     """Returns true if the given op is inside a tf.cond or in tf.while_loop.
 
     Args:
@@ -1109,6 +1402,11 @@ class TensorTracer:
     return control_flow_util.IsInCond(op)
 
   def _is_in_outmost_while_loop(self, op):
+    # [FUNCTION DOC]
+    # HELPER: control flow filter used by _skip_op.
+    # Input: an operation. Compares the while context containing the op with the while context
+    # containing the outermost (training loop) context recorded at trace time; returns True when
+    # they are the same, false for ops in inner loops or outside the training loop.
     """Returns true if the op is at the same level with the training loop.
 
     Returns false if the op is in an inner while loop or if it is outside of the
@@ -1125,6 +1423,11 @@ class TensorTracer:
         self._outmost_context)
 
   def _should_trace_in_control_flow(self):
+    # [FUNCTION DOC]
+    # HELPER: control flow policy used by _skip_op.
+    # Returns False when a temporary cache is used (it needs a static number of traced ops).
+    # On TPU returns True only if a compact cache or a tensor buffer is used (calling outside
+    # compilation inside inner control flow fails). On other devices returns True.
     """Returns false incase it is not safe to trace ops in tf.cond or tf.while_loop."""
     # As different from the other trace modes, TRACE_MODE_OPTIONAL_SUMMARY
     # forces the execution of the traced tensors. We should not trace the ops
@@ -1139,6 +1442,15 @@ class TensorTracer:
     return True
 
   def _skip_op(self, op_id, op, ops_in_exec_path, report_handler):
+    # [FUNCTION DOC]
+    # HELPER: decides which operations are traced.
+    # Inputs: topological index of the op, the op, the set of ops in the execution path, and the
+    # report handler. Applies the checks in order, recording a reason with the report handler
+    # each time: while-loop plumbing, switch/merge, unsafe op, device mismatch, not in the
+    # execution path (all skipped); inside control flow or an inner loop when that is not
+    # allowed (skipped); user-included op (traced, returns False immediately); outside the op
+    # range, less interesting than the trace level, or user-excluded (skipped). Otherwise the op
+    # is traced. Returns True to skip. Side effects: report entries, optional info logging.
     """Returns True if we should not trace Op.
 
     Args:
@@ -1209,6 +1521,14 @@ class TensorTracer:
     return False
 
   def _skip_tensor(self, op_id, out_tensor, report_handler):
+    # [FUNCTION DOC]
+    # HELPER: decides which output tensors of a selected op are traced.
+    # Inputs: index of the producing op, the output tensor and the report handler. Skips (returns
+    # True) tensors of variant, resource or string dtype, tensors feeding while-loop plumbing,
+    # user-excluded ones, dynamic-shape tensors (except in the reduced modes nan-inf, norm,
+    # history, max-abs and summary, which are traced), scalars unless scalar tracing is on and
+    # the producer is safe. User-included tensors and ordinary tensors are traced (False).
+    # Side effects: records a reason per tensor in the report handler; optional info logging.
     """Returns True if we should not trace out_tensor.
 
     Args:
@@ -1288,6 +1608,13 @@ class TensorTracer:
       return False
 
   def _filter_execution_path_operations(self, operations, fetches):
+    # [FUNCTION DOC]
+    # HELPER: prunes the graph to ops needed for the fetches.
+    # Inputs: all graph operations, and the fetches (a single item or list/tuple of ops or
+    # tensors, or nothing). With no fetches returns the set of all operations. Otherwise converts
+    # tensors to their ops, then walks backwards through data and control inputs collecting every
+    # reachable op, but does not follow into loop-condition ops (tracing them makes a cycle).
+    # Returns the set of ops. Raises a runtime error if a fetch is neither tensor nor op.
     """Returns the set of ops in the execution path to compute given fetches."""
 
     # If no fetch provided, then return all operations.
@@ -1330,6 +1657,13 @@ class TensorTracer:
                                                ops_in_exec_path,
                                                tensor_trace_points,
                                                report_handler):
+    # [FUNCTION DOC]
+    # HELPER: selection step of tracing.
+    # Inputs: the sorted graph description, set of ops in the execution path, the collection of
+    # programmatic tracepoints, and the report handler. Goes through the ops in topological
+    # order; if tracepoints exist only their ops are considered; ops rejected by the op filter
+    # are skipped, then each output tensor is checked with the tensor filter. Returns the list of
+    # tensors to trace. Side effect: reasons are recorded in the report handler.
     """Determines the tensors to trace and instruments the trace details.
 
     Args:
@@ -1360,6 +1694,12 @@ class TensorTracer:
     return traced_tensors
 
   def _check_trace_files(self):
+    # [FUNCTION DOC]
+    # HELPER: prepares the output location before tracing.
+    # Does nothing when no trace directory is set (output goes to standard error) or when in
+    # summary mode (summary ops create files). Otherwise creates the trace directory, including
+    # parents, if it does not exist and raises a runtime error if it still does not exist.
+    # Side effect: file system directory creation.
     """Checks if any requirements for trace files are satisfied."""
 
     if not self._parameters.trace_dir:
@@ -1376,6 +1716,11 @@ class TensorTracer:
                            self._parameters.trace_dir)
 
   def _create_temp_cache(self, num_traced_tensors, num_signatures, graph):
+    # [FUNCTION DOC]
+    # HELPER: initializes the temporary cache. Inputs: count of traced tensors, number of
+    # statistics per tensor, and the graph. Stores in the tracer, for that graph, a list with one
+    # constant vector (init value, length equal to number of statistics) per traced tensor; the
+    # entries are replaced later as statistics are computed. Returns nothing.
     """Creates a temporary cache with the given dimensions.
 
     Fills the self._temp_cache_var with num_traced_tensors tf.constant() ops
@@ -1394,6 +1739,16 @@ class TensorTracer:
 
   def _determine_trace_and_create_report(self, graph, ops_in_exec_path,
                                          graph_summary_tag):
+    # [FUNCTION DOC]
+    # HELPER: preparation step shared by TPU and CPU tracing.
+    # Inputs: the graph, the set of ops in the execution path and the graph summary tag. Checks
+    # trace files, sorts the graph, selects tensors to trace (raising a runtime error if the
+    # filter-check flag is set and anything would be traced), builds the trace order object,
+    # creates the cache (temporary or variable, plus history cache in history mode) when compact
+    # statistics are used, then writes the report: in summary modes builds the report proto,
+    # optionally appends its fingerprint to the trace directory, and writes it unless the
+    # report file is disabled; in other modes (except history) writes the text report.
+    # Returns the trace order object. Side effects: variables, files, logging, parameter update.
     """Work needs to be done prior to TPU or CPU tracing.
 
     Args:
@@ -1458,12 +1813,26 @@ class TensorTracer:
     return tensor_trace_order
 
   def _create_host_call(self):
+    # [FUNCTION DOC]
+    # HELPER: returns True when the mode (summary or full-tensor-summary) writes results through
+    # a host call that creates summary events instead of flushing a cache to text files.
     return self._parameters.trace_mode in (
         tensor_tracer_flags.TRACE_MODE_SUMMARY,
         tensor_tracer_flags.TRACE_MODE_FULL_TENSOR_SUMMARY)
 
   def _inspect_summary_cache(self, cache, replica_id, step_num, output_stream,
                              tensor_trace_order):
+    # [FUNCTION DOC]
+    # HELPER: inspection output for the non-history compact modes.
+    # KNOWN ISSUE: when there are no traced tensors it returns the no-op function itself
+    # rather than an operation created by calling it, and the docstring says it returns the
+    # op that flushes the cache whereas the normal path returns a print op.
+    # Inputs: the cache tensor for the step, replica id tensor, step number, output stream (file
+    # path or standard error) and the trace order object. Builds a summary message saying whether
+    # the step holds NaNs or infinities, then a print op listing, per traced tensor (ordered by
+    # cache index), the first statistic column (or a has/has-no NaN-Inf message in nan-inf mode),
+    # with core ids included only when per-core summaries are collected. Logs a warning when
+    # nothing is traced. Returns the print op.
     """Generates a print operation to print trace inspection.
 
     Args:
@@ -1477,6 +1846,10 @@ class TensorTracer:
       The Op to flush the cache to file.
     """
     def _inspect_tensor(tensor):
+      # [FUNCTION DOC]
+      # HELPER: formats one cache value for inspection printing. In nan-inf mode returns a
+      # conditional string tensor saying the tensor has or has no NaNs/Infs depending on whether
+      # the value is above zero; in other modes returns the value itself.
       """Returns the text to be printed for inspection output."""
       if (self._parameters.trace_mode ==
           tensor_tracer_flags.TRACE_MODE_NAN_INF):
@@ -1533,6 +1906,16 @@ class TensorTracer:
 
   def _inspect_history_cache(self, cache, replica_id, step_num,
                              tensor_trace_order):
+    # [FUNCTION DOC]
+    # HELPER: inspection output for the history trace mode.
+    # KNOWN ISSUE: when there are no traced tensors it returns the no-op function itself rather
+    # than an operation created by calling it.
+    # Inputs: the cache tensor for the step, replica id tensor, step number and the trace order
+    # object. For every traced tensor (ordered by cache index) it reads the stored previous value
+    # from the history variable, computes the absolute difference from the new cache value,
+    # assigns the new value, and collects the printing items. Returns a conditional op that
+    # prints all items only if the largest difference exceeds the delta threshold flag, else a
+    # no-op. Side effects: creates history variables, adds assignments, logs a warning if empty.
     """Generates a conditional print operation to log differences in tensor values.
 
     Args:
@@ -1584,6 +1967,9 @@ class TensorTracer:
         lambda: control_flow_ops.no_op())  # pylint: disable=unnecessary-lambda
 
   def _get_outfile_suffix(self):
+    # [FUNCTION DOC]
+    # HELPER: file name suffix for trace files. Returns the appendable-file encoding string when
+    # the trace directory is a remote path, otherwise an empty string.
     if remote_utils.is_remote_path(self._parameters.trace_dir):
       return remote_utils.get_appendable_file_encoding()
     else:
@@ -1591,6 +1977,15 @@ class TensorTracer:
 
   def _generate_flush_cache_op(self, num_replicas, on_tpu,
                                tensor_trace_order, graph):
+    # [FUNCTION DOC]
+    # HELPER: builds the op that writes the compact cache to files after a step.
+    # Inputs: number of replicas, whether running on TPU, the trace order object and the graph.
+    # Reads the cache (as a value, or the tensor itself with a temporary cache). On TPU, unless
+    # per-core summaries are requested, first merges the caches across cores and aggregates them.
+    # The flush function is run through outside compilation on TPU (with the global step) or
+    # directly otherwise. With a variable cache, the cache is reset to the init value after the
+    # flush. Returns a no-op-like op that depends on the flush (and reset). Side effects: creates
+    # the cache variable if needed, adds ops, creates or reads the global step.
     """Generates an Op that will flush the cache to file.
 
     Args:
@@ -1604,11 +1999,28 @@ class TensorTracer:
     """
 
     def _flush_fun(cache, replica_id, step_num):
+      # [FUNCTION DOC]
+      # HELPER: builds the per-replica flush logic. Inputs: cache tensor, replica id tensor and
+      # step number tensor. Creates a case with one branch per replica: replica zero always
+      # flushes; other replicas flush to their own file, except on TPU without per-core
+      # summaries where only the first core writes (others do nothing). Returns the case op.
+      # File names must be static, hence one branch per replica.
       """Flushes the cache to a file corresponding to replica_id."""
 
       def _f(file_index):
+        # [FUNCTION DOC]
+        # HELPER: factory for one replica's flush branch. Input: replica file index. Returns a
+        # zero-argument function that builds the flush ops for that replica.
         """Generates a func that flushes the cache to a file."""
         def _print_cache():
+          # [FUNCTION DOC]
+          # HELPER: the flush branch for one replica (closed over the file index).
+          # Chooses the output: a compact trace file named with the prefix, replica number and
+          # remote suffix in the trace directory, or standard error without a directory. If
+          # inspection is on, raises a value error for multiple signatures, otherwise adds the
+          # history or summary inspection print op; if inspection is off, adds one print op per
+          # signature column of the cache, preceded by a replica id line. Returns a constant op
+          # that depends on all print ops.
           """Flushes the cache to a file."""
           replica_str = ('%d' % file_index)
           if self._parameters.trace_dir:
@@ -1652,6 +2064,8 @@ class TensorTracer:
         return _print_cache
 
       def _eq(file_index):
+        # [FUNCTION DOC]
+        # HELPER: returns a boolean tensor that is true when the replica id equals the index.
         return math_ops.equal(replica_id, file_index)
 
       flush_op_cases = {}
@@ -1705,6 +2119,14 @@ class TensorTracer:
 
   def _flush_tensor_values_cache(self, tensor_fetches, op_fetches, on_tpu,
                                  tensor_trace_order, graph):
+    # [FUNCTION DOC]
+    # HELPER: attaches cache flushing to the model fetches.
+    # KNOWN ISSUE: the docstring says it flushes values to the cache, but it flushes the cache
+    # to files (or summaries), and returns the fetches tied to the flush op.
+    # Inputs: list of fetched tensors, list of fetched ops, TPU flag, trace order object and the
+    # graph. If nothing is traced logs a warning and returns the fetches unchanged. Otherwise,
+    # makes the flush op depend on all fetched ops and tensors, and returns the fetched tensors
+    # grouped so that they also depend on the flush op.
     """Flushes the intermediate tensor values in the graph to the cache.
 
     Args:
@@ -1730,6 +2152,10 @@ class TensorTracer:
                                     control_inputs=[flush_cache_op])
 
   def _process_tensor_fetches(self, tensor_fetches):
+    # [FUNCTION DOC]
+    # HELPER: validates the tensor fetches. Input: a tensor or a list/tuple of tensors. Raises a
+    # runtime error for nothing, an empty list, or any non-tensor element. Returns a list of the
+    # tensors (a single tensor is wrapped).
     """Check that tensor_fetches is not empty and have valid tensors."""
     # If none or empty list.
     if tensor_fetches is None:
@@ -1749,6 +2175,10 @@ class TensorTracer:
     return fetches
 
   def _process_op_fetches(self, op_fetches):
+    # [FUNCTION DOC]
+    # HELPER: normalizes op fetches. Input: nothing, one op/tensor or a list/tuple of them.
+    # Returns a list of operations (tensors are replaced by their ops); items that are neither
+    # are dropped with a logged warning. Nothing gives an empty list.
     """Check that op_fetches have valid ops."""
     if op_fetches is None:
       return []
@@ -1768,6 +2198,13 @@ class TensorTracer:
     return fetches
 
   def _convert_fetches_to_input_format(self, input_fetches, current_fetches):
+    # [FUNCTION DOC]
+    # HELPER: restores the caller's fetch structure on the result.
+    # KNOWN ISSUE: the length check in the non-tensor branch compares current_fetches with
+    # itself, so it can never fail; the intended comparison with input_fetches is missing.
+    # Inputs: original fetches and the processed list. If the original was a single tensor,
+    # returns the single element (raises a runtime error if the list length is not one); if it
+    # was a tuple returns a tuple; otherwise returns the list.
     """Changes current_fetches' format, so that it matches input_fetches."""
     if isinstance(input_fetches, tensor_lib.Tensor):
       if len(current_fetches) != 1:
@@ -1782,6 +2219,11 @@ class TensorTracer:
         return current_fetches
 
   def _get_op_control_flow_context(self, op):
+    # [FUNCTION DOC]
+    # HELPER: finds where an op's results live in control flow.
+    # Input: an operation. Returns its control flow context (read from a protected attribute);
+    # for loop-exit ops returns the enclosing outer context instead. May return nothing when the
+    # op is not in any control flow.
     """Returns the control flow of the given op.
 
     Args:
@@ -1799,6 +2241,12 @@ class TensorTracer:
     return op_control_flow_context
 
   def merge_caches_on_tpu(self, local_tpu_cache_tensor):
+    # [FUNCTION DOC]
+    # Gathers the per-core caches on every core. Input: the local cache tensor of one core.
+    # Broadcasts it to a leading dimension equal to the number of replicas; if the single-core
+    # summaries flag is set returns that broadcast tensor as is, else performs an all-to-all
+    # exchange across all replicas so each core ends with every core's cache stacked along the
+    # first dimension. Returns the merged tensor. Adds TPU collective ops to the graph.
     """Merges the given caches on tpu.
 
     Args:
@@ -1821,6 +2269,14 @@ class TensorTracer:
         group_assignment=[list(range(self._tt_config.num_replicas))])
 
   def aggregate_global_cache(self, global_tt_summary_cache):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring is copied from the merge function and says it merges caches on
+    # TPU; this function actually aggregates the stacked per-core statistics across cores.
+    # Input: a tensor shaped cores by traced tensors by signatures. For each signature (ordered
+    # by column) takes its slice and reduces it over the core axis with the aggregation function
+    # configured for that signature (raises a runtime error if none is defined). Stacks the
+    # results, transposes to traced tensors by signatures and adds a leading axis of size one.
+    # Returns that tensor.
     """Merges the given caches on tpu.
 
     Args:
@@ -1867,6 +2323,15 @@ class TensorTracer:
 
   def _prepare_host_call_fn(self, processed_t_fetches,
                             op_fetches, graph, graph_summary_tag):
+    # [FUNCTION DOC]
+    # HELPER: sets up summary writing for the summary modes.
+    # KNOWN ISSUE: the docstring says it creates the function, but it stores a (function,
+    # arguments) pair in the tracer host call mapping and returns nothing.
+    # Inputs: processed tensor fetches, op fetches, graph and graph summary tag. Raises a value
+    # error if no trace directory is set. Defines a writer function, then reshapes the global
+    # step to one element and every cache variable of the graph to gain a leading core axis (made
+    # dependent on the fetches), adds the step to that mapping and records the pair under the
+    # host call key, replacing any earlier host call mapping.
     """Creates a host call function that will write the cache as tb summary.
 
     Args:
@@ -1882,6 +2347,15 @@ class TensorTracer:
                        '--trace_dir=/model/dir')
 
     def _write_cache(step, event_file_suffix=None, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: host call function that writes caches as tensor summaries.
+      # Inputs: step tensor (one element per core), optional event file suffix tensor, and
+      # keyword tensors to write (tag to content). Creates a file writer in the trace directory
+      # (suffix plus optional joined suffix, bounded queue), registers it in a graph collection,
+      # converts the step to 64 bit when needed, and for every keyword writes a tensor summary
+      # tagged with the summary tag, key and graph tag; in non per-core mode the summary cache
+      # is first aggregated across cores when more than one core is present. Returns a grouped op
+      # of all writes. Side effects: creates writer resources and graph collection entries.
       """Writes the given caches as tensor summary.
 
       Args:
@@ -1973,9 +2447,14 @@ class TensorTracer:
     self._host_call_fn[_TT_HOSTCALL_KEY] = (_write_cache, caches_to_write)
 
   def host_call_deps_and_fn(self):
+    # [FUNCTION DOC]
+    # Returns the host call mapping built during tracing: empty, or holding one entry under the
+    # host call key with the writer function and its tensor arguments, for the estimator to use.
     return self._host_call_fn
 
   def get_traced_op_names(self):
+    # [FUNCTION DOC]
+    # Returns the set of names of ops that were selected for tracing by this tracer so far.
     """Returns the set of traced op names."""
     return self._traced_op_names
 
@@ -1983,6 +2462,24 @@ class TensorTracer:
                        tensor_fetches,
                        op_fetches=None,
                        on_tpu=True):
+    # [FUNCTION DOC]
+    # Core tracing routine shared by trace_tpu and trace_cpu; the caller must already have set
+    # the device configuration and replica id.
+    # Inputs: graph, tensor fetches (single tensor or list/tuple, at least one), optional op
+    # fetches, and the TPU flag (default true). Validates device and trace mode, normalizes the
+    # fetches, finds the ops in the execution path, writes the report and selects the tensors.
+    # For each selected tensor that has consumers (or is fetched), in the op's control flow
+    # context it builds the reduced values (casting unsupported dtypes on TPU), then stores them
+    # in the compact cache (temporary or variable), snapshots the whole tensor in buffer mode,
+    # or builds a print op (outside compiled on TPU). The resulting trace op becomes a control
+    # input of all consumers, or of the fetches if the tensor itself is fetched. Afterwards it
+    # stacks a temporary cache, then either prepares the summary host call (written directly
+    # on CPU, or by core zero via outside compilation when flushing with outside compile is
+    # on; otherwise left for the caller) or flushes the cache to files.
+    # Returns the fetches in the format given, with added dependencies. Raises runtime errors for
+    # bad fetches or buffer misuse, and a value error for outside compiled flush in other modes.
+    # Side effects: modifies the graph (ops, control inputs, control flow context), records
+    # usage analytics and traced op names.
     """Commong tracing function for both CPU and TPUs.
 
     The caller function should set device_type, num_replicas,
@@ -2007,6 +2504,9 @@ class TensorTracer:
       RuntimeError: If tensor_fetches is None or empty.
     """
     def _cast_unsupported_dtypes(tensor):
+      # [FUNCTION DOC]
+      # HELPER: makes values transferable to the host. Casts 64-bit integers to 32-bit integers
+      # and half-precision or bfloat16 floats to float32; returns other tensors unchanged.
       """Casts tensor to a supported type."""
 
       if tensor.dtype.__eq__(dtypes.int64):
@@ -2106,6 +2606,10 @@ class TensorTracer:
         else:
 
           def tpu_wrap_trace_fn(tensor, out_tensor_name):
+            # [FUNCTION DOC]
+            # HELPER: builds the print op for one tensor. Inputs: reduced tensor and its
+            # name. Creates the trace callback and runs it through outside compilation on TPU,
+            # or directly otherwise. Returns the resulting op.
             """Wraps the trace_fn with outside compilation if on TPUs."""
             tensor_trace_fn = self._make_tensor_trace_fun(out_tensor_name,
                                                           tensor_trace_order)
@@ -2175,6 +2679,10 @@ class TensorTracer:
               tt_core_summary = self.aggregate_global_cache(tt_core_summary)
 
             def write_if_core_0(step, replica_id, tt_summary):
+              # [FUNCTION DOC]
+              # HELPER: host side callback for outside compiled summary flushing. Inputs: step,
+              # replica id and the aggregated summary tensor. Returns a conditional op that
+              # calls the summary writer only on replica zero and does nothing elsewhere.
 
               return cond.cond(
                   math_ops.equal(replica_id, 0),
@@ -2210,6 +2718,16 @@ class TensorTracer:
                 num_replicas=None,
                 num_replicas_per_host=None,
                 num_hosts=None):
+    # [FUNCTION DOC]
+    # Public entry point for tracing a TPU graph. Inputs: graph, tensor fetches, optional op
+    # fetches, and optional counts of replicas, replicas per host (defaults to 8 when replicas
+    # are given) and hosts (derived by rounding up when unset). Function graphs (old or new
+    # style) are not supported and graphs already traced are ignored; both log a warning and
+    # return the fetches unchanged. Otherwise re-reads the flags, sets the TPU device
+    # configuration, optionally dumps the graph before and after tracing to the dump path, adds
+    # the replica id op and calls the common tracing routine.
+    # Returns the fetches with trace dependencies. Side effects: adds the graph to the set of
+    # traced graphs, modifies the graph, writes graph dump files.
     """Traces the tensors generated by TPU Ops in a TF graph.
 
     Args:
@@ -2267,6 +2785,14 @@ class TensorTracer:
     return tensor_fetches
 
   def trace_cpu(self, graph, tensor_fetches, op_fetches=None):
+    # [FUNCTION DOC]
+    # Public entry point for tracing a CPU (or GPU) graph. Inputs: graph, tensor fetches and
+    # optional op fetches. Function graphs are not supported and already traced graphs are
+    # ignored, each with a logged warning and the fetches returned unchanged. Otherwise re-reads
+    # the flags, sets a single replica, single host CPU configuration with replica id zero,
+    # optionally dumps the graph before and after to the dump path, and calls the common tracing
+    # routine without TPU handling. Returns the fetches with trace dependencies. Side effects:
+    # records the graph as traced, modifies the graph, writes graph dump files.
     """Traces the tensors generated by CPU Ops in a TF graph.
 
     Args:
