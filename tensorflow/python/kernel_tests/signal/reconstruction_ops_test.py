@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Tests for the overlap-and-add reconstruction op in the signal package: constant inputs,
+# unknown shape and rank, the fast path when frame step equals frame length, all hop lengths
+# for small frame sizes, inputs built from powers of distinct bases (so overlaps are verifiable
+# as digit strings), batching, and gradients (symbolic and numerical). No import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,8 +37,17 @@ from tensorflow.python.platform import test
 
 @test_util.run_all_in_graph_and_eager_modes
 class ReconstructionOpsTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests for overlap-and-add, run in graph and eager modes. Instances carry shared fixtures
+  # built in the constructor: batch size, frame count, samples per frame, a table of powers of
+  # three bases, the frame hop and the expected base-representation strings of the reconstruction.
 
   def __init__(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. Forwards all arguments to the base test case, then sets fixtures: batch size
+    # three, three frames of five samples, bases two to four, an array of shape batch by frames
+    # by samples holding each base raised to the sample position, frame hop two, and the list of
+    # expected digit strings when overlapped powers are written in their own base.
     super(ReconstructionOpsTest, self).__init__(*args, **kwargs)
     self.batch_size = 3
     self.frames = 3
@@ -54,6 +68,9 @@ class ReconstructionOpsTest(test.TestCase, parameterized.TestCase):
                             "100000000000000"]
 
   def test_all_ones(self):
+    # [FUNCTION DOC]
+    # Overlap-adds three frames of five ones with hop two, asserts a static output shape of nine
+    # and the expected overlap counts.
     signal = array_ops.ones([3, 5])
     reconstruction = reconstruction_ops.overlap_and_add(signal, 2)
     self.assertEqual(reconstruction.shape.as_list(), [9])
@@ -61,6 +78,10 @@ class ReconstructionOpsTest(test.TestCase, parameterized.TestCase):
     self.assertAllClose(reconstruction, expected_output)
 
   def test_unknown_shapes(self):
+    # [FUNCTION DOC]
+    # Does nothing in eager mode. In graph mode uses placeholders with unknown dimensions for
+    # both the signal and the frame step, asserts the static output shape is fully unknown and
+    # the values are the expected overlap counts for each of four batch items.
     # This test uses placeholders and does not work in Eager mode.
     if context.executing_eagerly():
       return
@@ -73,6 +94,9 @@ class ReconstructionOpsTest(test.TestCase, parameterized.TestCase):
     self.assertAllClose(reconstruction, expected_output)
 
   def test_unknown_rank(self):
+    # [FUNCTION DOC]
+    # Does nothing in eager mode. In graph mode uses a placeholder of unknown rank, asserts the
+    # static output shape is unknown, and checks the expected overlap counts per batch item.
     # This test uses placeholders and does not work in eager mode.
     if context.executing_eagerly():
       return
@@ -86,6 +110,10 @@ class ReconstructionOpsTest(test.TestCase, parameterized.TestCase):
     self.assertAllClose(reconstruction, expected_output)
 
   def test_fast_path(self):
+    # [FUNCTION DOC]
+    # Does nothing in eager mode. In graph mode uses a frame step equal to the frame length (no
+    # overlap), asserts the result tensor has the fast-path node name and equals all ones of
+    # length fifteen.
     # This test uses tensor names and does not work in eager mode.
     if context.executing_eagerly():
       return
@@ -112,7 +140,13 @@ class ReconstructionOpsTest(test.TestCase, parameterized.TestCase):
       (4, [1, 2, 3, 9, 6, 7, 17, 10, 11, 12], 3),
       (4, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], 4))
   def test_simple(self, frame_length, expected, frame_hop):
+    # [FUNCTION DOC]
+    # Parameterized over frame length, expected output and hop. Builds three frames of
+    # consecutive integers, overlap-adds them with the hop and asserts the expected sums.
     def make_input(frame_length, num_frames=3):
+      # [FUNCTION DOC]
+      # HELPER: returns an array of num_frames rows (default three) of frame_length consecutive
+      # integers starting at one.
       """Generate a tensor of num_frames frames of frame_length."""
       return np.reshape(np.arange(1, num_frames * frame_length + 1),
                         (-1, frame_length))
@@ -123,6 +157,9 @@ class ReconstructionOpsTest(test.TestCase, parameterized.TestCase):
     self.assertAllClose(reconstruction, expected_output)
 
   def test_powers(self):
+    # [FUNCTION DOC]
+    # Overlap-adds the first batch item of the powers fixture (int64) with the fixture hop and
+    # asserts that writing each output value in its base gives the expected digit strings.
     signal = constant_op.constant(np.squeeze(self.powers[0, :, :]),
                                   dtype=dtypes.int64)
     reconstruction = reconstruction_ops.overlap_and_add(signal, self.frame_hop)
@@ -132,6 +169,9 @@ class ReconstructionOpsTest(test.TestCase, parameterized.TestCase):
     self.assertEqual(string_output, self.expected_string)
 
   def test_batch(self):
+    # [FUNCTION DOC]
+    # Overlap-adds the whole batched powers fixture and asserts every batch item, written in its
+    # own base, equals the expected digit strings.
     signal = constant_op.constant(self.powers, dtype=dtypes.int64)
     reconstruction = reconstruction_ops.overlap_and_add(signal, self.frame_hop)
 
@@ -145,6 +185,9 @@ class ReconstructionOpsTest(test.TestCase, parameterized.TestCase):
     self.assertTrue(accumulator)
 
   def test_one_element_batch(self):
+    # [FUNCTION DOC]
+    # Same as the batch test with a batch of one float32 item: asserts the output shape is one
+    # by nine and the digit strings match the expectation.
     input_matrix = np.squeeze(self.powers[0, :, :])
     input_matrix = input_matrix[np.newaxis, :, :].astype(float)
     signal = constant_op.constant(input_matrix, dtype=dtypes.float32)
@@ -166,6 +209,10 @@ class ReconstructionOpsTest(test.TestCase, parameterized.TestCase):
       ((2, 2, 10, 128), 126),
       ((2, 2, 2, 10, 128), 125))
   def test_gradient(self, shape, frame_hop):
+    # [FUNCTION DOC]
+    # Parameterized over input shapes (with up to three batch dimensions) and hops. Does nothing
+    # in eager mode. In graph mode takes the gradient of the sum of the reconstruction with
+    # respect to a zero signal and asserts it is all ones.
     # TODO(rjryan): Eager gradient tests.
     if context.executing_eagerly():
       return
@@ -179,6 +226,10 @@ class ReconstructionOpsTest(test.TestCase, parameterized.TestCase):
     self.assertTrue((gradient == 1.0).all())
 
   def test_gradient_batch(self):
+    # [FUNCTION DOC]
+    # Does nothing in eager mode. In graph mode weights the first batch item by zeros and the
+    # second by 0 to 99 before summing, then asserts the gradient is zero for the first item
+    # and equals the weights for the second.
     # TODO(rjryan): Eager gradient tests.
     if context.executing_eagerly():
       return
@@ -204,10 +255,16 @@ class ReconstructionOpsTest(test.TestCase, parameterized.TestCase):
     self.assertAllEqual(expected_gradient, gradient)
 
   def test_gradient_numerical(self):
+    # [FUNCTION DOC]
+    # Compares theoretical and numerical Jacobians of overlap-and-add (hop equal to the frame
+    # length) on a zero input of shape two by ten by ten and asserts they are close.
     shape = (2, 10, 10)
     framed_signal = array_ops.zeros(shape)
     frame_hop = 10
     def f(signal):
+      # [FUNCTION DOC]
+      # Nested helper for the gradient checker: overlap-adds the given signal with the enclosing
+      # test's frame hop and returns the reconstruction.
       return reconstruction_ops.overlap_and_add(signal, frame_hop)
     ((jacob_t,), (jacob_n,)) = gradient_checker_v2.compute_gradient(
         f, [framed_signal])

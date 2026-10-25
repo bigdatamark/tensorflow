@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Tests for the mel weight matrix op in the signal package. Contains a NumPy reference
+# implementation (copied from the audioset mel feature code) of the hertz-to-mel conversion
+# and of the spectrogram-to-mel weight matrix, plus a test class that compares the TensorFlow
+# op against it for several settings, checks output dtypes, error handling, constant folding and
+# a dynamic number of spectrogram bins. Import-time side effects: defines mel scale constants.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -34,6 +40,10 @@ _MEL_HIGH_FREQUENCY_Q = 1127.0
 
 
 def hertz_to_mel(frequencies_hertz):
+  # [FUNCTION DOC]
+  # HELPER: NumPy reference conversion used by the mel matrix reference implementation.
+  # Input: frequencies_hertz, a scalar or array of frequencies in hertz. Returns values on the
+  # mel scale (HTK formula, logarithmic with a 700 hertz break frequency), same shape as input.
   """Convert frequencies to mel scale using HTK formula.
 
   Copied from
@@ -56,6 +66,15 @@ def spectrogram_to_mel_matrix(num_mel_bins=20,
                               lower_edge_hertz=125.0,
                               upper_edge_hertz=3800.0,
                               unused_dtype=None):
+  # [FUNCTION DOC]
+  # HELPER: NumPy reference implementation of the mel weight matrix, used as ground truth.
+  # KNOWN ISSUE: the docstring does not mention the unused_dtype parameter, which is accepted
+  # but ignored (the result is always a double-precision array).
+  # Inputs: number of mel bins, number of spectrogram bins, audio sample rate (a number or a
+  # constant tensor, converted to its constant value), lower and upper band edges in hertz.
+  # Builds triangular bands that are linear in the mel domain, zeroes the DC bin row, and
+  # returns a matrix of shape (spectrogram bins, mel bins). Raises a value error if the lower
+  # edge is not below the upper edge.
   """Return a matrix that can post-multiply spectrogram rows to make mel.
 
   Copied from
@@ -130,6 +149,9 @@ def spectrogram_to_mel_matrix(num_mel_bins=20,
 
 @tf_test_util.run_all_in_graph_and_eager_modes
 class LinearToMelTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests for the linear-to-mel weight matrix op, run in graph and eager modes, using the
+  # module-level NumPy reference as ground truth.
 
   @parameterized.parameters(
       # Defaults. Integer sample rate.
@@ -143,6 +165,10 @@ class LinearToMelTest(test.TestCase, parameterized.TestCase):
   def test_matches_reference_implementation(
       self, num_mel_bins, num_spectrogram_bins, sample_rate,
       use_tensor_sample_rate, lower_edge_hertz, upper_edge_hertz, dtype):
+    # [FUNCTION DOC]
+    # Parameterized over mel bin counts, spectrogram bin counts, integer or float sample rates,
+    # whether the rate is passed as a constant tensor, band edges and dtype. Builds the matrix
+    # with the reference and with the TensorFlow op and asserts they agree within 3e-6.
     if use_tensor_sample_rate:
       sample_rate = constant_op.constant(sample_rate)
     mel_matrix_np = spectrogram_to_mel_matrix(
@@ -155,11 +181,17 @@ class LinearToMelTest(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(dtypes.float32, dtypes.float64)
   def test_dtypes(self, dtype):
+    # [FUNCTION DOC]
+    # Parameterized over float32 and float64. Asserts the op's output has the requested dtype.
     # LinSpace is not supported for tf.float16.
     self.assertEqual(dtype,
                      mel_ops.linear_to_mel_weight_matrix(dtype=dtype).dtype)
 
   def test_error(self):
+    # [FUNCTION DOC]
+    # Does nothing in eager mode (error types differ). In graph mode asserts the op raises a
+    # value error for: zero mel bins, zero sample rate, negative lower edge, lower edge above
+    # upper edge, upper edge above the Nyquist frequency, and a non-float dtype.
     # TODO(rjryan): Error types are different under eager.
     if context.executing_eagerly():
       return
@@ -180,6 +212,10 @@ class LinearToMelTest(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(dtypes.float32, dtypes.float64)
   def test_constant_folding(self, dtype):
+    # [FUNCTION DOC]
+    # Parameterized over float32 and float64. Does nothing in eager mode. In graph mode builds
+    # the op with a constant sample rate, runs the graph optimizer and asserts the whole graph
+    # collapses to a single node, i.e. the matrix is computed at graph optimization time.
     """Mel functions should be constant foldable."""
     if context.executing_eagerly():
       return
@@ -193,6 +229,9 @@ class LinearToMelTest(test.TestCase, parameterized.TestCase):
       self.assertLen(rewritten_graph.node, 1)
 
   def test_num_spectrogram_bins_dynamic(self):
+    # [FUNCTION DOC]
+    # Passes the number of spectrogram bins as a scalar tensor (placeholder with a default of
+    # 129) and asserts the result matches the reference matrix within 3e-6.
     num_spectrogram_bins = array_ops.placeholder_with_default(
         ops.convert_to_tensor(129, dtype=dtypes.int32), shape=())
     mel_matrix_np = spectrogram_to_mel_matrix(

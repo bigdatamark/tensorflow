@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Minimal tests for the MFCC op that converts log mel spectrograms to cepstral coefficients:
+# error on zero mel bins, a basic run on random input, and a run with unknown rank. There is no
+# numerical reference check in the open-source tests. No import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,8 +35,12 @@ from tensorflow.python.platform import test
 # HTK conventions.
 @test_util.run_all_in_graph_and_eager_modes
 class MFCCTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Smoke tests for the MFCC op, run in graph and eager modes.
 
   def test_error(self):
+    # [FUNCTION DOC]
+    # Asserts that an input whose mel-bin dimension is zero raises a value error.
     # num_mel_bins must be positive.
     with self.assertRaises(ValueError):
       signal = array_ops.zeros((2, 3, 0))
@@ -40,11 +48,17 @@ class MFCCTest(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(dtypes.float32, dtypes.float64)
   def test_basic(self, dtype):
+    # [FUNCTION DOC]
+    # Parameterized over float32 and float64. Runs the op on a random normal input of shape
+    # two by three by five and only checks that it evaluates without error.
     """A basic test that the op runs on random input."""
     signal = random_ops.random_normal((2, 3, 5), dtype=dtype)
     self.evaluate(mfcc_ops.mfccs_from_log_mel_spectrograms(signal))
 
   def test_unknown_shape(self):
+    # [FUNCTION DOC]
+    # Does nothing in eager mode. In graph mode feeds a placeholder of unknown rank (default
+    # random data), asserts its rank is unknown, and checks the op evaluates without error.
     """A test that the op runs when shape and rank are unknown."""
     if context.executing_eagerly():
       return

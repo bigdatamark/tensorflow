@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: shared statistical test utilities for the random-ops kernel tests.
+# Provides functions to z-test sample moments against analytic moments, a Pearson chi-squared
+# statistic on uniform samples, a standard normal CDF, an Anderson-Darling statistic, and a
+# checker for the mean, median and variance of truncated normal samples.
+# Depends on numpy and the special-math helpers of the distributions package. No import-time
+# side effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +33,16 @@ def test_moment_matching(
     number_moments,
     dist,
     stride=0):
+  # [FUNCTION DOC]
+  # HELPER: statistical check used by random-op tests to validate sample distributions.
+  # Inputs: samples (numpy array of draws; two-dimensional arrays are flattened before
+  # striding), number_moments (how many moments, starting at the first, to check), dist (a
+  # distribution object offering a moment method) and stride (spacing between samples used
+  # for the i-th moment; zero means all samples, larger values spread the moments out).
+  # For each moment computes the sample mean of the i-th powers, the analytic moment, and the
+  # variance of the estimator (plus a small allowance for floating-point error, floored at the
+  # smallest normal number). Returns a list with one absolute z-score (array) per moment.
+  # Raises an assertion error if any total variance is not positive.
   """Return z-test scores for sample moments to match analytic moments.
 
   Given `samples`, check that the first sample `number_moments` match
@@ -73,6 +90,11 @@ def test_moment_matching(
 
 
 def chi_squared(x, bins):
+  # [FUNCTION DOC]
+  # HELPER: statistic for uniformity tests of random ops.
+  # Inputs: x, array of samples assumed to lie in the unit interval (values outside are ignored
+  # by the histogram), and bins, the number of equal-width bins. Returns the Pearson chi-squared
+  # statistic against a uniform expectation of equal counts per bin.
   """Pearson's Chi-squared test."""
   x = np.ravel(x)
   n = len(x)
@@ -82,11 +104,20 @@ def chi_squared(x, bins):
 
 
 def normal_cdf(x):
+  # [FUNCTION DOC]
+  # HELPER: used by the Anderson-Darling statistic.
+  # Input: x, scalar or array. Returns the standard normal cumulative probability for each
+  # element, computed through the error function applied elementwise.
   """Cumulative distribution function for a standard normal distribution."""
   return 0.5 + 0.5 * np.vectorize(math.erf)(x / math.sqrt(2))
 
 
 def anderson_darling(x):
+  # [FUNCTION DOC]
+  # HELPER: goodness-of-fit statistic used by normal-sampling tests.
+  # Input: x, array of samples (flattened and sorted internally). Returns the Anderson-Darling
+  # statistic comparing the samples to a standard normal distribution; larger means a worse
+  # fit. Samples that make the CDF reach exactly zero or one produce infinite values.
   """Anderson-Darling test for a standard normal distribution."""
   x = np.sort(np.ravel(x))
   n = len(x)
@@ -107,14 +138,29 @@ def test_truncated_normal(assert_equal,
                           mean_atol=5e-4,
                           median_atol=8e-4,
                           variance_rtol=1e-3):
+  # [FUNCTION DOC]
+  # HELPER: shared check for truncated-normal sampling tests.
+  # Inputs: assert_equal and assert_all_close (assertion callbacks from the calling test),
+  # n (expected number of samples, all of which must lie inside the bounds), y (numpy array of
+  # samples), optional means, stddevs, minvals and maxvals (default mean 0, standard deviation
+  # 1, bounds minus two and plus two), and tolerances mean_atol, median_atol (absolute) and
+  # variance_rtol (relative). Computes the analytic mean, median and variance of the truncated
+  # normal and asserts the sample statistics match within tolerance. Returns nothing; failures
+  # are reported by the callbacks.
   """Tests truncated normal distribution's statistics."""
   def _normal_cdf(x):
+    # [FUNCTION DOC]
+    # HELPER: local scalar standard normal CDF via the complementary error function.
     return .5 * math.erfc(-x / math.sqrt(2))
 
   def normal_pdf(x):
+    # [FUNCTION DOC]
+    # HELPER: local scalar standard normal density.
     return math.exp(-(x**2) / 2.) / math.sqrt(2 * math.pi)
 
   def probit(x):
+    # [FUNCTION DOC]
+    # HELPER: local inverse standard normal CDF, delegating to the special-math helper.
     return special_math.ndtri(x)
 
   a = -2.
