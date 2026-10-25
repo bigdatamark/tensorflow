@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# Legacy (graph-mode oriented) checkpoint saving and restoring of variables. Exposes the
+# saver builder classes (base and bulk-restore variants) that construct the save and restore
+# graph operations, the Saver class that drives saving, restoring and checkpoint bookkeeping
+# (keeping the newest N checkpoints, time-based retention, checkpoint state file), and the
+# module-level helpers to import and export meta graphs and to build a Saver from an
+# object-based checkpoint. Several checkpoint-management functions are re-exported here as
+# aliases for old users. Import-time side effects: defines aliases to checkpoint management
+# functions, a module-level lock and timestamp used for checkpoint write metrics, and
+# registers public symbols through the export decorator. Symbols are deprecated in favor of
+# the trackable and saving packages.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -74,6 +85,11 @@ _SAVER_LABEL = "saver_v1"
 
 
 def _get_duration_microseconds(start_time_seconds, end_time_seconds):
+  # [FUNCTION DOC]
+  # HELPER: converts timestamps into durations for the checkpoint write/read metrics.
+  # Takes a start time and an end time, both in seconds (numbers). Returns the elapsed time as
+  # a whole number of microseconds, rounded. If the end is earlier than the start (clock
+  # skew), returns zero rather than a negative value. No side effects.
   if end_time_seconds < start_time_seconds:
     # Avoid returning negative value in case of clock skew.
     return 0
@@ -81,6 +97,13 @@ def _get_duration_microseconds(start_time_seconds, end_time_seconds):
 
 
 def _get_checkpoint_size(prefix):
+  # [FUNCTION DOC]
+  # HELPER: computes checkpoint size for the write metrics reported by Saver.save.
+  # Input is a checkpoint path prefix (string). Finds every file on the local file system
+  # whose name starts with the prefix (the index file and all sharded data files) and sums
+  # their sizes, obtained from the native file-system metrics helper. Returns the total in
+  # bytes (zero when nothing matches). Note the match is purely by string prefix, so unrelated
+  # files sharing the prefix are also counted. Only reads file metadata.
   """Calculates filesize of checkpoint based on prefix."""
   size = 0
   # Gather all files beginning with prefix (.index plus sharded data files).
@@ -92,6 +115,12 @@ def _get_checkpoint_size(prefix):
 
 
 class BaseSaverBuilder:
+  # [CLASS DOC]
+  # Base builder that constructs the graph operations for saving and restoring variables
+  # (save, restore, sharded variants, and assembling a saver definition message). Created with
+  # the checkpoint format version to write (default is the version 2 format). Holds only that
+  # version as state. Subclasses may override the save, restore and bulk restore hooks to
+  # generate different operations. Also exposes aliases of saveable object types for old code.
   """Base class for Savers.
 
   Can be extended to create different Ops.
@@ -105,9 +134,25 @@ class BaseSaverBuilder:
   ResourceVariableSaveable = saveable_object_util.ResourceVariableSaveable
 
   def __init__(self, write_version=saver_pb2.SaverDef.V2):
+    # [FUNCTION DOC]
+    # Constructor. Takes the checkpoint format version to write (an enum value of the saver
+    # definition message, defaulting to the version 2 format) and stores it for later use by
+    # the save and sharded-save methods. Returns nothing; no other side effects and no
+    # validation of the value.
     self._write_version = write_version
 
   def save_op(self, filename_tensor, saveables):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the unexpected-version error message joins a string with the version value
+    # directly; since the version is an integer enum, building the message itself fails with a
+    # type error instead of the documented runtime error.
+    # Creates the single save operation for a list of saveable objects. Inputs: a string tensor
+    # (a file name for the version 1 format, but a checkpoint path prefix for version 2) and a
+    # list of saveable objects. Collects the name, tensor and slice specification of every spec
+    # of every saveable, then emits either the legacy save op (version 1) or the version 2 save
+    # op. Returns the created operation. Intended to be overridden by subclasses. Raises a
+    # runtime error if the configured write version is neither supported value (see above).
+    # Side effect: adds ops to the current graph (or executes them eagerly).
     """Create an Op to save 'saveables'.
 
     This is intended to be overridden by subclasses that want to generate
@@ -149,6 +194,14 @@ class BaseSaverBuilder:
 
   def bulk_restore(self, filename_tensor, saveables, preferred_shard,
                    restore_sequentially):
+    # [FUNCTION DOC]
+    # Restores every tensor of every saveable by calling the per-saveable restore hook one
+    # saveable at a time. Inputs: a string tensor with the checkpoint path, a list of saveable
+    # objects, the shard to open first (passed through to the hook) and a sequential flag that
+    # is ignored here. Each restore is placed on the saveable's device, forced to the CPU of
+    # that device when one is set, otherwise with no device constraint. Returns a flat list of
+    # the restored tensors in saveable and spec order. Subclasses may restore in one call.
+    # Side effect: adds restore ops to the graph.
     """Restore all tensors contained in saveables.
 
     By default, this issues separate calls to `restore_op` for each saveable.
@@ -179,6 +232,13 @@ class BaseSaverBuilder:
 
   # pylint: disable=unused-argument
   def restore_op(self, filename_tensor, saveable, preferred_shard):
+    # [FUNCTION DOC]
+    # Creates the restore operations for one saveable. Inputs: a string tensor with the
+    # checkpoint path, one saveable object, and a preferred shard number that this default
+    # implementation ignores. For each spec of the saveable it issues a version 2 restore of
+    # that single named tensor with its slice specification and data type. Returns a list of
+    # restored tensors, one per spec. Intended to be overridden. Side effect: adds ops to the
+    # graph.
     """Create ops to restore 'saveable'.
 
     This is intended to be overridden by subclasses that want to generate
@@ -205,6 +265,11 @@ class BaseSaverBuilder:
   # pylint: enable=unused-argument
 
   def sharded_filename(self, filename_tensor, shard, num_shards):
+    # [FUNCTION DOC]
+    # Builds the per-shard file name. Inputs: a string tensor with the base name or prefix,
+    # the shard index (integer) and the total number of shards (integer or integer tensor).
+    # Returns a string tensor produced by the native sharded-file-name op, which appends shard
+    # information to the base name. Side effect: adds an op to the graph.
     """Append sharding information to a filename.
 
     Args:
@@ -218,6 +283,12 @@ class BaseSaverBuilder:
     return gen_io_ops.sharded_filename(filename_tensor, shard, num_shards)
 
   def _AddSaveOps(self, filename_tensor, saveables):
+    # [FUNCTION DOC]
+    # HELPER: used by the build methods to create the save op for one shard or the whole set.
+    # Inputs: a string tensor with the file name or prefix, and a list of saveable objects that
+    # live on the same shard. Creates the save operation and returns the file name tensor
+    # wrapped so that it only becomes available after the save has run. Side effect: adds ops
+    # to the graph.
     """Add ops to save variables that are on the same shard.
 
     Args:
@@ -231,6 +302,19 @@ class BaseSaverBuilder:
     return control_flow_ops.with_dependencies([save], filename_tensor)
 
   def _AddShardedSaveOpsForV2(self, checkpoint_prefix, per_device):
+    # [FUNCTION DOC]
+    # HELPER: sharded save path for the version 2 format, used by the sharded save builder.
+    # Inputs: a scalar string tensor holding the checkpoint prefix (not a real file name) and
+    # a list of pairs of device name and saveable list, one pair per shard, as produced by the
+    # device grouping helper. Computes a temporary prefix by appending a suffix that is ".part"
+    # for prefixes starting with an S3 scheme, and a temporary directory part path otherwise
+    # (evaluated on the CPU at run time). For each shard, builds a sharded temporary file name
+    # on that device's CPU and a save op. After all shard saves finish, a merge step on the
+    # last shard's device merges the metadata of the shards into the final prefix and deletes
+    # the temporary directories. Returns an op that, when evaluated, yields only the original
+    # prefix, without any shard suffix. Side effects: adds ops to the graph; at run time writes
+    # files and removes the temporary directory. If there are no shards the last device is
+    # missing, so an empty device list is not supported.
     """Add ops to save the params per shard, for the V2 format.
 
     Note that the sharded save procedure for the V2 format is different from
@@ -310,6 +394,13 @@ class BaseSaverBuilder:
           return array_ops.identity(checkpoint_prefix)
 
   def _AddShardedSaveOps(self, filename_tensor, per_device):
+    # [FUNCTION DOC]
+    # HELPER: dispatches sharded saving by checkpoint format version.
+    # Inputs: a scalar string tensor (name or prefix) and a list of pairs of device and
+    # saveables, one per shard. For the version 2 format it delegates to the version 2 sharded
+    # helper. For version 1 it creates one save op per shard on that shard's device, using a
+    # sharded file name, and returns the sharded file specification op that runs only after all
+    # shard saves. Side effect: adds ops to the graph.
     """Add ops to save the params per shard.
 
     Args:
@@ -342,6 +433,16 @@ class BaseSaverBuilder:
                      reshape,
                      preferred_shard=-1,
                      name="restore_all"):
+    # [FUNCTION DOC]
+    # HELPER: creates the restore half of the saver graph for a set of saveables.
+    # Inputs: tensor with the checkpoint path, list of saveable objects, a flag to restore
+    # sequentially, a flag to let the restore reshape loaded values to the variables' shapes,
+    # the preferred shard (default minus one, meaning none) and the name of the returned op
+    # (default restore_all). Restores all tensors through the bulk restore hook, then slices
+    # the flat result per saveable and asks each saveable to build its assignment, passing the
+    # target shapes when reshaping (the static shape if fully defined, otherwise a dynamic
+    # shape tensor). Returns a grouped no-op that depends on all assignments. Side effect:
+    # adds ops to the graph.
     """Add operations to restore saveables.
 
     Args:
@@ -387,6 +488,12 @@ class BaseSaverBuilder:
 
   def _AddShardedRestoreOps(self, filename_tensor, per_device,
                             restore_sequentially, reshape):
+    # [FUNCTION DOC]
+    # HELPER: sharded restore for the builder. Inputs: checkpoint path tensor, list of pairs of
+    # device and saveables (one per shard), the sequential flag and the reshape flag. For each
+    # shard, on that shard's device, builds a restore group named restore_shard with that
+    # shard as the preferred one. Returns one grouped op named restore_all depending on every
+    # shard restore. Side effect: adds ops to the graph.
     """Add Ops to restore variables from multiple devices.
 
     Args:
@@ -415,6 +522,13 @@ class BaseSaverBuilder:
     return control_flow_ops.group(*sharded_restores, name="restore_all")
 
   def _GroupByDevices(self, saveables):
+    # [FUNCTION DOC]
+    # HELPER: partitions saveables by device for the sharded save and restore.
+    # Input: a list of saveable objects. For each, computes the canonical device names of all
+    # its specs; they must agree. Returns a list of pairs of canonical device name and list of
+    # saveables, sorted by device name. Raises a value error naming the saveable when its specs
+    # sit on different devices. Note the docstring mentions a TODO about duplicate devices:
+    # unspecified devices all collapse into one group. No side effects.
     """Group Variable tensor slices per device.
 
     TODO(touts): Make sure that all the devices found are on different
@@ -450,6 +564,17 @@ class BaseSaverBuilder:
             name=None,
             restore_sequentially=False,
             filename="model"):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring lists a type error for non-dictionary input, but the internal
+    # builder converts a list into a dictionary instead of raising; uniqueness errors come from
+    # the validation helper.
+    # Public entry point that builds the save and restore graph (or runs save and restore in
+    # eager mode) and returns a saver definition message. Takes a mapping from checkpoint names
+    # to variables or saveable objects, the reshape flag, the sharded flag, the maximum number
+    # of checkpoints to keep (none or zero means keep all files), the retention interval in
+    # hours (default 10000), an optional name scope, the sequential restore flag and the file
+    # name (default model). Simply forwards all arguments to the internal builder with both
+    # save and restore enabled and returns its result.
     """Builds save/restore graph nodes or runs save/restore in eager mode.
 
     Args:
@@ -505,6 +630,25 @@ class BaseSaverBuilder:
                       filename="model",
                       build_save=True,
                       build_restore=True):
+    # [FUNCTION DOC]
+    # HELPER: shared implementation behind the public build method, with switches to build only
+    # the save half or only the restore half (allowed only in eager mode).
+    # Inputs: mapping from names to variables or saveables (a list is converted to a mapping),
+    # reshape, sharded, maximum checkpoints to keep (none becomes zero), retention hours, name
+    # scope, sequential restore, file name (default model; a falsy value falls back to model),
+    # and the two build switches. Validates and slices the inputs into saveables, then under a
+    # name scope creates a filename placeholder with default value (and a second one named
+    # Const for backward compatibility), and the save and restore ops, sharded per device if
+    # requested. In eager mode returns a saver definition whose tensor names are the evaluated
+    # values (the restore op name is empty). In graph mode first makes sure that every
+    # partitioned variable stored in any graph collection has its concat op (creating it when
+    # its operation is missing), then returns a saver definition with the names of the created
+    # tensors and ops.
+    # Raises a value error if only one half is requested in graph mode, plus errors from the
+    # input validation. Side effects: adds ops to the default graph.
+    # KNOWN ISSUE: the commented-out assertion on the restore op name was disabled; also if
+    # build_save is false in graph mode the save tensor is never defined (guarded by the first
+    # check).
     """build() with option to only perform save and restore."""
     if not context.executing_eagerly() and (not build_save or
                                             not build_restore):
@@ -593,10 +737,21 @@ class BaseSaverBuilder:
 
 
 class BulkSaverBuilder(BaseSaverBuilder):
+  # [CLASS DOC]
+  # Saver builder variant that restores all saveables with one combined restore operation
+  # instead of one per saveable. Inherits everything else from the base builder, overriding only
+  # the bulk restore hook. No extra state.
   """SaverBuilder with support for bulk restoring multiple saveables."""
 
   def bulk_restore(self, filename_tensor, saveables, preferred_shard,
                    restore_sequentially):
+    # [FUNCTION DOC]
+    # Overrides the base behavior to restore everything in one call. Inputs: checkpoint path
+    # tensor, list of saveables, preferred shard and sequential flag (the last two are ignored;
+    # the single restore is internally sequential). Gathers the name, slice specification and
+    # data type of every spec of every saveable, then on the first CPU issues a single
+    # version 2 restore for all of them. Returns the list of restored tensors in spec order.
+    # Fails on unpacking if there are no specs at all. Side effect: adds one op to the graph.
 
     # Ignored: bulk restore is internally sequential.
     del restore_sequentially
@@ -612,6 +767,14 @@ class BulkSaverBuilder(BaseSaverBuilder):
 
 
 def _get_saver_or_default():
+  # [FUNCTION DOC]
+  # HELPER: used by the training scaffold and checkpoint hooks to share one Saver per graph.
+  # KNOWN ISSUE: the check that the created saver is not null is always true since the
+  # constructor never returns null.
+  # Looks in the savers collection of the default graph. Returns the single saver found. If
+  # none exists, creates a sharded Saver that tolerates having no variables, adds it to the
+  # collection and returns it. Raises a runtime error if more than one saver is registered.
+  # Side effect: may add to the graph collection.
   """Returns the saver from SAVERS collection, or creates a default one.
 
   This method is used by other members of the training module, such as
@@ -640,6 +803,18 @@ def _get_saver_or_default():
 
 @tf_export(v1=["train.Saver"])
 class Saver:
+  # [CLASS DOC]
+  # Legacy name-based checkpoint saver, exported as the version 1 train Saver. Adds save and
+  # restore ops for a set of variables or saveable objects to the graph and offers methods to
+  # run them in a session, to manage a rolling list of recent checkpoints (deleting old ones
+  # beyond a maximum, optionally keeping one per N hours), to maintain the checkpoint state
+  # file, and to export or convert the saver definition message. State: the variable list, the
+  # builder, the saver definition message, flags (reshape, sharded, sequential restore, built,
+  # empty, relative paths, step padding), the checkpoint format version, the list of recent
+  # checkpoints as pairs of path and timestamp, the list pending deletion, the next
+  # keep-forever time, and an optional second saver used for object-based checkpoints. Created
+  # directly by user code, or from a saver definition. Deprecated in favor of the object-based
+  # checkpoint API; works only partially in eager mode.
   # pylint: disable=line-too-long
   """Saves and restores variables.
 
@@ -795,6 +970,24 @@ class Saver:
                pad_step_number=False,
                save_relative_paths=False,
                filename=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says a type error is raised for an invalid variable list, but
+    # this constructor never raises it itself; it only comes (if at all) from the builder.
+    # Also the docstring says a saver with no variables raises unless empty is allowed, which
+    # holds only in graph mode when the build is not deferred.
+    # Constructor. Inputs: var_list (list of variables or saveables, or mapping from names to
+    # them; none means all saveable objects in the graph), reshape, sharded, maximum
+    # checkpoints to keep (default 5), retention hours (default 10000), name scope, sequential
+    # restore flag, an existing saver definition message to reuse, a builder (default: the
+    # bulk builder), defer-build flag, allow-empty flag, write format version (default 2),
+    # step-number padding flag, relative-paths flag, and an optional file name.
+    # On the first Saver created, records the current time in the module-level last-write
+    # timestamp under its lock. Raises a value error if building is deferred while a variable
+    # list is given, and a runtime error in eager mode when no variable list is given (eager
+    # mode also logs a deprecation warning and computes the next keep-forever time instead of
+    # building). In graph mode, unless deferred, builds the save and restore ops immediately.
+    # If a saver definition is present it is validated and its version overrides the given
+    # write version. Side effects: adds ops to the graph, logs, sets module-level state.
     """Creates a `Saver`.
 
     The constructor adds ops to save and restore variables.
@@ -941,15 +1134,36 @@ class Saver:
     self._object_restore_saver = None
 
   def build(self):
+    # [FUNCTION DOC]
+    # Builds the save and restore ops now, for savers created with a deferred build. Takes no
+    # inputs and returns nothing. Raises a runtime error in eager mode. Otherwise runs the
+    # internal build using the stored file name with both save and restore enabled; building
+    # twice is harmless since an already built saver returns early. Side effect: adds ops to
+    # the graph and sets the saver definition.
     if context.executing_eagerly():
       raise RuntimeError("Use save/restore instead of build in eager mode.")
     self._build(self._filename, build_save=True, build_restore=True)
 
   def _build_eager(self, checkpoint_path, build_save, build_restore):
+    # [FUNCTION DOC]
+    # HELPER: eager-mode entry used by save and restore to run the build with a concrete
+    # checkpoint path and the chosen halves. Simply forwards the path and the two switches to
+    # the internal build and returns nothing.
     self._build(
         checkpoint_path, build_save=build_save, build_restore=build_restore)
 
   def _build(self, checkpoint_path, build_save, build_restore):
+    # [FUNCTION DOC]
+    # HELPER: core builder of the saver definition. Inputs: file name to use (may be none), and
+    # switches for building the save and restore halves. In graph mode returns immediately if
+    # already built, otherwise marks it built. If there is no saver definition (or in eager
+    # mode) it creates the default bulk builder if none was given, defaults the variable list
+    # to all saveable objects, and handles an empty list by either marking the saver empty and
+    # returning (when allowed) or raising a value error saying there are no variables to save.
+    # Otherwise it asks the builder to produce the saver definition. If a definition was
+    # supplied together with a name, it prefixes the three tensor/op names in it with that
+    # name scope (the name doubles as an import scope). Finally validates the definition and,
+    # in graph mode, computes the next keep-forever time. Returns nothing; sets state.
     """Builds saver_def."""
     if not context.executing_eagerly():
       if self._is_built:
@@ -1001,6 +1215,10 @@ class Saver:
           time.time() + self.saver_def.keep_checkpoint_every_n_hours * 3600)
 
   def _check_saver_def(self):
+    # [FUNCTION DOC]
+    # HELPER: validates the saver definition. Raises a value error if it is not a saver
+    # definition message; in graph mode also raises a value error if the save tensor name or
+    # the restore op name is empty. Returns nothing; no side effects.
     if not isinstance(self.saver_def, saver_pb2.SaverDef):
       raise ValueError("saver_def must be a saver_pb2.SaverDef: %s" %
                        self.saver_def)
@@ -1013,6 +1231,9 @@ class Saver:
                          str(self.saver_def))
 
   def _CheckpointFilename(self, p):
+    # [FUNCTION DOC]
+    # HELPER: extracts the path from a recorded checkpoint entry. Input is a pair of file name
+    # and timestamp; returns the file name. No side effects.
     """Returns the checkpoint filename given a `(filename, time)` pair.
 
     Args:
@@ -1025,6 +1246,12 @@ class Saver:
     return name
 
   def _RecordLastCheckpoint(self, latest_save_path):
+    # [FUNCTION DOC]
+    # HELPER: bookkeeping after a successful save. Input: the path just written. Does nothing
+    # if the maximum to keep is zero. Otherwise removes any older entry with the same path,
+    # appends the path with the current time, and if the list exceeds the maximum moves the
+    # oldest entry to the list of checkpoints pending deletion. Returns nothing; mutates
+    # saver state.
     """Manages the list of the latest checkpoints."""
     if not self.saver_def.max_to_keep:
       return
@@ -1041,6 +1268,14 @@ class Saver:
       self._checkpoints_to_be_deleted.append(self._last_checkpoints.pop(0))
 
   def _MaybeDeleteOldCheckpoints(self, meta_graph_suffix="meta"):
+    # [FUNCTION DOC]
+    # HELPER: retention policy applied after each save. Input: suffix of the meta graph file
+    # (default meta). Takes at most one entry from the pending-deletion list (the oldest). If
+    # its timestamp is later than the next keep-forever time, it is kept and that time is
+    # advanced by the retention interval; otherwise the checkpoint files, including the meta
+    # graph file, are removed through the checkpoint management helper. Any failure while
+    # deleting is logged as a warning and ignored. Returns nothing. Note only one entry is
+    # processed per call. Side effects: deletes files, logs.
     """Deletes old checkpoints if necessary.
 
     `self._checkpoints_to_be_deleted` is going to contain checkpoints that are
@@ -1072,6 +1307,9 @@ class Saver:
         logging.warning("Ignoring: %s", str(e))
 
   def as_saver_def(self):
+    # [FUNCTION DOC]
+    # Returns the saver definition message of this saver (the stored object itself, not a
+    # copy); it may be none for a deferred or empty saver. No side effects.
     """Generates a `SaverDef` representation of this saver.
 
     Returns:
@@ -1080,6 +1318,12 @@ class Saver:
     return self.saver_def
 
   def to_proto(self, export_scope=None):
+    # [FUNCTION DOC]
+    # Converts the saver to a saver definition message for meta graph export. Input: optional
+    # name scope to strip. Without a scope returns the stored definition itself. With a scope,
+    # returns nothing if any of the filename tensor, save tensor or restore op names does not
+    # start with that scope; otherwise returns a copy with the scope removed from those three
+    # names. The stored definition is not modified.
     """Converts this `Saver` to a `SaverDef` protocol buffer.
 
     Args:
@@ -1108,6 +1352,11 @@ class Saver:
 
   @staticmethod
   def from_proto(saver_def, import_scope=None):
+    # [FUNCTION DOC]
+    # Static factory used when importing a meta graph. Inputs: a saver definition message and
+    # an optional import name scope. Returns a new Saver built around that definition, with the
+    # scope passed as the name (which prefixes the definition's names). Side effects: those of
+    # the constructor, including validation errors for an invalid definition.
     """Returns a `Saver` object created from `saver_def`.
 
     Args:
@@ -1121,6 +1370,9 @@ class Saver:
 
   @property
   def last_checkpoints(self):
+    # [FUNCTION DOC]
+    # Read-only property. Returns a new list of the paths of the checkpoints that have not yet
+    # been deleted, ordered from oldest to newest, usable as restore inputs. No side effects.
     """List of not-yet-deleted checkpoint filenames.
 
     You can pass any of the returned values to `restore()`.
@@ -1131,6 +1383,10 @@ class Saver:
     return list(self._CheckpointFilename(p) for p in self._last_checkpoints)
 
   def set_last_checkpoints(self, last_checkpoints):
+    # [FUNCTION DOC]
+    # Deprecated setter. Input: list of checkpoint paths. Replaces the recorded list with
+    # entries that all carry an infinite timestamp so they are never deleted by the
+    # keep-forever logic. Raises an assertion error if the input is not a list. Returns nothing.
     """DEPRECATED: Use set_last_checkpoints_with_time.
 
     Sets the list of old checkpoint filenames.
@@ -1148,6 +1404,10 @@ class Saver:
     self._last_checkpoints = [(s, np.inf) for s in last_checkpoints]
 
   def set_last_checkpoints_with_time(self, last_checkpoints_with_time):
+    # [FUNCTION DOC]
+    # Setter for the recorded checkpoint list. Input: list of pairs of path and timestamp. Stores
+    # that list directly (no copy). Raises an assertion error if it is not a list. Returns
+    # nothing.
     """Sets the list of old checkpoint filenames and timestamps.
 
     Args:
@@ -1161,6 +1421,11 @@ class Saver:
     self._last_checkpoints = last_checkpoints_with_time
 
   def recover_last_checkpoints(self, checkpoint_paths):
+    # [FUNCTION DOC]
+    # Rebuilds the recorded checkpoint list after a crash. Input: list of checkpoint paths. For
+    # each, looks up the modification time on disk; paths that no longer exist (not-found
+    # error) or yield no time are skipped. The surviving pairs of path and modification time
+    # replace the recorded list. Returns nothing. Side effect: reads file metadata.
     """Recovers the internal saver state after a crash.
 
     This method is useful for recovering the "self._last_checkpoints" state.
@@ -1193,6 +1458,26 @@ class Saver:
            write_state=True,
            strip_default_attrs=False,
            save_debug_info=False):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says a type error is raised if the session is not a Session,
+    # but this check is skipped in eager mode. Also, in graph mode with an empty saver and
+    # write_meta_graph true, the meta graph is still exported although nothing was saved.
+    # Runs the save op and manages checkpoint bookkeeping. Inputs: session (graph mode),
+    # save path prefix, optional global step (integer, tensor or tensor name; appended to the
+    # path, zero-padded to eight digits if padding is enabled), optional name of the checkpoint
+    # state file (default checkpoint), meta graph suffix (default meta), flags to write the
+    # meta graph (default true) and the checkpoint state (default true), strip default
+    # attributes, and save debug info. Warns when using the deprecated version 1 format.
+    # Raises a runtime error if the ops have not been built, a value error if the state file
+    # name has path components or collides with the save path (unless sharded), a type error
+    # for a non-session in graph mode, and a value error if the parent directory is missing
+    # when the file system reports not-found or failed-precondition (other errors of those
+    # kinds are re-raised). Unless the saver is empty it runs the save (feeding the file name),
+    # records the checkpoint, rewrites the state file and may delete old checkpoints. Then it
+    # records write duration and saved-training-time metrics (updating the module-level
+    # last-write time under its lock), writes the meta graph in graph mode, and records the
+    # checkpoint size metric. Returns the path prefix actually used, or nothing if the saver
+    # is empty. Side effects: files, metrics, logging, saver state.
     # pylint: disable=line-too-long
     """Saves variables.
 
@@ -1345,6 +1630,14 @@ class Saver:
                         clear_extraneous_savers=False,
                         strip_default_attrs=False,
                         save_debug_info=False):
+    # [FUNCTION DOC]
+    # Exports the default graph together with this saver's definition as a meta graph message.
+    # Inputs: optional output file name with path, list of collection keys to include, flag to
+    # write text instead of binary, optional name scope to strip, flags to clear device fields
+    # and to remove saver information not belonging to this saver, strip default attributes,
+    # and save debug info to a separate file. Serializes the default graph (with shapes) and
+    # delegates to the module-level export function. Returns the meta graph message; writes the
+    # file if a name is given. Errors (graph over 2 GB, eager mode) come from the delegate.
     # pylint: disable=line-too-long
     """Writes `MetaGraphDef` to save_path/filename.
 
@@ -1386,6 +1679,18 @@ class Saver:
     )
 
   def restore(self, sess, save_path):
+    # [FUNCTION DOC]
+    # Restores variables from a checkpoint. Inputs: a session (unused in eager mode, where it
+    # may be none) and the checkpoint path prefix. Returns nothing at once if the saver is
+    # empty. Raises a value error if the path is none or does not name an existing checkpoint.
+    # Otherwise logs the path and runs the restore op, feeding the path (in eager mode it
+    # builds and runs the restore half instead). If the op reports not-found: if the file is an
+    # object-based checkpoint, logs a warning, builds (or reuses the cached) helper saver that
+    # maps variable names to the checkpoint's keys, and restores through it; if it is not,
+    # re-raises the same kind of error with an explanatory message about a missing variable
+    # name or graph key. An invalid-argument error is re-raised with a message about a
+    # graph/checkpoint mismatch. On success records the read duration metric. Side effects:
+    # assigns variable values, logging, metrics, may create ops and set the cached helper saver.
     """Restores previously saved variables.
 
     This method runs the ops added by the constructor for restoring variables.
@@ -1463,6 +1768,11 @@ class Saver:
 
   @staticmethod
   def _add_collection_def(meta_graph_def, key, export_scope=None):
+    # [FUNCTION DOC]
+    # HELPER: static wrapper kept for meta graph export code. Inputs: a meta graph message, a
+    # collection key (standard graph key or user string) and an optional name scope to strip.
+    # Delegates to the meta graph module to add that collection to the message. Mutates the
+    # message; returns nothing.
     """Adds a collection to MetaGraphDef protocol buffer.
 
     Args:
@@ -1479,6 +1789,17 @@ def import_meta_graph(meta_graph_or_file,
                       clear_devices=False,
                       import_scope=None,
                       **kwargs):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring examples use old top-level names (session, import function,
+  # global variable initializer) that no longer exist at the top level; they only work under
+  # the compatibility version 1 namespace.
+  # Imports a saved meta graph into the current default graph. Inputs: a meta graph message or
+  # the path of a file containing one, a flag to clear device fields, an optional import name
+  # scope (only used when importing from a message) and extra keyword arguments forwarded to
+  # the importer. Adds the graph nodes and collections, then returns a Saver built from the
+  # stored saver definition, or a default Saver if only variables exist, or nothing if there
+  # is nothing to restore. Raises a runtime error in eager mode. Side effect: modifies the
+  # default graph.
   """Recreates a Graph saved in a `MetaGraphDef` proto.
 
   This function takes a `MetaGraphDef` protocol buffer as input. If
@@ -1594,6 +1915,13 @@ def _import_meta_graph_with_return_elements(meta_graph_or_file,
                                             import_scope=None,
                                             return_elements=None,
                                             **kwargs):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation of the meta graph import, also used by callers that need
+  # specific graph elements. Inputs: meta graph message or file path, clear-devices flag,
+  # import scope, optional list of names of elements to return, and extra keyword arguments
+  # forwarded to the scoped importer. Raises a runtime error in eager mode. Reads the file if
+  # a path is given, imports into the default graph, then creates a saver from the imported
+  # variables. Returns a pair: the saver (possibly none) and the list of requested elements.
   """Import MetaGraph, and return both a saver and returned elements."""
   if context.executing_eagerly():
     raise RuntimeError("Exporting/importing meta graphs is not supported when "
@@ -1619,6 +1947,13 @@ def _import_meta_graph_with_return_elements(meta_graph_or_file,
 
 def _create_saver_from_imported_meta_graph(meta_graph_def, import_scope,
                                            imported_vars):
+  # [FUNCTION DOC]
+  # HELPER: used by the meta graph import to produce the matching saver. Inputs: the meta
+  # graph message, the import scope and the mapping from names to imported variables. If the
+  # message has a saver definition, the scope is inferred from the first imported variable
+  # (its full name minus its original key) when any exist, and a Saver is built from the
+  # definition with that scope as its name. Without a definition, returns a default Saver if
+  # saveable objects exist in the scope, otherwise logs a message and returns nothing.
   """Return a saver for restoring variable values to an imported MetaGraph."""
   if meta_graph_def.HasField("saver_def"):
     # Infer the scope that is prepended by `import_scoped_meta_graph`.
@@ -1655,6 +1990,15 @@ def export_meta_graph(filename=None,
                       strip_default_attrs=False,
                       save_debug_info=False,
                       **kwargs):
+  # [FUNCTION DOC]
+  # Exports a graph, saver definition and collections as a meta graph message. Inputs: optional
+  # output file name, meta info message, graph definition, saver definition, list of collection
+  # keys, text flag, graph (default is the default graph), export scope, flags to clear
+  # devices, remove unrelated saver information, strip default attributes and save debug
+  # info, plus extra keyword arguments forwarded to the scoped exporter. Raises a runtime
+  # error in eager mode unless both a graph definition and a graph are supplied; a graph over
+  # 2 GB raises a value error in the delegate. Returns the meta graph message and writes it
+  # to the file when a name is given.
   # pylint: disable=line-too-long
   """Returns `MetaGraphDef` proto.
 
@@ -1728,6 +2072,12 @@ def export_meta_graph(filename=None,
 
 
 def _wrap_restore_error_with_msg(err, extra_verbiage):
+  # [FUNCTION DOC]
+  # HELPER: used by the restore method to make restore failures clearer. Inputs: a TensorFlow
+  # error and a phrase describing the probable cause. Builds a message saying the restore
+  # failed likely because of that cause and embeds the original message. Returns a new error
+  # of the same class carrying the original node definition and op plus the new message
+  # (the caller raises it). No other side effects.
   err_msg = ("Restoring from checkpoint failed. This is most likely "
              "due to {} from the checkpoint. Please ensure that you "
              "have not altered the graph expected based on the checkpoint. "
@@ -1743,6 +2093,12 @@ ops.register_proto_function(
 
 
 def object_graph_key_mapping(checkpoint_path):
+  # [FUNCTION DOC]
+  # Reads an object-based checkpoint and returns a mapping from each variable's full name to its
+  # checkpoint key. Input: the checkpoint path (string). Opens a checkpoint reader, loads the
+  # serialized object graph tensor, parses it, and collects the full name and key of every
+  # attribute of every node. Raises a not-found error if the checkpoint lacks the object graph
+  # tensor (i.e. is not object-based). Side effect: reads the checkpoint file.
   """Return name to key mappings from the checkpoint.
 
   Args:
@@ -1767,6 +2123,19 @@ def saver_from_object_based_checkpoint(checkpoint_path,
                                        builder=None,
                                        names_to_keys=None,
                                        cached_saver=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring lists a value error and a not-found error but, when a cached
+  # saver is given, the saveable specs are still renamed in place, mutating the current
+  # graph's saveables even though the cached saver is what is returned.
+  # Builds a Saver that reads a name-based request from an object-based checkpoint. Inputs:
+  # checkpoint path, optional variable list (default: all saveable objects), optional builder
+  # (default: bulk builder, otherwise unused), optional mapping from names to checkpoint keys
+  # (default: read from the checkpoint) and an optional previously built saver to reuse.
+  # Raises a value error if the mapping must be read but the checkpoint is not object-based,
+  # and a not-found error listing missing, extra and matching names if any current variable
+  # name is absent from the mapping. Otherwise renames each spec to its checkpoint key and
+  # returns the cached saver if given, else a new Saver over the saveables. Side effects:
+  # mutates spec names; creating a Saver adds graph ops.
   """Return a `Saver` which reads from an object-based checkpoint.
 
   This function validates that all variables in the variables list are remapped

@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Test module for the checkpoint Saver with a single huge variable. It defines one test case
+# checking that saving a 2 GB unpartitioned variable in the version 1 format fails with an
+# invalid-argument error. Separate from the main saver tests because large allocations are
+# flaky under the thread sanitizer. No import-time side effects; running it as a script starts
+# the test runner.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,11 +34,22 @@ from tensorflow.python.training import saver
 
 
 class SaverLargeVariableTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the Saver's behavior when a single variable is too large to serialize.
+  # Kept in a separate file from the main saver tests because huge allocations are flaky under
+  # the thread sanitizer. It has no shared fixtures beyond the base test case's temp directory.
 
   # NOTE: This is in a separate file from saver_test.py because the
   # large allocations do not play well with TSAN, and cause flaky
   # failures.
   def testLargeVariable(self):
+    # [FUNCTION DOC]
+    # Scenario: in a fresh graph and session, on the first CPU device, create an unpartitioned
+    # boolean variable of exactly 2 GB (shape 2 x 1024 x 1024 x 1024). A Saver is built over a
+    # mapping from the variable's op name to the variable, using the legacy version 1 checkpoint
+    # format. After running the variable initializer, saving is attempted. Expected: save raises
+    # an invalid-argument error whose message says the tensor slice is too large to serialize,
+    # since the checkpoint adds header metadata on top of the 2 GB payload.
     save_path = os.path.join(self.get_temp_dir(), "large_variable")
     with session.Session("", graph=ops.Graph()) as sess:
       # Declare a variable that is exactly 2GB. This should fail,
