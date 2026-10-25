@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Numeric-safety utilities for graph code: asserting that a tensor holds only finite values and
+# adding finiteness checks to every floating point tensor of the default graph.
+# Exposes the legacy (v1) and current (v2) finite-value assertion functions plus a graph-wide
+# check-numerics helper (v1 only). All of them build on the check-numerics op and control
+# dependencies. Import-time side effects: only the public-API export and dispatch/deprecation
+# decorator registrations of the functions below.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +36,13 @@ from tensorflow.python.util.tf_export import tf_export
 @dispatch.add_dispatch_support
 @deprecation.deprecated_endpoints("verify_tensor_all_finite")
 def verify_tensor_all_finite(t=None, msg=None, name=None, x=None, message=None):
+  # [FUNCTION DOC]
+  # Deprecated v1 wrapper for asserting that a tensor contains no NaN or infinite values.
+  # Inputs: t (tensor to check, optional only because x may be used instead), msg (failure
+  # message), name (optional op name), x (deprecated alias for t), message (deprecated alias for
+  # msg). The alias lookup picks the alias value or the primary one and complains if both are given.
+  # Output: the same tensor, made to depend on the finiteness check. Raises an invalid-argument
+  # error at run time if non-finite values exist. Side effects: deprecation warnings only.
   """Assert that the tensor does not contain any NaN's or Inf's.
 
   Args:
@@ -50,6 +64,13 @@ def verify_tensor_all_finite(t=None, msg=None, name=None, x=None, message=None):
 @tf_export("debugging.assert_all_finite", v1=[])
 @dispatch.add_dispatch_support
 def verify_tensor_all_finite_v2(x, message, name=None):
+  # [FUNCTION DOC]
+  # Asserts that a tensor has no NaN or infinite values.
+  # Inputs: x (tensor or value convertible to one), message (text reported on failure), name
+  # (optional name scope, default "VerifyFinite").
+  # Output: a tensor with the same value as x, colocated with x and gated by a control dependency
+  # on a check-numerics op, so any consumer triggers the check. A run-time invalid-argument error
+  # is raised when non-finite values are found. No other side effects beyond adding graph ops.
   """Assert that the tensor does not contain any NaN's or Inf's.
 
   >>> @tf.function
@@ -80,6 +101,14 @@ def verify_tensor_all_finite_v2(x, message, name=None):
 
 @tf_export(v1=["add_check_numerics_ops"])
 def add_check_numerics_ops():
+  # [FUNCTION DOC]
+  # Adds a check-numerics op for every half, float or double output of every op in the default
+  # graph, chaining them with control dependencies so each check runs after the previous ones
+  # (relying on the graph's operation list being in creation order). The message of each check is
+  # the op name plus the output index.
+  # Takes no inputs. Returns a grouped op that depends on the last check (and thereby all).
+  # Raises a runtime error when eager execution is enabled, and a value error if any such op lives
+  # inside a control flow context (conditional or loop). Side effect: mutates the default graph.
   """Connect a `tf.debugging.check_numerics` to every floating point tensor.
 
   `check_numerics` operations themselves are added for each `half`, `float`,
