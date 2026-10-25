@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# Python file IO layer for TensorFlow that wraps the C++ FileSystem API (through the native
+# file io extension). It provides the FileIO class (a file-like object with read, write, seek,
+# tell, line iteration and flush), and module level helpers for existence checks, deletion,
+# directory creation and listing, glob matching, copy, rename, atomic writes, walking directory
+# trees, stat, file comparison, crc32 computation, path joining and listing registered
+# filesystem schemes. Many functions are exported to the public tf.io.gfile namespace, with
+# older v1 aliases that simply forward to the v2 versions. Paths may be strings, bytes or
+# path-like objects and may carry a URI scheme to select a non-local filesystem.
+# Import time side effects: only registers API exports through the export decorator; no flags.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,6 +42,13 @@ _DEFAULT_BLOCK_SIZE = 16 * 1024 * 1024
 
 
 class FileIO(object):
+  # [CLASS DOC]
+  # File-like object over the C++ filesystem layer, exported as the public gfile file class.
+  # State: the path, the mode string, the text encoding, a lazily created buffered input
+  # stream used for reading, a lazily created writable file used for writing, a flag for bytes
+  # mode and two flags saying whether reading and writing are permitted by the mode. Instances
+  # are created with a path and a mode and used directly or as a context manager; they also
+  # iterate line by line. Native handles are opened only on first read or write.
   """FileIO class that exposes methods to read / write to / from files.
 
   The constructor takes the following arguments:
@@ -46,6 +63,12 @@ class FileIO(object):
   """
 
   def __init__(self, name, mode, encoding="utf-8"):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: name (path string or path-like object), mode (one of r, w, a, r+,
+    # w+, a+, optionally with b for bytes mode), encoding (text encoding, default utf-8).
+    # Records the arguments, clears the native handles and computes which of reading and
+    # writing the mode allows. Does not open the file. Raises an invalid-argument error if
+    # the mode with b removed is not one of the six valid modes. Returns nothing.
     self.__name = name
     self.__mode = mode
     self.__encoding = encoding
@@ -61,15 +84,24 @@ class FileIO(object):
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the path the file object was created with.
     """Returns the file name."""
     return self.__name
 
   @property
   def mode(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the mode string given at construction (including any b).
     """Returns the mode in which the file was opened."""
     return self.__mode
 
   def _preread_check(self):
+    # [FUNCTION DOC]
+    # HELPER: guards and lazily initializes the read path for FileIO read-style methods.
+    # If no read buffer exists yet, verifies the mode allows reading (otherwise raises a
+    # permission-denied error) and opens a buffered input stream of 512 KiB on the path.
+    # Returns nothing; side effect is creating the native input stream.
     if not self._read_buf:
       if not self._read_check_passed:
         raise errors.PermissionDeniedError(None, None,
@@ -78,6 +110,11 @@ class FileIO(object):
           compat.path_to_str(self.__name), 1024 * 512)
 
   def _prewrite_check(self):
+    # [FUNCTION DOC]
+    # HELPER: guards and lazily initializes the write path for FileIO write-style methods.
+    # If no writable file exists yet, verifies the mode allows writing (otherwise raises a
+    # permission-denied error) and opens a native writable file with the path and mode.
+    # Returns nothing; side effect is creating (and possibly truncating) the file.
     if not self._writable_file:
       if not self._write_check_passed:
         raise errors.PermissionDeniedError(None, None,
@@ -86,22 +123,40 @@ class FileIO(object):
           compat.path_to_bytes(self.__name), compat.as_bytes(self.__mode))
 
   def _prepare_value(self, val):
+    # [FUNCTION DOC]
+    # HELPER: converts data read from the native stream to the type the mode promises.
+    # Input val is bytes or text. Returns bytes (encoded with the file encoding) in bytes mode,
+    # otherwise a text string decoded with the file encoding. No side effects.
     if self._binary_mode:
       return compat.as_bytes(val, encoding=self.__encoding)
     else:
       return compat.as_str_any(val, encoding=self.__encoding)
 
   def size(self):
+    # [FUNCTION DOC]
+    # Returns the file length in bytes by querying filesystem statistics for the path (not the
+    # open handle), so unflushed written data is not counted. Raises filesystem errors if the
+    # path cannot be stat-ed. Takes no arguments.
     """Returns the size of the file."""
     return stat(self.__name).length
 
   def write(self, file_content):
+    # [FUNCTION DOC]
+    # Appends file_content (text or bytes) to the file. The content is converted to bytes with
+    # the file encoding. Opens the writable file on first use; raises a permission-denied error
+    # if the mode does not allow writing. Data may stay buffered until flush or close.
+    # Returns nothing.
     """Writes file_content to the file. Appends to the end of the file."""
     self._prewrite_check()
     self._writable_file.append(
         compat.as_bytes(file_content, encoding=self.__encoding))
 
   def read(self, n=-1):
+    # [FUNCTION DOC]
+    # Reads from the current position. Input n is a byte count; the default of minus one means
+    # read to the end, computed as file size minus current position. Returns bytes in bytes
+    # mode or decoded text otherwise. Raises permission-denied if the mode is not readable.
+    # Side effect: opens the input stream if needed and advances the read position.
     """Returns the contents of a file as a string.
 
     Starts reading from current position in file.
@@ -124,6 +179,12 @@ class FileIO(object):
       None, "position is deprecated in favor of the offset argument.",
       "position")
   def seek(self, offset=None, whence=0, position=None):
+    # [FUNCTION DOC]
+    # Moves the read position. Inputs: offset (byte count), whence (0 start of file, 1 relative
+    # to current position, 2 relative to end), position (deprecated alias of offset). Raises a
+    # type error if neither or both of offset and position are given, and an invalid-argument
+    # error for any other whence. Opens the input stream if needed, so it needs a readable
+    # mode. Returns nothing.
     # TODO(jhseu): Delete later. Used to omit `position` from docs.
     # pylint: disable=g-doc-args
     """Seeks to the offset in the file.
@@ -165,11 +226,19 @@ class FileIO(object):
     self._read_buf.seek(offset)
 
   def readline(self):
+    # [FUNCTION DOC]
+    # Reads and returns the next line including its newline, as bytes in bytes mode or text
+    # otherwise; returns an empty value at end of file. Opens the input stream if needed and
+    # advances the position. Raises permission-denied if the mode is not readable.
     r"""Reads the next line, keeping \n. At EOF, returns ''."""
     self._preread_check()
     return self._prepare_value(self._read_buf.readline())
 
   def readlines(self):
+    # [FUNCTION DOC]
+    # Reads all remaining lines by calling the line reader until it returns empty. Returns a
+    # list of lines (each keeping its newline). Advances the position to end of file; raises
+    # permission-denied if the mode is not readable.
     """Returns all lines from the file in a list."""
     self._preread_check()
     lines = []
@@ -181,6 +250,10 @@ class FileIO(object):
     return lines
 
   def tell(self):
+    # [FUNCTION DOC]
+    # Returns the current position as a byte offset. In readable modes it asks the input
+    # stream; otherwise it opens the writable file and asks that. May open native handles as a
+    # side effect and can raise permission-denied if the handle cannot be created.
     """Returns the current position in the file."""
     if self._read_check_passed:
       self._preread_check()
@@ -191,26 +264,43 @@ class FileIO(object):
       return self._writable_file.tell()
 
   def __enter__(self):
+    # [FUNCTION DOC]
+    # Context manager entry: returns the file object itself. No side effects.
     """Make usable with "with" statement."""
     return self
 
   def __exit__(self, unused_type, unused_value, unused_traceback):
+    # [FUNCTION DOC]
+    # Context manager exit: closes the file; the exception information arguments are ignored
+    # and exceptions are not suppressed. Returns nothing.
     """Make usable with "with" statement."""
     self.close()
 
   def __iter__(self):
+    # [FUNCTION DOC]
+    # Iterator protocol: the file object is its own iterator, yielding lines. Returns self.
     return self
 
   def __next__(self):
+    # [FUNCTION DOC]
+    # Iterator step: reads the next line and returns it; raises the stop-iteration signal when
+    # the line reader returns an empty value (end of file). Advances the read position.
     retval = self.readline()
     if not retval:
       raise StopIteration()
     return retval
 
   def next(self):
+    # [FUNCTION DOC]
+    # HELPER: legacy Python 2 style alias for the iterator step; delegates to the next-line
+    # method and returns the same line or raises the same stop-iteration signal.
     return self.__next__()
 
   def flush(self):
+    # [FUNCTION DOC]
+    # Flushes buffered written data out of the process if a writable file is open; does
+    # nothing otherwise (it never opens one). No guarantee of durability on disk. Returns
+    # nothing.
     """Flushes the Writable file.
 
     This only ensures that the data has made its way out of the process without
@@ -221,6 +311,10 @@ class FileIO(object):
       self._writable_file.flush()
 
   def close(self):
+    # [FUNCTION DOC]
+    # Releases the input stream and, if a writable file is open, closes it (which flushes it)
+    # and clears it. Safe to call repeatedly. Later reads or writes reopen the handles.
+    # Returns nothing.
     r"""Closes the file.
 
     Should be called for the WritableFile to be flushed.
@@ -242,12 +336,20 @@ class FileIO(object):
       self._writable_file = None
 
   def seekable(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: always returns true even for write-only modes, where seeking is not
+    # supported because seek only works on the read stream.
+    # Reports that the file supports random access; takes no arguments and has no side effects.
     """Returns True as FileIO supports random access ops of seek()/tell()"""
     return True
 
 
 @tf_export("io.gfile.exists")
 def file_exists_v2(path):
+  # [FUNCTION DOC]
+  # Public existence check. Input path is a string, bytes or path-like object (URI schemes
+  # allowed). Returns true if the path exists (file or directory), false if the filesystem
+  # reports not-found. Other filesystem errors propagate to the caller. No side effects.
   """Determines whether a path exists or not.
 
   >>> with open("/tmp/x", "w") as f:
@@ -295,6 +397,9 @@ def file_exists_v2(path):
 
 @tf_export(v1=["gfile.Exists"])
 def file_exists(filename):
+  # [FUNCTION DOC]
+  # HELPER: version 1 alias of the existence check; forwards to the v2 function and returns
+  # its boolean result. Its docstring is assigned from the v2 function after definition.
   return file_exists_v2(filename)
 
 
@@ -303,6 +408,9 @@ file_exists.__doc__ = file_exists_v2.__doc__
 
 @tf_export(v1=["gfile.Remove"])
 def delete_file(filename):
+  # [FUNCTION DOC]
+  # HELPER: version 1 alias that forwards to the v2 delete function. Input is the path of the
+  # file to delete. Returns nothing; filesystem errors such as not-found propagate.
   """Deletes the file located at 'filename'.
 
   Args:
@@ -317,6 +425,9 @@ def delete_file(filename):
 
 @tf_export("io.gfile.remove")
 def delete_file_v2(path):
+  # [FUNCTION DOC]
+  # Deletes the file at path (string, bytes or path-like). Returns nothing. Side effect:
+  # removes the file from the filesystem. Filesystem errors, such as not-found, propagate.
   """Deletes the path located at 'path'.
 
   Args:
@@ -330,6 +441,12 @@ def delete_file_v2(path):
 
 
 def read_file_to_string(filename, binary_mode=False):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the file object is never closed explicitly; it relies on garbage collection
+  # to release the native stream.
+  # Reads the whole file at filename. If binary_mode is true (default false) the file is
+  # opened in bytes mode and bytes are returned, otherwise text is returned. Filesystem errors
+  # such as not-found propagate.
   """Reads the entire contents of a file to a string.
 
   Args:
@@ -352,6 +469,9 @@ def read_file_to_string(filename, binary_mode=False):
 
 
 def write_string_to_file(filename, file_content):
+  # [FUNCTION DOC]
+  # Creates or truncates the file at filename and writes file_content (text or bytes) into it,
+  # closing it afterwards. Returns nothing. Filesystem errors propagate.
   """Writes a string to a given file.
 
   Args:
@@ -367,6 +487,9 @@ def write_string_to_file(filename, file_content):
 
 @tf_export(v1=["gfile.Glob"])
 def get_matching_files(filename):
+  # [FUNCTION DOC]
+  # HELPER: version 1 alias forwarding to the v2 glob function. Input is one glob pattern or
+  # an iterable of patterns. Returns the list of matching file names as strings.
   """Returns a list of files that match the given pattern(s).
 
   Args:
@@ -384,6 +507,11 @@ def get_matching_files(filename):
 
 @tf_export("io.gfile.glob")
 def get_matching_files_v2(pattern):
+  # [FUNCTION DOC]
+  # Glob expansion. Input pattern is a string, or any other iterable of string patterns (a
+  # non-string is iterated and the results are concatenated in order, without de-duplication).
+  # Each result is converted from bytes to text. Returns a list of matching names. Filesystem
+  # errors, including not-found for invalid directories, propagate.
   r"""Returns a list of files that match the given pattern(s).
 
   The patterns are defined as strings. Supported patterns are defined
@@ -453,6 +581,9 @@ def get_matching_files_v2(pattern):
 
 @tf_export(v1=["gfile.MkDir"])
 def create_dir(dirname):
+  # [FUNCTION DOC]
+  # HELPER: version 1 alias forwarding to the v2 directory creation. Creates one directory;
+  # parents must already exist. Returns nothing; filesystem errors propagate.
   """Creates a directory with the name `dirname`.
 
   Args:
@@ -469,6 +600,9 @@ def create_dir(dirname):
 
 @tf_export("io.gfile.mkdir")
 def create_dir_v2(path):
+  # [FUNCTION DOC]
+  # Creates a single directory at path (string, bytes or path-like); parents must exist.
+  # Returns nothing. Side effect: new directory on the filesystem. Errors propagate.
   """Creates a directory with the name given by `path`.
 
   Args:
@@ -485,6 +619,8 @@ def create_dir_v2(path):
 
 @tf_export(v1=["gfile.MakeDirs"])
 def recursive_create_dir(dirname):
+  # [FUNCTION DOC]
+  # HELPER: version 1 alias forwarding to the v2 recursive directory creation. Returns nothing.
   """Creates a directory and all parent/intermediate directories.
 
   It succeeds if dirname already exists and is writable.
@@ -500,6 +636,9 @@ def recursive_create_dir(dirname):
 
 @tf_export("io.gfile.makedirs")
 def recursive_create_dir_v2(path):
+  # [FUNCTION DOC]
+  # Creates the directory at path together with any missing parents; succeeds if it already
+  # exists. Returns nothing. Side effect: directories created. Filesystem errors propagate.
   """Creates a directory and all parent/intermediate directories.
 
   It succeeds if path already exists and is writable.
@@ -515,6 +654,11 @@ def recursive_create_dir_v2(path):
 
 @tf_export("io.gfile.copy")
 def copy_v2(src, dst, overwrite=False):
+  # [FUNCTION DOC]
+  # Copies the file src to dst. Inputs: src and dst paths (string, bytes or path-like) and
+  # overwrite (default false), which allows replacing an existing destination file. Only files
+  # can be copied, not directories. Returns nothing. Side effect: creates or replaces dst.
+  # Filesystem errors, such as an existing destination without overwrite, propagate.
   """Copies data from `src` to `dst`.
 
   >>> with open("/tmp/x", "w") as f:
@@ -584,6 +728,9 @@ def copy_v2(src, dst, overwrite=False):
 
 @tf_export(v1=["gfile.Copy"])
 def copy(oldpath, newpath, overwrite=False):
+  # [FUNCTION DOC]
+  # HELPER: version 1 alias of the copy function with differently named arguments; forwards
+  # oldpath, newpath and overwrite to the v2 version. Returns nothing.
   copy_v2(oldpath, newpath, overwrite)
 
 
@@ -592,6 +739,9 @@ copy.__doc__ = copy_v2.__doc__
 
 @tf_export(v1=["gfile.Rename"])
 def rename(oldname, newname, overwrite=False):
+  # [FUNCTION DOC]
+  # HELPER: version 1 alias forwarding to the v2 rename. Inputs: old path, new path, and
+  # overwrite flag (default false). Returns nothing; errors propagate.
   """Rename or move a file / directory.
 
   Args:
@@ -608,6 +758,10 @@ def rename(oldname, newname, overwrite=False):
 
 @tf_export("io.gfile.rename")
 def rename_v2(src, dst, overwrite=False):
+  # [FUNCTION DOC]
+  # Renames or moves a file or directory from src to dst. overwrite (default false) controls
+  # whether an existing dst may be replaced. Returns nothing. Side effect: filesystem change.
+  # Filesystem errors propagate.
   """Rename or move a file / directory.
 
   Args:
@@ -624,6 +778,12 @@ def rename_v2(src, dst, overwrite=False):
 
 
 def atomic_write_string_to_file(filename, contents, overwrite=True):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: when the filesystem lacks atomic move, the contents are written directly and
+  # the overwrite flag is ignored, so an existing file is replaced and the write is not atomic.
+  # Writes contents to filename via a uniquely named temporary file that is then renamed into
+  # place (overwrite, default true, is passed to the rename). If the rename fails with a
+  # filesystem error, the temporary file is deleted and the error re-raised. Returns nothing.
   """Writes to `filename` atomically.
 
   This means that when `filename` appears in the filesystem, it will contain
@@ -652,6 +812,8 @@ def atomic_write_string_to_file(filename, contents, overwrite=True):
 
 @tf_export(v1=["gfile.DeleteRecursively"])
 def delete_recursively(dirname):
+  # [FUNCTION DOC]
+  # HELPER: version 1 alias forwarding to the v2 recursive delete. Returns nothing.
   """Deletes everything under dirname recursively.
 
   Args:
@@ -665,6 +827,9 @@ def delete_recursively(dirname):
 
 @tf_export("io.gfile.rmtree")
 def delete_recursively_v2(path):
+  # [FUNCTION DOC]
+  # Removes the directory at path and everything under it. Returns nothing. Side effect:
+  # destructive filesystem change. Filesystem errors propagate.
   """Deletes everything under path recursively.
 
   Args:
@@ -678,6 +843,8 @@ def delete_recursively_v2(path):
 
 @tf_export(v1=["gfile.IsDirectory"])
 def is_directory(dirname):
+  # [FUNCTION DOC]
+  # HELPER: version 1 alias forwarding to the v2 directory check; returns a boolean.
   """Returns whether the path is a directory or not.
 
   Args:
@@ -691,6 +858,9 @@ def is_directory(dirname):
 
 @tf_export("io.gfile.isdir")
 def is_directory_v2(path):
+  # [FUNCTION DOC]
+  # Returns true if path is a directory. Any filesystem error (for instance a missing path) is
+  # swallowed and reported as false. No side effects.
   """Returns whether the path is a directory or not.
 
   Args:
@@ -706,6 +876,10 @@ def is_directory_v2(path):
 
 
 def has_atomic_move(path):
+  # [FUNCTION DOC]
+  # Asks the filesystem owning path whether renames are atomic. Returns true or false; if the
+  # query raises a filesystem error the function assumes true. Used to decide whether to write
+  # through a temporary file. No side effects.
   """Checks whether the file system supports atomic moves.
 
   Returns whether or not the file system of the given path supports the atomic
@@ -731,6 +905,9 @@ def has_atomic_move(path):
 
 @tf_export(v1=["gfile.ListDirectory"])
 def list_directory(dirname):
+  # [FUNCTION DOC]
+  # HELPER: version 1 alias forwarding to the v2 directory listing. Returns a list of entry
+  # names as strings; raises not-found if the directory does not exist.
   """Returns a list of entries contained within a directory.
 
   The list is in arbitrary order. It does not contain the special entries "."
@@ -750,6 +927,10 @@ def list_directory(dirname):
 
 @tf_export("io.gfile.listdir")
 def list_directory_v2(path):
+  # [FUNCTION DOC]
+  # Lists the entries of directory path in arbitrary order, excluding the current and parent
+  # entries. Raises a not-found error if path is not a directory. Returns a list of names
+  # converted to text. No side effects.
   """Returns a list of entries contained within a directory.
 
   The list is in arbitrary order. It does not contain the special entries "."
@@ -780,6 +961,11 @@ def list_directory_v2(path):
 
 @tf_export("io.gfile.join")
 def join(path, *paths):
+  # [FUNCTION DOC]
+  # Joins path components. If the first component contains a scheme separator after its first
+  # character, the pieces are joined like a URL using forward slashes on every platform;
+  # otherwise the native path join is used. Inputs: path (string or path-like) and further
+  # string components. Returns the joined path. No side effects.
   r"""Join one or more path components intelligently.
 
   TensorFlow specific filesystems will be joined
@@ -818,6 +1004,11 @@ def join(path, *paths):
 
 @tf_export(v1=["gfile.Walk"])
 def walk(top, in_order=True):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring describes a generator with yields, but this wrapper returns the
+  # generator produced by the v2 walk (equivalent for callers). The in_order flag is passed as
+  # the top-down flag.
+  # HELPER: version 1 alias forwarding to the v2 walk. Inputs: top directory and in_order flag.
   """Recursive directory tree generator for directories.
 
   Args:
@@ -836,6 +1027,16 @@ def walk(top, in_order=True):
 
 @tf_export("io.gfile.walk")
 def walk_v2(top, topdown=True, onerror=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: when listing the top directory fails with not-found and an onerror callback is
+  # supplied, the callback is called but execution then continues with an undefined listing,
+  # causing an unbound-local error if the callback returns instead of raising. The docstring
+  # also says errors while listing are ignored, which only holds when no callback is given.
+  # Generator that walks a directory tree. Inputs: top (directory), topdown (default true:
+  # yield a directory before its children, else after), onerror (optional callback called with
+  # the not-found error). Yields a triple of directory path, list of subdirectory names and
+  # list of file names, recursing into each subdirectory. Returns silently if top is missing
+  # and there is no callback.
   """Recursive directory tree generator for directories.
 
   Args:
@@ -853,6 +1054,11 @@ def walk_v2(top, topdown=True, onerror=None):
   """
 
   def _make_full_path(parent, item):
+    # [FUNCTION DOC]
+    # HELPER: builds the full path of a listed entry for the directory walk. If the entry name
+    # starts with the path separator it is concatenated onto the parent (ensuring a trailing
+    # separator) instead of being joined, because joining would discard the parent. Returns
+    # the full path string.
     # Since `join` discards paths before one that starts with the path
     # separator (https://docs.python.org/3/library/os.path.html#join),
     # we have to manually handle that case as `/` is a valid character on GCS.
@@ -894,6 +1100,8 @@ def walk_v2(top, topdown=True, onerror=None):
 
 @tf_export(v1=["gfile.Stat"])
 def stat(filename):
+  # [FUNCTION DOC]
+  # HELPER: version 1 alias forwarding to the v2 stat. Returns a file statistics structure.
   """Returns file statistics for a given path.
 
   Args:
@@ -910,6 +1118,9 @@ def stat(filename):
 
 @tf_export("io.gfile.stat")
 def stat_v2(path):
+  # [FUNCTION DOC]
+  # Returns the file statistics structure (including length) for path, which is converted to
+  # a string first. Filesystem errors propagate. No side effects.
   """Returns file statistics for a given path.
 
   Args:
@@ -925,6 +1136,10 @@ def stat_v2(path):
 
 
 def filecmp(filename_a, filename_b):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the two file objects opened to read sizes are never closed explicitly.
+  # Compares two files: returns false at once if sizes differ, otherwise compares the crc32
+  # values of their full contents and returns true if equal. Filesystem errors propagate.
   """Compare two files, returning True if they are the same, False otherwise.
 
   We check size first and return False quickly if the files are different sizes.
@@ -954,6 +1169,11 @@ def filecmp(filename_a, filename_b):
 
 
 def file_crc32(filename, block_size=_DEFAULT_BLOCK_SIZE):
+  # [FUNCTION DOC]
+  # Computes the crc32 of the whole file, reading it in blocks. Inputs: filename and
+  # block_size (bytes per read, default 16 MiB; the docstring says minus one reads at once).
+  # Returns the checksum as a hexadecimal string (masked to 32 bits). Filesystem errors
+  # propagate.
   """Get the crc32 of the passed file.
 
   The crc32 of a file can be used for error checking; two files with the same
@@ -979,6 +1199,9 @@ def file_crc32(filename, block_size=_DEFAULT_BLOCK_SIZE):
 
 @tf_export("io.gfile.get_registered_schemes")
 def get_registered_schemes():
+  # [FUNCTION DOC]
+  # Returns the list of filesystem URI schemes currently registered with the native layer
+  # (the empty string means local paths), in arbitrary order. Takes no arguments.
   """Returns the currently registered filesystem schemes.
 
   The `tf.io.gfile` APIs, in addition to accepting traditional filesystem paths,

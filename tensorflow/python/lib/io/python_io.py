@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# HELPER: thin re-export module for the legacy python_io API namespace. Importing it pulls
+# in everything public from the record file module (TFRecord options, compression types,
+# writer, iterator and random reader) through a wildcard import, adding no logic of its own.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

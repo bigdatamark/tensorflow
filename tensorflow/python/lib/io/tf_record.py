@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Python API for reading and writing TFRecord files. Defines the compression type constants,
+# the options object (compression and zlib tuning settings), a deprecated record iterator, a
+# random-access reader factory, and the writer class built on the native record writer.
+# Exported to the public io and legacy python_io namespaces. Import-time side effects:
+# registers API exports and deprecation wrappers; no flags.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +32,9 @@ from tensorflow.python.util.tf_export import tf_export
 @deprecation.deprecated_endpoints("io.TFRecordCompressionType",
                                   "python_io.TFRecordCompressionType")
 class TFRecordCompressionType(object):
+  # [CLASS DOC]
+  # Enumeration-like holder of integer constants for TFRecord compression: none (0), zlib (1)
+  # and gzip (2). Never instantiated in practice; used as option values (version 1 API only).
   """The type of compression for the record."""
   NONE = 0
   ZLIB = 1
@@ -37,6 +46,12 @@ class TFRecordCompressionType(object):
     v1=["io.TFRecordOptions", "python_io.TFRecordOptions"])
 @deprecation.deprecated_endpoints("python_io.TFRecordOptions")
 class TFRecordOptions(object):
+  # [CLASS DOC]
+  # Value object bundling the options for writing TFRecord files: the compression type plus
+  # optional zlib tuning values (flush mode, buffer sizes, window bits, compression level,
+  # method, memory level, strategy). Unset values (null) let the native layer choose defaults.
+  # A class level mapping converts compression constants to their string names. Also provides
+  # a conversion to the native writer options object.
   """Options used for manipulating TFRecord files."""
   compression_type_map = {
       TFRecordCompressionType.ZLIB: "ZLIB",
@@ -54,6 +69,12 @@ class TFRecordOptions(object):
                compression_method=None,
                mem_level=None,
                compression_strategy=None):
+    # [FUNCTION DOC]
+    # Constructor storing each option as an attribute of the same name. Inputs: compression_type
+    # (string name, compression constant, or nothing for none) and eight optional zlib tuning
+    # values, all defaulting to null (native default). The compression type is validated by
+    # normalizing it once (result discarded), so an invalid value raises a value error.
+    # Returns nothing.
     # pylint: disable=line-too-long
     """Creates a `TFRecordOptions` instance.
 
@@ -96,6 +117,12 @@ class TFRecordOptions(object):
 
   @classmethod
   def get_compression_type_string(cls, options):
+    # [FUNCTION DOC]
+    # Class method normalizing various forms of compression specification to one of the
+    # strings ZLIB, GZIP or the empty string. Input options may be nothing/empty (gives empty
+    # string), an options object (uses its compression type), a compression constant or its
+    # integer value (mapped to a name), or an already valid name string (returned as is).
+    # Raises a value error for anything else. No side effects.
     """Convert various option types to a unified string.
 
     Args:
@@ -121,6 +148,10 @@ class TFRecordOptions(object):
       raise ValueError('Not a valid compression_type: "{}"'.format(options))
 
   def _as_record_writer_options(self):
+    # [FUNCTION DOC]
+    # HELPER: used by the record writer to translate these options to the native writer options
+    # object. Creates it with the normalized compression type as bytes, then copies each zlib
+    # option that is not null onto its zlib options. Returns the native options object.
     """Convert to RecordWriterOptions for use with PyRecordWriter."""
     options = _pywrap_record_io.RecordWriterOptions(
         compat.as_bytes(
@@ -151,6 +182,11 @@ class TFRecordOptions(object):
     instructions=("Use eager execution and: \n"
                   "`tf.data.TFRecordDataset(path)`"))
 def tf_record_iterator(path, options=None):
+  # [FUNCTION DOC]
+  # Deprecated version 1 helper. Input path of a TFRecord file and optional options (options
+  # object, compression constant or name). Returns a native iterator over the serialized
+  # records. Raises an IO error if the file cannot be opened and a value error for an
+  # invalid compression type.
   """An iterator that read the records from a TFRecords file.
 
   Args:
@@ -168,6 +204,10 @@ def tf_record_iterator(path, options=None):
 
 
 def tf_record_random_reader(path):
+  # [FUNCTION DOC]
+  # Creates a native random-access reader for the TFRecord file at path. The reader reads a
+  # record at a byte offset and returns it with the ending offset. Raises an IO error if the
+  # file cannot be opened. Takes no compression option, so only uncompressed files work.
   """Creates a reader that allows random-access reads from a TFRecords file.
 
   The created reader object has the following method:
@@ -212,6 +252,11 @@ def tf_record_random_reader(path):
     "io.TFRecordWriter", v1=["io.TFRecordWriter", "python_io.TFRecordWriter"])
 @deprecation.deprecated_endpoints("python_io.TFRecordWriter")
 class TFRecordWriter(_pywrap_record_io.RecordWriter):
+  # [CLASS DOC]
+  # Writer of serialized records to a TFRecord file, subclassing the native record writer.
+  # Created with a path and optional compression or options; usable as a context manager. The
+  # write, flush and close methods are thin wrappers that delegate to the native base class
+  # to provide Python signatures.
   """A class to write records to a TFRecords file.
 
   [TFRecords tutorial](https://www.tensorflow.org/tutorials/load_data/tfrecord)
@@ -276,6 +321,12 @@ class TFRecordWriter(_pywrap_record_io.RecordWriter):
 
   # TODO(josh11b): Support appending?
   def __init__(self, path, options=None):
+    # [FUNCTION DOC]
+    # Opens (creates or truncates) the file at path for writing. Input options may be null,
+    # a compression name or constant, or an options object; anything other than an options
+    # object is wrapped in one (which validates it). Passes the path as bytes and the converted
+    # native options to the base constructor. Raises an IO error if the file cannot be opened
+    # and a value error for an invalid compression type.
     """Opens file `path` and creates a `TFRecordWriter` writing to it.
 
     Args:
@@ -301,6 +352,9 @@ class TFRecordWriter(_pywrap_record_io.RecordWriter):
   # See https://github.com/pybind/pybind11/issues/945
   # pylint: disable=useless-super-delegation
   def write(self, record):
+    # [FUNCTION DOC]
+    # Appends one serialized record (a byte string) to the file by delegating to the native
+    # writer. Returns nothing.
     """Write a string record to the file.
 
     Args:
@@ -309,10 +363,14 @@ class TFRecordWriter(_pywrap_record_io.RecordWriter):
     super(TFRecordWriter, self).write(record)
 
   def flush(self):
+    # [FUNCTION DOC]
+    # Flushes buffered records to the file by delegating to the native writer. Returns nothing.
     """Flush the file."""
     super(TFRecordWriter, self).flush()
 
   def close(self):
+    # [FUNCTION DOC]
+    # Closes the file by delegating to the native writer. Returns nothing.
     """Close the file."""
     super(TFRecordWriter, self).close()
   # pylint: enable=useless-super-delegation
