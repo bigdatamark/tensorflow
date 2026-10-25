@@ -12,6 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# HELPER: internal helper module for the ragged tensor package (not exposed in the public ragged
+# package). Provides a splits-equality assertion builder, a lengths-to-splits converter, and a
+# range-repeating gather routine, plus module-level aliases (positive axis normalization,
+# integer tensor conversion, repeat along an axis) taken from the array ops module to avoid a
+# circular import. No registrations or other import-time side effects beyond creating the aliases.
 """Private convenience functions for RaggedTensors.
 
 None of these methods are exposed in the main "ragged" package.
@@ -25,6 +31,14 @@ from tensorflow.python.ops import math_ops
 
 
 def assert_splits_match(nested_splits_lists):
+  # [FUNCTION DOC]
+  # HELPER: lets ragged ops require that several ragged inputs share identical partitioning.
+  # Input: a list whose items are each a list of splits tensors (outermost ragged dimension
+  # first) taken from one ragged tensor. Raises a value error immediately (static check) if any
+  # item has a different number of splits tensors than the first. Otherwise returns a list of
+  # assertion operations, one for each splits tensor of every later item compared against the
+  # corresponding tensor of the first item, which fail at run time with the same message if the
+  # values differ. Callers should use the result as control dependencies. No other side effects.
   """Checks that the given splits lists are identical.
 
   Performs static tests to ensure that the given splits lists are identical,
@@ -59,11 +73,25 @@ repeat = array_ops.repeat_with_axis
 
 
 def lengths_to_splits(lengths):
+  # [FUNCTION DOC]
+  # HELPER: converts row lengths into row-splits form. Input: a tensor of non-negative integer
+  # row lengths. Returns a tensor with a leading zero followed by the running sum of the lengths
+  # (one element longer than the input). Builds graph ops only; no validation is performed.
   """Returns splits corresponding to the given lengths."""
   return array_ops.concat([[0], math_ops.cumsum(lengths)], axis=-1)
 
 
 def repeat_ranges(params, splits, repeats):
+  # [FUNCTION DOC]
+  # HELPER: gather-based range repetition used by ragged tiling and related ops.
+  # Inputs: params, a tensor to gather from along its first dimension; splits, integer tensor of
+  # non-negative boundaries defining consecutive ranges of params; repeats, non-negative integer
+  # scalar or vector (one entry per range) giving how often each range repeats. Output: tensor
+  # of the same rank and dtype as params containing each range repeated in order. Adds
+  # assertion dependencies that splits and repeats are non-negative integers (failing at run
+  # time with an invalid-argument error, or a type error if not integer). With a scalar repeats
+  # it repeats the splits once and slices; otherwise it repeats starts and limits per range.
+  # It then builds the index list with a ragged range op and gathers params. Graph ops only.
   """Repeats each range of `params` (as specified by `splits`) `repeats` times.
 
   Let the `i`th range of `params` be defined as

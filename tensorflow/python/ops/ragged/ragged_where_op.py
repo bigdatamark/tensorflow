@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Implements the where operation for ragged tensors. Registers two dispatch overrides at import
+# time so that the version 2 and the original where functions of the array ops accept ragged
+# (or dense) inputs: coordinates of true elements when only the condition is given, or
+# elementwise / row selection between two tensors otherwise. Private helpers do the coordinate
+# computation and the two flavors of selection (broadcasting for version 2, and the older
+# same-shape or vector-condition rules).
 """where operation for RaggedTensors."""
 
 import typing
@@ -32,6 +39,14 @@ def where_v2(condition: ragged_tensor.RaggedOrDense,
              x: typing.Optional[ragged_tensor.RaggedOrDense] = None,
              y: typing.Optional[ragged_tensor.RaggedOrDense] = None,
              name=None):
+  # [FUNCTION DOC]
+  # Dispatch override of the version 2 where for ragged or dense inputs. Inputs: condition
+  # (boolean tensor, ragged or dense), x and y (optional tensors, ragged or dense; must be both
+  # given or both omitted), name (optional operation name scope). Raises a value error if only
+  # one of x and y is given. Converts the inputs to tensors or ragged tensors, and with no x and y
+  # returns the dense two-dimensional tensor of coordinates of true elements; otherwise unifies
+  # row-splits dtypes and returns the broadcasting elementwise selection (ragged if any input is
+  # ragged). Registered as a dispatcher at import time; builds ops only.
   """Return the elements where `condition` is `True`.
 
   : If both `x` and `y` are None: Retrieve indices of true elements.
@@ -97,6 +112,13 @@ def where(condition: ragged_tensor.RaggedOrDense,
           x: typing.Optional[ragged_tensor.RaggedOrDense] = None,
           y: typing.Optional[ragged_tensor.RaggedOrDense] = None,
           name=None):
+  # [FUNCTION DOC]
+  # Dispatch override of the original (version 1) where for ragged or dense inputs. Inputs:
+  # condition (boolean tensor, ragged or dense), x and y (optional, both or neither), name
+  # (optional). Raises a value error if only one of x and y is given. Converts inputs, then
+  # returns coordinates of true elements when x and y are absent, or otherwise the version 1
+  # selection: no broadcasting; shapes must match or condition must be a vector selecting whole
+  # rows. Registered as a dispatcher at import time; builds ops only.
   """Return the elements, either from `x` or `y`, depending on the `condition`.
 
   : If both `x` and `y` are `None`:
@@ -178,6 +200,14 @@ def where(condition: ragged_tensor.RaggedOrDense,
 
 
 def _elementwise_where(condition, x, y):
+  # [FUNCTION DOC]
+  # HELPER: implements the ragged selection for the version 1 where.
+  # Inputs: condition, x, y (dense or ragged tensors with matching row-splits dtypes). If none is
+  # ragged, delegates to the dense op. If all three are ragged, applies the dense op to their flat
+  # values. If only condition is not ragged, it must have rank one: concatenates x and y by rows,
+  # computes row indices (rows of x for true, offset rows of y for false) and gathers them,
+  # returning a ragged tensor. Raises a value error ("Input shapes do not match") when condition
+  # is ragged but x or y is not, or any other mixed case; the rank check raises a value error.
   """Ragged version of tf.where(condition, x, y)."""
   condition_is_ragged = isinstance(condition, ragged_tensor.RaggedTensor)
   x_is_ragged = isinstance(x, ragged_tensor.RaggedTensor)
@@ -204,6 +234,13 @@ def _elementwise_where(condition, x, y):
 
 
 def _elementwise_where_v2(condition, x, y):
+  # [FUNCTION DOC]
+  # HELPER: implements the ragged selection for the version 2 where, with broadcasting.
+  # Inputs: condition, x, y (dense or ragged tensors). Unless all three have identical fully
+  # defined static shapes, computes dynamic ragged shapes, broadcasts them together and
+  # broadcasts each input to the common shape. Then, if none is ragged, uses the dense version 2
+  # op; otherwise applies it to the flat values of the (broadcast) inputs. Returns a dense or
+  # ragged tensor. Errors from shape broadcasting propagate to the caller.
   """Ragged version of tf.where_v2(condition, x, y)."""
   # Broadcast x, y, and condition to have the same shape.
   if not (condition.shape.is_fully_defined() and x.shape.is_fully_defined() and
@@ -230,6 +267,14 @@ def _elementwise_where_v2(condition, x, y):
 
 
 def _coordinate_where(condition):
+  # [FUNCTION DOC]
+  # HELPER: coordinates-of-true implementation for both where flavors. Input: a boolean tensor,
+  # dense (delegates to the dense where op) or ragged. For ragged input recursively finds
+  # coordinates in the values, converts the first coordinate (an index into the flat values) into
+  # a row index through the value row ids and a column index by subtracting the row start, and
+  # concatenates row, column and the remaining inner coordinates. Returns a two-dimensional
+  # integer tensor with one row per true element, in row-major order, whose dtype follows the
+  # recursive result (the condition is cast to that row-splits dtype internally).
   """Ragged version of tf.where(condition)."""
   if not isinstance(condition, ragged_tensor.RaggedTensor):
     return array_ops.where(condition)
@@ -253,6 +298,10 @@ def _coordinate_where(condition):
 
 
 def _nrows(rt_input, out_type):
+  # [FUNCTION DOC]
+  # HELPER: row count of a tensor in a requested integer type. Inputs: rt_input (ragged or dense
+  # tensor) and out_type (integer dtype of the result). Returns the number of rows as a scalar
+  # tensor: from the ragged row count, or the size of the first dimension of a dense tensor.
   if isinstance(rt_input, ragged_tensor.RaggedTensor):
     return rt_input.nrows(out_type=out_type)
   else:

@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Test module for converting ragged tensors to sparse tensors. Covers the documented example,
+# ragged tensors of rank 2 to 4 with one or two ragged dimensions, static shape inference of the
+# result, kernel validation errors for malformed row splits, and gradient flow back to the
+# flat values. Runs in graph and eager modes with a main entry point for the test framework.
 """Tests for ragged.to_sparse op."""
 
 from tensorflow.python.eager import context
@@ -29,8 +34,14 @@ from tensorflow.python.platform import googletest
 
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedTensorToSparseOpTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case for the ragged tensor to-sparse conversion. Runs every test in both graph and
+  # eager modes. No shared fixtures; each test builds its own ragged tensors.
 
   def testDocStringExample(self):
+    # [FUNCTION DOC]
+    # Converts the ragged tensor with rows (1,2,3), (4), empty, (5,6) to sparse and asserts the
+    # exact indices, values and dense shape of four rows by three columns.
     rt = ragged_factory_ops.constant([[1, 2, 3], [4], [], [5, 6]])
     st = self.evaluate(rt.to_sparse())
     self.assertAllEqual(st.indices,
@@ -39,6 +50,9 @@ class RaggedTensorToSparseOpTest(test_util.TensorFlowTestCase):
     self.assertAllEqual(st.dense_shape, [4, 3])
 
   def test2DRaggedTensorWithOneRaggedDimension(self):
+    # [FUNCTION DOC]
+    # Converts a two-dimensional ragged string tensor (with an empty row) to sparse and asserts
+    # the indices, the string values in order, and the dense shape of five by three.
     rt = ragged_factory_ops.constant([['a', 'b'], ['c', 'd', 'e'], ['f'], [],
                                       ['g']])
     st = self.evaluate(rt.to_sparse())
@@ -48,6 +62,10 @@ class RaggedTensorToSparseOpTest(test_util.TensorFlowTestCase):
     self.assertAllEqual(st.dense_shape, [5, 3])
 
   def test3DRaggedTensorWithOneRaggedDimension(self):
+    # [FUNCTION DOC]
+    # Converts a three-dimensional ragged tensor with ragged rank one (uniform inner dimension of
+    # two) to sparse; asserts the three-component indices, the fourteen values and the dense
+    # shape of five by three by two.
     rt = ragged_factory_ops.constant(
         [[[1, 2], [3, 4]], [[5, 6], [7, 8], [9, 10]], [[11, 12]], [], [[13, 14]]
         ],
@@ -62,6 +80,10 @@ class RaggedTensorToSparseOpTest(test_util.TensorFlowTestCase):
     self.assertAllEqual(st.dense_shape, [5, 3, 2])
 
   def test4DRaggedTensorWithOneRaggedDimension(self):
+    # [FUNCTION DOC]
+    # Converts a four-dimensional ragged tensor with ragged rank one and an empty middle row to
+    # sparse; asserts the twelve values, the four-component indices and the dense shape of three
+    # by two by two by two.
     rt = ragged_factory_ops.constant(
         [[[[1, 2], [3, 4]], [[5, 6], [7, 8]]], [], [[[9, 10], [11, 12]]]],
         ragged_rank=1)
@@ -86,6 +108,10 @@ class RaggedTensorToSparseOpTest(test_util.TensorFlowTestCase):
     self.assertAllEqual(st.dense_shape, [3, 2, 2, 2])
 
   def test4DRaggedTensorWithTwoRaggedDimensions(self):
+    # [FUNCTION DOC]
+    # Converts a four-dimensional ragged tensor with ragged rank two (including empty rows) to
+    # sparse; asserts the indices, the fourteen values and the dense shape of three by three by
+    # three by two.
     rt = ragged_factory_ops.constant(
         [[[[1, 2], [3, 4]], [[5, 6], [7, 8], [9, 10]]],
          [[[11, 12]], [], [[13, 14]]], []],
@@ -114,6 +140,11 @@ class RaggedTensorToSparseOpTest(test_util.TensorFlowTestCase):
     self.assertAllEqual(st.dense_shape, [3, 3, 3, 2])
 
   def testShape(self):
+    # [FUNCTION DOC]
+    # Checks static shape inference of the sparse conversion for three ragged tensors (rank 2,
+    # rank 3 with ragged rank one, rank 3 with ragged rank two). Without evaluating, asserts the
+    # static shapes of indices (number of values by rank), values (number of values) and dense
+    # shape (rank).
     rt = ragged_factory_ops.constant([[1, 2], [3, 4, 5], [6], [], [7]])
     st = rt.to_sparse()
     self.assertEqual(st.indices.shape.as_list(), [7, 2])
@@ -134,6 +165,13 @@ class RaggedTensorToSparseOpTest(test_util.TensorFlowTestCase):
     self.assertEqual(st.dense_shape.shape.as_list(), [3])
 
   def testKernelErrors(self):
+    # [FUNCTION DOC]
+    # Builds unvalidated malformed ragged tensors (using a placeholder so errors cannot be caught
+    # at graph construction) and asserts that evaluating the sparse conversion raises an
+    # invalid-argument error: first split not zero; final split not matching the values length
+    # (flat and nested cases, and a nested case with a too-short inner splits); and empty splits.
+    # KNOWN ISSUE: the variable for the nested-mismatch pattern duplicates the first mismatch
+    # pattern, so the two mismatch cases are not distinguished by message.
     # An empty vector, defined using a placeholder to ensure that we can't
     # determine that it's invalid at graph-construction time.
     empty_vector = array_ops.placeholder_with_default(
@@ -176,6 +214,11 @@ class RaggedTensorToSparseOpTest(test_util.TensorFlowTestCase):
       self.evaluate(bad_rt5.to_sparse())
 
   def testGradient(self):
+    # [FUNCTION DOC]
+    # Graph-mode only (returns immediately in eager mode). Adds two ragged tensors of identical
+    # shape (the second scaled by two) by mapping over flat values, converts the sum to sparse,
+    # and takes gradients of the sparse values with respect to each input's flat values. Asserts
+    # the gradient is all ones for the first input and all twos for the second.
     if context.executing_eagerly():
       return
     # rt1.shape == rt2.shape == [2, (D2), (D3), 2].

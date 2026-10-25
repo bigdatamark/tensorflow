@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Test module for the ragged utility helpers: the repeat-along-axis function (compared against
+# numpy for many shapes, axes and shape-knowledge modes, including error cases) and the
+# range-repeating function's input validation. Defines two example nested string tensors (rank
+# three and four) used as test data. Runs in graph and eager modes; main entry runs the tests.
 """Tests for ragged_util."""
 
 from absl.testing import parameterized
@@ -41,6 +46,9 @@ TENSOR_4D = [[[[('%d%d%d%d' % (i, j, k, l)).encode('utf-8')
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedUtilTest(test_util.TensorFlowTestCase,
                      parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for the ragged utility functions repeat and repeat-ranges. Runs in both graph and
+  # eager modes. Shared fixtures are the module-level rank-3 and rank-4 example tensors.
 
   @parameterized.parameters([
       # Docstring examples
@@ -87,6 +95,10 @@ class RaggedUtilTest(test_util.TensorFlowTestCase,
       dict(data=[], repeats=[], axis=0, expected=[]),
   ])
   def testRepeat(self, data, repeats, expected, axis=None):
+    # [FUNCTION DOC]
+    # Parameterized test. Inputs: data, repeats, expected result and axis (optional). Calls the
+    # repeat utility directly on Python data (documented examples, scalar repeats, broadcasting of
+    # scalars to one dimension, and empty input) and asserts the result equals expected.
     result = ragged_util.repeat(data, repeats, axis)
     self.assertAllEqual(result, expected)
 
@@ -134,6 +146,12 @@ class RaggedUtilTest(test_util.TensorFlowTestCase,
       ]
   ])
   def testValuesMatchesNumpy(self, mode, data, repeats, axis):
+    # [FUNCTION DOC]
+    # Parameterized test. Inputs: mode (constant tensors, tensors with known shape behind a
+    # placeholder, or placeholders with fully unknown shape), data, repeats, axis. Skips (returns
+    # early) the negative axis case with unknown shape, which is unsupported. Computes the numpy
+    # repeat as the reference, converts the inputs according to mode, runs the repeat utility,
+    # and asserts the results are equal.
     # Exception: we can't handle negative axis if data.ndims is unknown.
     if axis < 0 and mode == 'unknown_shape':
       return
@@ -201,6 +219,12 @@ class RaggedUtilTest(test_util.TensorFlowTestCase,
                 axis,
                 exception=ValueError,
                 error=None):
+    # [FUNCTION DOC]
+    # Parameterized error test. Inputs: descr (label), mode (as for the numpy comparison test),
+    # data, repeats, axis, exception (expected type, default value error) and error (regular
+    # expression for the message). First asserts numpy also raises the exception for these
+    # inputs, then asserts the repeat utility raises it with the matching message. Cases: axis out
+    # of bounds either side, repeats length mismatch, repeats of rank above one, non-integer axis.
     # Make sure that this is also an error case for numpy.
     with self.assertRaises(exception):
       np.repeat(data, repeats, axis)
@@ -230,6 +254,10 @@ class RaggedUtilTest(test_util.TensorFlowTestCase,
       dict(params=[1, 2, 3], splits=[1, 2], repeats=0.5, exception=TypeError),
   ])
   def testInputCheck(self, params, splits, repeats, exception):
+    # [FUNCTION DOC]
+    # Parameterized test. Inputs: params, splits, repeats (Python data turned into constant
+    # tensors) and the expected exception type. Asserts the range-repeating utility raises an
+    # invalid-argument error for negative splits and a type error for non-integer repeats.
     params = constant_op.constant(params)
     splits = constant_op.constant(splits)
     repeats = constant_op.constant(repeats)

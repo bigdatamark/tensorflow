@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Test module for the ragged tile operation in the ragged array ops module. Contains one test
+# class with a large parameterized table (ragged ranks 1 to 4, per-axis repeat, multiples of zero
+# and one) plus a test that dense tensor input is delegated to the regular tile op. Runs in both
+# graph and eager modes; has a main entry point that runs the test framework.
 """Tests for ragged_array_ops.tile."""
 
 from absl.testing import parameterized
@@ -28,6 +33,9 @@ from tensorflow.python.platform import googletest
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedTileOpTest(test_util.TensorFlowTestCase,
                        parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case covering ragged tile of ragged tensors (and dense tensors). Decorated so every test
+  # runs in both graph and eager modes. Holds no shared fixtures; parameters come from tables.
 
   @parameterized.parameters([
       #=========================================================================
@@ -185,6 +193,14 @@ class RaggedTileOpTest(test_util.TensorFlowTestCase,
                      multiples,
                      expected,
                      ragged_rank=None):
+    # [FUNCTION DOC]
+    # Parameterized test. Inputs: descr (case label), rt_input (nested list to turn into a ragged
+    # tensor), multiples (repeat count per axis), expected (nested list result), ragged_rank
+    # (optional ragged rank for construction, default lets it be inferred). Builds the ragged
+    # tensor, computes the expected static shape, then tiles with both a constant multiples tensor
+    # and a placeholder-with-default (non-constant) one. Asserts that ragged rank and rank are
+    # preserved, that the static shape equals the expected one (only for the constant case), and
+    # that the values equal the expected nested list.
     rt = ragged_factory_ops.constant(rt_input, ragged_rank)
 
     expected_shape = [
@@ -207,6 +223,9 @@ class RaggedTileOpTest(test_util.TensorFlowTestCase,
       self.assertAllEqual(tiled, expected)
 
   def testRaggedTileWithTensorInput(self):
+    # [FUNCTION DOC]
+    # Test that tiling a plain dense 2x2 tensor with multiples of three and two simply delegates
+    # to the ordinary tile op: the result must equal the dense block repeated 3 by 2 times.
     # When the input is a `Tensor`, ragged_tile just delegates to tf.tile.
     dt = constant_op.constant([[1, 2], [3, 4]])
     tiled = ragged_array_ops.tile(dt, [3, 2])

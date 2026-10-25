@@ -12,6 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Test module for converting ragged tensors to dense tensors (the to-tensor method). Provides two
+# small module-level helpers (placeholder wrapping and rebuilding a ragged tensor from value row
+# ids), a large test class with parameterized cases (default values, explicit shapes, cropping and
+# padding, broadcasting defaults, errors), gradient tests, and a benchmark class. Runs in graph
+# and eager modes; has a main entry point that runs the test framework.
 """Tests for ragged.to_tensor."""
 
 import random
@@ -39,10 +45,22 @@ from tensorflow.python.util import nest
 
 
 def make_placeholder(t):
+  # [FUNCTION DOC]
+  # HELPER: shared test utility used to defeat static shape inference in the tests of this file.
+  # Wraps the given value (tensor or convertible value) in a placeholder-with-default of unknown
+  # shape and returns that tensor. No other side effects.
   return array_ops.placeholder_with_default(t, None)
 
 
 def rebuild_ragged_tensor_with_value_rowids(rt, feed_dict=None, sess=None):
+  # [FUNCTION DOC]
+  # HELPER: test utility that forces the value-row-ids code path of ragged to-tensor conversion.
+  # Inputs: rt, a ragged tensor (or a plain tensor at the recursion base); feed_dict, optional
+  # mapping that is filled with placeholder-to-value entries; sess, a session used to evaluate
+  # tensors, required when feed_dict is given. Recursively rebuilds the ragged tensor from its
+  # values, value row ids and row count; when feed_dict is given each row-id, row-count and leaf
+  # tensor is replaced by a placeholder and its evaluated value stored in feed_dict (a mutation).
+  # Returns the rebuilt ragged tensor, or the (possibly placeholder) tensor for non-ragged input.
   """Returns a copy of `rt`, built using `from_value_rowids`.
 
   This ensures that RaggedTensor._cached_value_rowids is populated, which
@@ -85,8 +103,15 @@ def rebuild_ragged_tensor_with_value_rowids(rt, feed_dict=None, sess=None):
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedTensorToTensorOpTest(test_util.TensorFlowTestCase,
                                  parameterized.TestCase):
+  # [CLASS DOC]
+  # Main test case for ragged to-tensor conversion, run in both graph and eager modes. Covers
+  # default values, explicit shapes (list, tuple, shape object, tensor), error messages,
+  # broadcasting of defaults, gradients and large/random inputs. No shared fixtures.
 
   def testDocStringExamples(self):
+    # [FUNCTION DOC]
+    # Converts a ragged tensor with rows (9,8,7), empty, (6,5), (4) to dense and asserts the
+    # result is zero padded to a four by three matrix.
     """Example from ragged_to_tensor.__doc__."""
     rt = ragged_factory_ops.constant([[9, 8, 7], [], [6, 5], [4]])
     dt = rt.to_tensor()
@@ -324,6 +349,16 @@ class RaggedTensorToTensorOpTest(test_util.TensorFlowTestCase,
                                default=None,
                                shape=None,
                                expected_shape=None):
+    # [FUNCTION DOC]
+    # Parameterized test. Inputs: rt_input (nested list), expected (nested list result),
+    # ragged_rank and inner_shape (optional construction settings), default (optional padding
+    # value), shape (optional explicit output shape), expected_shape (optional shape used to
+    # build the expected array for empty results). Builds the ragged tensor two ways (plain and
+    # rebuilt from value row ids) and, for each, with and without placeholders hiding static
+    # shapes. Converts to dense with the default and shape and asserts the result is a tensor with
+    # the same dtype, a shape compatible with the requested or ragged shape, and expected values.
+    # KNOWN ISSUE: when the placeholder variant is used, the default is replaced by a placeholder
+    # and stays replaced for later loop iterations; harmless but it mutates the loop variable.
     rt1 = ragged_factory_ops.constant(
         rt_input, ragged_rank=ragged_rank, inner_shape=inner_shape)
     rt2 = rebuild_ragged_tensor_with_value_rowids(rt1)
@@ -389,6 +424,13 @@ class RaggedTensorToTensorOpTest(test_util.TensorFlowTestCase,
                 default=None,
                 ragged_rank=None,
                 shape=None):
+    # [FUNCTION DOC]
+    # Parameterized error test. Inputs: rt_input (nested list), error (regular expression for the
+    # message), error_type (exception type or tuple, default value or invalid-argument error),
+    # default (optional padding value), ragged_rank and shape (optional). Asserts that converting
+    # to dense with the bad default or shape raises the expected error, both for a constant ragged
+    # tensor and for one built from placeholders. Cases: wrong dtype default, default of too high
+    # rank, mismatched inner dimension, shape of wrong rank, shape smaller-incompatible inner dim.
 
     rt = ragged_factory_ops.constant(rt_input, ragged_rank=ragged_rank)
     with self.assertRaisesRegex(error_type, error):
@@ -400,6 +442,9 @@ class RaggedTensorToTensorOpTest(test_util.TensorFlowTestCase,
           rt_placeholder.to_tensor(default_value=default, shape=shape))
 
   def test_shape_limit_shape_is_tensor(self):
+    # [FUNCTION DOC]
+    # Passes the output shape as an int64 tensor (two by three) to crop a ragged tensor; asserts
+    # the cropped values and a fully defined static shape of two by three.
     input_data = ragged_factory_ops.constant([[0, 1, 2, 3], [], [4], []])
     actual = input_data.to_tensor(
         shape=constant_op.constant([2, 3], dtype=dtypes.int64))
@@ -407,6 +452,9 @@ class RaggedTensorToTensorOpTest(test_util.TensorFlowTestCase,
     self.assertEqual(actual.shape.as_list(), [2, 3])
 
   def test_shape_limit_shape_is_tensor_unknown_rank(self):
+    # [FUNCTION DOC]
+    # Passes a scalar tensor of minus one as the shape (meaning unknown rank, no limit); asserts
+    # the output is padded to the natural four by four shape and statically compatible with it.
     input_data = ragged_factory_ops.constant([[0, 1, 2, 3], [], [4], []])
     actual = input_data.to_tensor(
         shape=constant_op.constant(-1, dtype=dtypes.int64))
@@ -415,6 +463,9 @@ class RaggedTensorToTensorOpTest(test_util.TensorFlowTestCase,
     self.assertTrue(actual.shape.is_compatible_with([4, 4]))
 
   def test_shape_limit_shape_is_tensor_unknown_dim(self):
+    # [FUNCTION DOC]
+    # Passes a shape tensor of two and minus one (second dimension unconstrained); asserts two
+    # rows padded to the longest row length of four and static compatibility with two by unknown.
     input_data = ragged_factory_ops.constant([[0, 1, 2, 3], [], [4], []])
     actual = input_data.to_tensor(
         shape=constant_op.constant([2, -1], dtype=dtypes.int64))
@@ -422,6 +473,9 @@ class RaggedTensorToTensorOpTest(test_util.TensorFlowTestCase,
     self.assertTrue(actual.shape.is_compatible_with([2, None]))
 
   def test_shape_limit_shape_is_tensor_int32(self):
+    # [FUNCTION DOC]
+    # Same as the int64 shape-tensor crop test but the shape tensor is 32-bit; asserts the cropped
+    # values and static shape of two by three.
     input_data = ragged_factory_ops.constant([[0, 1, 2, 3], [], [4], []])
     actual = input_data.to_tensor(
         shape=constant_op.constant([2, 3], dtype=dtypes.int32))
@@ -429,6 +483,9 @@ class RaggedTensorToTensorOpTest(test_util.TensorFlowTestCase,
     self.assertEqual(actual.shape.as_list(), [2, 3])
 
   def test_shape_expand_first_dim(self):
+    # [FUNCTION DOC]
+    # Requests a four by four output for a three-row ragged tensor; asserts the extra row and
+    # columns are zero padded and the static shape is four by four.
     input_data = ragged_factory_ops.constant([[0, 1, 2], [], [3]])
     actual = input_data.to_tensor(shape=[4, 4])
     self.assertAllEqual(
@@ -436,6 +493,10 @@ class RaggedTensorToTensorOpTest(test_util.TensorFlowTestCase,
     self.assertEqual(actual.shape.as_list(), [4, 4])
 
   def test_value_transposed(self):
+    # [FUNCTION DOC]
+    # Builds a ragged tensor from a transposed (non-contiguous) values tensor with explicit row
+    # ids and row count and validation on, and asserts it compares equal to the expected nested
+    # list, checking that transposed data is handled.
     # Check that transposed data is not an issue.
     my_value = array_ops.transpose(
         constant_op.constant([[0, 1, 2, 3], [4, 5, 6, 7]]))
@@ -447,6 +508,10 @@ class RaggedTensorToTensorOpTest(test_util.TensorFlowTestCase,
     self.assertAllEqual(input_data, [[[0, 4]], [[1, 5]], [[2, 6]], [[3, 7]]])
 
   def test_broadcast_default(self):
+    # [FUNCTION DOC]
+    # Converts a ragged tensor with a two by two dense inner shape using a placeholder default of
+    # shape two by one; asserts the default is broadcast across the inner dimension to fill the
+    # empty row.
     # The dense dimension here is 2 x 2
     input_data = ragged_factory_ops.constant([[[[1, 2], [3, 4]]], []],
                                              ragged_rank=1)
@@ -457,6 +522,9 @@ class RaggedTensorToTensorOpTest(test_util.TensorFlowTestCase,
     self.assertAllEqual(actual, expected)
 
   def test_broadcast_default_no_placeholder(self):
+    # [FUNCTION DOC]
+    # Same scenario as the placeholder broadcast test but the two by one default is a constant
+    # tensor with statically known shape; asserts the same broadcast result.
     input_data = ragged_factory_ops.constant([[[[1, 2], [3, 4]]], []],
                                              ragged_rank=1)
     # default_value has a 2 x 1 dimension.
@@ -466,6 +534,9 @@ class RaggedTensorToTensorOpTest(test_util.TensorFlowTestCase,
     self.assertAllEqual(actual, expected)
 
   def test_shape_expand_second_dim(self):
+    # [FUNCTION DOC]
+    # Requests shape three by four for a four-row ragged tensor; asserts the result is cropped to
+    # three rows and padded with zeros to four columns.
     input_data = ragged_factory_ops.constant([[0, 1, 2], [], [3], []])
     actual = input_data.to_tensor(shape=[3, 4])
     self.assertAllEqual(actual, [[0, 1, 2, 0], [0, 0, 0, 0], [3, 0, 0, 0]])
@@ -479,6 +550,11 @@ class RaggedTensorToTensorOpTest(test_util.TensorFlowTestCase,
       )
   def test_preserve_shape_roundtrip(
       self, input_shape, to_tensor_shape, expected_shape):
+    # [FUNCTION DOC]
+    # Parameterized test. Inputs: input_shape (shape of a dense zeros tensor), to_tensor_shape
+    # (shape argument for conversion back, possibly null or with unknown entries), expected_shape.
+    # Converts the dense tensor to a ragged tensor of ragged rank two and back to dense, and
+    # asserts that the original, ragged and recovered static shapes all equal the expected shape.
     tensor = array_ops.zeros(input_shape)
     ragged_from_tensor = RaggedTensor.from_tensor(tensor, ragged_rank=2)
     recovered_tensor = ragged_from_tensor.to_tensor(shape=to_tensor_shape)
@@ -487,6 +563,9 @@ class RaggedTensorToTensorOpTest(test_util.TensorFlowTestCase,
     self.assertAllEqual(recovered_tensor.shape.as_list(), expected_shape)
 
   def test_empty_tensor_with_shape(self):
+    # [FUNCTION DOC]
+    # Builds a ragged tensor with two rows and no values and converts it with default three and
+    # shape two by three; asserts the result is entirely filled with the default.
     input_data = RaggedTensor.from_value_rowids(
         values=constant_op.constant([], dtype=dtypes.int64),
         value_rowids=constant_op.constant([], dtype=dtypes.int64),
@@ -614,6 +693,17 @@ class RaggedTensorToTensorOpTest(test_util.TensorFlowTestCase,
                     output_value,
                     output_grad,
                     ragged_rank=None):
+    # [FUNCTION DOC]
+    # Parameterized gradient test. Inputs: shape (output shape), rt_value (ragged input values),
+    # rt_grad (expected gradient for the ragged input), default_value (padding value),
+    # default_grad (expected gradient for the default), output_value (expected dense output),
+    # output_grad (upstream gradient fed in), ragged_rank (optional). Builds float32 constants,
+    # then for both row-splits and value-row-ids partitioned versions runs the gradient helper:
+    # directly in eager mode, or in graph mode for each level of static shape information
+    # (known, unknown dimensions, unknown rank). Asserts output, input gradient and default
+    # gradient match the expectations.
+    # KNOWN ISSUE: in the graph-mode loop the ragged input is re-wrapped on every iteration, so
+    # later shape-info variants wrap an already wrapped value instead of the original.
     """Tests that ragged_to_dense generates the right gradient.
 
     Args:
@@ -664,6 +754,13 @@ class RaggedTensorToTensorOpTest(test_util.TensorFlowTestCase,
   def _test_gradient_helper(self, rt_val, default_val, shape_val, output_grad,
                             expected_output_val, expected_rt_grad,
                             expected_default_grad):
+    # [FUNCTION DOC]
+    # HELPER: shared by the gradient test. Inputs: rt_val (ragged tensor), default_val (padding
+    # value), shape_val (output shape), output_grad (upstream gradient), and the expected output,
+    # ragged-input gradient and default gradient. Converts to dense and computes gradients with a
+    # gradient tape in eager mode, or with the graph gradient function otherwise. Asserts the
+    # output is close to expected, the input gradient is a ragged tensor close to expected, and
+    # the default gradient is close to expected. Returns nothing.
     if context.executing_eagerly():
       with backprop.GradientTape() as tape:
         tape.watch([rt_val, default_val])
@@ -681,6 +778,11 @@ class RaggedTensorToTensorOpTest(test_util.TensorFlowTestCase,
     self.assertAllClose(actual_default_grad, expected_default_grad)
 
   def rt_with_partition_type(self, rt, partition_type):
+    # [FUNCTION DOC]
+    # HELPER: for the gradient test. Inputs: rt, a tensor or ragged tensor; partition_type, either
+    # row splits or value row ids. Returns plain tensors and row-splits input unchanged; for
+    # value row ids, recursively rebuilds the ragged tensor from values, row ids and row count.
+    # Raises an assertion error for any other partition type.
     if isinstance(rt, tensor_lib.Tensor):
       return rt
     if partition_type == 'row_splits':
@@ -692,6 +794,13 @@ class RaggedTensorToTensorOpTest(test_util.TensorFlowTestCase,
     raise AssertionError('Unexpected partition_type %r' % partition_type)
 
   def wrap_in_placeholder(self, arg, shape_info):
+    # [FUNCTION DOC]
+    # HELPER: for the gradient test, limits static shape information. Inputs: arg (tensor, ragged
+    # tensor or shape object) and shape_info (known, unknown dims, unknown rank). Known returns
+    # arg unchanged; ragged input has only its flat values wrapped; a shape object is first
+    # turned into a vector (a shape of unknown rank is returned as is). Otherwise returns a
+    # placeholder-with-default with unknown rank or with all dimensions unknown. Raises an
+    # assertion error for an unrecognized shape_info.
     """Wraps `arg` in a placeholder to limit static shape info.
 
     Args:
@@ -725,12 +834,19 @@ class RaggedTensorToTensorOpTest(test_util.TensorFlowTestCase,
     raise AssertionError('Unexpected shape_info %r' % shape_info)
 
   def test_shape_is_list_including_tensor_element(self):
+    # [FUNCTION DOC]
+    # Passes a shape list mixing a Python integer and a scalar tensor (two by two); asserts the
+    # ragged tensor is cropped and padded to the matching two by two result.
     rt = ragged_factory_ops.constant([[1, 2, 3], [4], [5, 6]])
     result = rt.to_tensor(shape=[2, constant_op.constant(2)])
     self.assertAllEqual(result, [[1, 2], [4, 0]])
 
 
 class RaggedToDenseBenchmark(googletest.Benchmark):
+  # [CLASS DOC]
+  # Benchmark for ragged to-tensor conversion over a table of configurations (shape, ragged rank,
+  # dtype, fill ratio, default shape, iterations). Each configuration is benchmarked for inputs
+  # partitioned by row splits and by value row ids, reporting memory usage and throughput.
 
   # Configurations to test.  See `run_benchmark` for config param docs.
   CONFIGS = [
@@ -760,6 +876,16 @@ class RaggedToDenseBenchmark(googletest.Benchmark):
                     default_shape=(),
                     output_shape=None,
                     min_iters=1000):
+    # [FUNCTION DOC]
+    # Runs one benchmark configuration. Inputs: shape (bounding box), ragged_rank (default shape
+    # length minus one), dtype (default 32-bit float), fill (per-dimension fill ratio, default
+    # 0.8), default_shape (shape of padding value, default scalar), output_shape (accepted but
+    # not used), min_iters (minimum iterations, default 1000). Generates random nested data,
+    # builds placeholders for the row-splits and value-row-ids forms inside a session, and runs
+    # the op benchmark for each with memory tracking. Returns nothing; reports through the
+    # benchmark framework.
+    # KNOWN ISSUE: the documented output_shape parameter is never used, so padding or cropping
+    # to an output shape is not actually benchmarked.
     """Run a benchmark with the specified configuration parameters.
 
     Args:
@@ -831,6 +957,13 @@ class RaggedToDenseBenchmark(googletest.Benchmark):
           **run_op_benchmark_kwargs)
 
   def _generateRaggedTensor(self, shape, ragged_rank, dtype, fill=None, axis=0):
+    # [FUNCTION DOC]
+    # HELPER: builds random benchmark input. Recursively generates a nested list for the given
+    # shape. At the leaf level (axis equals shape length) returns a random number, converted to
+    # a string for string dtype or scaled to an integer for integer dtypes. For the outermost
+    # axis and axes beyond the ragged rank the slice size is the full dimension; for ragged axes
+    # it is drawn from a geometric distribution with the fill value for that axis. Uses global
+    # random state. Returns the nested list (or a single leaf value).
     if axis == len(shape):
       value = random.random()
       if dtype == dtypes.string:
@@ -848,6 +981,9 @@ class RaggedToDenseBenchmark(googletest.Benchmark):
     ]
 
   def benchmark_ragged_to_dense(self):
+    # [FUNCTION DOC]
+    # Benchmark entry point. Seeds the Python random generator with a fixed value for
+    # reproducibility, then runs the benchmark for every configuration in the class table.
     random.seed(5)
     for config in self.CONFIGS:
       self.run_benchmark(**config)

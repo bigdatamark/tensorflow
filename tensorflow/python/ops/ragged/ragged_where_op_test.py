@@ -12,6 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Test module for the ragged where operation, with one test class for the original (version 1)
+# semantics and one for the version 2 semantics (which add broadcasting). Each class has a large
+# parameterized table covering coordinate retrieval, elementwise selection and (version 1) row
+# selection or (version 2) broadcasting, plus a parameterized error test. Runs in graph and eager
+# modes; main entry point runs the test framework.
 """Tests for ragged_array_ops.where."""
 
 from absl.testing import parameterized
@@ -26,6 +32,9 @@ from tensorflow.python.platform import googletest
 
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedWhereV1OpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests the original ragged where function (no broadcasting; same-shape selection or a vector
+  # condition selecting rows). Runs in both graph and eager modes; no shared fixtures.
 
   @parameterized.parameters([
       #=========================================================================
@@ -185,6 +194,11 @@ class RaggedWhereV1OpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
               [[[[], [b'A']]], [[[b'b']]]])),
   ])   # pyformat: disable
   def testRaggedWhere(self, condition, expected, x=None, y=None):
+    # [FUNCTION DOC]
+    # Parameterized test. Inputs: condition, expected result, and optional x and y (dense data or
+    # ragged values). Calls the version 1 ragged where and asserts the result equals expected.
+    # Cases: documented examples, coordinate retrieval for various ranks, elementwise selection,
+    # and row selection with a vector condition.
     result = ragged_where_op.where(condition, x, y)
     self.assertAllEqual(result, expected)
 
@@ -203,12 +217,19 @@ class RaggedWhereV1OpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
           message='Input shapes do not match.'),
   ])
   def testRaggedWhereErrors(self, condition, error, message, x=None, y=None):
+    # [FUNCTION DOC]
+    # Parameterized error test. Inputs: condition, error type, message pattern, optional x and y.
+    # Asserts the version 1 ragged where raises a value error when only x is given, and a value
+    # error saying input shapes do not match for a ragged condition with a dense y.
     with self.assertRaisesRegex(error, message):
       ragged_where_op.where(condition, x, y)
 
 
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedWhereV2OpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests the version 2 ragged where function, which broadcasts condition, x and y to a common
+  # shape. Runs in both graph and eager modes; no shared fixtures.
 
   @parameterized.parameters([
       #=========================================================================
@@ -349,6 +370,11 @@ class RaggedWhereV2OpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
           expected=[[[10, 50], [40, 20]], [[30, 30]]]),
   ])   # pyformat: disable
   def testRaggedWhere(self, condition, expected, x=None, y=None):
+    # [FUNCTION DOC]
+    # Parameterized test. Inputs: condition, expected result, optional x and y. Calls the version
+    # 2 ragged where and asserts the result equals expected. Cases: coordinate retrieval,
+    # elementwise multiplexing for several ranks, and broadcasting of condition, scalars and
+    # dense or numpy operands against ragged ones.
     result = ragged_where_op.where_v2(condition, x, y)
     self.assertAllEqual(result, expected)
 
@@ -367,6 +393,11 @@ class RaggedWhereV2OpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
           message=r'must be broadcastable|Unable to broadcast'),
   ])
   def testRaggedWhereErrors(self, condition, error, message, x=None, y=None):
+    # [FUNCTION DOC]
+    # Parameterized error test. Inputs: condition, error type, message pattern, optional x and y.
+    # Asserts the version 2 ragged where raises a value error when only x is given, and an
+    # invalid-argument error (not broadcastable) when ragged and dense operands have
+    # incompatible shapes; the second case is evaluated since the error arises at run time.
     with self.assertRaisesRegex(error, message):
       self.evaluate(ragged_where_op.where_v2(condition, x, y))
 
