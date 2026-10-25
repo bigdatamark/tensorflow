@@ -1,3 +1,16 @@
+# [MODULE DOC]
+# Legacy (TF1-style) variable scoping machinery for TensorFlow. This module implements the
+# variable store that maps full variable names to variable objects, the get_variable family of
+# functions that create-or-reuse variables by name, and the variable_scope context manager that
+# controls name prefixes, reuse mode, default initializers/regularizers/partitioners, custom
+# getters, device and dtype defaults. It also holds helpers for partitioned variables and for
+# keeping per-graph (or per-eager-context) scope state in graph collections.
+# Exposes: AUTO_REUSE, VariableScope, VariableStore pieces, get_variable, get_local_variable,
+# variable_scope, variable_op_scope, no_regularizer, VariableSynchronization, VariableAggregation,
+# and several tf_export-ed helpers. Import-time side effects: registers exported symbols through
+# tf_export, attaches documentation to the AUTO_REUSE constant, defines a global collection key
+# name for the variable store, and creates module-level default settings. Used heavily by
+# tf.compat.v1 layers and legacy models; in TF2 behavior most of it is a thin compatibility layer.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -50,11 +63,24 @@ __all__ = [
 
 
 class _PartitionInfo:
+  # [CLASS DOC]
+  # HELPER: internal value object passed to initializers when creating one shard of a
+  # partitioned variable.
+  # Immutable-ish record (uses slots) of the full combined shape of a partitioned variable and
+  # the offset of one particular shard inside it. Initializers that accept a partition_info
+  # argument use it to know which slice of the full tensor they must produce. Created by
+  # _get_partitioned_variable once per shard.
   """Holds partition info used by initializer functions."""
 
   __slots__ = ["_full_shape", "_var_offset"]
 
   def __init__(self, full_shape, var_offset):
+    # [FUNCTION DOC]
+    # Validates and stores the full shape and the shard offset. full_shape and var_offset must
+    # both be lists or tuples of integers of equal length, and every offset must satisfy
+    # zero <= offset < corresponding full dimension. Raises a type error if either argument is
+    # not a list/tuple and a value error if lengths differ or an offset is out of range.
+    # Returns nothing; sets the two internal attributes.
     """Constructor.
 
     Args:
@@ -96,13 +122,27 @@ class _PartitionInfo:
 
   @property
   def full_shape(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the full combined shape (list or tuple of ints) of the
+    # partitioned variable that this record describes. No side effects.
     return self._full_shape
 
   @property
   def var_offset(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the per-dimension offset (list or tuple of ints) of this
+    # shard within the full variable. No side effects.
     return self._var_offset
 
   def single_offset(self, shape):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says only a value error can be raised, but single_slice_dim
+    # can also raise a type error when shape is not a list/tuple.
+    # Given the shape of one shard, returns the offset of the shard along the single dimension
+    # in which the variable is partitioned, or 0 when no dimension is actually partitioned
+    # (shard shape equals full shape). Delegates validation to single_slice_dim, so it raises
+    # whatever that method raises (bad type, wrong rank, shard exceeding full shape, or
+    # partitioned in more than one dimension). No side effects.
     """Returns the offset when the variable is partitioned in at most one dim.
 
     Args:
@@ -125,6 +165,13 @@ class _PartitionInfo:
     return self.var_offset[single_slice_dim]
 
   def single_slice_dim(self, shape):
+    # [FUNCTION DOC]
+    # Finds the one dimension along which this shard differs from the full shape. shape is the
+    # shard shape (list or tuple of ints, same rank as the full shape). Returns that dimension's
+    # index, or the null value if shard shape equals full shape in every dimension. Raises a
+    # type error if shape is not a list/tuple; a value error if its length differs from the full
+    # shape, if offset plus shard size exceeds the full size in some dimension, or if more than
+    # one dimension differs from the full shape. No side effects.
     """Returns the slice dim when the variable is partitioned only in one dim.
 
     Args:
@@ -174,6 +221,11 @@ class _PartitionInfo:
 
 
 class _ReuseMode(enum.Enum):
+  # [CLASS DOC]
+  # HELPER: internal enumeration backing the public AUTO_REUSE constant.
+  # Enumeration of non-boolean reuse modes for variable scopes. Currently has the single member
+  # AUTO_REUSE, meaning "return the variable if it exists, otherwise create it". Boolean/null
+  # reuse values are handled separately by the scope code.
   """Mode for variable access within a variable scope."""
 
   # Indicates that variables are to be fetched if they already exist or
@@ -215,6 +267,14 @@ it does exist, simply return it.
 
 
 def _needs_no_arguments(python_callable):
+  # [FUNCTION DOC]
+  # HELPER: used by the variable store to decide whether an initializer callable can be invoked
+  # with no arguments.
+  # Takes any callable (function, partial, or callable object). Inspects its argument spec,
+  # discounts the implicit self argument for non-function callables, and returns true when the
+  # number of declared arguments equals the number of defaults, i.e. every argument has a
+  # default. Has no side effects; may propagate errors from the argument inspection helper if the
+  # callable cannot be introspected.
   """Returns true if the callable needs no arguments to call."""
   # TODO(bfontain): Switch to inspect.signature when we are python 3 only.
   # signature = inspect.signature(python_callable)
@@ -233,6 +293,15 @@ def _needs_no_arguments(python_callable):
 
 
 class _VariableStore:
+  # [CLASS DOC]
+  # KNOWN ISSUE: the docstring says stored variables are initialized with the initializer passed
+  # to the constructor and mentions an attribute named vars; the constructor takes no arguments
+  # and the attributes are the private dictionaries _vars and _partitioned_vars.
+  # Registry of named variables for one graph (or one eager variable store). Holds a mapping from
+  # full variable name to variable object, a mapping from name to partitioned variable, and a
+  # flag saying whether eager-mode variables are tracked. Provides get_variable, which creates or
+  # reuses variables according to reuse mode, shape/dtype compatibility checks, partitioners and
+  # custom getters. One instance is stored in a graph collection and fetched by variable scopes.
   """Variable store that carries a number of named Variables.
 
   New variable names and new variables can be created; all stored
@@ -246,6 +315,9 @@ class _VariableStore:
   __slots__ = ["_vars", "_partitioned_vars", "_store_eager_variables"]
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Creates an empty store: empty mapping of variables, empty mapping of partitioned variables,
+    # and eager-variable storing turned off. Takes no arguments, returns nothing.
     """Create a variable store."""
     self._vars = {}  # A dictionary of the stored TensorFlow variables.
     self._partitioned_vars = {}  # A dict of the stored PartitionedVariables.
@@ -268,6 +340,25 @@ class _VariableStore:
                    constraint=None,
                    synchronization=VariableSynchronization.AUTO,
                    aggregation=VariableAggregation.NONE):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says the default initializer comes from the constructor, but the
+    # constructor takes none; the default is chosen later in the single-variable path. It also
+    # says use_resource defaults to False, while in eager mode (or when lifted by an init scope
+    # into eager context) the code forces it to true, and it says reuse is always forced to false
+    # in eager mode, whereas the code actually sets it to auto-reuse when the store keeps eager
+    # variables.
+    # Main entry point of the store: returns the variable registered under name, or creates it.
+    # Inputs mirror the public get_variable (name, shape, dtype, initializer, regularizer, reuse,
+    # trainable, collections, caching_device, partitioner, validate_shape, use_resource,
+    # custom_getter, constraint, synchronization, aggregation); all but name are optional.
+    # Steps: validate that custom_getter is callable; in eager mode force use_resource and
+    # reject reuse unless an eager variable store is active; strip reference dtypes; validate
+    # synchronization/aggregation/trainable; then either call the custom getter (passing the
+    # internal getter and, only if it accepts them, the constraint) or call the internal getter
+    # directly. Returns a variable or a partitioned variable. Raises a value error for a
+    # non-callable custom getter or for reuse/shape/partition conflicts, and a runtime error if
+    # reuse is requested in eager mode without an eager variable store. Side effects: may create
+    # and register variables in the store and add them to graph collections.
     """Gets an existing variable with these parameters or create a new one.
 
     If a variable with the given name is already stored, we return the stored
@@ -416,6 +507,15 @@ class _VariableStore:
         constraint=None,
         synchronization=VariableSynchronization.AUTO,
         aggregation=VariableAggregation.NONE):
+      # [FUNCTION DOC]
+      # HELPER: nested default getter handed to custom getters by get_variable.
+      # Core create-or-reuse logic. If a partitioner is given and the requested shape is not a
+      # scalar, validates the partitioner is callable (value error otherwise) and delegates to the
+      # partitioned-variable path with the name scope cleared. If reuse is exactly true, no
+      # partitioner is given and a partitioned variable of that name exists, reuses it through
+      # the partitioned path. Otherwise raises a value error when shards of the same name exist
+      # without a partitioner, else delegates to the single-variable path. Arguments are the same
+      # as get_variable minus custom_getter; returns the variable found or created.
       is_scalar = (
           shape is not None and isinstance(shape, collections_abc.Sequence) and
           not shape)
@@ -550,6 +650,19 @@ class _VariableStore:
                                 constraint=None,
                                 synchronization=VariableSynchronization.AUTO,
                                 aggregation=VariableAggregation.NONE):
+    # [FUNCTION DOC]
+    # HELPER: partitioned-variable branch of get_variable.
+    # Creates or reuses a sharded variable. Inputs: name and a callable partitioner (required),
+    # plus the usual shape/dtype/initializer/regularizer/reuse/trainable/collections/
+    # caching_device/validate_shape/use_resource/constraint/synchronization/aggregation options.
+    # Rejects names already used by an unpartitioned variable. Computes the shard counts by
+    # calling the partitioner on the shape, merging shape with a tensor initializer's shape. If a
+    # partitioned variable of that name exists it checks reuse is not false and that shape, dtype
+    # and partitions are compatible, then returns it. Otherwise requires reuse to be not true,
+    # checks existing shard names for a conflicting partitioning, and creates one shard variable
+    # per slice (each named with a part suffix, with a partition-info object and sliced
+    # initializer), then wraps them in a partitioned variable stored in the store and returns it.
+    # Raises value errors on any conflict. Side effects: registers shards in the store.
     """Gets or creates a sharded variable list with these parameters.
 
     The `partitioner` must be a callable that accepts a fully defined
@@ -778,6 +891,24 @@ class _VariableStore:
                            constraint=None,
                            synchronization=VariableSynchronization.AUTO,
                            aggregation=VariableAggregation.NONE):
+    # [FUNCTION DOC]
+    # HELPER: single-variable (or single-shard) branch of get_variable.
+    # KNOWN ISSUE: the docstring's summary line is broken across two paragraphs by a formatting
+    # accident, and it omits that the regularizer is called twice: once immediately to test
+    # whether it returns a value, and again lazily to build the loss tensor.
+    # Looks up name in the store. If it exists: raises a value error when reuse is false (with
+    # a traceback of the original definition for non-resource variables), when the requested
+    # shape or dtype is incompatible with the stored variable; otherwise returns it. If it does
+    # not exist: raises a value error if reuse is true, if a constant initializer is combined
+    # with an explicit shape, if no initializer and no shape are given, or if the initializer is
+    # neither a usable callable nor combinable with a fully defined shape. Chooses a default
+    # initializer when none is given, instantiates initializer classes, binds shape, dtype and
+    # partition info into an initial-value callable inside an init scope, picks use_resource from
+    # the global toggle when unspecified, and builds the variable through the v1 variable
+    # constructor. Side effects: stores the variable in the store (graph mode, or eager with an
+    # eager store), adds it to collections in eager-store mode, logs creation at verbose level,
+    # and registers a lazily evaluated regularization loss in the regularization-losses collection.
+    # Returns the variable.
     """Get or create a single Variable (e.g.
 
     a shard or entire variable).
@@ -932,6 +1063,11 @@ class _VariableStore:
     # Run the regularizer if requested and save the resulting loss.
     if regularizer:
       def make_regularizer_op():
+        # [FUNCTION DOC]
+        # HELPER: thunk used by the lazily evaluated regularization loss tensor.
+        # Applies the regularizer to the new variable v, colocated with it and inside a name
+        # scope named after the variable plus a regularizer suffix; returns the resulting loss
+        # tensor (or the null value if the regularizer returns nothing). Each call builds fresh ops.
         with ops.colocate_with(v):
           with ops.name_scope(name + "/Regularizer/"):
             return regularizer(v)
@@ -945,6 +1081,15 @@ class _VariableStore:
 
   # Initialize variable when no initializer provided
   def _get_default_initializer(self, name, shape=None, dtype=dtypes.float32):
+    # [FUNCTION DOC]
+    # HELPER: picks the initializer used when the caller supplied none.
+    # KNOWN ISSUE: an inline comment says floats get a uniform unit scaling initializer, but the
+    # code returns the Glorot uniform initializer. Complex and other non-listed dtypes are not
+    # supported despite a note questioning it.
+    # Inputs: name (used only in the error message), shape (ignored), dtype. Floating types get
+    # a Glorot uniform initializer; integer, unsigned, boolean and string types get a zeros
+    # initializer. Returns a pair of the initializer and a flag that is always false here (the
+    # initializer is not a constant value). Raises a value error for any other dtype.
     """Provide a default initializer and a corresponding value.
 
     Args:
@@ -978,9 +1123,23 @@ class _VariableStore:
 
 
 class _LazyEvalTensor(core.Tensor):
+  # [CLASS DOC]
+  # HELPER: internal tensor proxy used for regularization-loss collection entries.
+  # KNOWN ISSUE: the docstring says the thunk is only evaluated when used, but the constructor
+  # calls the thunk immediately to build a master tensor (used for dtype/shape/name queries);
+  # the thunk is called again on every conversion to a real tensor.
+  # Tensor-like wrapper holding a callable that builds a tensor. Metadata properties and some
+  # methods (device, dtype, graph, name, op, shape, value_index, get_shape, string conversion) are
+  # forwarded to the master tensor; arithmetic and other operator methods rebuild the tensor by
+  # calling the thunk afresh so the value can be used in whatever graph/function is current.
+  # Forwarding members are attached to the class after its definition. It is also registered with
+  # the tensor conversion registry and the session fetch mechanism at import time.
   """A Tensor-like object that only evaluates its thunk when used."""
 
   def __init__(self, thunk):
+    # [FUNCTION DOC]
+    # Stores the thunk (callable with no arguments returning a tensor) and immediately calls it
+    # once to produce the master tensor used for metadata. Returns nothing.
     """Initializes a _LazyEvalTensor object.
 
     Args:
@@ -990,6 +1149,10 @@ class _LazyEvalTensor(core.Tensor):
     self._master_tensor = thunk()
 
   def _as_tensor(self, dtype=None, name=None, as_ref=False):
+    # [FUNCTION DOC]
+    # Conversion hook: builds and returns a fresh tensor by calling the thunk. The name argument
+    # is ignored. Uses assertions (not proper errors): as_ref must be false, and dtype must be
+    # null or equal to the tensor's dtype, otherwise an assertion error is raised.
     del name
     assert not as_ref
     assert dtype in [None, self.dtype]
@@ -998,8 +1161,15 @@ class _LazyEvalTensor(core.Tensor):
 
 
 def _make_master_property(name):
+  # [FUNCTION DOC]
+  # HELPER: factory used at import time to attach forwarding properties to _LazyEvalTensor.
+  # Takes an attribute name and returns a read-only property that fetches that attribute from the
+  # instance's master tensor.
   @property
   def prop(self):
+    # [FUNCTION DOC]
+    # HELPER: nested getter returned by the property factory.
+    # Returns the named attribute of the master tensor held by this lazy tensor.
     return getattr(self._master_tensor, name)  # pylint: disable=protected-access
   return prop
 
@@ -1010,7 +1180,13 @@ for _name in _master_property_list:
 
 
 def _make_master_method(name):
+  # [FUNCTION DOC]
+  # HELPER: factory used at import time to attach methods to _LazyEvalTensor that forward to the
+  # master tensor. Takes a method name and returns a method with that behavior.
   def method(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: nested forwarding method. Calls the named method on the master tensor with the same
+    # positional and keyword arguments and returns its result.
     return getattr(self._master_tensor, name)(*args, **kwargs)  # pylint: disable=protected-access
   return method
 
@@ -1020,7 +1196,14 @@ for _name in _master_method_list:
 
 
 def _make_op_method(name):
+  # [FUNCTION DOC]
+  # HELPER: factory used at import time to attach operator-style methods (arithmetic, comparison,
+  # indexing, evaluation, numpy conversion) to _LazyEvalTensor. Takes a method name and returns
+  # a method with that behavior.
   def method(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: nested operator method. Rebuilds a fresh tensor by running the thunk, then calls
+    # the named method on it with the given arguments and returns the result.
     return getattr(self._as_tensor(), name)(*args, **kwargs)  # pylint: disable=protected-access
   return method
 
@@ -1050,6 +1233,10 @@ session.register_session_run_conversion_functions(
 # To stop regularization, use this regularizer
 @tf_export(v1=["no_regularizer"])
 def no_regularizer(_):
+  # [FUNCTION DOC]
+  # Regularizer that does nothing: ignores its single argument (a variable) and returns the null
+  # value, so no regularization loss is produced. Pass it to override an inherited scope
+  # regularizer. Exported as a v1 API.
   """Use this function to prevent regularization of variables."""
   return None
 
@@ -1057,6 +1244,16 @@ def no_regularizer(_):
 # TODO(alive): support caching devices and partitioned variables in Eager mode.
 @tf_export(v1=["VariableScope"])
 class VariableScope:
+  # [CLASS DOC]
+  # KNOWN ISSUE: the docstring says reuse is always forced to false in eager mode, but the
+  # constructor sets it to auto-reuse and only get_variable forces it to false at call time.
+  # Immutable-name bundle of default settings used by get_variable: name prefix, initializer,
+  # regularizer, reuse mode, caching device, partitioner, custom getter, original name scope,
+  # dtype, use_resource and constraint. Offers read-only properties, setters for the mutable
+  # defaults, collection lookups restricted to the scope's name prefix, and get_variable and a
+  # private partitioned-variable method that fill in missing arguments from these defaults before
+  # delegating to a variable store. Exported as the v1 VariableScope API; instances are created by
+  # the variable_scope machinery and held by the thread-local scope store.
   """Variable scope object to carry defaults to provide to `get_variable`.
 
   Many of the arguments we need for `get_variable` in a variable store are most
@@ -1100,6 +1297,11 @@ class VariableScope:
                dtype=dtypes.float32,
                use_resource=None,
                constraint=None):
+    # [FUNCTION DOC]
+    # Stores the given defaults (reuse is required; all others optional: name prefix defaults to
+    # empty, dtype defaults to 32-bit float, name_scope defaults to empty). In eager mode, raises
+    # a not-implemented error if a caching device was given, and forces reuse to auto-reuse and
+    # use_resource to true. Returns nothing.
     """Creates a new VariableScope with the given properties."""
     self._name = name
     self._initializer = initializer
@@ -1121,61 +1323,97 @@ class VariableScope:
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Read-only property: the full name (prefix) of this scope; empty string for the root scope.
     return self._name
 
   @property
   def original_name_scope(self):
+    # [FUNCTION DOC]
+    # Read-only property: the name-scope string that was active when this variable scope was
+    # created (used to re-enter the same name scope later).
     return self._name_scope
 
   @property
   def reuse(self):
+    # [FUNCTION DOC]
+    # Read-only property: the reuse setting (true, false, null, or auto-reuse) of this scope.
     return self._reuse
 
   @property
   def initializer(self):
+    # [FUNCTION DOC]
+    # Read-only property: the default initializer for variables created in this scope, or null.
     return self._initializer
 
   @property
   def dtype(self):
+    # [FUNCTION DOC]
+    # Read-only property: the default data type for variables created in this scope.
     return self._dtype
 
   @property
   def use_resource(self):
+    # [FUNCTION DOC]
+    # Read-only property: whether resource variables are the default here (true, false or null
+    # meaning use the global default).
     return self._use_resource
 
   @property
   def regularizer(self):
+    # [FUNCTION DOC]
+    # Read-only property: the default regularizer callable for this scope, or null.
     return self._regularizer
 
   @property
   def caching_device(self):
+    # [FUNCTION DOC]
+    # Read-only property: the default caching device (string or callable) for this scope, or null.
     return self._caching_device
 
   @property
   def partitioner(self):
+    # [FUNCTION DOC]
+    # Read-only property: the default partitioner callable for this scope, or null.
     return self._partitioner
 
   @property
   def custom_getter(self):
+    # [FUNCTION DOC]
+    # Read-only property: the default custom getter callable for this scope, or null.
     return self._custom_getter
 
   @property
   def constraint(self):
+    # [FUNCTION DOC]
+    # Read-only property: the default variable constraint function for this scope, or null.
     return self._constraint
 
   def reuse_variables(self):
+    # [FUNCTION DOC]
+    # Switches this scope to reuse mode (sets reuse to true) so later get_variable calls must
+    # find existing variables. Mutates the scope; takes no arguments and returns nothing.
     """Reuse variables in this scope."""
     self._reuse = True
 
   def set_initializer(self, initializer):
+    # [FUNCTION DOC]
+    # Sets the default initializer (callable, constant value, or null) of this scope. Mutates
+    # the scope; returns nothing.
     """Set initializer for this scope."""
     self._initializer = initializer
 
   def set_dtype(self, dtype):
+    # [FUNCTION DOC]
+    # Sets the default data type of this scope. Mutates the scope; no validation; returns nothing.
     """Set data type for this scope."""
     self._dtype = dtype
 
   def set_use_resource(self, use_resource):
+    # [FUNCTION DOC]
+    # Sets whether resource variables are used by default in this scope. Raises a value error if
+    # eager execution is enabled and the new value is false (or otherwise falsy, including null).
+    # Mutates the scope; returns nothing.
     """Sets whether to use ResourceVariables for this scope."""
     if context.executing_eagerly() and not use_resource:
       raise ValueError("When eager execution is enabled, "
@@ -1183,10 +1421,17 @@ class VariableScope:
     self._use_resource = use_resource
 
   def set_regularizer(self, regularizer):
+    # [FUNCTION DOC]
+    # Sets the default regularizer (callable or null) of this scope. Mutates the scope; returns
+    # nothing.
     """Set regularizer for this scope."""
     self._regularizer = regularizer
 
   def set_caching_device(self, caching_device):
+    # [FUNCTION DOC]
+    # Sets the default caching device (string or callable) of this scope. Raises a
+    # not-implemented error whenever eager execution is enabled (even when clearing it). Mutates
+    # the scope; returns nothing.
     """Set caching_device for this scope."""
     if context.executing_eagerly():
       raise NotImplementedError("Caching devices are not yet supported "
@@ -1194,27 +1439,46 @@ class VariableScope:
     self._caching_device = caching_device
 
   def set_partitioner(self, partitioner):
+    # [FUNCTION DOC]
+    # Sets the default partitioner (callable or null) of this scope. Mutates the scope; returns
+    # nothing.
     """Set partitioner for this scope."""
     self._partitioner = partitioner
 
   def set_custom_getter(self, custom_getter):
+    # [FUNCTION DOC]
+    # Sets the default custom getter (callable or null) of this scope. Mutates the scope; returns
+    # nothing.
     """Set custom getter for this scope."""
     self._custom_getter = custom_getter
 
   def get_collection(self, name):
+    # [FUNCTION DOC]
+    # Returns the items of the named graph collection whose names start with this scope's name
+    # followed by a slash (all items if the scope name is empty). name is the collection key.
+    # Reads the default graph; no mutation.
     """Get this scope's variables."""
     scope = self._name + "/" if self._name else ""
     return ops.get_collection(name, scope)
 
   def trainable_variables(self):
+    # [FUNCTION DOC]
+    # Returns the list of trainable variables whose names fall under this scope's prefix, read
+    # from the trainable-variables graph collection.
     """Get this scope's trainable variables."""
     return self.get_collection(ops.GraphKeys.TRAINABLE_VARIABLES)
 
   def global_variables(self):
+    # [FUNCTION DOC]
+    # Returns the list of global variables whose names fall under this scope's prefix, read from
+    # the global-variables graph collection.
     """Get this scope's global variables."""
     return self.get_collection(ops.GraphKeys.GLOBAL_VARIABLES)
 
   def local_variables(self):
+    # [FUNCTION DOC]
+    # Returns the list of local variables whose names fall under this scope's prefix, read from
+    # the local-variables graph collection.
     """Get this scope's local variables."""
     return self.get_collection(ops.GraphKeys.LOCAL_VARIABLES)
 
@@ -1236,6 +1500,15 @@ class VariableScope:
                    constraint=None,
                    synchronization=VariableSynchronization.AUTO,
                    aggregation=VariableAggregation.NONE):
+    # [FUNCTION DOC]
+    # Scope-aware get_variable. Takes the variable store plus the usual get_variable arguments
+    # (name required). Fills in missing regularizer, caching device, partitioner and custom
+    # getter from the scope; in eager mode forces reuse to false and use_resource to true,
+    # otherwise falls back to the scope's reuse and use_resource. Builds the full name by
+    # prefixing the scope name, then, outside any name scope, checks that a non-callable
+    # initializer's dtype matches an explicit dtype (value error if not), fills in initializer,
+    # constraint and dtype from the scope, and delegates to the store's get_variable. Returns the
+    # variable (or partitioned variable). Errors from the store propagate.
     """Gets an existing variable with this name or create a new one."""
     if regularizer is None:
       regularizer = self._regularizer
@@ -1306,6 +1579,16 @@ class VariableScope:
                                 constraint=None,
                                 synchronization=VariableSynchronization.AUTO,
                                 aggregation=VariableAggregation.NONE):
+    # [FUNCTION DOC]
+    # HELPER: scope-level support for create_partitioned_variables and partitioned get_variable.
+    # KNOWN ISSUE: the docstring is copied from get_variable; this method only gets or creates a
+    # partitioned variable, has no reuse argument (it always passes the scope's own reuse, even in
+    # eager mode) and requires a partitioner.
+    # Fills missing initializer, regularizer, constraint, caching device, partitioner, dtype and
+    # use_resource from scope defaults. Raises a value error if the scope has a custom getter or
+    # if no partitioner is available. Forms the full name from the scope name and name (either may
+    # be empty), then calls the store's private partitioned-variable method with name scope reset.
+    # Returns the partitioned variable.
     """Gets an existing variable with this name or create a new one."""
     if initializer is None:
       initializer = self._initializer
@@ -1371,20 +1654,35 @@ _VARSCOPESTORE_KEY = ("__varscope",)
 
 
 class _VariableScopeStore(threading.local):
+  # [CLASS DOC]
+  # HELPER: internal state holder for the variable_scope machinery.
+  # Thread-local record of the current VariableScope and a mapping from scope names to how many
+  # times each has been opened, used to generate unique default scope names and to detect scope
+  # reopening. One instance lives in a graph collection (see get_variable_scope_store).
   """A thread local store for the current variable scope and scope counts."""
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Initializes per-thread state: the current scope is a fresh root VariableScope with reuse
+    # false, and the scope-count mapping is empty. Returns nothing.
     super(_VariableScopeStore, self).__init__()
     self.current_scope = VariableScope(False)
     self.variable_scopes_count = {}
 
   def open_variable_scope(self, scope_name):
+    # [FUNCTION DOC]
+    # Increments the open count for scope_name (string), starting it at one if unseen. Mutates
+    # the count mapping; returns nothing.
     if scope_name in self.variable_scopes_count:
       self.variable_scopes_count[scope_name] += 1
     else:
       self.variable_scopes_count[scope_name] = 1
 
   def close_variable_subscopes(self, scope_name):
+    # [FUNCTION DOC]
+    # Resets the open counts to zero for sub-scopes. If scope_name is null, resets every recorded
+    # scope; otherwise resets only scopes whose names begin with scope_name followed by a slash
+    # (the scope itself is not reset). Mutates the count mapping; returns nothing.
     if scope_name is None:
       for k in self.variable_scopes_count:
         self.variable_scopes_count[k] = 0
@@ -1396,10 +1694,18 @@ class _VariableScopeStore(threading.local):
           self.variable_scopes_count[k] = 0
 
   def variable_scope_count(self, scope_name):
+    # [FUNCTION DOC]
+    # Returns how many times scope_name has been opened (an integer, zero if never opened).
     return self.variable_scopes_count.get(scope_name, 0)
 
 
 def get_variable_scope_store():
+  # [FUNCTION DOC]
+  # HELPER: accessor for the scope store used by the variable_scope machinery.
+  # KNOWN ISSUE: the docstring says the store is per thread; it is looked up in a graph
+  # collection (so it is per graph), and only its contents are thread-local.
+  # Looks up the scope store in the default graph's collection; if absent, creates one and adds it
+  # to the collection (side effect on the graph). Returns the store.
   """Returns the variable scope store for current thread."""
   scope_store = ops.get_collection(_VARSCOPESTORE_KEY)
 
@@ -1414,6 +1720,11 @@ def get_variable_scope_store():
 
 @tf_export(v1=["get_variable_scope"])
 def get_variable_scope():
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the example in the docstring is not valid (it assigns the result of opening a
+  # name scope without a with statement); it only illustrates intent.
+  # Returns the current VariableScope object, taken from the scope store of the default graph.
+  # No arguments, no mutation of the scope. Exported as the v1 API.
   """Returns the current variable scope.
 
   @compatibility(TF2)
@@ -1446,6 +1757,10 @@ def get_variable_scope():
 
 
 def _get_default_variable_store():
+  # [FUNCTION DOC]
+  # HELPER: returns the variable store of the default graph, used by get_variable and
+  # variable_scope. Reads the store collection; if empty, creates a new store, registers it in
+  # the collection (side effect) and returns it.
   store = ops.get_collection(_VARSTORE_KEY)
   if store:
     return store[0]
@@ -1456,6 +1771,10 @@ def _get_default_variable_store():
 
 @tf_contextlib.contextmanager
 def with_variable_store(store):
+  # [FUNCTION DOC]
+  # Context manager that temporarily makes the given variable store the default one for the
+  # current graph: replaces the store collection contents with the store on entry and restores
+  # the previous contents on exit, even if the body raises. Yields nothing.
   store_collection = ops.get_collection_ref(_VARSTORE_KEY)
   old = list(store_collection)
   store_collection[:] = [store]
@@ -1466,6 +1785,13 @@ def with_variable_store(store):
 
 
 class EagerVariableStore:
+  # [CLASS DOC]
+  # KNOWN ISSUE: the docstring example refers to the long-gone tfe module name and a possibly
+  # outdated usage; the class itself is a thin wrapper.
+  # Wrapper around a variable store that is switched into eager-variable-storing mode so legacy
+  # functional layers can reuse and list variables while eager execution is enabled. Provides a
+  # context manager to make it the default store, accessors for stored variables, and helpers to
+  # copy or filter them.
   """Wrapper allowing functional layers to be used with eager execution.
 
   When eager execution is enabled Variables get deleted when they go out of
@@ -1486,6 +1812,10 @@ class EagerVariableStore:
   """
 
   def __init__(self, store=None):
+    # [FUNCTION DOC]
+    # Wraps an existing store or creates a new one. If store is given, it must already hold eager
+    # variables, otherwise a value error is raised. In both cases the wrapped store is marked as
+    # storing eager variables (mutation). Returns nothing.
     if store is not None:
       if not store._store_eager_variables:  # pylint: disable=protected-access
         raise ValueError("Cannot construct EagerVariableStore from a "
@@ -1497,24 +1827,43 @@ class EagerVariableStore:
     self._store._store_eager_variables = True  # pylint: disable=protected-access
 
   def as_default(self):
+    # [FUNCTION DOC]
+    # Returns a context manager that makes the wrapped store the default variable store of the
+    # current graph for the duration of a with block (see the store-swapping context manager).
     return with_variable_store(self._store)
 
   def variables(self):
+    # [FUNCTION DOC]
+    # Returns a list of all variables held by the wrapped store, sorted by variable name.
+    # Does not include partitioned-variable wrappers, only stored variables.
     return sorted(self._store._vars.values(), key=lambda x: x.name)  # pylint: disable=protected-access
 
   def trainable_variables(self):
+    # [FUNCTION DOC]
+    # Returns a list of the wrapped store's variables whose trainable flag is true, sorted by name.
     # pylint: disable=protected-access
     return sorted([x for x in self._store._vars.values() if x.trainable],
                   key=lambda x: x.name)
     # pylint: enable=protected-access
 
   def non_trainable_variables(self):
+    # [FUNCTION DOC]
+    # Returns a list of the wrapped store's variables whose trainable flag is false, sorted by
+    # name.
     # pylint: disable=protected-access
     return sorted([x for x in self._store._vars.values() if not x.trainable],
                   key=lambda x: x.name)
     # pylint: enable=protected-access
 
   def copy(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: only plain stored variables are copied; partitioned variables registered in
+    # the store are silently dropped, and copied variables are always resource variables with the
+    # current value but no initializer, constraint or other settings of the originals.
+    # Creates a new EagerVariableStore and, for every variable in this store, makes a new
+    # resource variable initialized from the current value, with the old name stripped of its
+    # output-index suffix and the same trainable flag, stored under the same key. Returns the new
+    # store; this store is unchanged.
     """Copy this variable store and all of its contents.
 
     Variables contained in this store will be copied over to the new variable
@@ -1562,6 +1911,15 @@ def get_variable(name,
                  constraint=None,
                  synchronization=VariableSynchronization.AUTO,
                  aggregation=VariableAggregation.NONE):
+  # [FUNCTION DOC]
+  # Public v1 get_variable. Its documentation is attached after definition from a shared template.
+  # Gets an existing variable by name inside the current variable scope or creates a new one.
+  # name is required; shape, dtype, initializer, regularizer, trainable, collections,
+  # caching_device, partitioner, validate_shape, use_resource, custom_getter, constraint,
+  # synchronization and aggregation are optional and fall back to scope defaults. There is no
+  # reuse argument; reuse comes from the current scope. Delegates to the current scope's
+  # get_variable using the default graph's variable store. Returns a variable or partitioned
+  # variable. Raises a value error on reuse violations, missing shape or dtype mismatch.
   return get_variable_scope().get_variable(
       _get_default_variable_store(),
       name,
@@ -1739,6 +2097,13 @@ def get_local_variable(  # pylint: disable=missing-docstring
     constraint=None,
     synchronization=VariableSynchronization.AUTO,
     aggregation=VariableAggregation.NONE):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the trainable argument is ignored (always forced to false), and when a
+  # collections list is passed it is extended in place, mutating the caller's list.
+  # Public v1 function like get_variable, but the variable is added to the local-variables
+  # collection (appended to any given collections) and is never trainable. Same optional
+  # arguments as get_variable. Delegates to get_variable and returns its result. Its docs are
+  # attached after definition from a shared template.
   if collections:
     collections += [ops.GraphKeys.LOCAL_VARIABLES]
   else:
@@ -1782,6 +2147,15 @@ def _get_partitioned_variable(name,
                               constraint=None,
                               synchronization=VariableSynchronization.AUTO,
                               aggregation=VariableAggregation.NONE):
+  # [FUNCTION DOC]
+  # HELPER: private module-level entry used by create_partitioned_variables and similar code.
+  # KNOWN ISSUE: the docstring says the default initializer comes from the constructor and that
+  # a tuple of shards and partitions is returned; the code returns the partitioned variable
+  # object produced by the scope, and it takes its defaults from the current variable scope.
+  # Fetches the current variable scope; raises a value error if it has a custom getter. Delegates
+  # to the scope's private partitioned-variable method with the default graph's variable store,
+  # passing all arguments (name required; trainable defaults to true here). Returns whatever that
+  # returns.
   """Gets or creates a sharded variable list with these parameters.
 
   The `partitioner` must be a callable that accepts a fully defined
@@ -1888,6 +2262,11 @@ def _get_partitioned_variable(name,
 # Named like a function for compatibility with the previous
 # @tf_contextlib.contextmanager definition.
 class _pure_variable_scope:  # pylint: disable=invalid-name
+  # [CLASS DOC]
+  # HELPER: implementation core of the variable_scope context manager (name scopes excluded).
+  # Context manager that opens either a named child of the current variable scope or a previously
+  # captured VariableScope object, installing a new current scope in the thread-local scope store
+  # and restoring the previous one on exit. Does not create a name scope.
   """A context for the variable_scope, see `variable_scope` for docs."""
 
   def __init__(self,
@@ -1902,6 +2281,16 @@ class _pure_variable_scope:  # pylint: disable=invalid-name
                dtype=dtypes.float32,
                use_resource=None,
                constraint=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says reuse may only be true, null or auto-reuse, but nothing is
+    # validated here; also when re-entering an existing VariableScope object the constraint passed
+    # in replaces the scope's own constraint (the old one is not inherited).
+    # Records all the options and looks up the default variable store and scope store. When
+    # name_or_scope is a VariableScope, immediately builds a copy of it (reuse overridden if a
+    # true reuse was given) and applies any non-null overrides for initializer, regularizer,
+    # caching device, partitioner, custom getter (wrapped to chain to the old getter), dtype and
+    # use_resource; the copy is cached for use on entry. A string name is handled on entry
+    # instead. Returns nothing. May raise errors from the setters (e.g. in eager mode).
     """Creates a context for the variable_scope, see `variable_scope` for docs.
 
     Note: this does not create a name scope.
@@ -1980,6 +2369,14 @@ class _pure_variable_scope:  # pylint: disable=invalid-name
       self._cached_variable_scope_object = variable_scope_object
 
   def __enter__(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring lists reuse-validation and type errors, but this method does not
+    # raise them itself; only setter errors (for example from eager-mode restrictions) can occur.
+    # Opens the scope. Saves the current scope. For a captured VariableScope: bumps its open
+    # count, snapshots the sub-scope counts and uses the cached copy. For a string name: builds the
+    # full name by appending to the current scope's name, inherits reuse (true if either is true),
+    # chooses the name scope string, creates a child VariableScope inheriting the parent settings,
+    # applies overrides, and bumps the open count. Installs the new scope as current and returns it.
     """Begins the scope block.
 
     Returns:
@@ -2042,6 +2439,12 @@ class _pure_variable_scope:  # pylint: disable=invalid-name
     return variable_scope_object
 
   def __exit__(self, type_arg, value_arg, traceback_arg):
+    # [FUNCTION DOC]
+    # Closes the scope. Raises a runtime error if the current scope is not the one this context
+    # opened (improper nesting). For a captured scope restores the saved sub-scope counts;
+    # for a named scope resets counts of sub-scopes under the new name. Restores the previous
+    # current scope. Arguments describe any in-flight exception and are ignored; returns nothing
+    # (exceptions are not suppressed).
     if (self._var_scope_store.current_scope is
         not self._last_variable_scope_object):
       raise RuntimeError("Improper nesting of variable_scope.")
@@ -2054,12 +2457,20 @@ class _pure_variable_scope:  # pylint: disable=invalid-name
 
 
 def _maybe_wrap_custom_getter(custom_getter, old_getter):
+  # [FUNCTION DOC]
+  # HELPER: chains custom getters of nested variable scopes.
+  # Given a new custom getter and the enclosing scope's getter (possibly null), returns the new
+  # getter unchanged if there is no old one; otherwise returns a wrapper that calls the new getter
+  # with a getter that first goes through the old getter and then the true getter.
   """Wrap a call to a custom_getter to use the old_getter internally."""
   if old_getter is None:
     return custom_getter
 
   # The new custom_getter should call the old one
   def wrapped_custom_getter(getter, *args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: nested composite getter. Calls the new custom getter, giving it a getter that is the
+    # old getter bound to the true getter, forwarding all extra arguments; returns its result.
     # Call:
     #  custom_getter(
     #    lambda: old_getter(true_getter, ...), *args, **kwargs)
@@ -2073,6 +2484,11 @@ def _maybe_wrap_custom_getter(custom_getter, old_getter):
 
 
 def _get_unique_variable_scope(prefix):
+  # [FUNCTION DOC]
+  # HELPER: generates default variable-scope names for variable_scope with a default name.
+  # Given a string prefix, returns the prefix if no scope with that full name (current scope name
+  # plus prefix) has been opened, otherwise the prefix with an underscore and the smallest
+  # positive integer making the full name unused. Reads the scope store counts; no mutation.
   """Get a name with the given prefix unique in the current variable scope."""
   var_scope_store = get_variable_scope_store()
   current_scope = get_variable_scope()
@@ -2090,6 +2506,14 @@ def _get_unique_variable_scope(prefix):
 # some object creation overhead.
 @tf_export(v1=["variable_scope"])  # pylint: disable=invalid-name
 class variable_scope:
+  # [CLASS DOC]
+  # Public v1 context manager (named like a function for historical reasons) that opens a
+  # variable scope and, in graph mode, the matching default graph and name scope. It accepts a
+  # scope name or an existing VariableScope plus optional default settings (initializer,
+  # regularizer, caching device, partitioner, custom getter, reuse, dtype, use_resource,
+  # constraint) and an option to skip the auxiliary name scope. It wraps an internal pure scope
+  # object and caches it so re-entering the same instance is cheap. Entering yields the active
+  # VariableScope; exiting restores the previous scope, name scope and graph context.
   """A context manager for defining ops that creates variables (layers).
 
   @compatibility(TF2)
@@ -2289,6 +2713,15 @@ class variable_scope:
                use_resource=None,
                constraint=None,
                auxiliary_name_scope=True):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says the call returns a scope and raises a value error for
+    # reusing within a create scope; the constructor returns nothing, and the actual reuse error
+    # message ("must be True or False or None") omits the allowed auto-reuse value.
+    # Stores all options. Raises a type error if both name_or_scope and default_name are null, or
+    # if auxiliary_name_scope is not a boolean. A reuse of false is converted to null (inherit);
+    # any reuse other than true, null or auto-reuse raises a value error. A null values list
+    # becomes empty. In graph mode (eager disabled) determines the graph from the values via the
+    # graph-from-inputs helper (which may raise if values come from different graphs).
     """Initialize the context manager.
 
     Args:
@@ -2368,6 +2801,13 @@ class variable_scope:
     self._auxiliary_name_scope = auxiliary_name_scope
 
   def __enter__(self):
+    # [FUNCTION DOC]
+    # Opens the scope. Records whether the default graph is building a function. In graph mode
+    # and not building a function, enters the graph chosen at construction as default. If a
+    # pure scope was cached from an earlier entry, re-enters the saved name scope (if any) and the
+    # cached pure scope and returns the variable scope. Otherwise builds the scope through the
+    # uncached path. If that fails the graph context is exited and the error re-raised.
+    # Returns the active VariableScope.
     # If the default graph is building a function, then we should not replace it
     # with the cached graph.
     if ops.get_default_graph().building_function:
@@ -2394,6 +2834,17 @@ class variable_scope:
       raise
 
   def _enter_scope_uncached(self):
+    # [FUNCTION DOC]
+    # HELPER: first-time entry path of variable_scope.
+    # Chooses the name scope to use: if the auxiliary name scope is disabled, re-enters the
+    # current name scope; otherwise creates one lazily. If a name or scope was given: raises a
+    # type error unless it is a string or VariableScope; opens the name scope (named by the string
+    # or last path component of the scope's name) unless entering the root scope, then creates and
+    # enters an internal pure variable scope (re-entering uses the scope's original name scope).
+    # If no name was given: raises a value error when reuse is true, opens a name scope named by
+    # the default name, makes the default name unique among sibling scopes, and enters a pure scope
+    # with that name. On any failure the partly entered scopes are exited and the error re-raised.
+    # Caches the entered objects only after success and returns the VariableScope.
     """Enters the context manager when there is no cached scope yet.
 
     Returns:
@@ -2513,6 +2964,11 @@ class variable_scope:
       return entered_pure_variable_scope
 
   def __exit__(self, type_arg, value_arg, traceback_arg):
+    # [FUNCTION DOC]
+    # Closes the scope in reverse order of entry: the internal pure scope first, then the name
+    # scope (if one was opened), then the graph context (graph mode, not building a function).
+    # Each later step runs even if an earlier one raises. The in-flight exception details are
+    # forwarded to each; returns nothing.
     try:
       self._cached_pure_variable_scope.__exit__(type_arg, value_arg,
                                                 traceback_arg)
@@ -2542,6 +2998,12 @@ def variable_op_scope(values,
                       dtype=None,
                       use_resource=None,
                       constraint=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: deprecated; it is marked as deprecated only by a logged warning, and the argument
+  # order (values first) differs from variable_scope.
+  # Context manager wrapper around variable_scope with the values list given first. Logs a
+  # deprecation warning, then opens variable_scope with the same options and yields the
+  # resulting VariableScope. Exported as a v1 API.
   """Deprecated: context manager for defining an op that creates variables."""
   logging.warn("tf.variable_op_scope(values, name, default_name) is deprecated,"
                " use tf.variable_scope(name, default_name, values)")
@@ -2562,6 +3024,15 @@ def variable_op_scope(values,
 
 
 def _call_partitioner(partitioner, shape, dtype):
+  # [FUNCTION DOC]
+  # HELPER: validates and invokes a user partitioner for partitioned variable creation.
+  # KNOWN ISSUE: the docstring says the shape must have at least two dimensions and that exactly
+  # one element is greater than one; the code only requires rank at least one and allows no
+  # partitioned axis (all ones).
+  # Inputs: partitioner callable (called with shape and dtype), a tensor shape and a dtype. Raises
+  # a value error if the shape is not fully defined, has rank below one, the partitioner result is
+  # not a sequence, its length differs from the rank, any entry is below one, or more than one
+  # entry exceeds one. Returns the validated list of partition counts per axis.
   """Call partitioner validating its inputs/output.
 
   Args:
@@ -2603,6 +3074,10 @@ def _call_partitioner(partitioner, shape, dtype):
 # `_VariableStore._get_partitioned_variable` is too complex even
 # without this logic.
 def _get_slice_dim_and_num_slices(slicing):
+  # [FUNCTION DOC]
+  # HELPER: interprets validated partitioner output for the variable store.
+  # Takes the list of partition counts per axis. Returns a pair: the index of the first axis with
+  # more than one partition and its count; if none, returns axis zero with one slice.
   """Get slicing dimension and number of slices from the partitioner output."""
   for slice_dim, num_slices in enumerate(slicing):
     if num_slices > 1:
@@ -2615,6 +3090,12 @@ def _get_slice_dim_and_num_slices(slicing):
 
 
 def _iter_slices(full_shape, num_slices, slice_dim):
+  # [FUNCTION DOC]
+  # HELPER: generator that splits a shape into shards for partitioned variables.
+  # Inputs: full_shape (list of ints), number of slices, and the dimension to split. Yields
+  # pairs of (offset list, shard shape list), one per slice, in order. The first slices get one
+  # extra element when the dimension does not divide evenly. Offsets advance cumulatively along
+  # the split dimension. Does not modify the input.
   """Slices a given a shape along the specified dimension."""
   num_slices_with_excess = full_shape[slice_dim] % num_slices
   offset = [0] * len(full_shape)
@@ -2627,6 +3108,10 @@ def _iter_slices(full_shape, num_slices, slice_dim):
 
 
 def _make_getter(captured_getter, captured_previous):
+  # [FUNCTION DOC]
+  # HELPER: closure factory that binds the current values of a getter and its predecessor so they
+  # are not affected by later loop variable changes. Returns a callable taking keyword arguments
+  # that calls the captured getter with the captured previous getter and those arguments.
   """Gets around capturing loop variables in python being broken."""
   return lambda **kwargs: captured_getter(captured_previous, **kwargs)
 
@@ -2635,6 +3120,11 @@ _variable_v1 = None
 
 
 def set_variable_v1(variable_v1):
+  # [FUNCTION DOC]
+  # HELPER: late-binding hook that breaks a circular import. Stores the given VariableV1 class in
+  # the module-level reference used when creating variables. Mutates module global state; returns
+  # nothing. Must be called before any variable is created through the store, otherwise the
+  # stored reference is null and creation fails.
   """Sets a reference to variable_v1.VariableV1."""
   global _variable_v1
   _variable_v1 = variable_v1
@@ -2643,6 +3133,12 @@ def set_variable_v1(variable_v1):
 @tf_export(v1=["variable_creator_scope"])
 @tf_contextlib.contextmanager
 def variable_creator_scope_v1(variable_creator):
+  # [FUNCTION DOC]
+  # Context manager (v1 API) that registers a variable creator function on the default graph for
+  # the duration of the with block. variable_creator takes the next creator plus keyword
+  # arguments describing the variable and returns a variable. Yields nothing. Side effect: the
+  # creator is pushed onto the graph's creator stack and removed on exit. Documentation differs
+  # from the v2 version only in the description of trainable.
   """Scope which defines a variable creation function to be used by variable().
 
   variable_creator is expected to be a function with the following signature:
@@ -2719,6 +3215,13 @@ def variable_creator_scope_v1(variable_creator):
 @tf_export("variable_creator_scope", v1=[])
 @tf_contextlib.contextmanager
 def variable_creator_scope(variable_creator):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring's list of keyword arguments is missing the bullet marker before
+  # dtype and omits use_resource, which the v1 variant lists.
+  # Context manager (v2 API) that registers a variable creator function on the default graph for
+  # the duration of the with block. variable_creator takes the next creator plus keyword
+  # arguments and returns a variable. Yields nothing. Side effect: pushes then removes the creator
+  # on the graph's creator stack.
   """Scope which defines a variable creation function to be used by variable().
 
   variable_creator is expected to be a function with the following signature:
