@@ -1,4 +1,11 @@
 # -*- coding: utf-8 -*-
+# [MODULE DOC]
+# Tests for the ragged unicode decode and split operations (unicode_decode, unicode_split and
+# their with-offsets variants) plus the raw generated decode op. Covers scalars, vectors,
+# ragged nests, sparse and padded conversion, error modes (replace, ignore, strict),
+# control-character replacement, several input encodings and error conditions. Contains small
+# module-level helpers that compute expected values in plain Python. Runs every test class in
+# both graph and eager modes. No import-time side effects besides decorators.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,6 +38,10 @@ from tensorflow.python.platform import test
 
 
 def _nested_encode(x, encoding):
+  # [FUNCTION DOC]
+  # HELPER: builds test inputs for the unicode decode/split tests.
+  # Recursively walks a nested list of text strings and encodes each string to bytes with the
+  # given encoding name. Returns a nested list with the same structure holding byte strings.
   """Encode each string in a nested list with `encoding`."""
   if isinstance(x, list):
     return [_nested_encode(v, encoding) for v in x]
@@ -39,6 +50,11 @@ def _nested_encode(x, encoding):
 
 
 def _nested_codepoints(x):
+  # [FUNCTION DOC]
+  # HELPER: computes expected codepoints for the unicode decode tests.
+  # Recursively maps each string in a nested list to a list of its integer codepoints by
+  # encoding as big-endian 32-bit and combining each group of four bytes. Handles byte values
+  # that appear as characters. Returns a nested list of integer lists.
   """Replace each string in a nested list with a list of its codepoints."""
   # Works for Python 2 and 3, and for both UCS2 and UCS4 builds
   if isinstance(x, list):
@@ -52,6 +68,11 @@ def _nested_codepoints(x):
 
 
 def _nested_offsets(x, encoding):
+  # [FUNCTION DOC]
+  # HELPER: computes expected byte offsets for the with-offsets tests.
+  # Recursively maps each string in a nested list to the list of starting byte offsets of its
+  # characters when encoded with the given encoding (cumulative sums of per-character encoded
+  # lengths, starting at zero). An empty string gives an empty list.
   """Replace each string in a nested list with a list of start offsets."""
   if isinstance(x, list):
     return [_nested_offsets(v, encoding) for v in x]
@@ -67,6 +88,11 @@ def _nested_offsets(x, encoding):
 
 
 def _nested_splitchars(x, encoding):
+  # [FUNCTION DOC]
+  # HELPER: computes expected character substrings for the unicode split tests.
+  # Recursively maps each string in a nested list to a list of single-character byte strings
+  # encoded with the given encoding. Has separate code paths for Python 2 style byte strings
+  # and Python 3. Returns a nested list of byte-string lists.
   """Replace each string in a nested list with a list of char substrings."""
   if isinstance(x, list):
     return [_nested_splitchars(v, encoding) for v in x]
@@ -80,6 +106,10 @@ def _nested_splitchars(x, encoding):
 
 
 def _make_sparse_tensor(indices, values, dense_shape, dtype=np.int32):
+  # [FUNCTION DOC]
+  # HELPER: builds expected sparse results for the sparse-output tests.
+  # Takes lists for indices, values and dense shape plus an optional value dtype (default
+  # 32-bit integer) and returns a sparse tensor value with 64-bit indices and shape.
   return sparse_tensor.SparseTensorValue(
       np.array(indices, np.int64), np.array(values, dtype),
       np.array(dense_shape, np.int64))
@@ -88,19 +118,33 @@ def _make_sparse_tensor(indices, values, dense_shape, dtype=np.int32):
 @test_util.run_all_in_graph_and_eager_modes
 class UnicodeDecodeTest(test_util.TensorFlowTestCase,
                         parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests for ragged_string_ops.unicode_decode and unicode_decode_with_offsets, and the raw
+  # generated decode op. Run in both graph and eager modes. Verifies codepoints and byte
+  # offsets for scalar, vector and ragged inputs, sparse and padded conversions, error
+  # handling modes and multiple encodings.
 
   def testScalarDecode(self):
+    # [FUNCTION DOC]
+    # Decodes a scalar UTF-8 string of four Chinese characters. Asserts the result is the
+    # flat list of their codepoints.
     text = constant_op.constant(u"仅今年前".encode("utf-8"))
     chars = ragged_string_ops.unicode_decode(text, "utf-8")
     self.assertAllEqual(chars, [ord(c) for c in u"仅今年前"])
 
   def testScalarDecodeWithOffset(self):
+    # [FUNCTION DOC]
+    # Decodes the same scalar string with offsets. Asserts the codepoints and that the byte
+    # start offsets are zero, three, six and nine (three bytes per character).
     text = constant_op.constant(u"仅今年前".encode("utf-8"))
     chars, starts = ragged_string_ops.unicode_decode_with_offsets(text, "utf-8")
     self.assertAllEqual(chars, [ord(c) for c in u"仅今年前"])
     self.assertAllEqual(starts, [0, 3, 6, 9])
 
   def testVectorDecode(self):
+    # [FUNCTION DOC]
+    # Decodes a vector of two strings (Chinese text and ASCII text). Asserts a ragged result
+    # with the codepoints of each string as one row.
     text = constant_op.constant([u"仅今年前".encode("utf-8"), b"hello"])
     chars = ragged_string_ops.unicode_decode(text, "utf-8")
     expected_chars = [[ord(c) for c in u"仅今年前"],
@@ -108,6 +152,9 @@ class UnicodeDecodeTest(test_util.TensorFlowTestCase,
     self.assertAllEqual(chars, expected_chars)
 
   def testVectorDecodeWithOffset(self):
+    # [FUNCTION DOC]
+    # Decodes the two-string vector with offsets. Asserts the per-row codepoints and the
+    # per-row byte start offsets (multi-byte characters step by three, ASCII by one).
     text = constant_op.constant([u"仅今年前".encode("utf-8"), b"hello"])
     chars, starts = ragged_string_ops.unicode_decode_with_offsets(text, "utf-8")
     expected_chars = [[ord(c) for c in u"仅今年前"],
@@ -127,6 +174,11 @@ class UnicodeDecodeTest(test_util.TensorFlowTestCase,
       {"texts": []}
   ])  # pyformat: disable
   def testBasicDecode(self, texts, ragged_rank=None):
+    # [FUNCTION DOC]
+    # Parameterized over nested text inputs (scalar, vector, ragged of various ranks, empty).
+    # texts is the nested text; ragged_rank optionally fixes the ragged rank of the input.
+    # Encodes to a ragged constant, decodes as UTF-8 and asserts equality with the codepoints
+    # computed by the helper.
     input_tensor = ragged_factory_ops.constant_value(
         _nested_encode(texts, "UTF-8"), ragged_rank=ragged_rank, dtype=bytes)
     result = ragged_string_ops.unicode_decode(input_tensor, "UTF-8")
@@ -143,6 +195,9 @@ class UnicodeDecodeTest(test_util.TensorFlowTestCase,
       {"texts": []}
   ])  # pyformat: disable
   def testBasicDecodeWithOffsets(self, texts, ragged_rank=None):
+    # [FUNCTION DOC]
+    # Same inputs as the basic decode test but uses the with-offsets variant. Asserts the first
+    # output equals the expected codepoints and the second equals the expected start offsets.
     input_tensor = ragged_factory_ops.constant_value(
         _nested_encode(texts, "UTF-8"), ragged_rank=ragged_rank, dtype=bytes)
     result = ragged_string_ops.unicode_decode_with_offsets(
@@ -153,6 +208,10 @@ class UnicodeDecodeTest(test_util.TensorFlowTestCase,
     self.assertAllEqual(expected_offsets, result[1])
 
   def testDocstringExamples(self):
+    # [FUNCTION DOC]
+    # Reproduces the documented decode example with two strings (one with accented letters, one
+    # emoji). Asserts the codepoints from both the plain and with-offsets variants and the
+    # expected byte offsets.
     texts = [s.encode("utf8") for s in [u"G\xf6\xf6dnight", u"\U0001f60a"]]
     codepoints1 = ragged_string_ops.unicode_decode(texts, "UTF-8")
     codepoints2, offsets = ragged_string_ops.unicode_decode_with_offsets(
@@ -183,6 +242,10 @@ class UnicodeDecodeTest(test_util.TensorFlowTestCase,
           expected=_make_sparse_tensor(np.zeros([0, 2], np.int64), [], [0, 0])),
   ])
   def testDecodeWithSparseOutput(self, texts, expected):
+    # [FUNCTION DOC]
+    # Decodes a byte-string array and converts the ragged result to a sparse tensor. texts is
+    # the nested text, expected the sparse tensor value. Asserts the result is a sparse tensor
+    # whose indices, values and dense shape match.
     input_tensor = np.array(_nested_encode(texts, "UTF-8"), dtype=bytes)
     result = ragged_string_ops.unicode_decode(input_tensor, "UTF-8").to_sparse()
     self.assertIsInstance(result, sparse_tensor.SparseTensor)
@@ -218,6 +281,9 @@ class UnicodeDecodeTest(test_util.TensorFlowTestCase,
       dict(texts=[], expected=np.zeros([0, 0], np.int64)),
   ])  # pyformat: disable
   def testDecodeWithPaddedOutput(self, texts, expected, ragged_rank=None):
+    # [FUNCTION DOC]
+    # Decodes ragged text input and converts the result to a dense tensor padded with minus
+    # one. Asserts it equals the expected padded nested list of codepoints.
     input_tensor = ragged_factory_ops.constant_value(
         _nested_encode(texts, "UTF-8"), ragged_rank=ragged_rank, dtype=bytes)
     result = ragged_string_ops.unicode_decode(
@@ -291,6 +357,11 @@ class UnicodeDecodeTest(test_util.TensorFlowTestCase,
                     [0xFFFD] * 4]),
   ])  # pyformat: disable
   def testErrorModes(self, expected=None, **args):
+    # [FUNCTION DOC]
+    # Passes keyword arguments straight to the decode op to exercise invalid-byte handling
+    # (replace with default or custom replacement character, ignore), control character
+    # replacement, surrogates, noncharacters and overlong encodings. Asserts the expected
+    # codepoints.
     result = ragged_string_ops.unicode_decode(**args)
     self.assertAllEqual(expected, result)
 
@@ -355,6 +426,10 @@ class UnicodeDecodeTest(test_util.TensorFlowTestCase,
                                 expected=None,
                                 expected_offsets=None,
                                 **args):
+    # [FUNCTION DOC]
+    # Like the error modes test but for the with-offsets decode. Keyword arguments go to the
+    # op. Asserts the expected codepoints and the expected byte offsets (ignored invalid bytes
+    # leave gaps in the offsets).
     result = ragged_string_ops.unicode_decode_with_offsets(**args)
     self.assertAllEqual(result[0], expected)
     self.assertAllEqual(result[1], expected_offsets)
@@ -368,6 +443,9 @@ class UnicodeDecodeTest(test_util.TensorFlowTestCase,
       ("SHIFT-JIS", [u"Hello", u"こんにちは"]),
   )
   def testDecodeWithDifferentEncodings(self, encoding, texts):
+    # [FUNCTION DOC]
+    # Encodes sample texts with the given encoding name (UTF variants, ASCII, Latin-1, Shift
+    # JIS), decodes with the same encoding and asserts the codepoints match.
     expected = _nested_codepoints(texts)
     input_tensor = constant_op.constant(_nested_encode(texts, encoding))
     result = ragged_string_ops.unicode_decode(input_tensor, encoding)
@@ -382,6 +460,9 @@ class UnicodeDecodeTest(test_util.TensorFlowTestCase,
       ("SHIFT-JIS", [u"Hello", u"こんにちは"]),
   )
   def testDecodeWithOffsetsWithDifferentEncodings(self, encoding, texts):
+    # [FUNCTION DOC]
+    # Same as the different-encodings decode test but with the with-offsets variant; asserts
+    # both codepoints and byte start offsets for the given encoding.
     expected_codepoints = _nested_codepoints(texts)
     expected_offsets = _nested_offsets(texts, encoding)
     input_tensor = constant_op.constant(_nested_encode(texts, encoding))
@@ -407,10 +488,16 @@ class UnicodeDecodeTest(test_util.TensorFlowTestCase,
            exception=(ValueError, errors.InvalidArgumentError)),
   ])  # pyformat: disable
   def testExceptions(self, exception=None, message=None, **args):
+    # [FUNCTION DOC]
+    # Calls decode with invalid input (strict mode on malformed bytes, out-of-range replacement
+    # character, unknown error mode). Asserts the expected exception type and message pattern.
     with self.assertRaisesRegex(exception, message):
       self.evaluate(ragged_string_ops.unicode_decode(**args))
 
   def testUnknownRankError(self):
+    # [FUNCTION DOC]
+    # Skipped in eager mode. In graph mode feeds a placeholder of unknown rank to decode and
+    # asserts a value error saying the input rank must be statically known.
     if context.executing_eagerly():
       return
     s = array_ops.placeholder(dtypes.string)
@@ -456,6 +543,10 @@ class UnicodeDecodeTest(test_util.TensorFlowTestCase,
                       expected_char_values=None,
                       expected_char_to_byte_starts=None,
                       **args):
+    # [FUNCTION DOC]
+    # Calls the raw generated decode-with-offsets op with keyword arguments from each case.
+    # doc is a label only. Asserts the row splits, character values and character-to-byte
+    # start offsets of the result.
     """Test for the c++ interface (gen_string_ops.unicode_decode)."""
     result = gen_string_ops.unicode_decode_with_offsets(**args)
     self.assertAllEqual(expected_row_splits, result.row_splits)
@@ -467,19 +558,32 @@ class UnicodeDecodeTest(test_util.TensorFlowTestCase,
 @test_util.run_all_in_graph_and_eager_modes
 class UnicodeSplitTest(test_util.TensorFlowTestCase,
                        parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests for ragged_string_ops.unicode_split and unicode_split_with_offsets, run in both graph
+  # and eager modes. Mirrors the decode tests but expects per-character byte strings instead
+  # of codepoints.
 
   def testScalarSplit(self):
+    # [FUNCTION DOC]
+    # Splits a scalar UTF-8 string of four Chinese characters. Asserts the result is the list
+    # of each character encoded as bytes.
     text = constant_op.constant(u"仅今年前".encode("UTF-8"))
     chars = ragged_string_ops.unicode_split(text, "UTF-8")
     self.assertAllEqual(chars, [c.encode("UTF-8") for c in u"仅今年前"])
 
   def testScalarSplitWithOffset(self):
+    # [FUNCTION DOC]
+    # Splits the scalar string with offsets. Asserts the character byte strings and start
+    # offsets zero, three, six and nine.
     text = constant_op.constant(u"仅今年前".encode("UTF-8"))
     chars, starts = ragged_string_ops.unicode_split_with_offsets(text, "UTF-8")
     self.assertAllEqual(chars, [c.encode("UTF-8") for c in u"仅今年前"])
     self.assertAllEqual(starts, [0, 3, 6, 9])
 
   def testVectorSplit(self):
+    # [FUNCTION DOC]
+    # Splits a vector of two strings. Asserts a ragged result of per-character byte strings
+    # for each row.
     text = constant_op.constant([u"仅今年前".encode("UTF-8"), b"hello"])
     chars = ragged_string_ops.unicode_split(text, "UTF-8")
     expected_chars = [[c.encode("UTF-8") for c in u"仅今年前"],
@@ -487,6 +591,9 @@ class UnicodeSplitTest(test_util.TensorFlowTestCase,
     self.assertAllEqual(chars, expected_chars)
 
   def testVectorSplitWithOffset(self):
+    # [FUNCTION DOC]
+    # Splits the two-string vector with offsets. Asserts the per-row character byte strings
+    # and byte start offsets.
     text = constant_op.constant([u"仅今年前".encode("UTF-8"), b"hello"])
     chars, starts = ragged_string_ops.unicode_split_with_offsets(text, "UTF-8")
     expected_chars = [[c.encode("UTF-8") for c in u"仅今年前"],
@@ -504,6 +611,9 @@ class UnicodeSplitTest(test_util.TensorFlowTestCase,
       {"texts": []}
   ])  # pyformat: disable
   def testBasicSplit(self, texts, ragged_rank=None):
+    # [FUNCTION DOC]
+    # Parameterized over nested text inputs with optional ragged rank. Encodes, splits as UTF-8
+    # and asserts equality with the expected nested lists of character byte strings.
     input_tensor = ragged_factory_ops.constant_value(
         _nested_encode(texts, "UTF-8"), ragged_rank=ragged_rank, dtype=bytes)
     result = ragged_string_ops.unicode_split(input_tensor, "UTF-8")
@@ -520,6 +630,9 @@ class UnicodeSplitTest(test_util.TensorFlowTestCase,
       {"texts": []}
   ])  # pyformat: disable
   def testBasicSplitWithOffsets(self, texts, ragged_rank=None):
+    # [FUNCTION DOC]
+    # Same inputs as the basic split test with the with-offsets variant. Asserts both the
+    # character byte strings and the byte start offsets.
     input_tensor = ragged_factory_ops.constant_value(
         _nested_encode(texts, "UTF-8"), ragged_rank=ragged_rank, dtype=bytes)
     result = ragged_string_ops.unicode_split_with_offsets(input_tensor, "UTF-8")
@@ -529,6 +642,9 @@ class UnicodeSplitTest(test_util.TensorFlowTestCase,
     self.assertAllEqual(expected_offsets, result[1])
 
   def testDocstringExamples(self):
+    # [FUNCTION DOC]
+    # Reproduces the documented split example with two strings. Asserts the character byte
+    # strings from both the plain and with-offsets variants and the expected byte offsets.
     texts = [s.encode("utf8") for s in [u"G\xf6\xf6dnight", u"\U0001f60a"]]
     codepoints1 = ragged_string_ops.unicode_split(texts, "UTF-8")
     codepoints2, offsets = ragged_string_ops.unicode_split_with_offsets(
@@ -568,6 +684,9 @@ class UnicodeSplitTest(test_util.TensorFlowTestCase,
               np.zeros([0, 2], np.int64), [], [0, 0], dtype=bytes)),
   ])  # pyformat: disable
   def testSplitWithSparseOutput(self, texts, expected):
+    # [FUNCTION DOC]
+    # Splits a byte-string array and converts the ragged result to a sparse tensor. Asserts a
+    # sparse tensor whose indices, values and dense shape equal the expected ones.
     input_tensor = np.array(_nested_encode(texts, "UTF-8"), dtype=bytes)
     result = ragged_string_ops.unicode_split(input_tensor, "UTF-8").to_sparse()
     self.assertIsInstance(result, sparse_tensor.SparseTensor)
@@ -611,6 +730,9 @@ class UnicodeSplitTest(test_util.TensorFlowTestCase,
       dict(texts=[], expected=np.zeros([0, 0], np.int64)),
   ])  # pyformat: disable
   def testSplitWithPaddedOutput(self, texts, expected, ragged_rank=None):
+    # [FUNCTION DOC]
+    # Splits ragged text and converts to a dense tensor padded with the empty string. Asserts
+    # equality with the expected byte-string array.
     input_tensor = ragged_factory_ops.constant_value(
         _nested_encode(texts, "UTF-8"), ragged_rank=ragged_rank, dtype=bytes)
     result = ragged_string_ops.unicode_split(
@@ -645,6 +767,9 @@ class UnicodeSplitTest(test_util.TensorFlowTestCase,
                     [b"w", b"o", b"r", b"l", b"d"]]),
   ])  # pyformat: disable
   def testErrorModes(self, expected=None, **args):
+    # [FUNCTION DOC]
+    # Passes keyword arguments to the split op to exercise invalid-byte handling (replace with
+    # default or custom character, ignore). Asserts the expected character byte strings.
     result = ragged_string_ops.unicode_split(**args)
     self.assertAllEqual(expected, result)
 
@@ -685,6 +810,9 @@ class UnicodeSplitTest(test_util.TensorFlowTestCase,
                                 expected=None,
                                 expected_offsets=None,
                                 **args):
+    # [FUNCTION DOC]
+    # Error-mode check for the with-offsets split. Keyword arguments go to the op. Asserts the
+    # expected character byte strings and byte offsets.
     result = ragged_string_ops.unicode_split_with_offsets(**args)
     self.assertAllEqual(expected, result[0])
     self.assertAllEqual(expected_offsets, result[1])
@@ -695,6 +823,9 @@ class UnicodeSplitTest(test_util.TensorFlowTestCase,
       ("UTF-32-BE", [u"こんにちは", u"你好", u"Hello"]),
   )
   def testSplitWithDifferentEncodings(self, encoding, texts):
+    # [FUNCTION DOC]
+    # Encodes sample texts in a UTF variant, splits with the same encoding and asserts the
+    # character byte strings match the expected ones.
     expected = _nested_splitchars(texts, encoding)
     input_tensor = constant_op.constant(_nested_encode(texts, encoding))
     result = ragged_string_ops.unicode_split(input_tensor, encoding)
@@ -706,6 +837,9 @@ class UnicodeSplitTest(test_util.TensorFlowTestCase,
       ("UTF-32-BE", [u"こんにちは", u"你好", u"Hello"]),
   )
   def testSplitWithOffsetsWithDifferentEncodings(self, encoding, texts):
+    # [FUNCTION DOC]
+    # With-offsets variant of the different-encodings split test; asserts both character byte
+    # strings and byte start offsets.
     expected_codepoints = _nested_splitchars(texts, encoding)
     expected_offsets = _nested_offsets(texts, encoding)
     input_tensor = constant_op.constant(_nested_encode(texts, encoding))
@@ -731,10 +865,18 @@ class UnicodeSplitTest(test_util.TensorFlowTestCase,
            exception=(ValueError, errors.InvalidArgumentError)),
   ])  # pyformat: disable
   def testExceptions(self, exception=None, message=None, **args):
+    # [FUNCTION DOC]
+    # Calls split with invalid input (strict mode on malformed bytes, out-of-range replacement
+    # character, unknown error mode). Asserts the expected exception type and message pattern.
     with self.assertRaisesRegex(exception, message):
       self.evaluate(ragged_string_ops.unicode_split(**args))
 
   def testUnknownRankError(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: despite living in the split test class, it calls the decode op, not the
+    # split op, so it duplicates the decode class test and never checks split's rank handling.
+    # Skipped in eager mode. In graph mode feeds a placeholder of unknown rank and asserts a
+    # value error saying the input rank must be statically known.
     if context.executing_eagerly():
       return
     s = array_ops.placeholder(dtypes.string)

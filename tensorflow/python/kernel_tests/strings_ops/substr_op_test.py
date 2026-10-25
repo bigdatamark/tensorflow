@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Kernel tests for the string substring operation (string_ops.substr). Covers scalar, vector,
+# matrix and broadcast inputs, byte and UTF-8 character units, positive and negative positions,
+# int32 and int64 index types, and the error paths (out of range, bad shapes, wrong dtypes,
+# invalid unit, unsupported rank). Test-only module with no import-time side effects.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +29,10 @@ from tensorflow.python.platform import test
 
 
 class SubstrOpTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case covering string_ops.substr across index dtypes and the byte and
+  # UTF-8 character units. Each test builds string tensors, evaluates the op in a cached
+  # session and compares against hand-computed expected substrings or expected errors.
 
   @parameterized.parameters(
       (np.int32, 1, "BYTE"),
@@ -36,6 +45,10 @@ class SubstrOpTest(test.TestCase, parameterized.TestCase):
       (np.int64, -4, "UTF8_CHAR"),
   )
   def testScalarString(self, dtype, pos, unit):
+    # [FUNCTION DOC]
+    # Takes a scalar string (ASCII for byte unit, multi-byte text for character unit) and
+    # extracts three units at a positive or negative position given as a scalar of the
+    # parameterized integer dtype. Asserts the result equals the expected substring.
     test_string = {
         "BYTE": b"Hello",
         "UTF8_CHAR": u"He\xc3\xc3\U0001f604".encode("utf-8"),
@@ -58,6 +71,10 @@ class SubstrOpTest(test.TestCase, parameterized.TestCase):
       (np.int64, "UTF8_CHAR"),
   )
   def testScalarString_EdgeCases(self, dtype, unit):
+    # [FUNCTION DOC]
+    # Edge cases on scalar strings: an empty string yields empty output; taking the whole
+    # string with position zero or minus five returns it unchanged; a length larger than
+    # what remains after a negative position is truncated to the available suffix.
     # Empty string
     test_string = {
         "BYTE": b"",
@@ -122,6 +139,9 @@ class SubstrOpTest(test.TestCase, parameterized.TestCase):
       (np.int64, -4, "UTF8_CHAR"),
   )
   def testVectorStrings(self, dtype, pos, unit):
+    # [FUNCTION DOC]
+    # Applies a scalar position and length to a vector of two strings, for byte and
+    # character units. Asserts each element is cut to the expected three-unit substring.
     test_string = {
         "BYTE": [b"Hello", b"World"],
         "UTF8_CHAR": [x.encode("utf-8") for x in [u"H\xc3llo",
@@ -145,6 +165,10 @@ class SubstrOpTest(test.TestCase, parameterized.TestCase):
       (np.int64, "UTF8_CHAR"),
   )
   def testMatrixStrings(self, dtype, unit):
+    # [FUNCTION DOC]
+    # Applies scalar position and length to a matrix of strings, first with a positive
+    # position and then with a negative one. Asserts the elementwise expected substrings
+    # for both byte and character units.
     test_string = {
         "BYTE": [[b"ten", b"eleven", b"twelve"],
                  [b"thirteen", b"fourteen", b"fifteen"],
@@ -195,6 +219,10 @@ class SubstrOpTest(test.TestCase, parameterized.TestCase):
       (np.int64, "UTF8_CHAR"),
   )
   def testElementWisePosLen(self, dtype, unit):
+    # [FUNCTION DOC]
+    # Uses a 3x3 matrix of strings with position and length matrices of the same shape,
+    # mixing positive and negative positions. Asserts each element is cut with its own
+    # position and length.
     test_string = {
         "BYTE": [[b"ten", b"eleven", b"twelve"],
                  [b"thirteen", b"fourteen", b"fifteen"],
@@ -236,6 +264,10 @@ class SubstrOpTest(test.TestCase, parameterized.TestCase):
       (np.int64, "UTF8_CHAR"),
   )
   def testBroadcast(self, dtype, unit):
+    # [FUNCTION DOC]
+    # Checks broadcasting in three ways: vector position/length onto a matrix of strings,
+    # a vector of strings onto matrix position/length, and a scalar string against vector
+    # position/length. Asserts the broadcast elementwise substrings for each case.
     # Broadcast pos/len onto input string
     test_string = {
         "BYTE": [[b"ten", b"eleven", b"twelve"],
@@ -318,6 +350,9 @@ class SubstrOpTest(test.TestCase, parameterized.TestCase):
   )
   @test_util.run_deprecated_v1
   def testBadBroadcast(self, dtype, unit):
+    # [FUNCTION DOC]
+    # Passes position and length vectors of length four against a 3x3 string matrix, which
+    # cannot broadcast. Asserts a value error is raised at graph construction time.
     test_string = [[b"ten", b"eleven", b"twelve"],
                    [b"thirteen", b"fourteen", b"fifteen"],
                    [b"sixteen", b"seventeen", b"eighteen"]]
@@ -338,6 +373,9 @@ class SubstrOpTest(test.TestCase, parameterized.TestCase):
   )
   @test_util.run_deprecated_v1
   def testOutOfRangeError_Scalar(self, dtype, pos, unit):
+    # [FUNCTION DOC]
+    # A scalar string of five units with position six or minus six is out of range.
+    # Asserts evaluating the op raises an invalid-argument error.
     # Scalar/Scalar
     test_string = {
         "BYTE": b"Hello",
@@ -362,6 +400,9 @@ class SubstrOpTest(test.TestCase, parameterized.TestCase):
   )
   @test_util.run_deprecated_v1
   def testOutOfRangeError_VectorScalar(self, dtype, pos, unit):
+    # [FUNCTION DOC]
+    # A vector of strings in which one is shorter than the scalar position (positive or
+    # negative magnitude four). Asserts evaluation raises an invalid-argument error.
     # Vector/Scalar
     test_string = {
         "BYTE": [b"good", b"good", b"bad", b"good"],
@@ -383,6 +424,10 @@ class SubstrOpTest(test.TestCase, parameterized.TestCase):
   )
   @test_util.run_deprecated_v1
   def testOutOfRangeError_MatrixMatrix(self, dtype, unit):
+    # [FUNCTION DOC]
+    # A matrix of strings with a matrix of positions where one position exceeds its string,
+    # first with positive then with negative positions. Asserts an invalid-argument error
+    # is raised when evaluating in each case.
     # Matrix/Matrix
     test_string = {
         "BYTE": [[b"good", b"good", b"good"], [b"good", b"good", b"bad"],
@@ -417,6 +462,10 @@ class SubstrOpTest(test.TestCase, parameterized.TestCase):
   )
   @test_util.run_deprecated_v1
   def testOutOfRangeError_Broadcast(self, dtype, unit):
+    # [FUNCTION DOC]
+    # Broadcasts a vector of positions and lengths over a matrix of strings where one string
+    # is too short, first with positive then negative positions. Asserts an invalid-argument
+    # error is raised on evaluation.
     # Broadcast
     test_string = {
         "BYTE": [[b"good", b"good", b"good"], [b"good", b"good", b"bad"]],
@@ -448,6 +497,9 @@ class SubstrOpTest(test.TestCase, parameterized.TestCase):
   )
   @test_util.run_deprecated_v1
   def testMismatchPosLenShapes(self, dtype, unit):
+    # [FUNCTION DOC]
+    # Passes position and length tensors whose rank or dimensionality differ from each other
+    # (matrix vs vector, then 3x3 vs 1x3). Asserts a value error is raised in both cases.
     test_string = {
         "BYTE": [[b"ten", b"eleven", b"twelve"],
                  [b"thirteen", b"fourteen", b"fifteen"],
@@ -476,6 +528,9 @@ class SubstrOpTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_deprecated_v1
   def testWrongDtype(self):
+    # [FUNCTION DOC]
+    # Passes a floating-point position, then a floating-point length. Asserts a type error
+    # is raised each time since only integer indices are accepted.
     with self.cached_session():
       with self.assertRaises(TypeError):
         string_ops.substr(b"test", 3.0, 1)
@@ -484,11 +539,17 @@ class SubstrOpTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_deprecated_v1
   def testInvalidUnit(self):
+    # [FUNCTION DOC]
+    # Passes an unsupported unit name. Asserts a value error is raised.
     with self.cached_session():
       with self.assertRaises(ValueError):
         string_ops.substr(b"test", 3, 1, unit="UTF8")
 
   def testInvalidPos(self):
+    # [FUNCTION DOC]
+    # Regression test for a reported issue: a scalar string with a two-element position
+    # vector and scalar length (positions one and minus one, then one and two). Asserts the
+    # call or its evaluation raises a value error or an invalid-argument error.
     # Test case for GitHub issue 46900.
     with self.assertRaises((ValueError, errors_impl.InvalidArgumentError)):
       x = string_ops.substr(b"abc", len=1, pos=[1, -1])
@@ -509,6 +570,10 @@ class SubstrOpTest(test.TestCase, parameterized.TestCase):
       (np.int64, "UTF8_CHAR", 2),
   )
   def testSingleString(self, dtype, unit, rank):
+    # [FUNCTION DOC]
+    # A single-element string array (optionally given an extra leading dimension for rank two)
+    # with vector positions and lengths. Asserts the output holds the expected three
+    # substrings and has the same rank as the input.
 
     test_string = {
         "BYTE": [b"abcdefghijklmnopqrstuvwxyz"],
@@ -551,6 +616,9 @@ class SubstrOpTest(test.TestCase, parameterized.TestCase):
       (np.int64, "UTF8_CHAR", 10),
   )
   def testSingleStringHighRankFails(self, dtype, unit, rank):
+    # [FUNCTION DOC]
+    # Expands a single string array to rank three or ten and calls substr. Asserts an
+    # unimplemented error is raised, since the op supports only up to rank two.
 
     test_string = {
         "BYTE": [b"abcdefghijklmnopqrstuvwxyz"],
