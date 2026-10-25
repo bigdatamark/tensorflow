@@ -1,3 +1,18 @@
+# [MODULE DOC]
+# KNOWN ISSUE: The named tuple type used for index specifications is given the type name
+# "IndexTest" while it is bound to the module variable IndexSpec, and the table of gradient
+# indexing cases (static indexing grad tests) is defined but never used by any test below.
+# Test module for the numpy-compatible indexing and indexed-update API of the TensorFlow
+# numpy ops package. It defines tables of indexing cases (static slicing, integer, ellipsis
+# and new-axis indexing, advanced integer-array indexing, and mixed forms) as lists of
+# named groups of specs pairing an input shape with an indexer. Two test classes consume
+# them: one checks that reading elements via indexing on tensors matches plain numpy and
+# compiles correctly, and one checks the index update, add, min and max operations and the
+# dynamic slice and dynamic update slice extensions against numpy reference
+# implementations. Test base class and helpers come from the sibling test utility, config,
+# extensions and wrapper modules. Import time side effect: command line flags are parsed
+# through the config object. Running the file as a script disables soft device placement
+# and starts the absl test runner.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -42,6 +57,11 @@ config.parse_flags_with_absl()
 
 
 def subvals(lst, replace):
+  # [FUNCTION DOC]
+  # HELPER: small utility for the indexing tests that rebuild index tuples.
+  # Returns a tuple copy of the sequence lst in which, for every pair of position and value
+  # in replace (an iterable of such pairs), the element at that position is substituted by
+  # the value. The input is not mutated. Raises an index error if a position is out of range.
   lst = list(lst)
   for i, v in replace:
     lst[i] = v
@@ -373,6 +393,12 @@ MIXED_ADVANCED_INDEXING_TESTS = MIXED_ADVANCED_INDEXING_TESTS_NO_REPEATS + [
 
 
 def dynamic_slice_reference(operand, start_indices, slice_sizes):
+  # [FUNCTION DOC]
+  # HELPER: pure numpy reference implementation used to check the dynamic slice extension.
+  # Inputs: operand is a numpy array, start_indices the per-axis start positions, slice_sizes
+  # the requested per-axis sizes. Returns a new zero-initialised array of shape slice_sizes
+  # and operand's dtype, filled with the in-bounds part of the requested window (the window
+  # is clipped at the array end, the remainder stays zero). No side effects.
   out = onp.zeros(slice_sizes, dtype=operand.dtype)
   idx = tuple(slice(start, start+size)
               for start, size in zip(start_indices, slice_sizes))
@@ -382,6 +408,11 @@ def dynamic_slice_reference(operand, start_indices, slice_sizes):
 
 
 def dynamic_update_slice_reference(operand, update, start_indices):
+  # [FUNCTION DOC]
+  # HELPER: pure numpy reference implementation used to check the dynamic update slice
+  # extension. Returns a copy of operand in which the block starting at start_indices and
+  # having the shape of update is overwritten with update. The operand is not mutated.
+  # Raises a numpy shape error if the block does not fit in the operand.
   slices = tuple(map(
       slice, start_indices, onp.add(start_indices, update.shape)))
   updated_operand = onp.copy(operand)
@@ -390,6 +421,12 @@ def dynamic_update_slice_reference(operand, update, start_indices):
 
 
 class IndexingTest(jtu.TestCase):
+  # [CLASS DOC]
+  # Test case covering read-only indexing of tensors created through the numpy wrapper:
+  # static and dynamic slicing, integer, advanced (array) and boolean indexing, error cases,
+  # and the dynamic slice extension. Each test compares against plain numpy results and
+  # (for parameterized ones) also checks graph compilation. Inherits the numpy comparison
+  # and compile-and-check helpers from the shared test utility base class.
   """Tests for Numpy indexing translation rules."""
 
   @parameterized.named_parameters(jtu.cases_from_list({
@@ -401,6 +438,12 @@ class IndexingTest(jtu.TestCase):
     for dtype in all_dtypes
     for rng_factory in [jtu.rand_default]))
   def testStaticIndexing(self, shape, dtype, rng_factory, indexer):
+    # [FUNCTION DOC]
+    # Parameterized over every static indexing case, every dtype and the default random
+    # generator factory. Builds a random array of the given shape and dtype, indexes it with
+    # the constant indexer (integers, slices, ellipsis, new axes, empty tuple) both in numpy
+    # and on a tensor made by the wrapper, and asserts equal results including dtypes. Then
+    # asserts the tensor version also compiles and agrees, with incomplete input shapes.
     # TODO(rohanj): Revisit passing in self.rng() to this to customize further.
     # This would need updating lax_numpy_test as well.
     rng = rng_factory()
@@ -412,6 +455,13 @@ class IndexingTest(jtu.TestCase):
                           check_incomplete_shape=True)
 
   def _ReplaceSlicesWithTuples(self, idx):
+    # [FUNCTION DOC]
+    # HELPER: prepares indexers so slice bounds can be passed as ordinary runtime arguments.
+    # Input: idx, a slice, an integer, or a possibly nested tuple or list of those. Returns a
+    # pair: the structure with each slice replaced by a (start, stop, step) triple whose
+    # missing (nothing) entries became zero, and a function that rebuilds the original
+    # structure from such a triple structure, restoring nothing at the replaced positions.
+    # Non-slice leaves are returned unchanged. Empty tuples or lists are treated as leaves.
     """Helper method to replace slices with tuples for dynamic indexing args."""
     if isinstance(idx, slice):
       triple = idx.start, idx.stop, idx.step
@@ -452,10 +502,19 @@ class IndexingTest(jtu.TestCase):
       for dtype in all_dtypes
       for rng_factory in [jtu.rand_default])
   def testDynamicIndexingWithSlices(self, shape, dtype, rng_factory, indexer):
+    # [FUNCTION DOC]
+    # Parameterized over slice-based indexers (single and double slices, negative and non-unit
+    # strides) and dtypes. The slices are converted to triples passed as runtime arguments of
+    # the function under test, then rebuilt inside it. Asserts that indexing a tensor matches
+    # numpy and that the compiled version agrees (with eager shape evaluation and the forced
+    # compile check turned off because of compile-time-constant requirements).
     rng = rng_factory()
     unpacked_indexer, pack_indexer = self._ReplaceSlicesWithTuples(indexer)
 
     def onp_fun(x, unpacked_indexer):
+      # [FUNCTION DOC]
+      # HELPER: function under test. Rebuilds the indexer from its triple form and returns
+      # the indexed value of x. Works on numpy arrays or tensors; no side effects.
       indexer = pack_indexer(unpacked_indexer)
       return x[indexer]
 
@@ -493,12 +552,20 @@ class IndexingTest(jtu.TestCase):
       for dtype in all_dtypes
       for rng_factory in [jtu.rand_default])
   def testDynamicIndexingWithIntegers(self, shape, dtype, rng_factory, indexer):
+    # [FUNCTION DOC]
+    # Parameterized over integer and integer-tuple indexers and dtypes. The indexer is passed
+    # as a runtime argument (not a constant) to the function under test. Asserts that the
+    # tensor result matches numpy and that the compiled function agrees, with incomplete
+    # input shapes allowed.
     # TODO(rohanj): Revisit passing in self.rng() to this to customize further.
     # This would need updating lax_numpy_test as well.
     rng = rng_factory()
     unpacked_indexer, pack_indexer = self._ReplaceSlicesWithTuples(indexer)
 
     def onp_fun(x, unpacked_indexer):
+      # [FUNCTION DOC]
+      # HELPER: function under test. Rebuilds the indexer from its argument form and returns
+      # x indexed with it. Works on numpy arrays or tensors; no side effects.
       indexer = pack_indexer(unpacked_indexer)
       return x[indexer]
 
@@ -520,6 +587,13 @@ class IndexingTest(jtu.TestCase):
       for rng_factory in [jtu.rand_default])
   def testAdvancedIntegerIndexing(self, name, shape, dtype, rng_factory,
                                   indexer):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the forced-compile check is meant to be skipped for the case named
+    # "ListOfPythonIntsAndIntArrays", but no case in the advanced indexing table has that name,
+    # so the check is always enabled and the intended exemption never applies.
+    # Parameterized over integer-array indexing cases and dtypes. The indexer is passed as a
+    # runtime argument. Asserts that indexing a tensor equals numpy and that the compiled
+    # version agrees with incomplete shapes allowed.
     rng = rng_factory()
     args_maker = lambda: [rng(shape, dtype), indexer]
     onp_fun = lambda x, idx: x[idx]
@@ -546,6 +620,12 @@ class IndexingTest(jtu.TestCase):
       for rng_factory in [jtu.rand_default])
   def testMixedAdvancedIntegerIndexing(self, name, shape, dtype, rng_factory,
                                        indexer):
+    # [FUNCTION DOC]
+    # Parameterized over indexers mixing integer arrays with slices, ellipsis and new axes.
+    # Only array elements are passed as runtime arguments (other elements replaced by empty
+    # placeholders) and the full indexer is rebuilt inside the function under test. Asserts
+    # the tensor result equals numpy and the compiled version agrees; the forced-compile
+    # check is skipped for the case named IntArrayWithInt32Type.
     rng = rng_factory()
     indexer_with_dummies = [e if isinstance(e, onp.ndarray) else ()
                             for e in indexer]
@@ -554,6 +634,10 @@ class IndexingTest(jtu.TestCase):
     args_maker = lambda: [rng(shape, dtype), indexer_with_dummies]
 
     def np_fun(x, indexer_with_dummies):
+      # [FUNCTION DOC]
+      # HELPER: function under test. Restores the non-array indexer elements at their
+      # recorded positions, rebuilds an indexer of the original container type and returns
+      # x indexed with it. No side effects.
       idx = type(indexer)(subvals(indexer_with_dummies, substitutes))
       return x[idx]
 
@@ -570,6 +654,12 @@ class IndexingTest(jtu.TestCase):
                           check_xla_forced_compile=check_xla)
 
   def testAdvancedIndexingManually(self):
+    # [FUNCTION DOC]
+    # Builds a random three-dimensional array and an integer index array, and for three
+    # indexing expressions (index array on the middle axis, index arrays combined with
+    # ellipsis and new axis, and a mix of ellipsis, a column-shaped index and new axis)
+    # asserts that the plain result equals the result of the jit-compiled extension version,
+    # including dtypes.
     x = onp.random.RandomState(0).randn(3, 4, 5)
     index_array = onp.array([0, 2, -1, 0])
 
@@ -600,8 +690,15 @@ class IndexingTest(jtu.TestCase):
   # Note that we don't currently allow __iter__ in graph mode. So this test only
   # iterates over eager tensor.
   def testUnpacking(self):
+    # [FUNCTION DOC]
+    # Asserts that iterating (unpacking into three names) over an eager tensor produced by the
+    # wrapper gives the same sum as for a numpy array of three elements. Only eager tensors
+    # are iterated because iteration is not allowed in graph mode.
 
     def foo(x):
+      # [FUNCTION DOC]
+      # HELPER: unpacks a three-element sequence x and returns the sum of its elements.
+      # Raises a value error if x does not have exactly three elements.
       a, b, c = x
       return a + b + c
 
@@ -611,6 +708,9 @@ class IndexingTest(jtu.TestCase):
     self.assertAllClose(a1, a2, check_dtypes=True)
 
   def testBooleanIndexingArray1D(self):
+    # [FUNCTION DOC]
+    # Indexes a tensor of three consecutive integers with a numpy boolean mask and asserts the
+    # result equals numpy's masked selection (dtype not checked).
     idx = onp.array([True, True, False])
     x = tnp.asarray(onp.arange(3))
     ans = x[idx]
@@ -618,6 +718,9 @@ class IndexingTest(jtu.TestCase):
     self.assertAllClose(ans, expected, check_dtypes=False)
 
   def testBooleanIndexingList1D(self):
+    # [FUNCTION DOC]
+    # Same as the one-dimensional array mask test but the boolean mask is a plain list of
+    # booleans; asserts the tensor result equals numpy's (dtype not checked).
     idx = [True, True, False]
     x = tnp.asarray(onp.arange(3))
     ans = x[idx]
@@ -625,6 +728,9 @@ class IndexingTest(jtu.TestCase):
     self.assertAllClose(ans, expected, check_dtypes=False)
 
   def testBooleanIndexingArray2DBroadcast(self):
+    # [FUNCTION DOC]
+    # Selects rows of a 4 by 2 tensor using a one-dimensional numpy boolean mask over the
+    # first axis; asserts the result equals numpy's row selection (dtype not checked).
     idx = onp.array([True, True, False, True])
     x = onp.arange(8).reshape(4, 2)
     ans = tnp.asarray(x)[idx]
@@ -632,6 +738,9 @@ class IndexingTest(jtu.TestCase):
     self.assertAllClose(ans, expected, check_dtypes=False)
 
   def testBooleanIndexingList2DBroadcast(self):
+    # [FUNCTION DOC]
+    # Same as the two-dimensional broadcast mask test but the row mask is a plain list of
+    # booleans; asserts the result equals numpy's row selection (dtype not checked).
     idx = [True, True, False, True]
     x = onp.arange(8).reshape(4, 2)
     ans = tnp.asarray(x)[idx]
@@ -639,6 +748,9 @@ class IndexingTest(jtu.TestCase):
     self.assertAllClose(ans, expected, check_dtypes=False)
 
   def testBooleanIndexingArray2D(self):
+    # [FUNCTION DOC]
+    # Indexes a 4 by 2 tensor with a full-shape two-dimensional boolean mask and asserts the
+    # flattened selection equals numpy's (dtype not checked).
     idx = onp.array([[True, False],
                      [False, True],
                      [False, False],
@@ -649,6 +761,12 @@ class IndexingTest(jtu.TestCase):
     self.assertAllClose(ans, expected, check_dtypes=False)
 
   def testBooleanIndexingDynamicShape(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the roles are swapped relative to the other tests: the numpy array is
+    # indexed to produce the "ans" value, and the tensor-indexed result is named "expected";
+    # the comparison is symmetric so it still checks equality, but the naming is misleading.
+    # Indexes a numpy zero vector with a boolean mask and a tensor copy with the same mask,
+    # asserting both selections are equal including dtype.
     x = onp.zeros(3)
     i = onp.array([True, True, False])
     ans = x[i]
@@ -656,6 +774,11 @@ class IndexingTest(jtu.TestCase):
     self.assertAllClose(ans, expected, check_dtypes=True)
 
   def testIssue187(self):
+    # [FUNCTION DOC]
+    # Regression test for an old issue. First asserts (implicitly, by not raising) that
+    # indexing a tensor of ones with two integer lists does not crash. Then indexes a numpy
+    # array with two integer lists inside a jit-compiled function and asserts equality with
+    # plain numpy (dtype not checked).
     x = tnp.ones((5, 5))
     x[[0, 2, 4], [0, 2, 4]]  # doesn't crash
 
@@ -667,6 +790,13 @@ class IndexingTest(jtu.TestCase):
   # TODO(agarwal): Fix this use case.
   @jtu.disable
   def testIndexingEmptyDimension(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the test is disabled by the disable decorator (marked as a to-do to fix),
+    # so it never runs; it also refers to JAX behaviour and expects out-of-bounds errors that
+    # the tensor implementation may not raise.
+    # Intended scenario: for a tensor with a zero-sized second axis, slicing and new-axis
+    # indexing work, while a scalar index into the empty axis should raise an index error
+    # (in numpy, directly, and under jit compilation).
     # Issue 2671: XLA error when indexing into dimension of size 0
     x = tnp.ones((2, 0))
     # The following work, even on axis 1 of size 0
@@ -683,6 +813,9 @@ class IndexingTest(jtu.TestCase):
       nje.jit(lambda i: x[0, i])(0)  # JAX indexing under jit
 
   def testBooleanIndexingWithEmptyResult(self):
+    # [FUNCTION DOC]
+    # Indexes a one-element tensor with an all-false boolean mask (must not crash) and asserts
+    # the empty result equals numpy's (dtype not checked).
     # based on a TensorFlow Probability test that started failing after #1623
     x = tnp.array([-1])
     mask = tnp.array([False])
@@ -692,6 +825,11 @@ class IndexingTest(jtu.TestCase):
     self.assertAllClose(ans, expected, check_dtypes=False)
 
   def testFloatIndexingError(self):
+    # [FUNCTION DOC]
+    # Asserts that using a float as an index raises an index error whose message says only
+    # integers, slices and similar are valid: first for numpy (to confirm the expected
+    # behaviour), then for tensors with a float scalar index, with a tuple containing a float,
+    # and inside a jit-compiled function with a runtime float index.
     error_regex = "only integers, slices.*are valid indices"
     # Verify onp behavior
     with self.assertRaisesRegex(IndexError, error_regex):
@@ -706,6 +844,9 @@ class IndexingTest(jtu.TestCase):
       nje.jit(lambda idx: tnp.zeros((2, 2))[idx])((0, 0.0))
 
   def testIndexOutOfBounds(self):  # https://github.com/google/jax/issues/2245
+    # [FUNCTION DOC]
+    # Asserts that slicing a five-element tensor of ones with an end bound beyond its length
+    # is clipped and returns the whole tensor (equal values and dtype).
     array = tnp.ones(5)
     self.assertAllClose(array, array[:10], check_dtypes=True)
 
@@ -727,6 +868,10 @@ class IndexingTest(jtu.TestCase):
       for rng_factory in [jtu.rand_default]))
   def testDynamicSlice(self, shape, dtype, start_indices, size_indices,
                        rng_factory):
+    # [FUNCTION DOC]
+    # Parameterized over shapes, start positions (including negative ones) and slice sizes.
+    # Runs the dynamic slice extension, with start positions passed as a runtime array, through
+    # the compile-and-check helper to verify the compiled and eager results agree.
     rng = rng_factory()
     args_maker = lambda: [rng(shape, dtype), onp.array(start_indices)]
     op = lambda x, starts: nje.dynamic_slice(x, starts, size_indices)
@@ -749,6 +894,9 @@ class IndexingTest(jtu.TestCase):
       for rng_factory in [jtu.rand_default]))
   def testDynamicSliceAgainstNumpy(self, shape, dtype, start_indices,
                                    size_indices, rng_factory):
+    # [FUNCTION DOC]
+    # Parameterized over shapes, start positions and slice sizes. Asserts that the dynamic
+    # slice extension equals the pure numpy reference implementation of dynamic slicing.
     rng = rng_factory()
     args_maker = lambda: [rng(shape, dtype), onp.array(start_indices)]
     op = lambda x, s: nje.dynamic_slice(x, s, size_indices)
@@ -756,6 +904,9 @@ class IndexingTest(jtu.TestCase):
     self._CheckAgainstNumpy(numpy_op, op, args_maker)
 
   def testDynamicSliceInDim(self):
+    # [FUNCTION DOC]
+    # Takes a random 6 by 7 integer array and asserts that the dynamic slice along one
+    # dimension (start 2, size 3, default axis) equals the plain slice of rows 2 to 4.
     rng = jtu.rand_default()
     x = rng((6, 7), onp.int32)
     self.assertAllClose(
@@ -764,8 +915,17 @@ class IndexingTest(jtu.TestCase):
 
 
 def _broadcastable_shapes(shape):
+  # [FUNCTION DOC]
+  # HELPER: generates update shapes for the indexed-update tests.
+  # Generator that yields, as lists of dimension sizes, every shape that can broadcast to the
+  # given shape: each dimension either kept or replaced by one, with leading dimensions also
+  # droppable (shorter shapes). Duplicates can be yielded when a dimension is already one.
   """Returns all shapes that broadcast to `shape`."""
   def f(rshape):
+    # [FUNCTION DOC]
+    # HELPER: recursive generator working on a reversed dimension list. Yields the empty
+    # list, then every suffix choice combined with the first dimension kept, and (when that
+    # dimension is not one) with it replaced by one.
     yield []
     if rshape:
       for s in f(rshape[1:]):
@@ -778,10 +938,18 @@ def _broadcastable_shapes(shape):
 
 
 def _update_shape(shape, indexer):
+  # [FUNCTION DOC]
+  # HELPER: computes the shape of the region selected by indexer in an array of the given
+  # shape, by indexing a temporary zero array and returning its shape (a tuple).
   return onp.zeros(shape)[indexer].shape
 
 
 class UpdateOps(enum.Enum):
+  # [CLASS DOC]
+  # HELPER: enumeration of the indexed-update operations under test (plain update, add,
+  # minimum and maximum; multiplication is commented out). Each member also offers two
+  # functions taking the member as first argument: one computing the numpy reference result
+  # and one calling the matching extension function. Member values are 0, 1, 3 and 4.
   UPDATE = 0
   ADD = 1
   # MUL = 2
@@ -789,6 +957,11 @@ class UpdateOps(enum.Enum):
   MAX = 4
 
   def np_fn(op, indexer, x, y):  # pylint: disable=no-self-argument
+    # [FUNCTION DOC]
+    # HELPER: numpy reference for an indexed update. The first argument is the operation
+    # member. Copies array x, then at the indexed region stores y (update), the sum with y,
+    # the elementwise minimum, or the elementwise maximum depending on the member. Returns the
+    # new array; x is not mutated.
     x = x.copy()
     x[indexer] = {
       UpdateOps.UPDATE: lambda: y,
@@ -800,6 +973,10 @@ class UpdateOps(enum.Enum):
     return x
 
   def tfnp_fn(op, indexer, x, y):  # pylint: disable=no-self-argument
+    # [FUNCTION DOC]
+    # HELPER: dispatches to the extension indexed-update function matching the operation
+    # member (update, add, min or max) and returns its result for array x, indexer and
+    # update values y. Raises a key error for a member without an implementation.
     return {
         UpdateOps.UPDATE: nje.index_update,
         UpdateOps.ADD: nje.index_add,
@@ -811,12 +988,23 @@ class UpdateOps(enum.Enum):
 
 # a test to workaround b/123559667
 def has_non_trivial_stride(indexer):
+  # [FUNCTION DOC]
+  # HELPER: decides whether forced compilation checks must be skipped (workaround for a
+  # known bug). Returns true if any slice found when flattening the indexer structure has a
+  # step other than one, minus one or nothing.
   def has(idx):
+    # [FUNCTION DOC]
+    # HELPER: returns true if idx is a slice with a step other than one, minus one or nothing.
     return isinstance(idx, slice) and idx.step not in (1, -1, None)
   return any(has(idx) for idx in nest.flatten(indexer))
 
 
 class IndexedUpdateTest(jtu.TestCase):
+  # [CLASS DOC]
+  # Test case covering the indexed update extension functions (update, add, min, max) and the
+  # dynamic update slice functions. Compares against numpy-based references, checks
+  # compilation, checks gradients, and uses the update-operation enumeration and indexing
+  # case tables defined at module level.
 
   @parameterized.named_parameters(jtu.cases_from_list({  # pylint: disable=g-complex-comprehension
       "testcase_name": "_{}_{}_{}_{}".format(
@@ -834,6 +1022,12 @@ class IndexedUpdateTest(jtu.TestCase):
     for rng_factory in [jtu.rand_default]))
   def testStaticIndexing(self, shape, dtype, update_shape, update_dtype,
                          rng_factory, indexer, op):
+    # [FUNCTION DOC]
+    # Parameterized over static indexing cases, update operations, dtypes and every update
+    # shape that broadcasts to the indexed region. Asserts the extension update function equals
+    # the numpy reference, then that the compiled version agrees. The experimental and forced
+    # compile checks are disabled for strided indexers and for slices ending at 8 with step
+    # minus one (known compiler errors).
     rng = rng_factory()
     args_maker = lambda: [rng(shape, dtype), rng(update_shape, update_dtype)]
     np_fn = lambda x, y: UpdateOps.np_fn(op, indexer, x, y)
@@ -864,6 +1058,11 @@ class IndexedUpdateTest(jtu.TestCase):
     for rng_factory in [jtu.rand_default]))
   def testAdvancedIndexing(self, shape, dtype, update_shape, update_dtype,
                            rng_factory, indexer, op):
+    # [FUNCTION DOC]
+    # Same scenario as the static update test but for integer-array indexers without repeated
+    # indices (so results are well defined), with all update operations and broadcastable
+    # update shapes. Asserts agreement with the numpy reference and with the compiled version
+    # (incomplete shapes allowed).
     rng = rng_factory()
     args_maker = lambda: [rng(shape, dtype), rng(update_shape, update_dtype)]
     np_fn = lambda x, y: UpdateOps.np_fn(op, indexer, x, y)
@@ -887,6 +1086,11 @@ class IndexedUpdateTest(jtu.TestCase):
     for rng_factory in [jtu.rand_default]))
   def testMixedAdvancedIndexing(self, shape, dtype, update_shape, update_dtype,
                                 rng_factory, indexer, op):
+    # [FUNCTION DOC]
+    # Same scenario for indexers mixing integer arrays with slices, ellipsis and new axes
+    # (without repeated indices). Asserts agreement with the numpy reference, then with the
+    # compiled version; experimental and forced compile checks are skipped if the indexer has
+    # a non-trivial stride.
     rng = rng_factory()
     args_maker = lambda: [rng(shape, dtype), rng(update_shape, update_dtype)]
     np_fn = lambda x, y: UpdateOps.np_fn(op, indexer, x, y)
@@ -913,6 +1117,12 @@ class IndexedUpdateTest(jtu.TestCase):
     for rng_factory in [jtu.rand_default]))
   def testStaticIndexingGrads(self, shape, dtype, update_shape, update_dtype,
                               rng_factory, indexer, op):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: draws its cases from the general static indexing table, not from the
+    # dedicated gradient table defined at module level, which stays unused.
+    # Parameterized over static indexers, the add and update operations, and float dtypes.
+    # Checks numerically (with loose tolerances) that gradients of the update function with
+    # respect to the array and the update values are correct.
     rng = rng_factory()
     tfnp_fn = lambda x, y: UpdateOps.tfnp_fn(op, indexer, x, y)
     x = rng(shape, dtype)
@@ -936,8 +1146,15 @@ class IndexedUpdateTest(jtu.TestCase):
       for rng_factory in [jtu.rand_default]))
   def testDynamicUpdateSlice(self, shape, dtype, start_indices, update_shape,
                              rng_factory):
+    # [FUNCTION DOC]
+    # Parameterized over shapes, start positions and update shapes. Runs the dynamic update
+    # slice extension through the compile-and-check helper to verify compiled and eager
+    # results agree; incomplete-shape checking is off because the update shape must be known.
     rng = rng_factory()
     def args_maker():
+      # [FUNCTION DOC]
+      # HELPER: argument factory. Returns a list of a random array, a random update array and
+      # the start positions as an array.
       return [rng(shape, dtype), rng(update_shape, dtype),
               onp.array(start_indices)]
     # update's shape must be fully known.
@@ -964,8 +1181,14 @@ class IndexedUpdateTest(jtu.TestCase):
       for rng_factory in [jtu.rand_default]))
   def testDynamicUpdateSliceAgainstNumpy(self, shape, dtype, start_indices,
                                          update_shape, rng_factory):
+    # [FUNCTION DOC]
+    # Parameterized over shapes, start positions and update shapes. Asserts the dynamic update
+    # slice extension equals the numpy reference implementation.
     rng = rng_factory()
     def args_maker():
+      # [FUNCTION DOC]
+      # HELPER: argument factory. Returns a list of a random array, a random update array and
+      # the start positions as an array.
       return [rng(shape, dtype), rng(update_shape, dtype),
               onp.array(start_indices)]
     self._CheckAgainstNumpy(
@@ -973,6 +1196,10 @@ class IndexedUpdateTest(jtu.TestCase):
     )
 
   def testDynamicUpdateSliceInDim(self):
+    # [FUNCTION DOC]
+    # Takes a random 6 by 7 array and a 3 by 7 update, computes the expected result by writing
+    # the update into rows 2 to 4 of a copy, and asserts the dynamic update along dimension
+    # zero at start 2 equals it, including dtype.
     rng = jtu.rand_default()
     x = rng((6, 7), onp.int32)
     y = rng((3, 7), onp.int32)
