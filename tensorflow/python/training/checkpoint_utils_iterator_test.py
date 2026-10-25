@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Unit tests for the checkpoints_iterator generator in the checkpoint utilities module.
+# Covers empty directories, single and sharded checkpoints, path-like directories, and the
+# timeout callback. Contains only tests; no import-time side effects beyond the test runner
+# entry point at the bottom.
 """Tests for checkpoints tools."""
 
 import os
@@ -31,9 +36,16 @@ from tensorflow.python.training import saver as saver_lib
 
 
 class CheckpointIteratorTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the checkpoints_iterator function: how many checkpoints it yields for
+  # various checkpoint directory layouts and how timeouts end iteration. Uses the per-test
+  # temporary directory as fixture; no shared setup.
 
   @test_util.run_in_graph_and_eager_modes
   def testReturnsEmptyIfNoCheckpointsFound(self):
+    # [FUNCTION DOC]
+    # Scenario: the directory does not exist. Iterates the checkpoints iterator with a zero
+    # timeout and expects it to yield nothing (count of yielded paths equals zero).
     checkpoint_dir = os.path.join(self.get_temp_dir(), "no_checkpoints_found")
 
     num_found = 0
@@ -43,6 +55,9 @@ class CheckpointIteratorTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testReturnsSingleCheckpointIfOneCheckpointFound(self):
+    # [FUNCTION DOC]
+    # Scenario: creates the directory, saves one object-based checkpoint of a resource variable
+    # valued five, then iterates with zero timeout. Expects exactly one checkpoint yielded.
     checkpoint_dir = os.path.join(self.get_temp_dir(), "one_checkpoint_found")
     if not gfile.Exists(checkpoint_dir):
       gfile.MakeDirs(checkpoint_dir)
@@ -61,6 +76,9 @@ class CheckpointIteratorTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testWorksWithFSPath(self):
+    # [FUNCTION DOC]
+    # Scenario: same as the single-checkpoint test but the directory and save prefix are
+    # path-like objects instead of strings. Expects exactly one checkpoint yielded.
     checkpoint_dir = pathlib.Path(self.get_temp_dir()) / "one_checkpoint_found"
     if not gfile.Exists(checkpoint_dir):
       gfile.MakeDirs(checkpoint_dir)
@@ -79,6 +97,10 @@ class CheckpointIteratorTest(test.TestCase):
 
   @test_util.run_v1_only("Tests v1-style checkpoint sharding")
   def testReturnsSingleCheckpointIfOneShardedCheckpoint(self):
+    # [FUNCTION DOC]
+    # Scenario (graph mode only): builds variables on two CPU devices, saves with a sharded
+    # saver in a session configured with two CPUs (producing several shard files), then
+    # iterates with zero timeout. Expects the shards to count as exactly one checkpoint.
     checkpoint_dir = os.path.join(self.get_temp_dir(),
                                   "one_checkpoint_found_sharded")
     if not gfile.Exists(checkpoint_dir):
@@ -109,8 +131,15 @@ class CheckpointIteratorTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testTimeoutFn(self):
+    # [FUNCTION DOC]
+    # Scenario: iterates over a nonexistent directory with a short timeout and a callback that
+    # counts its calls and returns true after more than three calls. Expects no results and
+    # exactly four callback invocations.
     timeout_fn_calls = [0]
     def timeout_fn():
+      # [FUNCTION DOC]
+      # Test callback: increments the shared call counter and returns true once the counter
+      # exceeds three, telling the iterator to stop. Takes no arguments.
       timeout_fn_calls[0] += 1
       return timeout_fn_calls[0] > 3
 

@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Thread coordination for TensorFlow training. Defines Coordinator, which lets a group of
+# threads cooperatively stop, records the first reported exception and re-raises it on join,
+# and LooperThread, a daemon thread class that repeatedly runs a function (back to back or on
+# a timer) under a coordinator. Both are exported in the public training API (LooperThread only
+# in the v1 API). Not a helper module; no import-time side effects other than the export
+# decorators.
 """Coordinator to help multiple threads stop when requested."""
 import contextlib
 import sys
@@ -26,6 +33,12 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export("train.Coordinator")
 class Coordinator:
+  # [CLASS DOC]
+  # Thread-safe coordinator used to tell a set of threads to stop and to collect errors.
+  # State: a lock guarding all attributes, a stop event, the first recorded exception info
+  # (type, value, traceback), a joined flag, a set of registered threads, and the tuple of
+  # exception types treated as a clean stop. Threads poll should_stop, report errors with
+  # request_stop, and the owner calls join to wait and re-raise the recorded error.
   """A coordinator for threads.
 
   This class implements a simple mechanism to coordinate the termination of a
@@ -122,6 +135,11 @@ class Coordinator:
   """
 
   def __init__(self, clean_stop_exception_types=None):
+    # [FUNCTION DOC]
+    # Creates a coordinator. Input: optional collection of exception types that count as a
+    # clean stop (reporting one is treated like reporting nothing); defaults to the
+    # out-of-range error used by input queues. Initializes the lock, an unset stop event, no
+    # recorded exception, not-joined state and an empty registered-thread set. Returns nothing.
     """Create a new Coordinator.
 
     Args:
@@ -153,6 +171,11 @@ class Coordinator:
     self._registered_threads = set()
 
   def _filter_exception(self, ex):
+    # [FUNCTION DOC]
+    # HELPER: used by request_stop to drop exceptions that mean a clean stop.
+    # Input: nothing, an exception, or an exception-info tuple (the exception is its second
+    # element). Output: the input unchanged, or nothing if the exception is an instance of one
+    # of the configured clean-stop types. No side effects.
     """Check if the exception indicated in 'ex' should be ignored.
 
     This method examines `ex` to check if it is an exception that should be
@@ -179,6 +202,18 @@ class Coordinator:
     return ex
 
   def request_stop(self, ex=None):
+    # [FUNCTION DOC]
+    # Asks all threads to stop, optionally recording an error to be re-raised by join.
+    # Input: optional exception or exception-info tuple (clean-stop types are ignored).
+    # Under the lock: if the coordinator was already joined, re-raises the given error
+    # immediately (for a tuple, its exception; for a bare exception, the one currently being
+    # handled). Otherwise, if not yet stopped and an error is given and none recorded yet, logs
+    # and records it (a tuple as given; a bare exception is recorded from the current handling
+    # context). If the recorded info is malformed, records a value error instead. Then sets the
+    # stop event. Returns nothing.
+    # KNOWN ISSUE: for a bare exception the recorded error is the one currently being handled,
+    # not the argument, so it is wrong if not called from the handler (the code comments admit
+    # this); after join, that handled exception may be nothing, so raising it would fail.
     """Request that the threads stop.
 
     After this is called, calls to `should_stop()` will return `True`.
@@ -240,6 +275,10 @@ class Coordinator:
         self._stop_event.set()
 
   def clear_stop(self):
+    # [FUNCTION DOC]
+    # Resets the coordinator so it can be reused: under the lock clears the joined flag and any
+    # recorded exception, and clears the stop event if set. Afterward should_stop is false.
+    # No inputs, returns nothing. Registered threads are left unchanged.
     """Clears the stop flag.
 
     After this is called, calls to `should_stop()` will return `False`.
@@ -251,6 +290,9 @@ class Coordinator:
         self._stop_event.clear()
 
   def should_stop(self):
+    # [FUNCTION DOC]
+    # Non-blocking check used by worker threads. Returns true if a stop was requested (the stop
+    # event is set), false otherwise. Does not take the lock and has no side effects.
     """Check if stop was requested.
 
     Returns:
@@ -260,6 +302,12 @@ class Coordinator:
 
   @contextlib.contextmanager
   def stop_on_exception(self):
+    # [FUNCTION DOC]
+    # Context manager (generator based) for use in a with statement. Runs the body and, if any
+    # exception (including system-exiting ones, since the handler is bare) escapes, reports it
+    # to request_stop as exception info and swallows it, so the body's exception does not
+    # propagate. Yields nothing. Side effect: may set the stop event and record the error.
+    # Note: request_stop may itself re-raise when the coordinator was already joined.
     """Context manager to request stop when an Exception is raised.
 
     Code that uses a coordinator must catch exceptions and pass
@@ -295,6 +343,10 @@ class Coordinator:
       self.request_stop(ex=sys.exc_info())
 
   def wait_for_stop(self, timeout=None):
+    # [FUNCTION DOC]
+    # Blocks until a stop is requested or the timeout elapses. Input: optional timeout in
+    # seconds (nothing waits indefinitely). Returns true if the stop event is set, false if the
+    # wait timed out. No other side effects.
     """Wait till the Coordinator is told to stop.
 
     Args:
@@ -307,6 +359,10 @@ class Coordinator:
     return self._stop_event.wait(timeout)
 
   def register_thread(self, thread):
+    # [FUNCTION DOC]
+    # Adds a thread to the set that join will wait for in addition to explicitly passed ones.
+    # Input: a thread object. Under the lock adds it to the registered set (duplicates are
+    # harmless). Returns nothing.
     """Register a thread to join.
 
     Args:
@@ -317,6 +373,18 @@ class Coordinator:
 
   def join(self, threads=None, stop_grace_period_secs=120,
            ignore_live_threads=False):
+    # [FUNCTION DOC]
+    # Waits for threads to finish, then re-raises any recorded error.
+    # Inputs: optional list of threads (nothing means only registered ones; otherwise the union
+    # with registered ones); stop grace period in seconds (default 120) allowed after a stop
+    # request; ignore_live_threads flag (default false) that downgrades leftover live threads
+    # to a log message.
+    # Behavior: takes a snapshot of threads under the lock, polls until all are dead or a stop
+    # is requested, then waits with exponentially growing short sleeps until the grace period
+    # runs out. Marks the coordinator joined and clears the registered set. If an exception was
+    # recorded it is raised; else if threads are still alive it raises a runtime error naming
+    # them (unless ignored). Returns nothing.
+    # Side effects: sleeps, logs, and mutates the joined flag and registered threads.
     """Wait for threads to terminate.
 
     This call blocks until a set of threads have terminated.  The set of thread
@@ -395,9 +463,15 @@ class Coordinator:
 
   @property
   def joined(self):
+    # [FUNCTION DOC]
+    # Read-only property: true once join has completed (and clear_stop has not reset it).
+    # Has no docstring of its own.
     return self._joined
 
   def raise_requested_exception(self):
+    # [FUNCTION DOC]
+    # Under the lock, re-raises the exception recorded by request_stop, if any; otherwise does
+    # nothing. No inputs, returns nothing. Does not clear the recorded exception.
     """If an exception has been passed to `request_stop`, this raises it."""
     with self._lock:
       if self._exc_info_to_raise:
@@ -408,6 +482,12 @@ class Coordinator:
 # Threads for the standard services.
 @tf_export(v1=["train.LooperThread"])
 class LooperThread(threading.Thread):
+  # [CLASS DOC]
+  # Daemon thread that repeatedly runs work under a Coordinator, either back to back or at
+  # fixed timer intervals. Work is the target callable with stored arguments, or an overridden
+  # run_loop in a subclass; start_loop and stop_loop are hooks. Errors raised while running are
+  # reported to the coordinator (stopping all threads). The thread registers itself with the
+  # coordinator at construction. Extends the standard thread class.
   """A thread that runs code repeatedly, optionally on a timer.
 
   This thread class is intended to be used with a `Coordinator`.  It repeatedly
@@ -426,6 +506,14 @@ class LooperThread(threading.Thread):
 
   def __init__(self, coord, timer_interval_secs, target=None, args=None,
                kwargs=None):
+    # [FUNCTION DOC]
+    # Constructs the looper thread. Inputs: a coordinator (required); timer interval in seconds
+    # or nothing for back-to-back calls; optional target callable; optional positional and
+    # keyword arguments for the target. Marks the thread daemon, stores the settings and
+    # registers the thread with the coordinator. Raises a value error if the coordinator is not
+    # a Coordinator, or if arguments are given without a target. Does not start the thread.
+    # KNOWN ISSUE: when no target is given, the stored args and kwargs attributes are never
+    # created, which is fine unless a subclass or caller relies on them.
     """Create a LooperThread.
 
     Args:
@@ -456,6 +544,12 @@ class LooperThread(threading.Thread):
 
   @staticmethod
   def loop(coord, timer_interval_secs, target, args=None, kwargs=None):
+    # [FUNCTION DOC]
+    # Static convenience factory: builds a looper thread for the target, starts it, and returns
+    # it. Inputs: coordinator, timer interval (nothing for back-to-back), target callable,
+    # optional positional and keyword arguments. Raises value errors as the constructor does.
+    # KNOWN ISSUE: the docstring says the target is called with the args as one value; the code
+    # actually unpacks args as positional and kwargs as keyword arguments.
     """Start a LooperThread that calls a function periodically.
 
     If `timer_interval_secs` is None the thread calls `target(args)`
@@ -479,6 +573,12 @@ class LooperThread(threading.Thread):
     return looper
 
   def run(self):
+    # [FUNCTION DOC]
+    # Thread body. Inside the coordinator's stop-on-exception context: calls start_loop, then
+    # either calls run_loop repeatedly until a stop is requested (no interval), or calls it at
+    # each interval boundary, waiting on the coordinator's stop event between calls; finally
+    # calls stop_loop. Exceptions are reported to the coordinator and end the thread. Returns
+    # nothing.
     with self._coord.stop_on_exception():
       self.start_loop()
       if self._timer_interval_secs is None:
@@ -494,14 +594,23 @@ class LooperThread(threading.Thread):
       self.stop_loop()
 
   def start_loop(self):
+    # [FUNCTION DOC]
+    # Hook called once when the thread starts, before the loop. Default does nothing; override
+    # in subclasses.
     """Called when the thread starts."""
     pass
 
   def stop_loop(self):
+    # [FUNCTION DOC]
+    # Hook called once after the loop finishes normally. Default does nothing; override in
+    # subclasses. Not called if the loop raised an exception.
     """Called when the thread stops."""
     pass
 
   def run_loop(self):
+    # [FUNCTION DOC]
+    # One iteration of the loop. If a target was given, calls it with the stored positional and
+    # keyword arguments; otherwise does nothing. Subclasses may override. Returns nothing.
     """Called at 'timer_interval_secs' boundaries."""
     if self._target:
       self._target(*self._args, **self._kwargs)

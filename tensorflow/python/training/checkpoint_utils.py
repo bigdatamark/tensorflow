@@ -12,6 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Utilities for reading and consuming name-based (variable-name keyed) checkpoints.
+# Exposes load_checkpoint (get a reader), load_variable (read one tensor), list_variables
+# (names and shapes), wait_for_new_checkpoint and checkpoints_iterator (poll a directory for new
+# checkpoints), and init_from_checkpoint (rewrite variable initializers in the current graph so
+# they restore from a checkpoint). Private helpers resolve checkpoint paths, match scopes and
+# partitioned variables, and override initializer ops. No import-time side effects other than
+# the API export decorators on the public functions.
 """Tools to work with name-based checkpoints.
 
 While some of these symbols also work with the TF2 object-based checkpoints,
@@ -45,6 +53,12 @@ __all__ = [
 
 @tf_export("train.load_checkpoint")
 def load_checkpoint(ckpt_dir_or_file):
+  # [FUNCTION DOC]
+  # Creates a checkpoint reader for a checkpoint file, or for the latest checkpoint found in a
+  # directory. Input: a directory path or checkpoint prefix (path-like or string).
+  # Output: a checkpoint reader object that can list and fetch tensors.
+  # Raises a value error if no checkpoint can be resolved (for example an empty directory).
+  # Side effects: reads the checkpoint state from the file system; nothing is mutated.
   """Returns `CheckpointReader` for checkpoint found in `ckpt_dir_or_file`.
 
   If `ckpt_dir_or_file` resolves to a directory with multiple checkpoints,
@@ -82,6 +96,12 @@ def load_checkpoint(ckpt_dir_or_file):
 
 @tf_export("train.load_variable")
 def load_variable(ckpt_dir_or_file, name):
+  # [FUNCTION DOC]
+  # Reads a single tensor from a checkpoint by name. Inputs: a checkpoint directory or file, and
+  # the tensor name; a trailing ":0" output suffix is stripped before lookup (a temporary
+  # workaround noted in the code). Output: the tensor value as a numpy array copy.
+  # Raises whatever the reader raises (value error for no checkpoint, not-found error for an
+  # unknown name). Side effects: reads from the file system only.
   """Returns the tensor value of the given variable in the checkpoint.
 
   When the variable name is unknown, you can use `tf.train.list_variables` to
@@ -116,6 +136,10 @@ def load_variable(ckpt_dir_or_file, name):
 
 @tf_export("train.list_variables")
 def list_variables(ckpt_dir_or_file):
+  # [FUNCTION DOC]
+  # Lists every tensor key stored in a checkpoint together with its shape. Input: a checkpoint
+  # directory or file. Output: a list of (name, shape) pairs sorted by name.
+  # Raises a value error if no checkpoint is found. Side effects: reads from the file system.
   """Lists the checkpoint keys and shapes of variables in a checkpoint.
 
   Checkpoint keys are paths in a checkpoint graph.
@@ -151,6 +175,13 @@ def wait_for_new_checkpoint(checkpoint_dir,
                             last_checkpoint=None,
                             seconds_to_sleep=1,
                             timeout=None):
+  # [FUNCTION DOC]
+  # Blocks, polling a directory, until the latest checkpoint differs from the last one seen.
+  # Inputs: the checkpoint directory; the previously used checkpoint path (optional, nothing
+  # means any checkpoint counts as new); seconds to sleep between polls (default 1); an optional
+  # timeout in seconds (nothing means wait forever).
+  # Output: the new checkpoint path, or nothing if the next sleep would pass the timeout.
+  # Side effects: sleeps, logs at info level, reads the file system. Does not raise by itself.
   """Waits until a new checkpoint file is found.
 
   Args:
@@ -183,6 +214,14 @@ def checkpoints_iterator(checkpoint_dir,
                          min_interval_secs=0,
                          timeout=None,
                          timeout_fn=None):
+  # [FUNCTION DOC]
+  # Generator that yields checkpoint paths as new checkpoints appear in a directory.
+  # Inputs: checkpoint directory; minimum seconds between yields (default 0), enforced by
+  # sleeping after the consumer resumes; timeout in seconds per wait (nothing waits forever);
+  # optional timeout callback taking no arguments whose true result ends iteration, while a
+  # false result resumes waiting.
+  # Output: yields path strings. Ends when a wait times out with no callback, or when the
+  # callback returns true. Side effects: sleeps, logs, reads the file system.
   """Continuously yield new checkpoint files as they appear.
 
   The iterator only checks for new checkpoints when control flow has been
@@ -245,6 +284,15 @@ def checkpoints_iterator(checkpoint_dir,
 
 @tf_export(v1=["train.init_from_checkpoint"])
 def init_from_checkpoint(ckpt_dir_or_file, assignment_map):
+  # [FUNCTION DOC]
+  # Public TF1-style entry point that makes variables initialize from checkpoint values.
+  # Inputs: checkpoint directory or file; assignment map (mapping or list of pairs from
+  # checkpoint tensor names or scopes to variables, variable lists, or variable/scope names).
+  # Output: returns nothing. Under a cross-replica context it applies the work directly,
+  # otherwise it uses a merge call from the current replica context so it runs once.
+  # Raises value errors for missing variables, tensors or shape mismatches (via the helper).
+  # Side effects: replaces initializer ops of matched variables; values load only when
+  # initializers run.
   """Replaces `tf.Variable` initializers so they load from a checkpoint file.
 
   @compatibility(TF2)
@@ -379,6 +427,18 @@ def init_from_checkpoint(ckpt_dir_or_file, assignment_map):
 
 
 def _init_from_checkpoint(ckpt_dir_or_file, assignment_map):
+  # [FUNCTION DOC]
+  # HELPER: does the real work for init_from_checkpoint.
+  # Resolves the checkpoint, sorts the assignment entries by checkpoint tensor name, and for
+  # each entry either (a) maps a tensor to a variable, variable list, or named variable found in
+  # the default variable store (including partitioned variables), checking existence and shape
+  # compatibility, or (b) for scope-to-scope entries, finds all store variables under the scope
+  # and maps each to the corresponding checkpoint tensor. Overrides initializers and logs debug.
+  # Raises value errors for missing checkpoint tensors, shape mismatch, or a scope-only name
+  # mapped to a non-scope tensor name. Returns nothing.
+  # KNOWN ISSUE: in the scope branch the variable store dictionary is only defined in the
+  # else-path of the earlier branch; it works because that path is the only one reaching it,
+  # but a list value containing non-variables would fail the string containment check.
   """See `init_from_checkpoint` for documentation."""
   ckpt_file = _get_checkpoint_filename(ckpt_dir_or_file)
   reader = load_checkpoint(ckpt_dir_or_file)
@@ -472,6 +532,10 @@ def _init_from_checkpoint(ckpt_dir_or_file, assignment_map):
 
 
 def _get_checkpoint_filename(ckpt_dir_or_file):
+  # [FUNCTION DOC]
+  # HELPER: resolves user input to a concrete checkpoint path for the public functions.
+  # Converts path-like input to a string; if it is a directory returns the latest checkpoint in
+  # it (nothing if none exists), otherwise returns the input unchanged. Reads the file system.
   """Returns checkpoint filename given directory or specific checkpoint file."""
   if isinstance(ckpt_dir_or_file, os.PathLike):
     ckpt_dir_or_file = os.fspath(ckpt_dir_or_file)
@@ -485,6 +549,14 @@ def _set_checkpoint_initializer(variable,
                                 tensor_name,
                                 slice_spec,
                                 name="checkpoint_initializer"):
+  # [FUNCTION DOC]
+  # HELPER: replaces a variable's initializer with a restore from a checkpoint tensor.
+  # Inputs: variable; checkpoint file path; tensor name; slice spec (empty for whole tensors);
+  # operation name. Builds a restore op on the CPU (within the variable's device scope), turns
+  # it into the variable's restore assignment, and sets the private initializer op and initial
+  # value attributes of the variable. Returns nothing; asserts exactly one saveable object.
+  # KNOWN ISSUE: the loop over saveables reuses the name parameter as its loop variable,
+  # shadowing the operation name after the restore op was already created.
   """Overrides given variable's initialization op.
 
   Sets variable initializer to assign op that initializes variable from tensor's
@@ -524,6 +596,11 @@ def _set_checkpoint_initializer(variable,
 
 def _set_variable_or_list_initializer(variable_or_list, ckpt_file,
                                       tensor_name):
+  # [FUNCTION DOC]
+  # HELPER: applies checkpoint initializers to one variable or to a list of partition slices.
+  # For a list or tuple, verifies every slice shares the same full name and initializes each
+  # with its slice spec; otherwise initializes the single variable with an empty slice spec.
+  # Raises a value error if slices come from different full variables. Returns nothing.
   """Overrides initialization op of given variable or list of variables.
 
   Calls `_set_checkpoint_initializer` for each variable in the given list of
@@ -554,11 +631,18 @@ def _set_variable_or_list_initializer(variable_or_list, ckpt_file,
 
 
 def _is_variable(x):
+  # [FUNCTION DOC]
+  # HELPER: predicate for init_from_checkpoint. Returns true if the argument is a variable
+  # object or a resource variable; false otherwise. No side effects.
   return (isinstance(x, variables.Variable) or
           resource_variable_ops.is_resource_variable(x))
 
 
 def _collect_partitioned_variable(name, all_vars):
+  # [FUNCTION DOC]
+  # HELPER: gathers the partitions of a partitioned variable from a name-to-variable mapping.
+  # Looks for consecutive entries named with the base name plus a part suffix starting at zero.
+  # Returns the list of partition variables in order, or nothing if part zero is missing.
   """Returns list of `tf.Variable` that comprise the partitioned variable."""
   if name + "/part_0" in all_vars:
     var = []

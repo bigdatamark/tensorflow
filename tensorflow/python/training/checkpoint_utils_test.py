@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Unit tests for the name-based checkpoint utilities: load_variable, list_variables,
+# load_checkpoint, init_from_checkpoint (scope mapping, partitioned variables, root mapping,
+# error cases, resource variables) and wait_for_new_checkpoint. Defines two module-level helper
+# functions that write small checkpoints. Only tests; no import-time side effects.
 """Tests for checkpoints tools."""
 
 import os
@@ -35,6 +40,13 @@ from tensorflow.python.training import saver as saver_lib
 
 
 def _create_checkpoints(sess, checkpoint_dir):
+  # [FUNCTION DOC]
+  # HELPER: test fixture that writes a checkpoint for the checkpoint utility tests.
+  # Creates four variables (var1 of shape 1x10, var2 10x10, var3 100x100, and var4 9x9 inside
+  # a scope named useful_scope), initializes them in the given session, saves them with a
+  # saver under a model prefix in the given directory (global step zero), and returns the four
+  # values as arrays in that order. Side effects: adds variables to the default graph, writes
+  # files.
   checkpoint_prefix = os.path.join(checkpoint_dir, "model")
   checkpoint_state_name = "checkpoint"
   v1 = variable_scope.get_variable("var1", [1, 10])
@@ -54,6 +66,12 @@ def _create_checkpoints(sess, checkpoint_dir):
 
 
 def _create_partition_checkpoints(sess, checkpoint_dir):
+  # [FUNCTION DOC]
+  # HELPER: test fixture that writes a checkpoint holding one partitioned variable.
+  # Creates variable var1 (shape 100x100, truncated-normal initializer, up to five partitions
+  # along the first axis) in a scope named scope, initializes it, saves it with a saver under
+  # a model prefix in the given directory, and returns the list of partition values.
+  # Side effects: adds variables to the default graph, writes files.
   checkpoint_prefix = os.path.join(checkpoint_dir, "model")
   checkpoint_state_name = "checkpoint"
   with variable_scope.variable_scope("scope"):
@@ -75,14 +93,24 @@ def _create_partition_checkpoints(sess, checkpoint_dir):
 
 
 class CheckpointsTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the checkpoint reading and initialization utilities. Each test writes its
+  # own checkpoint into the temporary directory with the module helpers and then loads,
+  # lists, or initializes variables from it in fresh graphs.
 
   def testNoCheckpoints(self):
+    # [FUNCTION DOC]
+    # Scenario: loading a variable from a directory with no checkpoints. Expects a TensorFlow
+    # op error to be raised.
     checkpoint_dir = self.get_temp_dir() + "/no_checkpoints"
     with self.assertRaises(errors_impl.OpError):
       self.assertAllEqual(
           checkpoint_utils.load_variable(checkpoint_dir, "var1"), [])
 
   def testNoTensor(self):
+    # [FUNCTION DOC]
+    # Scenario: a checkpoint exists but the requested name (var5) is not in it. Expects an op
+    # error from load_variable.
     checkpoint_dir = self.get_temp_dir()
     with self.cached_session() as session:
       _, _, _, _ = _create_checkpoints(session, checkpoint_dir)
@@ -91,6 +119,9 @@ class CheckpointsTest(test.TestCase):
           checkpoint_utils.load_variable(checkpoint_dir, "var5"), [])
 
   def testGetTensor(self):
+    # [FUNCTION DOC]
+    # Scenario: writes a checkpoint, then loads each of the four variables by name (including
+    # the scoped one). Expects each loaded value to equal the value that was saved.
     checkpoint_dir = self.get_temp_dir()
     with self.cached_session() as session:
       v1, v2, v3, v4 = _create_checkpoints(session, checkpoint_dir)
@@ -104,6 +135,9 @@ class CheckpointsTest(test.TestCase):
         checkpoint_utils.load_variable(checkpoint_dir, "useful_scope/var4"), v4)
 
   def testGetAllVariables(self):
+    # [FUNCTION DOC]
+    # Scenario: writes a checkpoint and lists its variables. Expects the sorted list of name
+    # and shape pairs for the four saved variables.
     checkpoint_dir = self.get_temp_dir()
     with self.cached_session() as session:
       _create_checkpoints(session, checkpoint_dir)
@@ -113,6 +147,10 @@ class CheckpointsTest(test.TestCase):
          ("var3", [100, 100])])
 
   def testFSPath(self):
+    # [FUNCTION DOC]
+    # Scenario: the checkpoint directory is a path-like object. Checks that load_checkpoint,
+    # load_variable and list_variables all accept it and return the saved value and the expected
+    # sorted name and shape list.
     checkpoint_dir = pathlib.Path(self.get_temp_dir())
     with self.cached_session() as session:
       v1, v2, v3, v4 = _create_checkpoints(session, checkpoint_dir)  # pylint: disable=unused-variable
@@ -129,6 +167,12 @@ class CheckpointsTest(test.TestCase):
          ("var3", [100, 100])])
 
   def testInitFromCheckpoint(self):
+    # [FUNCTION DOC]
+    # Scenario: in a new graph, creates differently named variables and initializes them from
+    # the checkpoint using a dictionary map (name to name and scope to scope) and a list of
+    # pairs (including mapping one checkpoint tensor to two variables). After running the
+    # initializers expects all values to match the saved ones and the graph definition to stay
+    # small, showing tensors are not embedded as constants.
     checkpoint_dir = self.get_temp_dir()
     with self.cached_session() as session:
       v1, v2, v3, v4 = _create_checkpoints(session, checkpoint_dir)
@@ -166,6 +210,11 @@ class CheckpointsTest(test.TestCase):
         self.assertLess(len(str(session.graph.as_graph_def())), 32000)
 
   def testInitialValueComesFromCheckpoint(self):
+    # [FUNCTION DOC]
+    # Scenario: a variable with a zeros initializer has its initialized-value read taken before
+    # and after init_from_checkpoint. Expects the earlier read to give zeros before running
+    # initializers and, after the global initializer runs, all reads to give the checkpoint
+    # value; also confirms the zeros comparison fails an approximate-equality assertion.
     checkpoint_dir = self.get_temp_dir()
     with self.cached_session() as session:
       v1, _, _, _ = _create_checkpoints(session, checkpoint_dir)
@@ -196,6 +245,10 @@ class CheckpointsTest(test.TestCase):
           self.assertAllClose(v1, [[0.0] * 10])
 
   def testInitWithScopeDoesNotCaptureSuffixes(self):
+    # [FUNCTION DOC]
+    # Scenario: a scope mapping for useful_scope must not also capture variables in a scope
+    # named useful_scope_1. Expects the first variable to load the checkpoint value and the
+    # second to keep its own initial value.
     checkpoint_dir = self.get_temp_dir()
     with self.cached_session() as session:
       _, _, _, v4 = _create_checkpoints(session, checkpoint_dir)
@@ -215,6 +268,10 @@ class CheckpointsTest(test.TestCase):
         self.assertAllEqual(my5.eval(session), my5_init)
 
   def testRestoreRunsOnSameDevice(self):
+    # [FUNCTION DOC]
+    # Scenario: a variable is created under a parameter-server device scope and then
+    # initialized from the checkpoint by scope mapping. The test only expects the call to
+    # complete without error (device placement of the restore must be compatible).
     checkpoint_dir = self.get_temp_dir()
     with self.cached_session() as session:
       _create_checkpoints(session, checkpoint_dir)
@@ -228,6 +285,9 @@ class CheckpointsTest(test.TestCase):
                                             {"useful_scope/": "useful_scope/"})
 
   def testInitFromRootCheckpoint(self):
+    # [FUNCTION DOC]
+    # Scenario: maps the checkpoint root to a scope named some_scope, whose variables share the
+    # checkpoint names. Expects all four variables to take the saved values.
     checkpoint_dir = self.get_temp_dir()
     with self.cached_session() as session:
       v1, v2, v3, v4 = _create_checkpoints(session, checkpoint_dir)
@@ -252,6 +312,9 @@ class CheckpointsTest(test.TestCase):
         self.assertAllEqual(my4.eval(session), v4)
 
   def testInitToRootCheckpoint(self):
+    # [FUNCTION DOC]
+    # Scenario: maps the checkpoint root to the graph root with variables at top level and one
+    # inside a scope. Expects all four variables to take the saved values.
     checkpoint_dir = self.get_temp_dir()
     with self.cached_session() as session:
       v1, v2, v3, v4 = _create_checkpoints(session, checkpoint_dir)
@@ -275,6 +338,12 @@ class CheckpointsTest(test.TestCase):
         self.assertAllEqual(my4.eval(session), v4)
 
   def testInitFromPartitionVar(self):
+    # [FUNCTION DOC]
+    # Scenario: a checkpoint contains one partitioned variable. In a first graph, one variable
+    # with the same partitioning is initialized by name and another with a different number of
+    # partitions by scope; expects the values to match, the partition counts to differ, and the
+    # concatenated values to be equal. In a second graph, a partition list is mapped directly
+    # and expected to equal the saved partitions.
     checkpoint_dir = self.get_temp_dir()
     with self.cached_session() as session:
       v1 = _create_partition_checkpoints(session, checkpoint_dir)
@@ -337,6 +406,11 @@ class CheckpointsTest(test.TestCase):
         self.assertAllEqual(my1_values, v1)
 
   def testInitFromCheckpointMissing(self):
+    # [FUNCTION DOC]
+    # Scenario: error handling of init_from_checkpoint. Expects an op error for a missing
+    # directory, and value errors for: a tensor absent from the checkpoint, a graph variable that
+    # does not exist, a shape mismatch, a scope with no matching checkpoint tensors, and a
+    # mapping from a non-scope name to a scope name.
     checkpoint_dir = self.get_temp_dir()
     with self.cached_session() as session:
       _, _, _, _ = _create_checkpoints(session, checkpoint_dir)
@@ -382,6 +456,11 @@ class CheckpointsTest(test.TestCase):
                                                 {"useful_scope": "some_scope/"})
 
   def testNoAdditionalReadOpsForResourceVariables(self):
+    # [FUNCTION DOC]
+    # Scenario: initializes a resource variable from the checkpoint inside a name scope.
+    # Expects the value to match after running initializers, and that the only operations
+    # created under that scope besides the checkpoint initializer ones are variable assignment
+    # and identity ops (no extra read ops).
     checkpoint_dir = self.get_temp_dir()
     with self.cached_session() as session:
       v1, _, _, _ = _create_checkpoints(session, checkpoint_dir)
@@ -411,8 +490,15 @@ class CheckpointsTest(test.TestCase):
 
 @test_util.run_all_in_graph_and_eager_modes
 class WaitForNewCheckpointTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for wait_for_new_checkpoint, run in both graph and eager modes via the class
+  # decorator. No shared fixtures.
 
   def testReturnsNoneAfterTimeout(self):
+    # [FUNCTION DOC]
+    # Scenario: waits on a nonexistent directory with a one second timeout and half second
+    # sleep. Expects a null result, with elapsed wall time greater than half a second and less
+    # than about 1.1 seconds.
     start = time.time()
     ret = checkpoint_utils.wait_for_new_checkpoint(
         "/non-existent-dir", "foo", timeout=1.0, seconds_to_sleep=0.5)

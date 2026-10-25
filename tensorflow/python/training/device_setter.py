@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Device placement for between-graph replicated (parameter server) training. Provides the
+# replica_device_setter function (exported in the v1 training API), which returns a device
+# function placing variable-like operations on parameter-server tasks and everything else on the
+# worker job, plus private helpers: a round-robin task chooser and a chooser class that computes
+# device strings. Also defines STANDARD_PS_OPS, the default operation types placed on parameter
+# servers. No import-time side effects other than export registration.
 """Device function for replicated training."""
 from tensorflow.core.framework import node_def_pb2
 from tensorflow.python.framework import device as pydev
@@ -30,6 +37,10 @@ STANDARD_PS_OPS = ("Variable", "VariableV2", "AutoReloadVariable",
 
 
 class _RoundRobinStrategy:
+  # [CLASS DOC]
+  # HELPER: default placement strategy for replica_device_setter. A callable object holding the
+  # number of parameter-server tasks and a counter of the next task; each call returns the next
+  # task index, cycling from zero up to the task count minus one.
   """Returns the next ps task index for placement in round-robin order.
 
   This class is not to be used directly by users.  See instead
@@ -37,6 +48,9 @@ class _RoundRobinStrategy:
   """
 
   def __init__(self, num_tasks):
+    # [FUNCTION DOC]
+    # HELPER: stores the number of parameter-server tasks to cycle among and starts the
+    # counter at task zero. Returns nothing.
     """Create a new `_RoundRobinStrategy`.
 
     Args:
@@ -46,6 +60,12 @@ class _RoundRobinStrategy:
     self._next_task = 0
 
   def __call__(self, unused_op):
+    # [FUNCTION DOC]
+    # HELPER: placement callback. Ignores the operation argument, returns the current task
+    # index and advances the counter modulo the task count (mutates internal state; not
+    # thread-safe).
+    # KNOWN ISSUE: the docstring mentions an offset range, but the code has no offset; indices
+    # always start at zero.
     """Choose a ps task index for the given `Operation`.
 
     Args:
@@ -61,6 +81,10 @@ class _RoundRobinStrategy:
 
 
 class _ReplicaDeviceChooser:
+  # [CLASS DOC]
+  # HELPER: implementation behind replica_device_setter. Holds the ps task count, ps and worker
+  # device strings, merge flag, list of operation types that go to ps, and the strategy
+  # callable choosing a ps task. Its device_function method is what is handed to device scopes.
   """Class to choose devices for Ops in a replicated training setup.
 
   This class is not to be used directly by users.  See instead
@@ -69,6 +93,10 @@ class _ReplicaDeviceChooser:
 
   def __init__(self, ps_tasks, ps_device, worker_device, merge_devices, ps_ops,
                ps_strategy):
+    # [FUNCTION DOC]
+    # HELPER: stores the configuration: ps task count, ps device string, worker device string,
+    # merge-devices flag, operation types for ps, and the strategy callable. No validation is
+    # done. Returns nothing.
     """Create a new `_ReplicaDeviceChooser`.
 
     Args:
@@ -90,6 +118,14 @@ class _ReplicaDeviceChooser:
     self._ps_strategy = ps_strategy
 
   def device_function(self, op):
+    # [FUNCTION DOC]
+    # HELPER: device function used in device scopes. Input: an operation or node definition.
+    # If merging is off and the operation already has a device, returns that device unchanged.
+    # If ps is configured and the operation type is in the ps list, builds the ps device,
+    # assigning a task chosen by the strategy only when the ps device names a job that the
+    # operation's current device does not override, merges in the operation's current device
+    # and returns the string. Otherwise merges the worker device with the current device and
+    # returns that string. Calls the strategy (side effect: advances its state) for ps ops.
     """Choose a device for `op`.
 
     Args:
@@ -133,6 +169,19 @@ def replica_device_setter(ps_tasks=0,
                           cluster=None,
                           ps_ops=None,
                           ps_strategy=None):
+  # [FUNCTION DOC]
+  # Builds a device function for between-graph replicated training. Inputs: ps task count
+  # (ignored if a cluster is given); ps device and worker device strings (defaults for the ps
+  # and worker jobs); merge flag (default true; false logs a deprecation warning); optional
+  # cluster (cluster spec object, dictionary, or cluster definition); optional list of
+  # operation types for ps (defaults to the standard variable-like types); optional strategy
+  # callable (defaults to round robin).
+  # Output: the chooser's device function, or nothing when there is no cluster ps job or the ps
+  # task count is zero.
+  # Raises a type error if the strategy is not callable; a malformed cluster fails in the
+  # cluster spec constructor.
+  # KNOWN ISSUE: the docstring says the returned function is a no-op in the no-ps case, but the
+  # code returns a null value, which a device scope treats as no device function.
   """Return a `device function` to use when building a Graph for replicas.
 
   Device Functions are used in `with tf.device(device_function):` statement to
