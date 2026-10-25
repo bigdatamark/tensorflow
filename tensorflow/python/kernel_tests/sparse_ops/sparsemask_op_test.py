@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Tests for the sparse mask operation applied to indexed slices (array_ops.sparse_mask).
+# Defines a single test case class that is run through the standard TensorFlow test main
+# entry point. No import-time side effects beyond imports. Not a helper module.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,9 +27,17 @@ from tensorflow.python.platform import test
 
 
 class SparseMaskTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the sparse mask operation on indexed slices. It has a single test
+  # method and no shared fixtures; it relies on a cached session from the base test class.
 
   @test_util.run_deprecated_v1
   def testBasic(self):
+    # [FUNCTION DOC]
+    # Builds an indexed-slices object from a random 4x4 float matrix with row indices 0, 2, 3, 4,
+    # then masks out index 0 using the sparse mask operation inside a cached session.
+    # Asserts the resulting values equal the last three rows of the input and the resulting
+    # indices equal 2, 3, 4. Runs only in graph mode (decorated as deprecated-v1). Returns nothing.
     values = np.random.rand(4, 4).astype(np.single)
     indices = np.array([0, 2, 3, 4], dtype=np.int32)
     mask_indices = np.array([0], dtype=np.int32)

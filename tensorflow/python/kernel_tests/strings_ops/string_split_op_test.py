@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Tests for the string splitting operations: the legacy sparse-result string_split, the ragged
+# wrapper with result type selection, the version-two split (separator, maximum splits, ragged
+# result) and the version-one compatibility wrapper. Scenarios cover default whitespace and
+# explicit delimiters, empty tokens, delimiter tensors, scalar, dense and ragged inputs of up to
+# four dimensions and invalid arguments. Python's own split behavior is the reference for the
+# version-two tests. Run via the standard test main entry point. No import-time side effects.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,8 +38,14 @@ from tensorflow.python.util import compat
 
 
 class StringSplitOpTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for the legacy string split operation that returns a sparse result (indices,
+  # values, dense shape) and for the ragged wrapper that can return either result type.
 
   def testStringSplit(self):
+    # [FUNCTION DOC]
+    # Splits two strings on whitespace by default and asserts the sparse indices, token values and
+    # dense shape (two rows, four columns). Returns nothing.
     strings = ["pigs on the wing", "animals"]
 
     with self.cached_session():
@@ -44,6 +57,11 @@ class StringSplitOpTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_deprecated_v1
   def testStringSplitEmptyDelimiter(self):
+    # [FUNCTION DOC]
+    # Splits with an empty delimiter, which separates strings into single bytes, on two ASCII
+    # words and one four-byte emoji. Asserts the indices, the one-byte tokens (the emoji becomes
+    # four separate bytes) and the dense shape of three rows by five columns. Graph mode only.
+    # Returns nothing.
     strings = ["hello", "hola", b"\xF0\x9F\x98\x8E"]  # Last string is U+1F60E
 
     with self.cached_session():
@@ -62,6 +80,11 @@ class StringSplitOpTest(test.TestCase, parameterized.TestCase):
       self.assertAllEqual(shape, [3, 5])
 
   def testStringSplitEmptyToken(self):
+    # [FUNCTION DOC]
+    # Splits strings that are empty, all spaces, or have leading, trailing or repeated spaces,
+    # using the default whitespace delimiter, and asserts no empty tokens are produced: only the
+    # rows containing letters yield a single token and the dense shape has ten rows, one column.
+    # Returns nothing.
     strings = ["", " a", "b ", " c", " ", " d ", "  e", "f  ", "  g  ", "  "]
 
     with self.cached_session():
@@ -74,6 +97,10 @@ class StringSplitOpTest(test.TestCase, parameterized.TestCase):
       self.assertAllEqual(shape, [10, 1])
 
   def testStringSplitOnSetEmptyToken(self):
+    # [FUNCTION DOC]
+    # Same scenario as the empty-token test but with a two-character delimiter set (space and
+    # period), asserting every character of the set acts as a delimiter and empty tokens are
+    # dropped, giving ten rows and one column. Returns nothing.
     strings = ["", " a", "b ", " c", " ", " d ", ". e", "f .", " .g. ", " ."]
 
     with self.cached_session():
@@ -87,6 +114,10 @@ class StringSplitOpTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_deprecated_v1
   def testStringSplitWithDelimiter(self):
+    # [FUNCTION DOC]
+    # Asserts that delimiter lists (two entries, or one entry) are rejected with a value error.
+    # Then splits on a single pipe character and on a pipe-and-space set, asserting the sparse
+    # indices, values and dense shape in each case. Graph mode only. Returns nothing.
     strings = ["hello|world", "hello world"]
 
     with self.cached_session():
@@ -110,6 +141,11 @@ class StringSplitOpTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_deprecated_v1
   def testStringSplitWithDelimiterTensor(self):
+    # [FUNCTION DOC]
+    # Supplies the delimiter through a string placeholder. Feeding a two-element list or a
+    # one-element list must raise an invalid-argument error at run time; feeding a scalar pipe
+    # splits correctly with the expected indices, values and shape. Graph mode only.
+    # Returns nothing.
     strings = ["hello|world", "hello world"]
 
     with self.cached_session() as sess:
@@ -129,6 +165,10 @@ class StringSplitOpTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_deprecated_v1
   def testStringSplitWithDelimitersTensor(self):
+    # [FUNCTION DOC]
+    # Like the delimiter-tensor test but feeds a scalar containing two delimiter characters (period
+    # and comma). Non-scalar feeds raise invalid-argument errors; the scalar splits on either
+    # character, leaving a string without them as one token. Graph mode only. Returns nothing.
     strings = ["hello.cruel,world", "hello cruel world"]
 
     with self.cached_session() as sess:
@@ -148,6 +188,10 @@ class StringSplitOpTest(test.TestCase, parameterized.TestCase):
       self.assertAllEqual(shape, [2, 3])
 
   def testStringSplitWithNoSkipEmpty(self):
+    # [FUNCTION DOC]
+    # Splits strings with leading and trailing hash delimiters, first with skipping of empty tokens
+    # turned off (empty tokens are kept and the shape grows to three by three) and then with the
+    # default (empty tokens dropped, shape three by one). Returns nothing.
     strings = ["#a", "b#", "#c#"]
 
     with self.cached_session():
@@ -212,6 +256,13 @@ class StringSplitOpTest(test.TestCase, parameterized.TestCase):
                                    result_type="SparseTensor",
                                    expected=None,
                                    error=None):
+    # [FUNCTION DOC]
+    # Parameterized over named scenarios. Inputs: a list of byte strings, optional separator,
+    # skip-empty flag (default true), optional delimiter, result type (default sparse) and either
+    # an expected value or an expected error pattern. If an error is given, asserts the ragged
+    # module's split raises a value error matching it. If an expected value is given, performs the
+    # split and compares: for a sparse expectation compares indices, values and dense shape,
+    # otherwise compares the ragged result directly. Returns nothing.
     if error is not None:
       with self.assertRaisesRegex(ValueError, error):
         ragged_string_ops.string_split(source, sep, skip_empty, delimiter,
@@ -228,6 +279,10 @@ class StringSplitOpTest(test.TestCase, parameterized.TestCase):
 
 
 class StringSplitV2OpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case for the version-two split (separator and maximum split count) and
+  # the version-one compatibility wrapper. Python's built-in split is used as the reference
+  # through a private helper that applies it recursively to nested lists.
 
   @parameterized.named_parameters([
       {"testcase_name": "Simple",
@@ -311,6 +366,14 @@ class StringSplitV2OpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
                   expected,
                   input_is_ragged=False,
                   **kwargs):  # pylint: disable=redefined-builtin
+    # [FUNCTION DOC]
+    # Parameterized over scenarios giving an input (scalar, list or nested list), the expected
+    # nested result, a flag saying the input should be built as a ragged tensor, and optional
+    # separator and maximum-split keyword arguments. First checks the expected value matches the
+    # Python reference split. Then splits with the public ragged version-two function (also with
+    # the input passed by keyword) and compares with the expected ragged tensor. For vector inputs
+    # also runs the internal sparse version and compares indices, values and dense shape.
+    # Returns nothing.
     # Check that we are matching the behavior of Python's str.split:
     self.assertEqual(expected, self._py_split(input, **kwargs))
 
@@ -416,6 +479,15 @@ class StringSplitV2OpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
       ])  # pyformat: disable
   def testSplitV1(self, input, expected, input_is_ragged=False, **kwargs):  # pylint: disable=redefined-builtin
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the scalar-input scenario in this table expects a nested list with one row,
+    # whereas the same-named scenario of the version-two test expects a flat list; the two
+    # near-duplicate scenario tables are copy-pasted and must be kept in sync by hand.
+    # Parameterized like the version-two test. Builds the input tensor (ragged if requested), then
+    # calls the version-one wrapper requesting a ragged result with the input passed positionally,
+    # by the input keyword and by the source keyword, asserting all equal the expected ragged
+    # tensor. Then requests a sparse result and compares indices, values and dense shape with the
+    # sparse form of the expectation. Returns nothing.
     # Prepare the input tensor.
     if input_is_ragged:
       input = ragged_factory_ops.constant(input, dtype=dtypes.string)
@@ -443,10 +515,19 @@ class StringSplitV2OpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
                      self.evaluate(actual_sparse_v1.dense_shape).tolist())
 
   def testSplitV1BadResultType(self):
+    # [FUNCTION DOC]
+    # Asserts the version-one wrapper raises a value error saying the result type must be one of
+    # the supported kinds when given an unknown result type name. Returns nothing.
     with self.assertRaisesRegex(ValueError, "result_type must be .*"):
       ragged_string_ops.strings_split_v1("foo", result_type="BouncyTensor")
 
   def _py_split(self, strings, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: reference implementation for the version-two split test.
+    # Takes a byte or text string or an arbitrarily nested list of them, plus optional separator
+    # and maximum-split keyword arguments. For a single string applies Python's split with the
+    # separator (or whitespace if none) and the maximum split count if provided; for a list
+    # recurses over elements. Returns the same nesting with lists of tokens in place of strings.
     if isinstance(strings, compat.bytes_or_text_types):
       # Note: str.split doesn't accept keyword args.
       if "maxsplit" in kwargs:

@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Tests for the string length operation (string_ops.string_length) which returns per-element
+# lengths of a string tensor in bytes or in UTF-8 characters. Covers a nested input, the length
+# unit option including an invalid unit, and backward compatibility of passing the name
+# argument positionally. Run via the standard test main entry point. No import-time side effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,8 +25,13 @@ from tensorflow.python.platform import test
 
 
 class StringLengthOpTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the string length operation; scenarios are independent and need no fixtures.
 
   def testStringLength(self):
+    # [FUNCTION DOC]
+    # Computes lengths of a three-dimensional nested list of ASCII strings and asserts the result
+    # has the same nesting with the lengths one through six. Returns nothing.
     strings = [[["1", "12"], ["123", "1234"], ["12345", "123456"]]]
 
     with self.cached_session() as sess:
@@ -31,6 +41,10 @@ class StringLengthOpTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testUnit(self):
+    # [FUNCTION DOC]
+    # Encodes two unicode strings as UTF-8 and computes their lengths in bytes (expecting six and
+    # four) and in UTF-8 characters (expecting five and one). Also asserts that an unsupported
+    # unit name raises a value error naming the allowed values. Graph mode only. Returns nothing.
     unicode_strings = [u"H\xc3llo", u"\U0001f604"]
     utf8_strings = [s.encode("utf-8") for s in unicode_strings]
     expected_utf8_byte_lengths = [6, 4]
@@ -51,6 +65,10 @@ class StringLengthOpTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testLegacyPositionalName(self):
+    # [FUNCTION DOC]
+    # Calls the length operation passing the operation name as the second positional argument, as
+    # code written before the unit option existed would, and asserts the lengths are still
+    # computed correctly. Graph mode only. Returns nothing.
     # Code that predates the 'unit' parameter may have used a positional
     # argument for the 'name' parameter.  Check that we don't break such code.
     strings = [[["1", "12"], ["123", "1234"], ["12345", "123456"]]]

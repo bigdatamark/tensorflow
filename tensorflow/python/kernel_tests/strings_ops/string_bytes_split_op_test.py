@@ -1,4 +1,10 @@
 # -*- coding: utf-8 -*-
+# [MODULE DOC]
+# Tests for the string-to-bytes splitting operation (ragged_string_ops.string_bytes_split), which
+# splits each string into a list of single-byte strings and adds one ragged dimension. Covers
+# scalar, vector, dense and ragged multi-dimensional inputs, empty strings, null bytes, multi-byte
+# unicode text, and the failure for an input of unknown rank. Run via the standard test main entry
+# point. No import-time side effects. Not a helper module.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,6 +34,9 @@ from tensorflow.python.platform import test
 
 class StringsToBytesOpTest(test_util.TensorFlowTestCase,
                            parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case for the byte-splitting operation. Scenarios are supplied as pairs of
+  # input and expected ragged output; one extra test covers the unknown-rank error.
 
   @parameterized.parameters(
       # Scalar input -> vector output
@@ -58,14 +67,26 @@ class StringsToBytesOpTest(test_util.TensorFlowTestCase,
         b'\xb9', b'\xb4', b'\xe5', b'\x89', b'\x8d']),
   )
   def testStringToBytes(self, source, expected):
+    # [FUNCTION DOC]
+    # Parameterized by an input (byte string, list, nested list or ragged value) and the expected
+    # nested list of single-byte strings. Converts the expectation to a ragged object array,
+    # splits the input into bytes, and asserts the two are equal. Returns nothing.
     expected = ragged_factory_ops.constant_value(expected, dtype=object)
     result = ragged_string_ops.string_bytes_split(source)
     self.assertAllEqual(expected, result)
 
   def testUnknownInputRankError(self):
+    # [FUNCTION DOC]
+    # Wraps the byte-splitting call in a compiled function whose input signature has unknown
+    # rank and a default (float) element type, then calls it with a list of one string.
+    # Asserts a type error whose message says binding inputs to the function failed.
+    # Returns nothing.
     # Use a tf.function that erases shape information.
     @def_function.function(input_signature=[tensor_spec.TensorSpec(None)])
     def f(v):
+      # [FUNCTION DOC]
+      # HELPER: function body traced by the test above. Takes one tensor and returns the result of
+      # splitting its strings into bytes.
       return ragged_string_ops.string_bytes_split(v)
 
     with self.assertRaisesRegex(TypeError,

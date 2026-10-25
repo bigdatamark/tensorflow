@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Tests for the base64 encode and decode string operations (string_ops.encode_base64 and
+# decode_base64), in padded and unpadded modes. Verifies agreement with the Python url-safe
+# base64 codec on random data, shape preservation including zero-element inputs, and
+# invalid-argument errors for malformed encodings. Graph-mode tests run via the standard test
+# main entry point. No import-time side effects. Not a helper module.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,8 +35,17 @@ from tensorflow.python.platform import test
 
 @test_util.run_deprecated_v1
 class Base64OpsTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case (graph mode only, via the deprecated-v1 decorator) for the encode and decode
+  # base64 string operations. Its fixture holds a string placeholder and the encode/decode
+  # graphs both without and with padding. Results are compared against the Python url-safe
+  # base64 implementation.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Fixture: creates a string placeholder and stores it plus four graph nodes on the instance:
+    # encode without padding, decode of that, encode with padding, and decode of that.
+    # Takes no arguments, returns nothing.
     self._msg = array_ops.placeholder(dtype=dtypes.string)
     self._encoded_f = string_ops.encode_base64(self._msg, pad=False)
     self._decoded_f = string_ops.decode_base64(self._encoded_f)
@@ -38,6 +53,11 @@ class Base64OpsTest(test_util.TensorFlowTestCase):
     self._decoded_t = string_ops.decode_base64(self._encoded_t)
 
   def _RemovePad(self, msg, base64_msg):
+    # [FUNCTION DOC]
+    # HELPER: lets the round-trip test derive the expected unpadded encoding from the padded one.
+    # Given the raw message bytes and its padded base64 encoding, strips two trailing characters
+    # when the message length leaves remainder one modulo three, one trailing character when
+    # the remainder is two, and nothing otherwise. Returns the trimmed encoding.
     if len(msg) % 3 == 1:
       return base64_msg[:-2]
     if len(msg) % 3 == 2:
@@ -45,6 +65,13 @@ class Base64OpsTest(test_util.TensorFlowTestCase):
     return base64_msg
 
   def _RunTest(self, msg, pad):
+    # [FUNCTION DOC]
+    # HELPER: shared round-trip check used by the encode/decode tests.
+    # Takes a single byte string or a list/tuple of them, plus a flag selecting padded or unpadded
+    # operations. Feeds the message to the matching prebuilt encode and decode graph in a cached
+    # session, wraps single values into one-element lists, then asserts every encoded value
+    # equals the Python url-safe base64 encoding (padding removed when requested) and every
+    # decoded value equals the original message. Returns nothing.
     with self.cached_session() as sess:
       if pad:
         encoded, decoded = sess.run([self._encoded_t, self._decoded_t],
@@ -67,6 +94,10 @@ class Base64OpsTest(test_util.TensorFlowTestCase):
       self.assertEqual(msg[i], decoded[i])
 
   def testWithPythonBase64(self):
+    # [FUNCTION DOC]
+    # For both padded and unpadded modes, checks the empty message and one hundred random byte
+    # strings of random length below one mebibyte against the Python base64 implementation via
+    # the shared round-trip helper. Returns nothing.
     for pad in (False, True):
       self._RunTest(b"", pad=pad)
 
@@ -76,6 +107,11 @@ class Base64OpsTest(test_util.TensorFlowTestCase):
         self._RunTest(msg, pad=pad)
 
   def testShape(self):
+    # [FUNCTION DOC]
+    # For both padding modes, round-trips ten random lists of short random byte strings through
+    # the helper, then ten times builds an empty byte array with zero rows and a random number
+    # of columns, encodes and decodes it, and asserts both outputs keep the input shape.
+    # Returns nothing.
     for pad in (False, True):
       for _ in range(10):
         msg = [np.random.bytes(np.random.randint(20))
@@ -96,7 +132,17 @@ class Base64OpsTest(test_util.TensorFlowTestCase):
         self.assertEqual(decoded_value.shape, msg.shape)
 
   def testInvalidInput(self):
+    # [FUNCTION DOC]
+    # Asserts the decode operation raises an invalid-argument error for malformed input: a length
+    # that is one modulo four (with a message mentioning that), a single character replaced by a
+    # question mark, a non-ascii byte, a plus sign or a slash (the last two being non-url-safe),
+    # partial padding, unnecessary padding of two to four equals signs, and padding characters
+    # inserted in the middle. Returns nothing.
     def try_decode(enc):
+      # [FUNCTION DOC]
+      # HELPER: runs the unpadded decode graph on one encoded byte string by feeding it in
+      # place of the encode output and evaluating in the default session. Returns nothing;
+      # the decode error propagates to the caller.
       self._decoded_f.eval(feed_dict={self._encoded_f: enc})
 
     with self.cached_session():

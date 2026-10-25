@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Tests for the string-to-hash-bucket operations in string_ops: the fast (fingerprint based),
+# legacy and strong keyed variants. Checks that a single bucket maps everything to zero, that
+# buckets for known strings match precomputed hash values modulo the bucket count, and that a
+# strong-hash key of the wrong length raises an op error. Run via the standard test main entry
+# point. No import-time side effects. Not a helper module.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,9 +28,15 @@ from tensorflow.python.platform import test
 
 
 class StringToHashBucketOpTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the three string hashing operations. Graph-mode tests feed strings through a
+  # string placeholder; the strong-hash tests use constants. Expected buckets are hard-coded.
 
   @test_util.run_deprecated_v1
   def testStringToOneHashBucketFast(self):
+    # [FUNCTION DOC]
+    # Feeds three strings to the fast hash operation with a single bucket and asserts every
+    # result is bucket zero. Graph mode only. Returns nothing.
     with self.cached_session():
       input_string = array_ops.placeholder(dtypes.string)
       output = string_ops.string_to_hash_bucket_fast(input_string, 1)
@@ -34,6 +46,10 @@ class StringToHashBucketOpTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testStringToHashBucketsFast(self):
+    # [FUNCTION DOC]
+    # Feeds the strings a, b, c, d to the fast hash operation with ten buckets and asserts the
+    # buckets equal the 64-bit fingerprints modulo ten (nine, two, two, five). Graph mode only.
+    # Returns nothing.
     with self.cached_session():
       input_string = array_ops.placeholder(dtypes.string)
       output = string_ops.string_to_hash_bucket_fast(input_string, 10)
@@ -47,6 +63,9 @@ class StringToHashBucketOpTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testStringToOneHashBucketLegacyHash(self):
+    # [FUNCTION DOC]
+    # Feeds three strings to the legacy hash operation with a single bucket and asserts every
+    # result is bucket zero. Graph mode only. Returns nothing.
     with self.cached_session():
       input_string = array_ops.placeholder(dtypes.string)
       output = string_ops.string_to_hash_bucket(input_string, 1)
@@ -56,6 +75,10 @@ class StringToHashBucketOpTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testStringToHashBucketsLegacyHash(self):
+    # [FUNCTION DOC]
+    # Feeds the strings a, b, c to the legacy hash operation with ten buckets and asserts the
+    # buckets equal the legacy 64-bit hash modulo ten (eight, zero, seven). Graph mode only.
+    # Returns nothing.
     with self.cached_session():
       input_string = array_ops.placeholder(dtypes.string)
       output = string_ops.string_to_hash_bucket(input_string, 10)
@@ -67,6 +90,11 @@ class StringToHashBucketOpTest(test.TestCase):
       self.assertAllEqual([8, 0, 7], result)
 
   def testStringToOneHashBucketStrongOneHashBucket(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the method name repeats the words one hash bucket; it only checks the strong
+    # hash with a single bucket.
+    # Hashes three constant strings with the strong keyed operation, a two-element key and one
+    # bucket, and asserts every result is zero. Returns nothing.
     with self.cached_session():
       input_string = constant_op.constant(['a', 'b', 'c'])
       output = string_ops.string_to_hash_bucket_strong(
@@ -74,6 +102,10 @@ class StringToHashBucketOpTest(test.TestCase):
       self.assertAllEqual([0, 0, 0], self.evaluate(output))
 
   def testStringToHashBucketsStrong(self):
+    # [FUNCTION DOC]
+    # Hashes the strings a, b, c with the strong keyed operation, ten buckets and a fixed
+    # two-element key, and asserts the buckets equal the precomputed keyed hashes modulo ten
+    # (four, two, eight). Returns nothing.
     with self.cached_session():
       input_string = constant_op.constant(['a', 'b', 'c'])
       output = string_ops.string_to_hash_bucket_strong(
@@ -85,6 +117,9 @@ class StringToHashBucketOpTest(test.TestCase):
       self.assertAllEqual([4, 2, 8], self.evaluate(output))
 
   def testStringToHashBucketsStrongInvalidKey(self):
+    # [FUNCTION DOC]
+    # Calls the strong keyed hash with a one-element key and asserts that evaluating raises an op
+    # error stating the key must have two elements. Returns nothing.
     with self.cached_session():
       input_string = constant_op.constant(['a', 'b', 'c'])
       with self.assertRaisesOpError('Key must have 2 elements'):
