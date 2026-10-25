@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Compatibility helpers for writing code that works across Python and TensorFlow versions:
+# converting values to bytes, text or str, converting path-like objects to str or bytes, and
+# tuples of types grouping integral, real, complex and bytes-or-text values. Also re-exports
+# the collections abstract base module. Import-time side effects: registers the functions and
+# type tuples as public API exports under the compat namespace.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -55,6 +61,13 @@ from tensorflow.python.util.tf_export import tf_export
 
 
 def as_bytes(bytes_or_text, encoding='utf-8'):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring does not mention that an unknown encoding name raises a lookup
+  # error (the encoding is validated first, even when no encoding is needed).
+  # Converts a byte array, bytes or text value to bytes. Inputs: bytes_or_text, a byte array,
+  # bytes or str; encoding, charset name used for text (default utf-8). A byte array is copied
+  # into bytes, text is encoded, bytes are returned unchanged. Raises a type error for any
+  # other input type. No side effects.
   """Converts `bytearray`, `bytes`, or unicode python input types to `bytes`.
 
   Uses utf-8 encoding for text by default.
@@ -83,6 +96,13 @@ def as_bytes(bytes_or_text, encoding='utf-8'):
 
 
 def as_text(bytes_or_text, encoding='utf-8'):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring mentions Python 2 unicode objects, but only Python 3 str and
+  # bytes are handled; byte arrays are rejected here, unlike in the bytes conversion. An
+  # unknown encoding raises a lookup error, which is not documented.
+  # Converts bytes or text to a text string. Inputs: bytes_or_text, a str or bytes value;
+  # encoding, charset used for decoding bytes (default utf-8). Text is returned as is, bytes
+  # are decoded. Raises a type error for any other input type. No side effects.
   """Converts any string-like python input types to unicode.
 
   Returns the input as a unicode string. Uses utf-8 encoding for text
@@ -109,6 +129,11 @@ def as_text(bytes_or_text, encoding='utf-8'):
 
 
 def as_str(bytes_or_text, encoding='utf-8'):
+  # [FUNCTION DOC]
+  # Alias of the text conversion function. Inputs: bytes_or_text, a bytes or str value;
+  # encoding, charset for decoding bytes (default utf-8). Returns the text string produced by
+  # delegating to it; the same errors apply (type error for other types, lookup error for an
+  # unknown encoding, decode error for undecodable bytes).
   """Acts as an alias for the `as_text` function..
 
   Args:
@@ -133,6 +158,11 @@ tf_export('compat.as_str')(as_str)
 
 @tf_export('compat.as_str_any')
 def as_str_any(value, encoding='utf-8'):
+  # [FUNCTION DOC]
+  # Converts any value to a text string. Inputs: value, any object; encoding, charset used
+  # only when the value is bytes (default utf-8). Bytes are decoded with the str conversion,
+  # everything else is converted with the builtin string conversion. Returns the string.
+  # Errors from decoding or from the object's own string conversion propagate.
   """Converts input to `str` type.
 
      Uses `str(value)`, except for `bytes` typed inputs, which are converted
@@ -153,6 +183,14 @@ def as_str_any(value, encoding='utf-8'):
 
 @tf_export('compat.path_to_str')
 def path_to_str(path):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring examples are shown with a shell-style prompt and some outputs
+  # (e.g. normalized relative paths) do not match what the code does, since it performs no
+  # path normalization; it only calls the file-system-path protocol method if present.
+  # Converts a path-like object to a text string. Input: path, any object. If it provides the
+  # file-system-path protocol method, that result is converted to str (decoding bytes);
+  # otherwise the input is returned unchanged (so non-path inputs may be returned as is, even
+  # if not text). No exceptions of its own.
   r"""Converts input which is a `PathLike` object to `str` type.
 
   Converts from any python constant representation of a `PathLike` object to
@@ -191,6 +229,13 @@ def path_to_str(path):
 
 
 def path_to_bytes(path):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: unlike its str counterpart, this function is not registered as a public API
+  # export; and the docstring says nothing about errors from the bytes conversion.
+  # Converts a path-like object or string to bytes. Input: path, a path-like object, str, bytes
+  # or byte array. If it has the file-system-path protocol method, that result is used; then
+  # the value is converted with the bytes conversion function. Returns bytes. Raises a type
+  # error if the final value is not bytes-convertible.
   r"""Converts input which is a `PathLike` object to `bytes`.
 
   Converts from any python constant representation of a `PathLike` object

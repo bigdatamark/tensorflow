@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Utilities for controlling which symbols a module exposes based on references written in
+# module docstrings: building a public-names list from reference markers, removing (hiding)
+# symbols that are not referenced, and restoring hidden symbols for internal tests. Keeps a
+# module-level registry of hidden attributes. Exposes only the three public functions via the
+# export list. No import-time side effects other than defining the registry and pattern.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +30,16 @@ _reference_pattern = _re.compile(r'^@@(\w+)$', flags=_re.MULTILINE)
 
 
 def make_all(module_name, doc_string_modules=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring has a grammar slip ("must each a docstring"), and it says the
+  # modules must have a docstring while modules without one are actually silently skipped.
+  # Builds a list of public symbol names from reference markers in docstrings. Inputs:
+  # module_name, the name of an already-imported module (looked up in the loaded modules);
+  # doc_string_modules, optional list of modules whose docstrings are scanned (default: only
+  # the named module). Collects every name written as a double-at marker on its own line in
+  # those docstrings, keeping only names that currently exist as members of the named module.
+  # Returns a list of the unique names in arbitrary order. Raises a key error if the named
+  # module is not loaded. No side effects.
   """Generates `__all__` from the docstring of one or more modules.
 
   Usage: `make_all(__name__)` or
@@ -62,6 +78,13 @@ _HIDDEN_ATTRIBUTES = {}
 
 
 def reveal_undocumented(symbol_name, target_module=None):
+  # [FUNCTION DOC]
+  # Restores a symbol previously hidden by remove_undocumented, intended for internal tests.
+  # Inputs: symbol_name, the full dotted path of the symbol; target_module, optional module to
+  # restore it into (default: the module it was removed from). Looks up the stored module and
+  # value in the hidden-attribute registry and sets the attribute (last path component) on
+  # the target module. Raises a lookup error if the symbol was never hidden. Returns nothing.
+  # The registry entry is not removed.
   """Reveals a symbol that was previously removed by `remove_undocumented`.
 
   This should be used by tensorflow internal tests only. It explicitly
@@ -83,6 +106,18 @@ def reveal_undocumented(symbol_name, target_module=None):
 
 def remove_undocumented(module_name, allowed_exception_list=None,
                         doc_string_modules=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring mentions a global allow-list function that does not exist in
+  # this module, and the last paragraph is attached to the argument list; no allow-list is
+  # consulted. Also, the allowed exception list is combined by adding to the list returned
+  # from make_all, which is a fresh list so callers' lists are not mutated.
+  # Hides every public symbol of a module that is not referenced in the scanned docstrings.
+  # Inputs: module_name, name of a loaded module; allowed_exception_list, optional names to
+  # keep anyway; doc_string_modules, optional modules whose docstrings define the referenced
+  # names (default: the module itself). Names starting with an underscore are always kept.
+  # For each removed symbol it records the module and original value in the hidden-attribute
+  # registry under the dotted full name, then deletes the attribute from the module.
+  # Returns nothing. Side effects: mutates the module and the registry.
   """Removes symbols in a module that are not referenced by a docstring.
 
   Args:

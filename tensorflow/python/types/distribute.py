@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Abstract interface types for tf.distribute: iterable and iterator interfaces, the distributed
+# values base class with its per-replica and mirrored variants, and the interfaces for
+# distributed iterators and datasets. These are mostly documentation-bearing base classes whose
+# methods raise not-implemented errors; real implementations live in the distribute package.
+# Import-time side effect: registers public API exports through the export decorator.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,13 +27,26 @@ from tensorflow.tools.docs import doc_controls
 
 
 class Iterable(object):
+  # [CLASS DOC]
+  # Interface for distributed objects that can be iterated and reduced. Declares iteration and
+  # reduce stubs only.
   """Interface for distributed objects that admit iteration/reduction."""
 
   def __iter__(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: stub that returns a null value instead of an iterator; subclasses must
+    # override it.
+    # Interface stub for creating an iterator over the object.
     pass
 
   # TODO(mdan): Describe this contract.
   def reduce(self, initial_state, reduce_func):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the base body is only a docstring, so it returns a null value rather than a
+    # reduced state; the contract is undocumented beyond the docstring.
+    # Interface for reducing the iterable to a single element. Inputs: initial_state, the
+    # starting state; reduce_func, a function mapping the old state and an input element to a
+    # new state of the same structure. Returns the final state.
     """Reduces this iterable object to a single element.
 
     The transformation calls `reduce_func` successively on each element.
@@ -47,20 +66,36 @@ class Iterable(object):
 
 
 class Iterator(object):
+  # [CLASS DOC]
+  # Interface for distributed iterators: declares get-next, next and iter stubs.
   """Interface for distributed iterators."""
 
   def get_next(self):
+    # [FUNCTION DOC]
+    # Interface stub for fetching the next element, possibly signalling the end without raising.
+    # The base body does nothing and returns a null value.
     """Unlike __next__, this may use a non-raising mechanism."""
 
   def __next__(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: stub that returns a null value rather than an element or raising stop
+    # iteration; subclasses must override.
+    # Interface stub for the standard next-element protocol method.
     pass
 
   def __iter__(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: stub that returns a null value rather than the iterator itself.
+    # Interface stub for the standard iteration protocol method.
     pass
 
 
 @tf_export("distribute.DistributedValues", v1=[])
 class DistributedValues(object):
+  # [CLASS DOC]
+  # Base class for values that hold one value per replica, created inside distribution
+  # strategies. Never instantiated directly; has no members. Subclasses differ in whether the
+  # replica values are kept synchronized. Exported as a public type for TensorFlow 2.
   """Base class for representing distributed values.
 
   A subclass instance of `tf.distribute.DistributedValues` is created when
@@ -168,6 +203,9 @@ class DistributedValues(object):
 
 @tf_export("types.experimental.distributed.PerReplica", v1=[])
 class PerReplica(DistributedValues):
+  # [CLASS DOC]
+  # Marker subclass for distributed values whose per-replica values are different and not
+  # synchronized, e.g. results of running a step function on each replica. No members.
   """Holds a distributed value: a map from replica id to unsynchronized values.
 
   `PerReplica` values exist on the worker devices, with a different value for
@@ -181,6 +219,9 @@ class PerReplica(DistributedValues):
 
 @tf_export("types.experimental.distributed.Mirrored", v1=[])
 class Mirrored(DistributedValues):
+  # [CLASS DOC]
+  # Marker subclass for distributed values known to be identical on all replicas and kept in
+  # sync by the strategy, e.g. model weights. No members.
   """Holds a distributed value: a map from replica id to synchronized values.
 
   `Mirrored` values are `tf.distribute.DistributedValues` for which we know that
@@ -195,6 +236,10 @@ class Mirrored(DistributedValues):
 
 @tf_export("distribute.DistributedIterator", v1=[])
 class DistributedIteratorInterface(Iterator):
+  # [CLASS DOC]
+  # Public interface for iterators over distributed datasets. Extends the base iterator
+  # interface with get-next, element specification and get-next-as-optional contracts, each
+  # raising a not-implemented error until overridden by descendants.
   """An iterator over `tf.distribute.DistributedDataset`.
 
   `tf.distribute.DistributedIterator` is the primary mechanism for enumerating
@@ -211,6 +256,10 @@ class DistributedIteratorInterface(Iterator):
   """
 
   def get_next(self):
+    # [FUNCTION DOC]
+    # Contract for returning the next input for all replicas, as a tensor or distributed
+    # values. No inputs. The base implementation always raises a not-implemented error;
+    # implementations raise an out-of-range error when the iterator is exhausted.
     """Returns the next input from the iterator for all replicas.
 
     Example use:
@@ -241,6 +290,9 @@ class DistributedIteratorInterface(Iterator):
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Property contract for the nested type specification of one element produced by the
+    # iterator. The base implementation always raises a not-implemented error.
     # pylint: disable=line-too-long
     """The type specification of an element of `tf.distribute.DistributedIterator`.
 
@@ -266,6 +318,10 @@ class DistributedIteratorInterface(Iterator):
         "DistributedIterator.element_spec() must be implemented in descendants")
 
   def get_next_as_optional(self):
+    # [FUNCTION DOC]
+    # Contract for returning an optional holding the next value for all replicas, or an empty
+    # optional once the iterator is exhausted. The base implementation always raises a
+    # not-implemented error.
     # pylint: disable=line-too-long
     """Returns a `tf.experimental.Optional` that contains the next value for all replicas.
 
@@ -306,6 +362,10 @@ class DistributedIteratorInterface(Iterator):
 
 @tf_export("distribute.DistributedDataset", v1=[])
 class DistributedDatasetInterface(Iterable):
+  # [CLASS DOC]
+  # Public interface for a dataset distributed among devices and machines. Supports iteration
+  # and the element specification only (not other dataset transformations). All members raise a
+  # not-implemented error until overridden. Exported as a public type for TensorFlow 2.
   # pylint: disable=line-too-long
   """Represents a dataset distributed among devices and machines.
 
@@ -454,6 +514,9 @@ class DistributedDatasetInterface(Iterable):
   """
 
   def __iter__(self):
+    # [FUNCTION DOC]
+    # Contract for creating an iterator over the distributed dataset. The base implementation
+    # always raises a not-implemented error.
     """Creates an iterator for the `tf.distribute.DistributedDataset`.
 
     The returned iterator implements the Python Iterator protocol.
@@ -479,6 +542,9 @@ class DistributedDatasetInterface(Iterable):
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Property contract for the nested type specification of one dataset element. The base
+    # implementation always raises a not-implemented error.
     """The type specification of an element of this `tf.distribute.DistributedDataset`.
 
     Example usage:
@@ -504,5 +570,8 @@ class DistributedDatasetInterface(Iterable):
 
   @doc_controls.do_not_generate_docs
   def reduce(self, initial_state, reduce_func):
+    # [FUNCTION DOC]
+    # Hidden-from-docs override of the iterable reduce contract, taking an initial state and a
+    # reduce function. Always raises a not-implemented error; descendants provide behavior.
     raise NotImplementedError(
         "DistributedDataset.reduce must be implemented in descendants.")

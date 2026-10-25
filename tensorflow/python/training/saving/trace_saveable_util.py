@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Helper module that traces the save and restore logic of legacy SaveableObject factories into
+# concrete (graph) functions, used when exporting trackables to a SavedModel. Exposes one public
+# function that traces every factory of a trackable and one private function that traces a single
+# factory. No import-time side effects.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +31,16 @@ from tensorflow.python.util import nest
 
 
 def trace_save_restore_function_map(obj, factory_data_list):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring has a typo ("atttribute") and the returned dictionary omits
+  # factories that are skipped (resource variables, non-callable factories, or factories whose
+  # saveables validate to empty), which the docstring does not mention.
+  # Traces save and restore concrete functions for each saveable factory. Inputs: obj, the
+  # trackable that owns the factories; factory_data_list, a list of records each with a factory
+  # and an attribute name. Factories are skipped when obj or the factory is a resource variable
+  # or the factory is not callable, and when tracing yields no save function. Returns a mapping
+  # from attribute name to a pair of (concrete save function, concrete restore function).
+  # Exceptions from tracing propagate. Side effect: traces functions (may build graphs).
   """Traces all save and restore functions in the provided factory list.
 
   Args:
@@ -57,6 +72,18 @@ def trace_save_restore_function_map(obj, factory_data_list):
 
 
 def _trace_save_restore_functions(saveable_factory, obj):
+  # [FUNCTION DOC]
+  # HELPER: per-factory tracing step for trace_save_restore_function_map.
+  # If the factory was produced for an already-restored saveable (a partial carrying stored
+  # save and restore functions), returns those two stored functions directly. Otherwise traces
+  # a save function taking one scalar string checkpoint key, which calls the factory with that
+  # key, normalizes a single saveable to a list, records the saveables in a shared list, and
+  # returns a list of mappings with name, tensor and slice spec for every save spec. The
+  # saveables are then validated for SavedModel use against obj; if none remain, returns a pair
+  # of null values. Otherwise a restore function is traced whose input signature is the type
+  # specs of all spec tensors; it repacks the flat restored tensors into per-saveable groups,
+  # calls each saveable's restore, and returns a dummy constant 1. Returns the pair of concrete
+  # save and restore functions. Validation errors propagate.
   """Traces save and restore functions."""
   if saveable_object_util.is_factory_for_restored_saveable_object(
       saveable_factory):
@@ -72,6 +99,11 @@ def _trace_save_restore_functions(saveable_factory, obj):
       input_signature=[tensor_spec.TensorSpec([], dtypes.string)]
   )
   def save_fn(checkpoint_key):
+    # [FUNCTION DOC]
+    # HELPER: traced save function. Input: a scalar string tensor, the checkpoint key. Calls the
+    # factory with that key, wraps a lone saveable in a list, stores the saveables into the
+    # enclosing shared list (side effect), and returns a list with one mapping per save spec
+    # holding its name, tensor and slice spec.
     maybe_saveable = saveable_factory(name=checkpoint_key)
     if isinstance(maybe_saveable, saveable_object.SaveableObject):
       maybe_saveable = [maybe_saveable]
@@ -105,6 +137,13 @@ def _trace_save_restore_functions(saveable_factory, obj):
 
   @def_function.function(input_signature=restored_type_specs)
   def restore_fn(*restored_tensors):
+    # [FUNCTION DOC]
+    # HELPER: traced restore function. Input: the flat restored tensors, one per save spec.
+    # KNOWN ISSUE: the loop variable reuses the name of the function argument, shadowing it;
+    # harmless here since the argument is no longer needed after repacking.
+    # Repacks the flat tensors into the nested per-saveable structure, calls each saveable's
+    # restore with its group of tensors (shapes unspecified), and returns the integer 1 as a
+    # dummy output. Side effect: restores variables or resources owned by the saveables.
     structured_restored_tensors = nest.pack_sequence_as(
         tensor_structure, restored_tensors)
     for saveable, restored_tensors in zip(saveables,

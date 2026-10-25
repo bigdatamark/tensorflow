@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: utility module for attaching documentation to type aliases (used by the type modules).
+# Holds a module-level registry that maps object identity numbers to documentation text for
+# aliases whose documentation attribute cannot be overwritten. Exposes one function for
+# documenting an alias. The registry is consumed by the documentation generator.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +27,12 @@ _EXTRA_DOCS: Dict[int, str] = {}
 
 
 def document(obj, doc):
+  # [FUNCTION DOC]
+  # HELPER: attaches documentation text to a type alias for the doc generator.
+  # Inputs: obj, the alias object to document; doc, the documentation string. Tries to set the
+  # object's documentation attribute; if that is not allowed (attribute error), stores the text
+  # in the module-level registry keyed by the object's identity number instead. Returns nothing.
+  # Side effects: mutates the object or the registry.
   """Adds a docstring to typealias by overriding the `__doc__` attribute.
 
   Note: Overriding `__doc__` is only possible after python 3.7.

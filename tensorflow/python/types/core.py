@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Core TensorFlow type definitions: the base Tensor classes (symbolic and eager-value variants),
+# the function type, abstract callable, atomic, concrete and polymorphic function interfaces, the
+# tensor conversion protocol and the TensorLike type alias. Mostly abstract interfaces with
+# documentation but little behavior. Import-time side effects: registers public API exports via
+# the export decorator, attaches documentation to the TensorLike alias, and exports that constant.
+# Falls back to the typing extensions package for Protocol on older Python versions.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -44,6 +51,9 @@ else:
 # TODO(b/178822082): Revisit this API when tf.types gets more resource.
 @tf_export("__internal__.types.Tensor", v1=[])
 class Tensor(object):
+  # [CLASS DOC]
+  # Base class of all dense tensors. Declares the dtype and shape properties as stubs that
+  # return nothing; concrete subclasses supply real values. Exported as an internal API type.
   """The base class of all dense Tensor objects.
 
   A dense tensor has a static data type (dtype), and may have a static rank and
@@ -53,10 +63,16 @@ class Tensor(object):
 
   @property
   def dtype(self):
+    # [FUNCTION DOC]
+    # Property stub for the tensor's data type. The base implementation does nothing and
+    # returns a null value; subclasses override it to return the element data type.
     pass
 
   @property
   def shape(self):
+    # [FUNCTION DOC]
+    # Property stub for the tensor's static shape. The base implementation does nothing and
+    # returns a null value; subclasses override it to return the shape.
     pass
 
 
@@ -68,6 +84,10 @@ class Tensor(object):
 #   ...
 # ```
 class Symbol(Tensor):
+  # [CLASS DOC]
+  # Marker subclass of Tensor for symbolic graph tensors: outputs of op definitions that carry
+  # no concrete value. No added members. Eager tensors also inherit from it indirectly, so
+  # checks must also test for the value type.
   """Symbolic "graph" Tensor.
 
   These objects represent the output of an op definition and do not carry a
@@ -77,6 +97,9 @@ class Symbol(Tensor):
 
 
 class Value(Tensor):
+  # [CLASS DOC]
+  # Marker subclass of Tensor for tensors that can hold a value, i.e. eager tensors. Declares
+  # a numpy conversion stub.
   """Tensor that can be associated with a value (aka "eager tensor").
 
   These objects represent the (usually future) output of executing an op
@@ -84,11 +107,18 @@ class Value(Tensor):
   """
 
   def numpy(self):
+    # [FUNCTION DOC]
+    # Stub for converting the tensor to a numpy array. The base implementation does nothing
+    # and returns a null value; eager tensor subclasses override it.
     pass
 
 
 @tf_export("types.experimental.FunctionType")
 class FunctionType(inspect.Signature, metaclass=abc.ABCMeta):
+  # [CLASS DOC]
+  # Abstract-metaclass subclass of the standard signature class describing the input/output
+  # contract of a TensorFlow callable; concrete implementations integrate with trace types.
+  # This base only fixes the from-callable constructor behavior. Exported as a public type.
   """Represents the type of a TensorFlow callable.
 
   FunctionType inherits from inspect.Signature which canonically represents the
@@ -105,11 +135,20 @@ class FunctionType(inspect.Signature, metaclass=abc.ABCMeta):
   # The signature of this method changes in Py3.10 so we override to enforce it.
   @classmethod
   def from_callable(cls, obj, *, follow_wrapped=True):
+    # [FUNCTION DOC]
+    # Class method building a function type from a callable object. Inputs: obj, the callable
+    # to inspect; follow_wrapped (keyword only, default true), whether to unwrap decorated
+    # callables first. Delegates to the parent implementation and returns the resulting
+    # instance. Exists only to pin down the signature, which changed in Python 3.10.
     return super().from_callable(obj, follow_wrapped=follow_wrapped)
 
 
 @tf_export("types.experimental.Callable", v1=[])
 class Callable(metaclass=abc.ABCMeta):
+  # [CLASS DOC]
+  # Abstract base class for TensorFlow callables such as those made by the function decorator.
+  # Requires a function_type property and declares a call method contract; the call method here
+  # is only documentation. Exported as a public experimental type.
   """Base class for TF callables like those created by tf.function.
 
   Note: Callables are conceptually very similar to `tf.Operation`: a
@@ -119,9 +158,17 @@ class Callable(metaclass=abc.ABCMeta):
   @property
   @abc.abstractmethod
   def function_type(self) -> FunctionType:
+    # [FUNCTION DOC]
+    # Abstract property that subclasses must implement to return the function type describing
+    # this callable's inputs and outputs. The base body is empty.
     """Returns a FunctionType describing this callable."""
 
   def __call__(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: this base method has no body besides its docstring, so calling it on a
+    # subclass that does not override it silently returns a null value instead of executing.
+    # Contract for executing the callable with positional and keyword arguments. Returns the
+    # execution results (eager values or symbolic tensors); subclasses must supply behavior.
     """Executes this callable.
 
     This behaves like a regular op - in eager mode, it immediately starts
@@ -141,6 +188,10 @@ class Callable(metaclass=abc.ABCMeta):
 
 @tf_export("types.experimental.AtomicFunction", v1=[])
 class AtomicFunction(Callable):
+  # [CLASS DOC]
+  # Abstract base class for a single graph function definition, callable directly only when no
+  # captures are required, otherwise via the call-with-captures method. Supports no gradients;
+  # use the concrete function for that. Exported as a public experimental type.
   """Base class for graph functions.
 
   An `AtomicFunction` encapsulates a single graph function definition.
@@ -154,6 +205,12 @@ class AtomicFunction(Callable):
   """
 
   def call_with_captures(self, args, kwargs, captures):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the base body is only a docstring, so it returns a null value rather than
+    # the documented structured output; real behavior lives in subclasses.
+    # Contract for calling the function with captured values. Inputs: args, tuple of positional
+    # arguments; kwargs, mapping of keyword arguments; captures, tuple of tensors supplying
+    # captured values. Returns the structured outputs.
     """Calls this AtomicFunction with captures as defined by its FunctionType.
 
     Args:
@@ -168,6 +225,10 @@ class AtomicFunction(Callable):
 
 @tf_export("types.experimental.ConcreteFunction", v1=[])
 class ConcreteFunction(Callable, metaclass=abc.ABCMeta):
+  # [CLASS DOC]
+  # Abstract base class for differentiable graph functions: wraps an original atomic graph
+  # function and may generate forward and backward variants for gradient tapes. Requires an
+  # inference function property. Exported as a public experimental type.
   """Base class for differentiable graph functions.
 
   A `ConcreteFunction` encapsulates the original graph function definition with
@@ -179,6 +240,9 @@ class ConcreteFunction(Callable, metaclass=abc.ABCMeta):
   @property
   @abc.abstractmethod
   def inference_fn(self) -> AtomicFunction:
+    # [FUNCTION DOC]
+    # Abstract property that subclasses implement to return the original atomic function owned
+    # by this concrete function. The base body is empty.
     """Returns the original `AtomicFunction` owned by this ConcreteFunction."""
 
 
@@ -189,6 +253,11 @@ class ConcreteFunction(Callable, metaclass=abc.ABCMeta):
     v1=[],
 )
 class PolymorphicFunction(Callable, metaclass=abc.ABCMeta):
+  # [CLASS DOC]
+  # Abstract base class for polymorphic graph functions that dispatch to one of several traced
+  # graphs depending on input types, tracing new specializations on demand. Requires a method
+  # returning concrete functions and offers a debugging method for compiler output. Exported
+  # as the polymorphic function type and, deprecated, under the generic function name.
   """Base class for polymorphic graph functions.
 
   Graph functions are Python callable objects that dispatch calls to a
@@ -202,6 +271,11 @@ class PolymorphicFunction(Callable, metaclass=abc.ABCMeta):
 
   @abc.abstractmethod
   def get_concrete_function(self, *args, **kwargs) -> ConcreteFunction:
+    # [FUNCTION DOC]
+    # Abstract method that subclasses implement to return a concrete function specialized to
+    # the given input types. Inputs: positional and keyword arguments following normal call
+    # rules, where type specifiers may replace real tensors; may be omitted when only one
+    # specialization exists. Base body does nothing (returns a null value).
     """Returns a `ConcreteFunction` specialized to input types.
 
     The arguments specified by `args` and `kwargs` follow normal function call
@@ -249,6 +323,15 @@ class PolymorphicFunction(Callable, metaclass=abc.ABCMeta):
     pass
 
   def experimental_get_compiler_ir(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the base body is only a docstring followed by a no-op, so it returns a null
+    # value instead of the documented callable; the docstring example also has unbalanced
+    # parentheses. The documented behavior lives in subclasses.
+    # Debugging contract: returns a callable that, given a stage name and optional device name,
+    # produces the compiler intermediate representation of the compiled function. Inputs are
+    # the compilation arguments, either all type specs or all tensors/values. Documented to
+    # raise a value error for an invalid stage, a function not compiled, or underdefined input
+    # shapes, and a type error when used in graph mode.
     """Returns compiler IR for the compiled function.
 
     This API is intended *only* for debugging as there are no guarantees on
@@ -373,9 +456,16 @@ class PolymorphicFunction(Callable, metaclass=abc.ABCMeta):
 
 @runtime_checkable
 class TensorProtocol(Protocol):
+  # [CLASS DOC]
+  # Runtime-checkable structural protocol for objects that can convert themselves to a Tensor
+  # by providing the tensor conversion method.
   """Protocol type for objects that can be converted to Tensor."""
 
   def __tf_tensor__(self, dtype=None, name=None):
+    # [FUNCTION DOC]
+    # Protocol method: converts the object to a Tensor. Inputs: dtype, optional requested data
+    # type; name, optional name for the created operations. Documented to return a Tensor, but
+    # this protocol body does nothing and returns a null value.
     """Converts this object to a Tensor.
 
     Args:

@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Defines the types used by tf.function tracing: the abstract trace type that decides subtype
+# relations, common supertypes, placeholders and tensor decomposition for dispatching calls to
+# cached concrete functions; empty context classes for tracing, placeholders and casting; and a
+# runtime-checkable protocol for objects that supply their own trace type. Import-time side
+# effects: registers public API exports, including an explicit constant export for the protocol
+# (done separately because the export decorator would break runtime-checkable protocols).
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -38,6 +45,12 @@ from tensorflow.tools.docs import doc_controls
 
 @tf_export("types.experimental.TraceType", v1=[])
 class TraceType(metaclass=abc.ABCMeta):
+  # [CLASS DOC]
+  # Abstract base class describing the type of values for tf.function tracing. Subclasses
+  # define subtype checks, most specific common supertypes, placeholder creation, equality and
+  # hashing, and may override tensor decomposition, reconstruction, flattening and casting. The
+  # function machinery uses it to decide whether a cached concrete function can be reused or
+  # a retrace is needed. Exported as a public experimental type.
   """Represents the type of object(s) for tf.function tracing purposes.
 
   `TraceType` is an abstract class that other classes might inherit from to
@@ -105,6 +118,10 @@ class TraceType(metaclass=abc.ABCMeta):
 
   @abc.abstractmethod
   def is_subtype_of(self, other: "TraceType") -> bool:
+    # [FUNCTION DOC]
+    # Abstract method. Input: other, a trace type to compare against. Must return true when
+    # this type is a subtype of the other, meaning values of this type can be passed to a
+    # function traced with the other type. Base body is empty.
     """Returns True if `self` is a subtype of `other`.
 
     For example, `tf.function` uses subtyping for dispatch:
@@ -133,6 +150,10 @@ class TraceType(metaclass=abc.ABCMeta):
   def most_specific_common_supertype(
       self, others: Sequence["TraceType"]
   ) -> Optional["TraceType"]:
+    # [FUNCTION DOC]
+    # Abstract method. Input: others, a sequence of trace types. Must return the most specific
+    # trace type that is a supertype of this type and all the others, or a null value if none
+    # exists. Base body is empty.
     """Returns the most specific supertype of `self` and `others`, if exists.
 
     The returned `TraceType` is a supertype of `self` and `others`, that is,
@@ -163,6 +184,12 @@ class TraceType(metaclass=abc.ABCMeta):
 
   @abc.abstractmethod
   def placeholder_value(self, placeholder_context) -> Any:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: docstring has a typo in the function name ("tf.funcion") and an example
+    # mixed into the argument section.
+    # Abstract method. Input: placeholder_context, a context reserved for internal or future
+    # use. Must return a placeholder value standing for possibly many actual values, which the
+    # function is traced with. Base body is empty.
     """Creates a placeholder for tracing.
 
     tf.funcion traces with the placeholder value rather than the actual value.
@@ -198,6 +225,10 @@ class TraceType(metaclass=abc.ABCMeta):
     """
 
   def to_tensors(self, value: Any) -> List[core.Tensor]:
+    # [FUNCTION DOC]
+    # Default decomposition of a value into tensors. Input: value, a value of this type
+    # (ignored). Returns an empty list; subclasses that carry tensors override it and must
+    # always produce the same number of tensors for this type.
     """Breaks down a value of this type into Tensors.
 
     For a TraceType instance, the number of tensors generated for corresponding
@@ -213,6 +244,11 @@ class TraceType(metaclass=abc.ABCMeta):
     return []
 
   def from_tensors(self, tensors: Iterator[core.Tensor]) -> Any:
+    # [FUNCTION DOC]
+    # Default reconstruction of a value from tensors. Input: tensors, an iterator of tensors
+    # (ignored, none consumed). Returns the placeholder value of this type, built with a fresh
+    # placeholder context. Subclasses that use tensors must consume the same count as the
+    # tensor decomposition produces.
     """Generates a value of this type from Tensors.
 
     Must use the same fixed amount of tensors as `to_tensors`.
@@ -227,10 +263,24 @@ class TraceType(metaclass=abc.ABCMeta):
     return self.placeholder_value(PlaceholderContext())
 
   def flatten(self) -> List["TraceType"]:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it returns tensor specs, but the annotation and the
+    # default implementation use a list of trace types (and the default list is empty).
+    # Default flattening: returns an empty list. Subclasses override to list the component
+    # types matching the tensor decomposition values.
     """Returns a list of TensorSpecs corresponding to `to_tensors` values."""
     return []
 
   def cast(self, value, cast_context) -> Any:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring refers to an overloaded "_cast" method, which does not exist;
+    # the actual method is named cast. It also describes the assertion as the raised error
+    # while it is the default behavior.
+    # Default cast of a value to this type. Inputs: value, a value belonging to this type;
+    # cast_context, reserved for internal or future use (ignored). Asserts that the value
+    # equals this type's placeholder value (built with a fresh placeholder context) and raises
+    # an assertion error with a message naming the value and type otherwise; returns the
+    # value unchanged. Subclasses override to perform real conversion.
     """Cast value to this type.
 
     Args:
@@ -252,14 +302,23 @@ class TraceType(metaclass=abc.ABCMeta):
 
   @abc.abstractmethod
   def __hash__(self) -> int:
+    # [FUNCTION DOC]
+    # Abstract hash method: subclasses must return an integer hash consistent with equality so
+    # trace types can key caches. Base body does nothing (returns a null value).
     pass
 
   @abc.abstractmethod
   def __eq__(self, other) -> bool:
+    # [FUNCTION DOC]
+    # Abstract equality method: subclasses must return whether the other object is an equal
+    # trace type. Base body does nothing (returns a null value).
     pass
 
 
 class TracingContext(metaclass=abc.ABCMeta):
+  # [CLASS DOC]
+  # Abstract container for flags and variables that influence tracing while building the trace
+  # types of a set of objects; shared across all tracing-type calls for that set. No members.
   """Contains information scoped to the tracing of multiple objects.
 
   `TracingContext` is a container class for flags and variables that have
@@ -271,20 +330,33 @@ class TracingContext(metaclass=abc.ABCMeta):
 
 
 class PlaceholderContext():
+  # [CLASS DOC]
+  # Empty context class carrying information used when generating placeholders within a
+  # scope. Instantiated with no arguments by default trace type methods.
   """Contains context information for generating placeholders within a scope."""
 
 
 class CastContext():
+  # [CLASS DOC]
+  # Empty context class carrying information and rules for casting values to a type spec.
   """Contains context info and rules for casting values to a TypeSpec."""
 
 
 @runtime_checkable
 class SupportsTracingProtocol(Protocol):
+  # [CLASS DOC]
+  # Runtime-checkable protocol for custom classes that control tf.function retracing by
+  # supplying their own trace type. Exported as a public type via an explicit constant export
+  # at the end of this module.
   """A protocol allowing custom classes to control tf.function retracing."""
 
   @doc_controls.doc_private
   @abc.abstractmethod
   def __tf_tracing_type__(self, context: TracingContext) -> TraceType:
+    # [FUNCTION DOC]
+    # Protocol method hidden from generated docs. Input: context, a tracing context reserved
+    # for internal or future use. Must return the trace type of this object, used to build
+    # call signatures and match arguments against existing ones. Base body is empty.
     """Returns the tracing type of this object.
 
     The tracing type is used to build the signature of a tf.function

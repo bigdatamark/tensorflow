@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Public module for user-defined ops. Re-exports every generated wrapper from the generated
+# user ops module (by wildcard import) and defines one hand-written example wrapper that
+# overrides the generated code for the fact op. Import-time side effect: registers the example
+# function as a TensorFlow 1 API export.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,5 +29,9 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export(v1=['user_ops.my_fact'])
 def my_fact():
+  # [FUNCTION DOC]
+  # Example of overriding generated op code. Takes no inputs, calls the generated fact op and
+  # returns its result (a string tensor in graph mode or an eager string value). Exported only
+  # in the TensorFlow 1 API as an op under user ops.
   """Example of overriding the generated code for an Op."""
   return _gen_user_ops.fact()

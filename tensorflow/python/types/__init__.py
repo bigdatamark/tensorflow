@@ -1,3 +1,9 @@
+# [PACKAGE DOC]
+# Package of public TensorFlow type definitions: base tensor classes, callable and function
+# types, dataset and distribution types, tracing types and internal type interfaces. The package
+# initializer itself re-exports nothing and has no import-time side effects; the submodules
+# (core, data, distribute, internal, trace, doc_typealias) hold the definitions and are imported
+# individually. By convention it should contain type definitions only, with no behavior.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

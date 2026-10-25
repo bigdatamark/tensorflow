@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Defines the runtime-checkable protocol that user classes implement to be treated as nested
+# structures by the nest utilities: a method to flatten an object into static metadata plus
+# dynamic components, and a class method to rebuild an object from them. Interface
+# definitions only; no import-time side effects.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +26,11 @@ from typing import Protocol
 
 @typing.runtime_checkable
 class CustomNestProtocol(Protocol):
+  # [CLASS DOC]
+  # Runtime-checkable protocol for adding custom nest support to user classes. Implementers
+  # provide the flatten and unflatten methods; nest and data functions then treat instances as
+  # structures. Limited function-tracing support (needs a custom trace type); not supported
+  # by SavedModel. Used for structural isinstance checks, not for inheritance behavior.
   """Protocol for adding custom tf.nest support in user-defined classes.
 
   User classes should implement the two methods defined in this protocol in
@@ -81,6 +91,10 @@ class CustomNestProtocol(Protocol):
   """
 
   def __tf_flatten__(self):
+    # [FUNCTION DOC]
+    # Protocol method. No inputs. Implementations return a pair of static metadata (a fixed
+    # custom object) and a tuple of components (the modifiable fields), flattening only the
+    # current level and not invoking TensorFlow ops. Base body is empty and returns a null value.
     """Flatten current object into (metadata, components).
 
     Returns:
@@ -101,6 +115,11 @@ class CustomNestProtocol(Protocol):
 
   @classmethod
   def __tf_unflatten__(cls, metadata, components):
+    # [FUNCTION DOC]
+    # Protocol class method. Inputs: metadata, the static configuration object produced when
+    # flattening; components, a tuple of dynamic fields. Implementations return a new object of
+    # the same class, unflattening only the current level and not invoking TensorFlow ops. Base
+    # body is empty and returns a null value.
     """Create a user-defined object from (metadata, components).
 
     Args:
