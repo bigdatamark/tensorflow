@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# HELPER: shared test utility for the parallel_for test modules.
+# Provides a base test case that compares results of vectorized parallel-for loops against the
+# equivalent sequential for-loop. No import-time side effects beyond imports.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,9 +27,19 @@ from tensorflow.python.util import nest
 
 
 class PForTestCase(test.TestCase):
+  # [CLASS DOC]
+  # HELPER: base class for the parallel_for tests.
+  # Test case with helpers to evaluate tensors and assert that a vectorized loop (pfor) and a
+  # sequential loop (for_loop) give equal values and compatible static shapes.
   """Base class for test cases."""
 
   def _run_targets(self, targets1, targets2=None, run_init=True):
+    # [FUNCTION DOC]
+    # HELPER: evaluation glue for the assertion helpers in this class.
+    # Flattens the nested structures targets1 and optional targets2, asserts they have equal length
+    # (unless targets2 is empty), optionally runs the global variable initializer (run_init, default
+    # true), then evaluates all targets in one call. Returns the list of evaluated values of
+    # targets1 followed by those of targets2. Raises an assertion error on length mismatch.
     targets1 = nest.flatten(targets1)
     targets2 = ([] if targets2 is None else nest.flatten(targets2))
     assert len(targets1) == len(targets2) or not targets2
@@ -36,6 +50,13 @@ class PForTestCase(test.TestCase):
 
   # TODO(agarwal): Allow tests to pass down tolerances.
   def run_and_assert_equal(self, targets1, targets2, rtol=1e-4, atol=1e-5):
+    # [FUNCTION DOC]
+    # Evaluates both structures of targets and asserts the first half of the flattened outputs
+    # matches the second half element-wise. Numeric outputs are compared with relative and absolute
+    # tolerances rtol and atol; object-dtype outputs (e.g. strings) are compared for exact equality.
+    # Returns nothing; fails the test on mismatch.
+    # KNOWN ISSUE: the comparison pairs outputs[i + n] with outputs[i] where n is half the output
+    # count, so it silently assumes targets1 and targets2 flatten to equally many tensors.
     outputs = self._run_targets(targets1, targets2)
     outputs = nest.flatten(outputs)  # flatten SparseTensorValues
     n = len(outputs) // 2
@@ -52,6 +73,13 @@ class PForTestCase(test.TestCase):
                     fallback_to_while_loop=False,
                     rtol=1e-4,
                     atol=1e-5):
+    # [FUNCTION DOC]
+    # HELPER: runs a per-iteration function both vectorized and sequentially and compares them.
+    # loop_fn maps an iteration index to a structure of tensors; iters is the iteration count;
+    # parallel_iterations (optional) bounds parallelism; fallback_to_while_loop allows unsupported
+    # ops to fall back to a while loop; rtol and atol are comparison tolerances. Builds the pfor
+    # result and the for_loop result, checks their leading static dimensions agree, then asserts the
+    # values are equal. Returns nothing; fails the test on mismatch.
     t1 = pfor_control_flow_ops.pfor(
         loop_fn,
         iters=iters,
@@ -62,6 +90,11 @@ class PForTestCase(test.TestCase):
                                         parallel_iterations=parallel_iterations)
 
     def _check_shape(a, b):
+      # [FUNCTION DOC]
+      # HELPER: shape check used by the loop comparison.
+      # Given the pfor result a and the for_loop result b, if b has a non-empty static shape,
+      # asserts the first dimensions of a and b are equal, with a message showing both shapes.
+      # Returns nothing.
       msg = (
           "Inferred static shapes are different between two loops:"
           f" {a.shape} vs {b.shape}."

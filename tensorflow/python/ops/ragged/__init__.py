@@ -1,3 +1,7 @@
+# [PACKAGE DOC]
+# Package for ragged tensors (tf.RaggedTensor), tensors with non-uniform dimensions. Importing it
+# only imports the ragged_tensor submodule, which defines the RaggedTensor type; the other ragged
+# op modules live in sibling files and are imported by the callers that need them.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

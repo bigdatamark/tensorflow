@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test module for the function that converts a value to a tensor or ragged tensor. Verifies that
+# ragged tensors and dense tensors pass through unchanged, that ragged tensor values and numpy arrays
+# are converted honoring dtype and preferred dtype, and that mismatched dtypes raise value errors.
+# Runs under the googletest main when executed directly.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,6 +33,10 @@ from tensorflow.python.platform import googletest
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedConvertToTensorOrRaggedTensorTest(test_util.TensorFlowTestCase,
                                               parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests for converting values to a tensor or ragged tensor, run in graph and eager modes with
+  # parameterized cases. Covers inputs that are ragged tensors, ragged tensor values, dense tensors and
+  # numpy arrays, each for successful conversion and for dtype-mismatch errors.
 
   #=============================================================================
   # Tests where the 'value' param is a RaggedTensor
@@ -51,6 +60,10 @@ class RaggedConvertToTensorOrRaggedTensorTest(test_util.TensorFlowTestCase,
       dict(pylist=[np.array(1)], preferred_dtype=dtypes.string),
   ])
   def testConvertRaggedTensor(self, pylist, dtype=None, preferred_dtype=None):
+    # [FUNCTION DOC]
+    # Parameterized by a nested list or numpy array, optional dtype and optional preferred dtype. Builds
+    # a ragged tensor from it, converts that with the conversion function and asserts the very same
+    # object is returned unchanged (even when a preferred dtype is given).
     rt = ragged_factory_ops.constant(pylist)
     converted = ragged_tensor.convert_to_tensor_or_ragged_tensor(
         rt, dtype, preferred_dtype)
@@ -78,6 +91,9 @@ class RaggedConvertToTensorOrRaggedTensorTest(test_util.TensorFlowTestCase,
                                    message,
                                    dtype=None,
                                    preferred_dtype=None):
+    # [FUNCTION DOC]
+    # Parameterized by input, requested dtype and expected message. Builds a ragged tensor and asserts
+    # that converting it with an incompatible explicit dtype raises a value error matching the message.
     rt = ragged_factory_ops.constant(pylist)
 
     with self.assertRaisesRegex(ValueError, message):
@@ -117,6 +133,11 @@ class RaggedConvertToTensorOrRaggedTensorTest(test_util.TensorFlowTestCase,
                                    dtype=None,
                                    preferred_dtype=None,
                                    expected_dtype=None):
+    # [FUNCTION DOC]
+    # Parameterized by a ragged tensor value, optional dtype, optional preferred dtype and expected
+    # dtype (defaults to the value dtype or the requested dtype). Converts the value and asserts the
+    # ragged rank is preserved, the result dtype is the expected one, and contents are equal. A
+    # preferred dtype is used only when convertible, otherwise the original dtype remains.
     if expected_dtype is None:
       expected_dtype = value.dtype if dtype is None else dtype
     converted = ragged_tensor.convert_to_tensor_or_ragged_tensor(
@@ -138,6 +159,9 @@ class RaggedConvertToTensorOrRaggedTensorTest(test_util.TensorFlowTestCase,
                                         message,
                                         dtype=None,
                                         preferred_dtype=None):
+    # [FUNCTION DOC]
+    # Converting a ragged tensor value of strings with an explicit integer dtype must raise a value error
+    # whose message matches the failed integer parse (accepting either numpy string representation).
     with self.assertRaisesRegex(ValueError, message):
       ragged_tensor.convert_to_tensor_or_ragged_tensor(value, dtype,
                                                        preferred_dtype)
@@ -151,6 +175,9 @@ class RaggedConvertToTensorOrRaggedTensorTest(test_util.TensorFlowTestCase,
       dict(pylist=[[1, 2], [3, 4]], preferred_dtype=dtypes.string),
   ])
   def testConvertTensor(self, pylist, dtype=None, preferred_dtype=None):
+    # [FUNCTION DOC]
+    # Parameterized by nested lists and optional dtype arguments. Converts a dense tensor and asserts the
+    # very same tensor object is returned.
     tensor = constant_op.constant(pylist)
     converted = ragged_tensor.convert_to_tensor_or_ragged_tensor(
         tensor, dtype, preferred_dtype)
@@ -173,6 +200,9 @@ class RaggedConvertToTensorOrRaggedTensorTest(test_util.TensorFlowTestCase,
                              message,
                              dtype=None,
                              preferred_dtype=None):
+    # [FUNCTION DOC]
+    # Converting a dense integer tensor to an incompatible explicit dtype (float or string) must raise a
+    # value error whose message says the requested dtype does not match the tensor dtype.
     tensor = constant_op.constant(pylist)
     with self.assertRaisesRegex(ValueError, message):
       ragged_tensor.convert_to_tensor_or_ragged_tensor(tensor, dtype,
@@ -206,6 +236,9 @@ class RaggedConvertToTensorOrRaggedTensorTest(test_util.TensorFlowTestCase,
                             dtype=None,
                             preferred_dtype=None,
                             expected_dtype=None):
+    # [FUNCTION DOC]
+    # Parameterized by a numpy array, optional dtype, optional preferred dtype and expected dtype.
+    # Converts the array and asserts the result dtype is the expected one and the contents are equal.
     if expected_dtype is None:
       expected_dtype = value.dtype if dtype is None else dtype
     converted = ragged_tensor.convert_to_tensor_or_ragged_tensor(
@@ -225,6 +258,9 @@ class RaggedConvertToTensorOrRaggedTensorTest(test_util.TensorFlowTestCase,
                                  message,
                                  dtype=None,
                                  preferred_dtype=None):
+    # [FUNCTION DOC]
+    # Converting a numpy string array with an explicit integer dtype must raise a value error whose
+    # message matches the failed integer parse (accepting either numpy string representation).
     with self.assertRaisesRegex(ValueError, message):
       ragged_tensor.convert_to_tensor_or_ragged_tensor(value, dtype,
                                                        preferred_dtype)

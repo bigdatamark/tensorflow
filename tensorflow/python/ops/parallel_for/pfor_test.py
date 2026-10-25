@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test module for the parallel_for package's private shape helpers in the pfor module. It defines
+# one test class and runs it through the standard TensorFlow test main when executed directly.
+# No import-time side effects beyond imports.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,8 +27,14 @@ from tensorflow.python.platform import test
 
 
 class PForTest(test.TestCase):
+  # [CLASS DOC]
+  # Unit tests for the small private shape helpers in the pfor module (rank, size and expand-dims).
+  # Each test builds its own graph or eager tensors; there is no shared fixture state.
 
   def test_rank_known(self):
+    # [FUNCTION DOC]
+    # Builds a placeholder with two unknown dimensions but known rank, calls the private rank helper
+    # and asserts the result is a plain integer equal to 2.
     with ops.Graph().as_default():
       x = array_ops.placeholder(dtypes.float32, [None, None])
       rank = pfor._rank(x)
@@ -32,12 +42,18 @@ class PForTest(test.TestCase):
       self.assertEqual(rank, 2)
 
   def test_rank_unknown(self):
+    # [FUNCTION DOC]
+    # Builds a placeholder of completely unknown shape and asserts the rank helper then returns a
+    # symbolic tensor instead of a Python integer.
     with ops.Graph().as_default():
       x = array_ops.placeholder(dtypes.float32)
       rank = pfor._rank(x)
       self.assertIsInstance(rank, tensor.Tensor)
 
   def test_size_known(self):
+    # [FUNCTION DOC]
+    # With a fully defined shape of 3 by 5, asserts the size helper returns a plain integer equal to
+    # 15.
     with ops.Graph().as_default():
       x = array_ops.placeholder(dtypes.float32, [3, 5])
       size = pfor._size(x)
@@ -45,6 +61,9 @@ class PForTest(test.TestCase):
       self.assertEqual(size, 3 * 5)
 
   def test_size_unknown(self):
+    # [FUNCTION DOC]
+    # With a partly unknown shape, asserts the size helper returns a tensor, and that the tensor has
+    # the requested dtype for both 32-bit and 64-bit integer requests.
     with ops.Graph().as_default():
       x = array_ops.placeholder(dtypes.float32, [3, None])
 
@@ -57,6 +76,9 @@ class PForTest(test.TestCase):
       self.assertEqual(size.dtype, dtypes.int64)
 
   def test_expand_dims_static(self):
+    # [FUNCTION DOC]
+    # Expands a random 3 by 5 tensor at axis 1 with a static count of 2 new axes and asserts the
+    # result equals a reshape to 3 by 1 by 1 by 5.
     x = random_ops.random_uniform([3, 5])
     axis = 1
     num_axes = 2
@@ -65,6 +87,9 @@ class PForTest(test.TestCase):
     self.assertAllEqual(expected, actual)
 
   def test_expand_dims_dynamic(self):
+    # [FUNCTION DOC]
+    # Same as the static expand-dims test but the number of new axes is given as a one-element
+    # constant tensor; asserts the result still equals a reshape to 3 by 1 by 1 by 5.
     x = random_ops.random_uniform([3, 5])
     axis = 1
     num_axes = constant_op.constant([2])
