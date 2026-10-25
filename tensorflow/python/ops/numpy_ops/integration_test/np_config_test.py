@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Integration test checking that numpy-style tensor methods and properties are unavailable on
+# TensorFlow tensors until numpy behavior is enabled through the numpy config module.
+# Runs eagerly when executed as a script.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,8 +23,16 @@ from tensorflow.python.ops.numpy_ops import np_config
 
 
 class ConfigTest(tf.test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the numpy_ops config module's enable_numpy_behavior switch. No shared
+  # fixtures.
 
   def testMethods(self):
+    # [FUNCTION DOC]
+    # Scenario: a scalar float tensor is created. Before enabling numpy behavior, accessing each
+    # of the attributes T, astype, ravel, transpose, reshape, clip, size and tolist must raise an
+    # attribute error mentioning enable_numpy_behavior. Then numpy behavior is enabled (global
+    # side effect on the tensor class) and accessing each attribute must succeed.
     a = tf.constant(1.)
 
     for name in {'T', 'astype', 'ravel', 'transpose', 'reshape', 'clip', 'size',
