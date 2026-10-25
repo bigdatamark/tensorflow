@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Kernel tests for the binomial random sampling ops: the stateful generator method and the
+# stateless random binomial function. Covers statistical moment matching against scipy,
+# seed reproducibility, stateless determinism, output shape broadcasting, corner-case
+# parameters (invalid or extreme probabilities) and int64 shape tensors.
+# Defines the supported dtype tuple used by the tests and a single test class; running the file
+# as a script starts the TensorFlow test runner. No import-time side effects beyond imports.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,11 +38,28 @@ _SUPPORTED_DTYPES = (dtypes.float16, dtypes.float32, dtypes.float64,
 
 
 class RandomBinomialTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering binomial sampling (stateful generator and stateless variants).
+  # Holds no instance state; provides a sampler-factory helper used by the moment and seed tests.
+  # Statistical tests use scipy when it is installed and silently return otherwise.
   """This is a large test due to the moments computation taking some time."""
 
   def _Sampler(
       self, num, counts, probs, dtype, gen=None, sample_shape=None, seed=None):
+    # [FUNCTION DOC]
+    # HELPER: builds sampling callables for the moment and seed tests in this class.
+    # Inputs: num (base sample count; the default sample shape is ten times it), counts and probs
+    # (binomial parameters, scalars or arrays), dtype (output dtype), gen (optional existing
+    # generator to reuse), sample_shape (optional explicit shape overriding the default), seed
+    # (used to create a fresh generator only when gen is not given).
+    # Returns a zero-argument callable that draws binomial samples from the generator.
+    # No side effects until the callable is invoked, which advances the generator state.
     def func():
+      # [FUNCTION DOC]
+      # HELPER: inner closure returned by the sampler factory.
+      # Takes no arguments. Picks the sample shape (explicit or ten times num), uses the supplied
+      # generator or creates one from the seed, and returns a tensor of binomial samples with the
+      # captured counts, probs and dtype. Advances the generator state.
       shape = [10 * num] if sample_shape is None else sample_shape
       generator = gen if gen is not None else (
           stateful_random_ops.Generator.from_seed(seed))
@@ -46,6 +70,11 @@ class RandomBinomialTest(test.TestCase):
 
   @test_util.run_v2_only
   def testMoments(self):
+    # [FUNCTION DOC]
+    # Checks that sampled binomial moments (up to six) match scipy's binomial distribution.
+    # Runs only in v2 mode. Uses one seeded generator, loops over all supported dtypes, strides,
+    # counts and probabilities, draws 500000 samples as float64 and asserts all z-scores are
+    # below 6. Returns early with a logged warning if scipy cannot be imported.
     try:
       from scipy import stats  # pylint: disable=g-import-not-at-top
     except ImportError as e:
@@ -73,12 +102,20 @@ class RandomBinomialTest(test.TestCase):
 
   @test_util.run_v2_only
   def testSeed(self):
+    # [FUNCTION DOC]
+    # Verifies that two samplers created with the same seed produce identical samples.
+    # Runs only in v2 mode; for float16, float32 and float64 draws 10000 samples from each of two
+    # fresh generators with equal seeds and asserts the results are exactly equal.
     for dt in dtypes.float16, dtypes.float32, dtypes.float64:
       sx = self._Sampler(1000, counts=10., probs=0.4, dtype=dt, seed=345)
       sy = self._Sampler(1000, counts=10., probs=0.4, dtype=dt, seed=345)
       self.assertAllEqual(self.evaluate(sx()), self.evaluate(sy()))
 
   def testStateless(self):
+    # [FUNCTION DOC]
+    # Verifies determinism of the stateless binomial op for float16, float32 and float64.
+    # Builds two op instances with the same seed pair, evaluates each twice, and asserts that all
+    # four results are identical (repeat evaluation and equal seeds give equal output).
     for dt in dtypes.float16, dtypes.float32, dtypes.float64:
       sx = stateless_random_ops.stateless_random_binomial(
           shape=[1000], seed=[12, 34], counts=10., probs=0.4, output_dtype=dt)
@@ -91,10 +128,18 @@ class RandomBinomialTest(test.TestCase):
       self.assertAllEqual(sy0, sy1)
 
   def testZeroShape(self):
+    # [FUNCTION DOC]
+    # Checks that requesting a zero-length output shape with empty counts and probs works and
+    # yields a tensor whose static shape is a single dimension of size zero.
     rnd = stateful_random_ops.Generator.from_seed(12345).binomial([0], [], [])
     self.assertEqual([0], rnd.shape.as_list())
 
   def testShape(self):
+    # [FUNCTION DOC]
+    # Checks the static output shape of the generator's binomial method under broadcasting.
+    # Cases: scalar parameters with vector and empty shapes, matching vector parameters,
+    # scalar-with-vector mixes in both directions, and multi-dimensional parameters that broadcast
+    # against the requested shape. Asserts each result's static shape equals the requested shape.
     rng = stateful_random_ops.Generator.from_seed(12345)
     # Scalar parameters.
     rnd = rng.binomial(shape=[10], counts=np.float32(2.), probs=np.float32(0.5))
@@ -144,6 +189,11 @@ class RandomBinomialTest(test.TestCase):
 
   @test_util.run_v2_only
   def testCornerCases(self):
+    # [FUNCTION DOC]
+    # Checks binomial sampling at degenerate parameters (v2 only). Probability zero gives zero,
+    # probability one gives the count, a not-a-number probability gives not-a-number when the count
+    # is positive, and zero counts with out-of-range or not-a-number probabilities give zero.
+    # Asserts the six samples equal the expected array exactly.
     rng = stateful_random_ops.Generator.from_seed(12345)
     counts = np.array([5, 5, 5, 0, 0, 0], dtype=np.float32)
     probs = np.array([0, 1, float("nan"), -10, 10, float("nan")],
@@ -155,6 +205,11 @@ class RandomBinomialTest(test.TestCase):
 
   @test_util.run_v2_only
   def testMomentsForTensorInputs(self):
+    # [FUNCTION DOC]
+    # Moment-matching test with tensor-valued (broadcasting) counts and probabilities (v2 only).
+    # For each dtype and stride, draws a large sample with random integer counts and uniform
+    # probabilities, compares up to six moments against a scipy-based wrapper, and asserts all
+    # z-scores are below 6. Returns early with a warning if scipy is unavailable.
     try:
       from scipy import stats  # pylint: disable=g-import-not-at-top
     except ImportError as e:
@@ -166,13 +221,23 @@ class RandomBinomialTest(test.TestCase):
     z_limit = 6.0
 
     class ScipyBinomialWrapper(object):
+      # [CLASS DOC]
+      # HELPER: adapter letting the moment-matching utility query scipy binomial moments for
+      # broadcast arrays of parameters. Stores the counts and probs arrays; exposes a moment method.
       """Wrapper for stats.binom to support broadcasting."""
 
       def __init__(self, counts, probs):
+        # [FUNCTION DOC]
+        # HELPER: constructor storing the counts and probs arrays (any broadcast-compatible
+        # shapes) for later moment computation. Returns nothing.
         self.counts = counts
         self.probs = probs
 
       def moment(self, i):
+        # [FUNCTION DOC]
+        # HELPER: computes the i-th raw moment of the binomial distribution for every element of
+        # the broadcast of counts and probs. Input i is the moment order. Returns a float64 array
+        # with the broadcast shape. Evaluates scipy's distribution one element at a time.
         counts, probs = np.broadcast_arrays(self.counts, self.probs)
         broadcast_shape = counts.shape
 
@@ -209,6 +274,10 @@ class RandomBinomialTest(test.TestCase):
         self.assertAllLess(z_scores, z_limit)
 
   def testStatelessDtypeInt64(self):
+    # [FUNCTION DOC]
+    # Checks the stateless binomial op accepts a shape given as an int64 tensor. Requests a
+    # single float16 sample with fixed seed, counts ten and probability 0.4, and asserts the
+    # result equals the value five (a regression-style exact-value check).
     srb = stateless_random_ops.stateless_random_binomial(
         shape=[constant_op.constant(1, dtype=dtypes.int64)],
         seed=[12, 34],

@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Tests for the gradient code of random ops: the helper that prepends unit dimensions to a
+# tensor, and the gradient of gamma sampling with respect to its shape (alpha) and rate (beta)
+# parameters. Gamma gradient tests check gradient shapes, compare against an explicit
+# reparameterization derivative (using scipy) and an implicit derivative from the incomplete
+# gamma function, and run statistical checks on averaged gradients and a quadratic loss, including
+# the stateless gamma V3 op. Two test classes; running as a script starts the test runner.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,21 +38,34 @@ from tensorflow.python.platform import tf_logging
 
 
 class AddLeadingUnitDimensionsTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for the helper that adds a given number of leading size-one dimensions to a tensor
+  # (static counts, zero, scalar input, and an unknown dynamic count). No shared fixtures.
 
   def testBasic(self):
+    # [FUNCTION DOC]
+    # Adding three leading unit dimensions to a 3x2x1 tensor yields shape 1x1x1x3x2x1.
     ret = random_grad.add_leading_unit_dimensions(array_ops.ones([3, 2, 1]), 3)
     self.assertAllEqual(ret.shape, [1, 1, 1, 3, 2, 1])
 
   def testZeroExtraDimensions(self):
+    # [FUNCTION DOC]
+    # Adding zero leading dimensions leaves the 3x2x1 input shape unchanged.
     ret = random_grad.add_leading_unit_dimensions(array_ops.ones([3, 2, 1]), 0)
     self.assertAllEqual(ret.shape, [3, 2, 1])
 
   def testScalarInput(self):
+    # [FUNCTION DOC]
+    # A plain scalar number with two leading dimensions requested becomes shape 1x1.
     ret = random_grad.add_leading_unit_dimensions(1.0, 2)
     self.assertAllEqual(ret.shape, [1, 1])
 
   @test_util.run_deprecated_v1
   def testUnknownShape(self):
+    # [FUNCTION DOC]
+    # Graph-mode test with placeholders for both the input tensor and the number of dimensions.
+    # Feeds a 2x2 array of ones and a count of two, runs a session, and asserts the output shape
+    # is 1x1x2x2 (the count is only known at run time).
     x = array_ops.placeholder(dtypes.float32)
     num_dimensions = array_ops.placeholder(dtypes.int32)
     ret = random_grad.add_leading_unit_dimensions(x, num_dimensions)
@@ -55,6 +75,12 @@ class AddLeadingUnitDimensionsTest(test.TestCase):
 
 
 class RandomGammaGradTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for the gradient of gamma sampling with respect to alpha and beta. The alpha gradient
+  # cannot be finite-difference checked because the underlying noise cannot be fixed, so tests
+  # compare to explicit and implicit reparameterization derivatives and to statistical identities.
+  # Most tests run in graph mode through the deprecated v1 decorator. Defines two shared helpers
+  # parameterised by dtype.
   """Tests for derivative of a sample ~ Gamma(alpha, beta) wrt alpha and beta.
 
   The sample is an "implicit" function of alpha, beta and the independent random
@@ -74,6 +100,9 @@ class RandomGammaGradTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testGradientsShape(self):
+    # [FUNCTION DOC]
+    # Gradients of seeded gamma samples (sample shape 2x3, alpha 2x2, beta 1x2) with respect to
+    # alpha and beta must have the same shapes as alpha and beta respectively.
     shape = [2, 3]
     alpha = array_ops.ones([2, 2])
     beta = array_ops.ones([1, 2])
@@ -84,6 +113,9 @@ class RandomGammaGradTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testGradientsShapeWithOneSamplePerParameter(self):
+    # [FUNCTION DOC]
+    # Same as the basic gradient shape test but with an empty sample shape (one sample per
+    # parameter combination): gradients must still match the shapes of alpha and beta.
     shape = []
     alpha = array_ops.ones([2, 2])
     beta = array_ops.ones([1, 2])
@@ -94,6 +126,10 @@ class RandomGammaGradTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testGradientsUnknownShape(self):
+    # [FUNCTION DOC]
+    # Graph-mode check with placeholders for the sample shape, alpha and beta. Feeds alpha of
+    # shape 1x2, beta of shape 2x1 and sample shape 2x1, runs a session and asserts the gradient
+    # values have the shapes of alpha and beta.
     shape = array_ops.placeholder(dtypes.int32)
     alpha = array_ops.placeholder(dtypes.float32)
     beta = array_ops.placeholder(dtypes.float32)
@@ -110,6 +146,15 @@ class RandomGammaGradTest(test.TestCase):
     self.assertAllEqual(grads_beta_val.shape, beta_val.shape)
 
   def _testCompareToExplicitDerivative(self, dtype):
+    # [FUNCTION DOC]
+    # HELPER: shared body for the float and double explicit-derivative tests.
+    # Input dtype is the TensorFlow floating dtype. Samples one gamma value for each of fifty
+    # alphas spaced logarithmically between 0.01 and 1000, computes the op gradient with respect
+    # to alpha, and compares it (tolerance 1e-3) to a numerical derivative of the inverse
+    # regularized incomplete gamma function evaluated with scipy at the sample's cdf value.
+    # If scipy or its derivative module cannot be imported, a warning is logged and the test
+    # passes without checking anything.
+    # KNOWN ISSUE: the try block wraps the whole body, so any import error silently skips the test.
     """Compare to the explicit reparameterization derivative.
 
     Verifies that the computed derivative satisfies
@@ -149,13 +194,26 @@ class RandomGammaGradTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testCompareToExplicitDerivativeFloat(self):
+    # [FUNCTION DOC]
+    # Runs the explicit-derivative comparison with float32.
     self._testCompareToExplicitDerivative(dtypes.float32)
 
   @test_util.run_deprecated_v1
   def testCompareToExplicitDerivativeDouble(self):
+    # [FUNCTION DOC]
+    # Runs the explicit-derivative comparison with float64.
     self._testCompareToExplicitDerivative(dtypes.float64)
 
   def _testCompareToImplicitDerivative(self, dtype):
+    # [FUNCTION DOC]
+    # HELPER: shared body for the float and double implicit-derivative tests.
+    # Input dtype is the TensorFlow floating dtype. Samples one gamma value for each of fifty
+    # logarithmically spaced alphas, takes the op's gradient with respect to alpha, and compares
+    # it (tolerance 1e-3) to the implicit reparameterization formula: minus the partial
+    # derivative of the regularized incomplete gamma cdf with respect to alpha divided by its
+    # partial derivative with respect to the sample (sample held constant via stop-gradient).
+    # KNOWN ISSUE: the docstring derivation repeats one equation line twice; harmless but
+    # redundant. The division is acknowledged in a comment as numerically unstable.
     """Compare to the implicit reparameterization derivative.
 
     Let's derive the formula we compare to.
@@ -196,14 +254,22 @@ class RandomGammaGradTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testCompareToImplicitDerivativeFloat(self):
+    # [FUNCTION DOC]
+    # Runs the implicit-derivative comparison with float32.
     self._testCompareToImplicitDerivative(dtypes.float32)
 
   @test_util.run_deprecated_v1
   def testCompareToImplicitDerivativeDouble(self):
+    # [FUNCTION DOC]
+    # Runs the implicit-derivative comparison with float64.
     self._testCompareToImplicitDerivative(dtypes.float64)
 
   @test_util.run_deprecated_v1
   def testAverageAlphaGradient(self):
+    # [FUNCTION DOC]
+    # Statistical test: the expected value of a gamma sample (rate one) has derivative one with
+    # respect to alpha, so the gradient of the mean of 10000 seeded samples with respect to
+    # alpha values 0.8, 10 and 1000 must be close to one (tolerance 0.1 absolute and relative).
     """Statistical test for the gradient.
 
     Using the equation (5) of https://arxiv.org/abs/1805.08498, we have
@@ -224,6 +290,10 @@ class RandomGammaGradTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testQuadraticLoss(self):
+    # [FUNCTION DOC]
+    # Statistical test with loss equal to the mean squared distance of 10000 seeded gamma samples
+    # (alpha 0.5, rate one) from 0.3. The Monte-Carlo gradient with respect to alpha must be close
+    # (tolerance 0.1) to the analytic value: one plus twice alpha minus twice the offset.
     """Statistical test for the gradient.
 
     The equation (5) of https://arxiv.org/abs/1805.08498 says
@@ -253,6 +323,10 @@ class RandomGammaGradTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testQuadraticLossV3(self):
+    # [FUNCTION DOC]
+    # Same quadratic-loss gradient check as the previous test but using the raw stateless gamma
+    # V3 op with explicit key, counter and the Philox algorithm code, 10000 samples and alpha 0.5.
+    # Asserts the loss gradient with respect to alpha is close (tolerance 0.1) to the analytic value.
     """Statistical test for the gradient.
 
     This is the same test as in testQuadraticLoss but for
