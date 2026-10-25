@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Re-exports make_decorator and unwrap from tf_decorator under the internal public API names
+# for decorator helpers. Exists as a separate module to avoid an import cycle between
+# tf_decorator and tf_export. Import-time side effect: applies the export decorator, which
+# registers the two functions in the API symbol tables. Helper module with no functions.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

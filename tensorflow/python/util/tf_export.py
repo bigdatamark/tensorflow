@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# Implements the tf_export and keras_export decorators that mark functions, classes and constants
+# as part of the public API and record the public names (separately for the V2 and V1 APIs).
+# Exposes: constants naming the API families and the attribute names used to store export
+# information, a global mapping from public API name to symbol, lookup helpers (symbol by name,
+# canonical name, V1/V2 names and constants of a symbol or module), the api_export decorator
+# class, a keyword-only argument wrapper, and the partial-application decorators tf_export and
+# keras_export. API generation tools read the attributes written here. Import-time side effects:
+# builds the attribute tables and the two decorator objects; the global name-to-symbol mapping is
+# filled as other modules are imported and decorated.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -54,6 +64,9 @@ SUBPACKAGE_NAMESPACES = []
 
 
 class _Attributes(NamedTuple):
+  # [CLASS DOC]
+  # HELPER: small immutable record holding the two attribute names (for API names and for API
+  # constants) used to store export information on a symbol or module for one API family.
   names: str
   constants: str
 
@@ -75,6 +88,9 @@ API_ATTRS_V1 = {
 
 
 class InvalidSymbolNameError(Exception):
+  # [CLASS DOC]
+  # Error raised by the export decorator when a symbol would be exported under a name that is not
+  # allowed for its API (for example under a subpackage reserved for another component).
   """Raised when trying to export symbol as an invalid or unallowed name."""
 
 
@@ -82,6 +98,10 @@ _NAME_TO_SYMBOL_MAPPING: dict[str, Any] = dict()
 
 
 def get_symbol_from_name(name: str) -> Optional[Any]:
+  # [FUNCTION DOC]
+  # Looks up an exported symbol by its public API name in the global registry filled by the export
+  # decorators. Input: name, a dotted string (V1-only names carry the compat.v1 prefix). Returns
+  # the symbol, or nothing/null if the name is unknown. No side effects.
   return _NAME_TO_SYMBOL_MAPPING.get(name)
 
 
@@ -90,6 +110,17 @@ def get_canonical_name_for_symbol(
     api_name: str = TENSORFLOW_API_NAME,
     add_prefix_to_v1_names: bool = False,
 ) -> Optional[str]:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: when the symbol has V2 names attribute but no V1 one (or the reverse path), the
+  # lookup of the V1 attribute uses a direct attribute read and raises an attribute error; also,
+  # if no V1 canonical name exists and prefixing is requested, the result is the text
+  # compat.v1.None instead of null.
+  # Finds the preferred public name of an exported symbol. Inputs: symbol, a function or class;
+  # api_name, which API family to use (default tensorflow); add_prefix_to_v1_names, whether a
+  # name found only in the V1 API gets a compat.v1 prefix (default false). Unwraps any decorators
+  # first. Returns null if the symbol has no dictionary or no export attribute; otherwise the
+  # canonical V2 name, falling back to the canonical V1 name. Deprecated names are consulted so
+  # non-deprecated names win. Raises a key error for an unknown api_name. No side effects.
   """Get canonical name for the API symbol.
 
   Example:
@@ -141,6 +172,10 @@ def get_canonical_name_for_symbol(
 def get_canonical_name(
     api_names: Sequence[str], deprecated_api_names: Sequence[str]
 ) -> Optional[str]:
+  # [FUNCTION DOC]
+  # Chooses the preferred endpoint name from a sequence of API names. Inputs: api_names, all
+  # names; deprecated_api_names, names considered deprecated. Returns the first name that is not
+  # deprecated, else the first name, else null when the sequence is empty. No side effects.
   """Get preferred endpoint name.
 
   Args:
@@ -164,6 +199,10 @@ def get_canonical_name(
 
 
 def get_v1_names(symbol: Any) -> Sequence[str]:
+  # [FUNCTION DOC]
+  # Collects the V1 API names recorded on a symbol by the export decorators, for both the
+  # tensorflow and keras families, tensorflow names first. Input: symbol, any object. Returns a
+  # new list (empty if the symbol has no dictionary or no names). No side effects.
   """Get a list of TF 1.* names for this symbol.
 
   Args:
@@ -186,6 +225,10 @@ def get_v1_names(symbol: Any) -> Sequence[str]:
 
 
 def get_v2_names(symbol: Any) -> Sequence[str]:
+  # [FUNCTION DOC]
+  # Collects the V2 API names recorded on a symbol by the export decorators, for both the
+  # tensorflow and keras families, tensorflow names first. Input: symbol, any object. Returns a
+  # new list (empty if the symbol has no dictionary or no names). No side effects.
   """Get a list of TF 2.0 names for this symbol.
 
   Args:
@@ -208,6 +251,11 @@ def get_v2_names(symbol: Any) -> Sequence[str]:
 
 
 def get_v1_constants(module: Any) -> Sequence[str]:
+  # [FUNCTION DOC]
+  # Returns a new list of the V1 API constant records stored on a module by export_constant (only
+  # the tensorflow family is consulted). Input: module object. Returns an empty list if none.
+  # KNOWN ISSUE: the annotation and docstring say a sequence of strings, but entries are pairs of
+  # (names, constant name).
   """Get a list of TF 1.* constants in this module.
 
   Args:
@@ -225,6 +273,11 @@ def get_v1_constants(module: Any) -> Sequence[str]:
 
 
 def get_v2_constants(module: Any) -> Sequence[str]:
+  # [FUNCTION DOC]
+  # Returns a new list of the V2 API constant records stored on a module by export_constant (only
+  # the tensorflow family is consulted). Input: module object. Returns an empty list if none.
+  # KNOWN ISSUE: the annotation and docstring say a sequence of strings, but entries are pairs of
+  # (names, constant name).
   """Get a list of TF 2.0 constants in this module.
 
   Args:
@@ -245,6 +298,11 @@ T = TypeVar('T')
 
 
 class api_export(object):  # pylint: disable=invalid-name
+  # [CLASS DOC]
+  # Decorator class behind tf_export and keras_export. An instance holds the V2 public names, the
+  # V1 public names (defaulting to the V2 names) and the API family name. Calling it on a symbol
+  # records the names on the undecorated symbol and registers the symbol in the global name
+  # registry; export_constant records constants on a module. Names are validated at creation.
   """Provides ways to export symbols to the TensorFlow API."""
 
   _names: Sequence[str]
@@ -258,6 +316,11 @@ class api_export(object):  # pylint: disable=invalid-name
       v1: Optional[Sequence[str]] = None,
       allow_multiple_exports: bool = True,  # pylint: disable=unused-argument
   ):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: positional strings naming the public endpoints in dotted form (the first
+    # is canonical); api_name, the API family (default tensorflow); v1, optional names for the V1
+    # API (defaults to the positional names); allow_multiple_exports, deprecated and ignored.
+    # Stores the names and validates them. Raises InvalidSymbolNameError for disallowed names.
     """Export under the names *args (first one is considered canonical).
 
     Args:
@@ -274,6 +337,11 @@ class api_export(object):  # pylint: disable=invalid-name
     self._validate_symbol_names()
 
   def _validate_symbol_names(self) -> None:
+    # [FUNCTION DOC]
+    # HELPER: used by the constructor to check the requested names. For the tensorflow family it
+    # rejects any name starting with a registered component subpackage namespace; for other
+    # families it requires every name to start with the family name. Raises InvalidSymbolNameError
+    # on violation; returns nothing.
     """Validate you are exporting symbols under an allowed package.
 
     We need to ensure things exported by tf_export, etc.
@@ -303,6 +371,11 @@ class api_export(object):  # pylint: disable=invalid-name
         )
 
   def __call__(self, func: T) -> T:
+    # [FUNCTION DOC]
+    # Applies the export to a symbol. Input: func, a function or class (possibly decorated).
+    # Side effects: sets the V2 and V1 name attributes on the undecorated symbol, and registers the
+    # symbol in the global registry under each V2 name and under each V1 name with a compat.v1
+    # prefix. Returns the same symbol unchanged.
     """Calls this decorator.
 
     Args:
@@ -328,9 +401,18 @@ class api_export(object):  # pylint: disable=invalid-name
   def set_attr(
       self, func: Any, api_names_attr: str, names: Sequence[str]
   ) -> None:
+    # [FUNCTION DOC]
+    # Stores a names sequence as an attribute on the given object (overridable hook used by
+    # __call__). Inputs: func, target object; api_names_attr, attribute name; names, the value.
+    # Returns nothing; mutates func.
     setattr(func, api_names_attr, names)
 
   def export_constant(self, module_name: str, name: str) -> None:
+    # [FUNCTION DOC]
+    # Records a constant for API generation. Inputs: module_name, name of an already imported
+    # module; name, the constant's name in that module. Side effects: creates (if missing) the V2
+    # and V1 constants lists on the module and appends a pair of the exported names and the
+    # constant name to each. Raises a key error if the module is not imported. Returns nothing.
     """Store export information for constants/string literals.
 
     Export information is stored in the module where constants/string literals
@@ -363,10 +445,20 @@ class api_export(object):  # pylint: disable=invalid-name
 
 
 def kwarg_only(f: Any) -> Any:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it throws away non-keyword arguments, but the wrapper actually
+  # raises a type error when any positional argument is passed.
+  # Decorator forcing keyword-only calls. Input: f, the callable. Captures its full argument spec
+  # and returns a wrapper, built with make_decorator using that spec, that rejects positional
+  # arguments and otherwise calls f with the keyword arguments.
   """A wrapper that throws away all non-kwarg arguments."""
   f_argspec = tf_inspect.getfullargspec(f)
 
   def wrapper(*args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: wrapper built by kwarg_only. Raises a type error naming the function and its
+    # possible keyword names if any positional argument is given; otherwise calls the wrapped
+    # function with the keyword arguments and returns its result.
     if args:
       raise TypeError(
           '{f} only takes keyword args (possible keys: {kwargs}). '
@@ -380,6 +472,9 @@ def kwarg_only(f: Any) -> Any:
 
 
 class ExportType(Protocol):
+  # [CLASS DOC]
+  # HELPER: typing protocol describing the call signature of tf_export and keras_export for static
+  # type checkers. Never instantiated at runtime.
 
   def __call__(
       self,
@@ -387,6 +482,9 @@ class ExportType(Protocol):
       v1: Optional[Sequence[str]] = None,
       allow_multiple_exports: bool = True,  # Deprecated, no-op
   ) -> api_export:
+    # [FUNCTION DOC]
+    # HELPER: typing-only signature. Takes positional API name strings, optional V1 names and a
+    # deprecated no-op flag, and is declared to return an api_export object. Body is empty.
     ...
 
 

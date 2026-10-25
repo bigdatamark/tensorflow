@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Core of TensorFlow's decorator introspection support. Provides the TFDecorator base class
+# (records the wrapped target, decorator name, doc and argspec), make_decorator (attaches that
+# metadata to a wrapper function and copies name, module, doc, dict and signature from the
+# target), unwrap (peels a chain of decorators down to the final target), rewrap (swaps the
+# innermost target), and helpers converting an argspec into an inspect signature.
+# Used by tf_inspect, tf_export, tf_contextlib and many other utilities so that documentation and
+# signature inspection are not obscured by generic wrapper signatures. No import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -60,6 +68,11 @@ from typing import Dict, Any
 
 
 def _make_default_values(fullargspec: inspect.FullArgSpec) -> Dict[str, Any]:
+  # [FUNCTION DOC]
+  # HELPER: used by fullargspec_to_signature to line up default values with parameter names.
+  # Takes an argument-spec record and returns a mapping from parameter name to default value. The
+  # positional defaults are matched to the trailing positional argument names; keyword-only
+  # defaults are merged in. Returns an empty mapping when there are no defaults. No side effects.
   """Returns default values from the function's fullargspec."""
   if fullargspec.defaults is not None:
     defaults = {
@@ -77,6 +90,12 @@ def _make_default_values(fullargspec: inspect.FullArgSpec) -> Dict[str, Any]:
 
 def fullargspec_to_signature(
     fullargspec: inspect.FullArgSpec) -> inspect.Signature:
+  # [FUNCTION DOC]
+  # Converts an argument-spec record into an equivalent signature object. Builds, in order, the
+  # positional-or-keyword parameters (with defaults where present), the variable positional
+  # parameter, the keyword-only parameters (with their defaults) and the variable keyword
+  # parameter. Returns the new signature; raises whatever the signature classes raise if the
+  # spec is inconsistent (for example an invalid parameter name). No side effects.
   """Repackages fullargspec information into an equivalent inspect.Signature."""
   defaults = _make_default_values(fullargspec)
   parameters = []
@@ -117,6 +136,18 @@ def make_decorator(target,
                    decorator_name=None,
                    decorator_doc='',
                    decorator_argspec=None):
+  # [FUNCTION DOC]
+  # Turns decorator_func (the wrapper) into an introspectable decorator of target and returns it.
+  # Inputs: target, the callable being wrapped; decorator_func, the wrapper; decorator_name,
+  # optional name (defaults to the name of the calling function found via the call stack);
+  # decorator_doc, optional doc text specific to this application; decorator_argspec, optional
+  # argument-spec record used to override the signature.
+  # Side effects: mutates decorator_func by attaching a TFDecorator record, copying the name,
+  # qualified name, module, doc and any missing dictionary entries from target, setting the
+  # wrapped and original-wrapped references, and setting a signature (from the override, or
+  # from the target when it can be inspected; failures to inspect are silently ignored). When the
+  # target is bound to an instance whose signature starts with self, that first parameter is
+  # dropped and the bound instance is recorded. Returns decorator_func.
   """Make a decorator from a wrapper and a target.
 
   Args:
@@ -177,6 +208,12 @@ def make_decorator(target,
 
 
 def _get_bound_instance(target):
+  # [FUNCTION DOC]
+  # HELPER: used by make_decorator to find the instance that a wrapped bound method belongs to.
+  # KNOWN ISSUE: the unwrapped final target returned by unwrap is assigned but never used, and the
+  # function returns nothing at all (the null value) when no decorator wraps a bound method.
+  # Unwraps the given target into its decorators and returns the owning instance of the first
+  # decorator whose decorated target is a bound method. No side effects.
   """Returns the instance any of the targets is attached to."""
   decorators, target = unwrap(target)
   for decorator in decorators:
@@ -185,6 +222,11 @@ def _get_bound_instance(target):
 
 
 def _has_tf_decorator_attr(obj):
+  # [FUNCTION DOC]
+  # HELPER: used by unwrap and rewrap to detect decorated objects.
+  # KNOWN ISSUE: the docstring has no return section; the function returns a boolean that is true
+  # only when obj has a decorator-record attribute whose value really is a TFDecorator (so
+  # mock objects with auto-created attributes are rejected). No side effects.
   """Checks if object has _tf_decorator attribute.
 
   This check would work for mocked object as well since it would
@@ -198,6 +240,17 @@ def _has_tf_decorator_attr(obj):
 
 
 def rewrap(decorator_func, previous_target, new_target):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says decorator_func is the callable returned by "wrap", but no such
+  # function exists; it is the result of make_decorator.
+  # Replaces previous_target with new_target inside a decorator chain built by make_decorator.
+  # Walks from decorator_func through the chain of decorator records until it reaches the record
+  # whose decorated target is previous_target (or the innermost one), then sets that record's
+  # target to new_target and updates the wrapped reference on the matching function (for bound
+  # methods, on the underlying function). If decorator_func is not a decorator at all, it must be
+  # identical to previous_target (checked with an assertion) and new_target is returned.
+  # Returns the updated decorator_func (mutated in place) or new_target. Raises an assertion
+  # error if a chain link has no target or the consistency check fails.
   """Injects a new target into a function built by make_decorator.
 
   This function allows replacing a function wrapped by `decorator_func`,
@@ -270,6 +323,12 @@ def rewrap(decorator_func, previous_target, new_target):
 
 
 def unwrap(maybe_tf_decorator):
+  # [FUNCTION DOC]
+  # Peels off decorators from a callable. Input: any object. Follows TFDecorator instances or
+  # objects carrying a decorator record, collecting each decorator from outermost to innermost,
+  # stopping when a non-decorator (or a record without a decorated target) is reached.
+  # Returns a pair: the list of decorators (empty if none) and the final undecorated target.
+  # No exceptions or side effects.
   """Unwraps an object into a list of TFDecorators and a final target.
 
   Args:
@@ -299,6 +358,12 @@ def unwrap(maybe_tf_decorator):
 
 
 class TFDecorator(object):
+  # [CLASS DOC]
+  # Base class for stateful TensorFlow decorators. Holds the wrapped target, the decorator name,
+  # an optional decorator doc and optional argument-spec override, and mimics the target by copying
+  # its name, qualified name, doc and signature. Instances are callable (forwarding to the target)
+  # and act as descriptors so they work as methods. Subclass it and override the call method for
+  # decorators that need state; make_decorator creates instances of it as metadata records.
   """Base class for all TensorFlow decorators.
 
   TFDecorator captures and exposes the wrapped target, and provides details
@@ -310,6 +375,13 @@ class TFDecorator(object):
                target,
                decorator_doc='',
                decorator_argspec=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: decorator_name (string name of the decorator), target (the wrapped
+    # callable), decorator_doc (optional doc text, empty by default), decorator_argspec (optional
+    # argument-spec override). Stores them as private state. Copies the target's name and qualified
+    # name when present; sets the doc to the decorator doc if given, otherwise the target's doc,
+    # otherwise an empty string. Sets the signature from the override or from the target if it can
+    # be inspected (inspection failures are ignored). Returns nothing.
     self._decorated_target = target
     self._decorator_name = decorator_name
     self._decorator_doc = decorator_doc
@@ -335,27 +407,46 @@ class TFDecorator(object):
         pass
 
   def __get__(self, instance, owner):
+    # [FUNCTION DOC]
+    # Descriptor hook so the decorator behaves like a function when stored on a class. Delegates
+    # to the decorated target's own descriptor method with the given instance and owner class and
+    # returns the result (typically a bound method). Raises an attribute error if the target has
+    # no such hook.
     return self._decorated_target.__get__(instance, owner)
 
   def __call__(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Calls the decorated target with the given positional and keyword arguments and returns its
+    # result; exceptions from the target propagate. Subclasses override this to add behavior.
     return self._decorated_target(*args, **kwargs)
 
   @property
   def decorated_target(self):
+    # [FUNCTION DOC]
+    # Property getter returning the wrapped target callable.
     return self._decorated_target
 
   @decorated_target.setter
   def decorated_target(self, decorated_target):
+    # [FUNCTION DOC]
+    # Property setter replacing the wrapped target with the given callable (used by rewrap).
+    # Does not update the copied name, doc or signature. Returns nothing.
     self._decorated_target = decorated_target
 
   @property
   def decorator_name(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the decorator's name string.
     return self._decorator_name
 
   @property
   def decorator_doc(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the decorator-specific doc text (empty string if none).
     return self._decorator_doc
 
   @property
   def decorator_argspec(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the argument-spec override, or the null value if none.
     return self._decorator_argspec

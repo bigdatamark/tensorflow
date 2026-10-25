@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Drop-in replacements for functions of the standard inspect module that understand TensorFlow
+# decorators (TFDecorator objects and functions built with make_decorator). Most predicates and
+# source/file getters first unwrap the decorator chain and then delegate to the standard module;
+# the argument-spec functions prefer an argument spec recorded on a decorator, handle partial
+# objects, and convert between the older and fuller spec record types. Also exposes aliases for
+# the standard parameter, signature and argument-spec types (defining compatible ones when missing).
+# Import-time side effect: chooses implementations of the private spec helpers depending on
+# whether the standard module offers getfullargspec. Widely used across TensorFlow.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +34,13 @@ from tensorflow.python.util import tf_decorator
 # provided ArgSpec/FullArgSpec and instead return the signature of the
 # inner-most function.
 def signature(obj, *, follow_wrapped=True):
+  # [FUNCTION DOC]
+  # Returns the standard signature object of obj after unwrapping any TensorFlow decorators.
+  # KNOWN ISSUE: because the innermost target is inspected, a signature override recorded on a
+  # decorator is ignored, as the comment above the function says.
+  # Inputs: obj, any callable; follow_wrapped, keyword-only flag (default true) passed through to
+  # the standard function. Raises type or value errors from the standard function when no
+  # signature can be found.
   """TFDecorator-aware replacement for inspect.signature."""
   return _inspect.signature(
       tf_decorator.unwrap(obj)[1], follow_wrapped=follow_wrapped)
@@ -57,6 +73,11 @@ else:
 
 
 def _convert_maybe_argspec_to_fullargspec(argspec):
+  # [FUNCTION DOC]
+  # HELPER: normalizes argument-spec records for getfullargspec and the fallback code.
+  # Returns the input unchanged if it already is a full argument spec; otherwise builds a full
+  # spec copying args, varargs, defaults and the keywords field (as the variable-keyword name),
+  # with empty keyword-only names, no keyword-only defaults and empty annotations.
   if isinstance(argspec, FullArgSpec):
     return argspec
   return FullArgSpec(
@@ -72,6 +93,14 @@ if hasattr(_inspect, 'getfullargspec'):
   _getfullargspec = _inspect.getfullargspec  # pylint: disable=invalid-name
 
   def _getargspec(target):
+    # [FUNCTION DOC]
+    # HELPER: version of getargspec built on getfullargspec, defined when the standard module
+    # has getfullargspec. Input: target, an object to inspect (decorators are honored through
+    # getfullargspec). Returns an ArgSpec whose names are the positional plus keyword-only
+    # names, with the variable-keyword name as keywords, and defaults being positional defaults
+    # followed by keyword-only default values (or null when there are none).
+    # KNOWN ISSUE: keyword-only defaults are appended to the positional defaults without regard to
+    # which names actually have defaults, so the result can misalign defaults with names.
     """A python3 version of getargspec.
 
     Calls `getfullargspec` and assigns args, varargs,
@@ -107,6 +136,11 @@ else:
   _getargspec = _inspect.getargspec
 
   def _getfullargspec(target):
+    # [FUNCTION DOC]
+    # HELPER: fallback defined only when the standard module lacks getfullargspec (old
+    # interpreters). Input: target, the object to inspect. Returns a full spec built from the
+    # older getargspec result with empty keyword-only names, defaults and annotations.
+    # KNOWN ISSUE: effectively dead code on modern interpreters, where the other branch is used.
     """A python2 version of getfullargspec.
 
     Args:
@@ -119,11 +153,23 @@ else:
 
 
 def currentframe():
+  # [FUNCTION DOC]
+  # Returns the frame object of the caller of this function, by taking the second entry of the
+  # full interpreter stack. Takes no inputs and has no side effects. Note this builds the whole
+  # stack with source context, which is slow compared with the standard direct frame lookup.
   """TFDecorator-aware replacement for inspect.currentframe."""
   return _inspect.stack()[1][0]
 
 
 def getargspec(obj):
+  # [FUNCTION DOC]
+  # Returns an ArgSpec (names, variable positional name, keywords name, defaults) for a callable.
+  # Input: obj, a function, partial object or callable object, possibly decorated. Partial objects
+  # are delegated to a dedicated helper. Otherwise decorators are unwrapped and the first argument
+  # spec recorded on a decorator wins; else the final target is inspected, falling back for classes
+  # to the constructor and then the object-creation method, and finally to the call method of
+  # the target's type. Raises ValueError when a signature cannot be expressed as an ArgSpec and
+  # TypeError for unsupported objects. No side effects.
   """TFDecorator-aware replacement for `inspect.getargspec`.
 
   Note: `getfullargspec` is recommended as the python 2/3 compatible
@@ -176,6 +222,14 @@ def getargspec(obj):
 
 
 def _get_argspec_for_partial(obj):
+  # [FUNCTION DOC]
+  # HELPER: implements getargspec for partial objects.
+  # Input: obj, a partial object. Takes the argument spec of the wrapped function, drops as many
+  # leading arguments as the partial has positional values, and applies the partial's keyword values
+  # as defaults (they take precedence over the function's own defaults). Returns an ArgSpec; its
+  # defaults are null when no argument has a default. Raises ValueError when a partial keyword
+  # names an argument that does not exist and the function lacks variable keywords, or when an
+  # argument without a default follows one with a default (not expressible in an ArgSpec).
   """Implements `getargspec` for `functools.partial` objects.
 
   Args:
@@ -263,6 +317,13 @@ def _get_argspec_for_partial(obj):
 
 
 def getfullargspec(obj):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring contains a garbled fragment (a character-class pattern) where the
+  # text about emulating the standard function in Python 2 should be.
+  # Returns a full argument spec for a callable. Input: obj, a callable, possibly decorated.
+  # Unwraps decorators; the first decorator with a recorded argument spec supplies the result
+  # (converted to a full spec if needed); otherwise the final target is inspected directly.
+  # Exceptions come from the standard inspection. No side effects.
   """TFDecorator-aware replacement for `inspect.getfullargspec`.
 
   This wrapper emulates `inspect.getfullargspec` in[^)]* Python2.
@@ -285,6 +346,15 @@ def getfullargspec(obj):
 
 
 def getcallargs(*func_and_positional, **named):
+  # [FUNCTION DOC]
+  # Computes how the arguments of a call would be bound to parameter names. Inputs: the first
+  # positional value is the callable (possibly decorated); the remaining positional values are the
+  # call's positional arguments; named holds the call's keyword arguments. Uses the full argument
+  # spec of the outermost recorded decorator or the final target. For bound methods the owning
+  # instance is prepended to the positional values. Returns a new mapping from parameter names
+  # to values, including defaults (positional and keyword-only) for parameters not supplied.
+  # KNOWN ISSUE: unlike the standard function it does not raise for missing or surplus
+  # arguments; extra positional values are silently dropped and missing ones are left out.
   """TFDecorator-aware replacement for inspect.getcallargs.
 
   Args:
@@ -322,10 +392,17 @@ def getcallargs(*func_and_positional, **named):
 
 
 def getframeinfo(*args, **kwargs):
+  # [FUNCTION DOC]
+  # Thin pass-through to the standard frame information function; all positional and keyword
+  # arguments are forwarded and its result returned. No decorator unwrapping is done.
   return _inspect.getframeinfo(*args, **kwargs)
 
 
 def getdoc(object):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # Returns the cleaned doc string of the given object using the standard function. The object
+  # is deliberately not unwrapped because the outermost decorated object has the fullest docs.
+  # Returns null if there is no doc. No side effects.
   """TFDecorator-aware replacement for inspect.getdoc.
 
   Args:
@@ -341,6 +418,11 @@ def getdoc(object):  # pylint: disable=redefined-builtin
 
 
 def getfile(object):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # Returns the source file path for an object after unwrapping decorators. For frame objects whose
+  # globals have a file entry, that entry is returned (works around wrong paths when only compiled
+  # files exist); otherwise the standard function result is returned. Raises type errors for
+  # built-in objects, as the standard function does.
   """TFDecorator-aware replacement for inspect.getfile."""
   unwrapped_object = tf_decorator.unwrap(object)[1]
 
@@ -355,71 +437,113 @@ def getfile(object):  # pylint: disable=redefined-builtin
 
 
 def getmembers(object, predicate=None):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # Pass-through to the standard function listing the members of an object as name/value pairs
+  # sorted by name, optionally filtered by the predicate callback (default none). No unwrapping,
+  # despite the docstring's claim of decorator awareness.
   """TFDecorator-aware replacement for inspect.getmembers."""
   return _inspect.getmembers(object, predicate)
 
 
 def getmodule(object):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # Pass-through to the standard function returning the module that defines the object, or null if
+  # unknown. No unwrapping is done.
   """TFDecorator-aware replacement for inspect.getmodule."""
   return _inspect.getmodule(object)
 
 
 def getmro(cls):
+  # [FUNCTION DOC]
+  # Pass-through returning the tuple of base classes of cls in method resolution order.
   """TFDecorator-aware replacement for inspect.getmro."""
   return _inspect.getmro(cls)
 
 
 def getsource(object):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # Returns the source text of the object's innermost undecorated target. Raises OS or type errors
+  # if the source is unavailable.
   """TFDecorator-aware replacement for inspect.getsource."""
   return _inspect.getsource(tf_decorator.unwrap(object)[1])
 
 
 def getsourcefile(object):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # Returns the name of the source file of the innermost undecorated target, or null if it cannot
+  # be determined.
   """TFDecorator-aware replacement for inspect.getsourcefile."""
   return _inspect.getsourcefile(tf_decorator.unwrap(object)[1])
 
 
 def getsourcelines(object):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # Returns the pair of source lines and starting line number of the innermost undecorated
+  # target. Raises OS or type errors if the source is unavailable.
   """TFDecorator-aware replacement for inspect.getsourcelines."""
   return _inspect.getsourcelines(tf_decorator.unwrap(object)[1])
 
 
 def isbuiltin(object):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # Returns true if the innermost undecorated target is a built-in function.
   """TFDecorator-aware replacement for inspect.isbuiltin."""
   return _inspect.isbuiltin(tf_decorator.unwrap(object)[1])
 
 
 def isclass(object):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # Returns true if the innermost undecorated target is a class.
   """TFDecorator-aware replacement for inspect.isclass."""
   return _inspect.isclass(tf_decorator.unwrap(object)[1])
 
 
 def isfunction(object):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # Returns true if the innermost undecorated target is a plain Python function.
   """TFDecorator-aware replacement for inspect.isfunction."""
   return _inspect.isfunction(tf_decorator.unwrap(object)[1])
 
 
 def isframe(object):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it replaces the module predicate, but it actually checks for
+  # a frame object.
+  # Returns true if the innermost undecorated target is a stack frame.
   """TFDecorator-aware replacement for inspect.ismodule."""
   return _inspect.isframe(tf_decorator.unwrap(object)[1])
 
 
 def isgenerator(object):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # Returns true if the innermost undecorated target is a generator object.
   """TFDecorator-aware replacement for inspect.isgenerator."""
   return _inspect.isgenerator(tf_decorator.unwrap(object)[1])
 
 
 def isgeneratorfunction(object):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # Returns true if the innermost undecorated target is a generator function.
   """TFDecorator-aware replacement for inspect.isgeneratorfunction."""
   return _inspect.isgeneratorfunction(tf_decorator.unwrap(object)[1])
 
 
 def ismethod(object):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # Returns true if the innermost undecorated target is a bound method.
   """TFDecorator-aware replacement for inspect.ismethod."""
   return _inspect.ismethod(tf_decorator.unwrap(object)[1])
 
 
 def isanytargetmethod(object):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring names the parameter obj but the real parameter is object, and the
+  # name suggests only methods count while the final check is true for any callable that is not
+  # a plain function (classes, callable instances), not just methods.
+  # Decides whether the first argument of the callable's spec may be self or cls. Input: object,
+  # a method, function or partial, possibly decorated. Returns true if any decorator's wrapped
+  # target is a bound method; otherwise looks through partial objects to their function and
+  # returns true when the result is callable but not a plain function. No side effects.
   # pylint: disable=g-doc-args,g-doc-return-or-yield
   """Checks if `object` or a TF Decorator wrapped target contains self or cls.
 
@@ -456,15 +580,23 @@ def isanytargetmethod(object):  # pylint: disable=redefined-builtin
 
 
 def ismodule(object):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # Returns true if the innermost undecorated target is a module.
   """TFDecorator-aware replacement for inspect.ismodule."""
   return _inspect.ismodule(tf_decorator.unwrap(object)[1])
 
 
 def isroutine(object):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # Returns true if the innermost undecorated target is a function, method or built-in routine.
   """TFDecorator-aware replacement for inspect.isroutine."""
   return _inspect.isroutine(tf_decorator.unwrap(object)[1])
 
 
 def stack(context=1):
+  # [FUNCTION DOC]
+  # Returns the interpreter stack as records, with the first entry (this function's own frame)
+  # removed so the list starts at the caller. Input: context, number of source lines of context
+  # per frame (default 1).
   """TFDecorator-aware replacement for inspect.stack."""
   return _inspect.stack(context)[1:]
