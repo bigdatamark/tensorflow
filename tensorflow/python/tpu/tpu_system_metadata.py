@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# KNOWN ISSUE: the comment on the pinging timeout constant says ten minutes, but the value is
+# five minutes in milliseconds.
+# Discovers and describes the TPU system. Exposes the public TPU system metadata record type
+# (core count, host count, cores per host, topology, device list), a private query that detects
+# the metadata either from the eager context or by listing devices on a TensorFlow master with
+# retries, a topology fetcher, a session-config helper with an operation timeout, and a function
+# that infers the job name for TPU placement. Defines timeout, retry and default job name
+# constants. Importing registers the public export of the metadata type; no other side effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -46,6 +55,10 @@ class TPUSystemMetadata(
         'topology',
         'devices',
     ])):
+  # [CLASS DOC]
+  # Immutable record (named tuple) describing a TPU system: total core count, host count, cores
+  # per host, the physical topology object (may be null) and a tuple of device attributes.
+  # Created by the system query function or directly by users; exported as a public API class.
   """Describes some metadata about the TPU system.
 
   Attributes:
@@ -60,6 +73,9 @@ class TPUSystemMetadata(
 
   def __new__(cls, num_cores, num_hosts, num_of_cores_per_host, topology,
               devices):
+    # [FUNCTION DOC]
+    # Constructor creating the record from the five fields in order: core count, host count,
+    # cores per host, topology and devices. No validation. Returns the new instance.
     return super(TPUSystemMetadata,
                  cls).__new__(cls, num_cores, num_hosts, num_of_cores_per_host,
                               topology, devices)
@@ -67,6 +83,16 @@ class TPUSystemMetadata(
 
 def _query_tpu_system_metadata(master_address, cluster_def=None,
                                query_topology=False):
+  # [FUNCTION DOC]
+  # HELPER: used by TPU cluster/strategy setup to learn the shape of the TPU system.
+  # Detects the TPU system. Inputs: master address (text), optional cluster definition, and a flag
+  # asking whether to also fetch the topology (default false). In eager mode the devices come from
+  # the logical device list; otherwise a session on the master lists devices, retrying on
+  # deadline-exceeded errors up to a large retry limit (then raising a value error) and logging
+  # warnings. Counts TPU devices per task, raises a runtime error if hosts have different core
+  # counts, and, when the topology is requested, raises a runtime error if no TPU cores exist,
+  # otherwise initializes the system to fetch the topology. Devices are sorted by job, replica,
+  # task, type and index. Returns a TPUSystemMetadata record and logs a summary.
   """Automatically detects the TPU system metadata in the system."""
   tpu_core_count = 0
   devices = []
@@ -139,6 +165,9 @@ def _query_tpu_system_metadata(master_address, cluster_def=None,
   # We sort the metadata devices so that downstream users get a sorted list
   # for creating mirrored variables correctly.
   def _sort_key(device):
+    # [FUNCTION DOC]
+    # HELPER: sort key for the device list. Takes a device attributes object and returns a tuple
+    # of job, replica, task, device type and device index parsed from its name.
     spec = tf_device.DeviceSpec.from_string(device.name)
     return (spec.job, spec.replica, spec.task, spec.device_type,
             spec.device_index)
@@ -165,6 +194,12 @@ def _query_tpu_system_metadata(master_address, cluster_def=None,
 
 
 def _obtain_topology(master_address, cluster_def):
+  # [FUNCTION DOC]
+  # HELPER: used by the system metadata query.
+  # Fetches the serialized TPU topology by running the system initialization op in a new graph
+  # and session against the master, with a five-minute operation timeout. Inputs: master address
+  # and cluster definition. Returns the serialized topology; raises a value error if the
+  # deadline is exceeded. Side effect: initializes the TPU system.
   """Obtains TPU fabric topology."""
   try:
     logging.info('Initializing TPU system (master: %s) to fetch topology '
@@ -185,6 +220,13 @@ def _obtain_topology(master_address, cluster_def):
 
 
 def get_session_config_with_timeout(timeout_in_secs, cluster_def):
+  # [FUNCTION DOC]
+  # HELPER: builds session configuration for the query helpers.
+  # KNOWN ISSUE: the docstring says it returns a session, but it returns a configuration
+  # message; and the parameter is named seconds while the value is stored as milliseconds
+  # (callers pass millisecond constants).
+  # Inputs: a timeout number and a cluster definition. Returns a config message whose operation
+  # timeout and cluster definition are set from them.
   """Returns a session given a timeout and a cluster configuration."""
   config_proto = config_pb2.ConfigProto(
       operation_timeout_in_ms=timeout_in_secs, cluster_def=cluster_def)
@@ -192,6 +234,12 @@ def get_session_config_with_timeout(timeout_in_secs, cluster_def):
 
 
 def master_job(master, cluster_def):
+  # [FUNCTION DOC]
+  # Infers the job name for placing TPU computations. Inputs: master address text and a cluster
+  # definition (may be null). Returns null for local masters (empty or "local"); the default
+  # worker job name if the cluster definition has no jobs; the single job name if there is one;
+  # with two jobs one being the coordinator, the other job's name. Raises a value error if the
+  # default worker name is already used as a job, or if the name cannot be inferred.
   """Returns the canonical job name to use to place TPU computations on.
 
   Args:

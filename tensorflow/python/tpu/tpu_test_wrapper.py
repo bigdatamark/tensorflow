@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# HELPER: helper module acting as the main program of Python TPU tests built by the TPU test
+# build macro; it is not a test itself.
+# Defines flags (path of the wrapped user test module, base directory for temporary test files,
+# repository root substring) at import time, ensures the standard TPU flags (tpu, zone, project,
+# model_dir) exist, picks a random model directory per run, imports the user test module, copies
+# its test classes into this module so the test runner finds them, and finally executes the
+# user module's main block. When run as a script it also restores test filter and sharding
+# environment variables from their saved copies if the regular ones are missing.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -52,6 +61,11 @@ REQUIRED_FLAGS = ['tpu', 'zone', 'project', 'model_dir']
 
 
 def maybe_define_flags():
+  # [FUNCTION DOC]
+  # HELPER: ensures the flags every TPU test must accept exist.
+  # For each name in the required list (tpu, zone, project, model_dir) defines a string flag with
+  # no default, silently ignoring flags the user test already defined. Takes no inputs,
+  # returns nothing; side effect is registering global flags.
   """Defines any required flags that are missing."""
   for f in REQUIRED_FLAGS:
     try:
@@ -61,12 +75,25 @@ def maybe_define_flags():
 
 
 def set_random_test_dir():
+  # [FUNCTION DOC]
+  # HELPER: gives each test run its own model directory.
+  # KNOWN ISSUE: if the base directory flag is unset (its default is taken from an environment
+  # variable that may be missing), joining paths fails with a type error.
+  # Joins the base directory flag with a fresh random hexadecimal name and sets the result as
+  # the default value of the model directory flag (which must already be defined). Returns
+  # nothing.
   """Pick a random GCS directory under --test_dir_base, set as --model_dir."""
   path = os.path.join(FLAGS.test_dir_base, uuid.uuid4().hex)
   FLAGS.set_default('model_dir', path)
 
 
 def calculate_parent_python_path(test_filepath):
+  # [FUNCTION DOC]
+  # HELPER: used to resolve the relative import of the user module.
+  # Input: file path of the invoked test (text). Takes the part after the last occurrence of the
+  # repository root flag, prefixes the root, drops the final path component (the wrapper name)
+  # and converts separators to dots. Returns the dotted import path of the containing package.
+  # Raises a value error if the root substring is not in the path.
   """Returns the absolute import path for the containing directory.
 
   Args:
@@ -96,6 +123,11 @@ def calculate_parent_python_path(test_filepath):
 
 
 def import_user_module():
+  # [FUNCTION DOC]
+  # HELPER: loads the wrapped test.
+  # Imports the module named by the relative-module flag, relative to the package computed from
+  # the first command-line argument. Importing runs its top-level code, including flag
+  # definitions. Returns the module object; import errors propagate.
   """Imports the flag-specified user test code.
 
   This runs all top-level statements in the user module, specifically flag
@@ -109,6 +141,10 @@ def import_user_module():
 
 
 def _is_test_class(obj):
+  # [FUNCTION DOC]
+  # HELPER: filter used when moving test classes.
+  # Takes any object; returns true if it is a class and any class in its inheritance chain is
+  # named TestCase (so different test libraries work), otherwise false. No side effects.
   """Check if arbitrary object is a test class (not a test object!).
 
   Args:
@@ -127,6 +163,11 @@ module_variables = vars()
 
 
 def move_test_classes_into_scope(wrapped_test_module):
+  # [FUNCTION DOC]
+  # HELPER: makes the test runner see the wrapped tests.
+  # Input: the user test module. For every test class found in its namespace, adds a variable to
+  # this module's namespace named with a fixed prefix plus the class name. Returns nothing;
+  # mutates this module's global namespace.
   """Add all test classes defined in wrapped module to our module.
 
   The test runner works by inspecting the main module for TestCase classes, so
@@ -142,6 +183,14 @@ def move_test_classes_into_scope(wrapped_test_module):
 
 
 def run_user_main(wrapped_test_module):
+  # [FUNCTION DOC]
+  # HELPER: executes the entry-point block of the wrapped test.
+  # KNOWN ISSUE: the not-found error message mentions a main-name condition spelled with the
+  # word main rather than the dunder form actually searched for.
+  # Input: the user test module. Parses its source, finds the last top-level conditional whose
+  # test equals the main-module check, and executes that block's body with the wrapper's globals
+  # and the user module namespace as locals. Raises a not-implemented error if no such block
+  # exists. Side effects: runs arbitrary user code (typically starting the test runner).
   """Runs the "if __name__ == '__main__'" at the bottom of a module.
 
   TensorFlow practice is to have a main if at the bottom of the module which

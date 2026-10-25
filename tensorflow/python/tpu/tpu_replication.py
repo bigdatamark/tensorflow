@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# KNOWN ISSUE: the license header contains a stray typo ("file8") in the license text; harmless.
+# Implements the graph-construction machinery that marks operations as belonging to a TPU
+# replicated computation or to an outside-compilation (host/CPU) cluster. It exposes the
+# TPUReplicateContext control-flow context (tags every op with a replicate attribute, tracks
+# replicated variable handles and outside-compilation scopes), the TF2 style
+# OutsideCompilationV2Context, the public outside_compilation entry point (exported for the v1
+# API) and an experimental map variant, plus helpers to detect TPU strategies and to find the
+# enclosing TPU context/graph. Importing registers the v1 export of outside_compilation only;
+# there are no other import-time side effects. Used by the TPU rewriting code and TPU strategies.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -61,6 +71,11 @@ _UNSUPPORTED_OPS = frozenset([
 
 
 def is_tpu_strategy(strategy: Any) -> bool:
+  # [FUNCTION DOC]
+  # Decides whether a distribution strategy object is a TPU strategy. Takes any strategy
+  # object and returns true if its class name, or the name of any direct base class, starts
+  # with the text "TPUStrategy"; otherwise false. Only direct bases are examined, not the full
+  # inheritance chain. No side effects and no exceptions for ordinary objects.
   is_tpu_strat = lambda k: k.__name__.startswith("TPUStrategy")
   clz = strategy.__class__
   return is_tpu_strat(clz) or any(map(is_tpu_strat, clz.__bases__))
@@ -68,6 +83,12 @@ def is_tpu_strategy(strategy: Any) -> bool:
 
 def _enclosing_tpu_device_assignment(
 ) -> Optional[device_assignment_lib.DeviceAssignment]:
+  # [FUNCTION DOC]
+  # HELPER: used by TPUReplicateContext to find the device assignment of the current strategy.
+  # Takes no inputs. Returns the device assignment stored on the extended object of the current
+  # distribution strategy when a strategy is active and it is a TPU strategy; returns nothing
+  # (null) if there is no strategy or it is not a TPU strategy. Reads a private attribute of
+  # the strategy; no other side effects.
   if not distribute_lib.has_strategy():
     return None
   strategy = distribute_lib.get_strategy()
@@ -77,6 +98,16 @@ def _enclosing_tpu_device_assignment(
 
 
 class TPUReplicateContext(control_flow_ops.XLAControlFlowContext):
+  # [CLASS DOC]
+  # Control-flow context entered while building a TPU replicated computation. Every operation
+  # added while it is active receives the replicate attribute carrying the context name, has
+  # external control edges rewritten, and is blocked from being fed or fetched. It also manages
+  # outside-compilation scopes (clusters of ops that run on the host), gradient colocation for
+  # ops inside such clusters, a cache of replicated variable handles, and a list of
+  # unsupported ops that are reported as a warning. State: replica count, pivot op, name,
+  # saved device-function stacks, outside-compilation cluster name and counter, host compute
+  # core list, and the replicated variable handle cache. Created by the TPU rewrite code with
+  # a name, replica count and pivot op.
   """A `ControlFlowContext` for nodes inside a TPU computation.
 
   The primary role of `TPUReplicateContext` is to mark operators inside a
@@ -92,6 +123,12 @@ class TPUReplicateContext(control_flow_ops.XLAControlFlowContext):
   """
 
   def __init__(self, name: Text, num_replicas: int, pivot: ops.Operation):
+    # [FUNCTION DOC]
+    # Constructor. Takes the unique context name (text), the number of replicas (integer) and
+    # the pivot operation that inputless ops get a control dependency on. Initializes the
+    # outside-compilation bookkeeping (cluster name, counter, map flag, v2 context), gradient
+    # colocation stack, host compute core list, the replicate attribute value built from the
+    # name, the unsupported-op list and the empty replicated variable cache. Returns nothing.
     """Builds a new TPUReplicateContext.
 
     Args:
@@ -130,6 +167,18 @@ class TPUReplicateContext(control_flow_ops.XLAControlFlowContext):
                                              List[variables.Variable]],
                                 is_mirrored: bool = False,
                                 is_packed: bool = False) -> core_types.Tensor:
+    # [FUNCTION DOC]
+    # Returns (creating and caching if needed) a replicated-input handle tensor for a set of
+    # per-replica variables. Inputs: variable name (used to name the op), a unique handle id used
+    # as cache key, a list of variables or handles, and optional flags is_mirrored and
+    # is_packed (both default false). If the id is cached the cached handle is returned. When a
+    # device assignment exists and the variables are not packed, the variables are reordered so
+    # there is one per replica following the assignment (first logical core of each replica
+    # that has a copy); raises a value error if a replica has no variable on any of its devices.
+    # Otherwise the list is used as is. Variables are converted to their handles, then a
+    # replicated-input op is built in the graph of the enclosing TPU context with the outer
+    # control-flow context temporarily installed, and the result is cached. Raises a value error
+    # if no enclosing TPU context exists. Side effects: adds an op to the graph and mutates the cache.
     """Returns a variable handle for replicated TPU variable 'var'.
 
     This is a method used by an experimental replicated variable implementation
@@ -204,6 +253,10 @@ class TPUReplicateContext(control_flow_ops.XLAControlFlowContext):
     return handle
 
   def report_unsupported_operations(self) -> None:
+    # [FUNCTION DOC]
+    # Logs a warning listing up to five of the unsupported ops collected by this context
+    # (type and name), followed by a note with the count of the remaining ones. Does nothing if
+    # none were collected. Takes no inputs, returns nothing; only side effect is logging.
     if self._unsupported_ops:
       op_str = "\n".join(
           "  %s (%s)" % (op.type, op.name) for op in
@@ -216,6 +269,16 @@ class TPUReplicateContext(control_flow_ops.XLAControlFlowContext):
                         (len(self._unsupported_ops) - _MAX_WARNING_LINES))
 
   def EnterGradientColocation(self, op: ops.Operation, gradient_uid: Text):
+    # [FUNCTION DOC]
+    # Called when gradient computation starts colocating with a forward op, so that gradient
+    # ops of an outside-compiled op land in a new outside-compilation cluster named after the
+    # forward cluster root plus the gradient uid. Inputs: the forward op (may be null, then
+    # nothing happens) and the unique gradient id text. In a TF2 function graph (no control flow
+    # context) it enters an OutsideCompilationV2Context if the op carries the outside
+    # compilation attribute, otherwise returns silently. Otherwise it pushes the op on the
+    # colocation stack and, when not already inside an outside-compilation cluster and the op
+    # has the attribute, enters a new cluster scope. Raises not-implemented errors for nested
+    # gradient colocation or when the uid is the unsupported marker. Returns nothing.
     if op is not None:
       if ops.get_default_graph()._control_flow_context is None:  # pylint: disable=protected-access
         # If we are in TF 2 functions (control flow V2 functions, or
@@ -270,6 +333,14 @@ class TPUReplicateContext(control_flow_ops.XLAControlFlowContext):
           pass
 
   def ExitGradientColocation(self, op: ops.Operation, gradient_uid: Text):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the gradient_uid parameter is never used.
+    # Counterpart of EnterGradientColocation. Input: the op (null means no-op) and an unused
+    # gradient id. In a TF2 function graph it exits the v2 outside-compilation context if one
+    # was entered (else asserts none exists). Otherwise it pops the colocation stack and, if the
+    # op is the one that opened the gradient colocation, clears that marker and exits the
+    # outside-compilation scope. Raises an internal error for an empty stack or when the popped
+    # op differs from the given op (badly nested colocation). Returns nothing.
     if op is not None:
       if ops.get_default_graph()._control_flow_context is None:  # pylint: disable=protected-access
         # Inside a TF2 tf.function or control flow graph and `op` was not
@@ -303,7 +374,20 @@ class TPUReplicateContext(control_flow_ops.XLAControlFlowContext):
   def _EnterOutsideCompilationScope(
       self, cluster: Optional[Text] = None, is_map_outside_compilation=False
   ):
+    # [FUNCTION DOC]
+    # HELPER: internal glue for outside_compilation and gradient colocation.
+    # Starts an outside-compilation scope. Inputs: optional cluster name (if absent a name is
+    # generated from an incrementing counter) and a flag marking map-style outside compilation.
+    # Raises a not-implemented error if a cluster is already active. Records the cluster, finds
+    # the device that would currently be applied (using a fake op and the graph's device
+    # functions) and, when it is a replicated TPU core with an index, appends a cluster:core entry
+    # to the host compute core list. Finally saves the current device function stack and
+    # replaces it with the outer one captured at entry, so ops are placed as if outside the
+    # TPU computation. Returns nothing.
     class FakeOp(object):
+      # [CLASS DOC]
+      # HELPER: minimal stand-in operation used only to run the graph's device functions and
+      # read back the resulting device string. Holds a single device string, initially empty.
       """A helper class to determine the current device.
 
       Supports only the type and device set/get methods needed to run the
@@ -311,23 +395,34 @@ class TPUReplicateContext(control_flow_ops.XLAControlFlowContext):
       """
 
       def __init__(self):
+        # [FUNCTION DOC]
+        # HELPER: constructor; sets the stored device to an empty string.
         self._device = ""
 
       @property
       def type(self):
+        # [FUNCTION DOC]
+        # HELPER: property returning the constant op type name "FakeOp".
         return "FakeOp"
 
       @property
       def device(self):
+        # [FUNCTION DOC]
+        # HELPER: property returning the currently stored device string.
         return self._device
 
       def _set_device(self, device):
+        # [FUNCTION DOC]
+        # HELPER: stores the device; accepts a device spec (converted to its string form) or a
+        # plain string stored as is. Returns nothing.
         if isinstance(device, pydev.DeviceSpec):
           self._device = device.to_string()
         else:
           self._device = device
 
       def _set_device_from_string(self, device_str):
+        # [FUNCTION DOC]
+        # HELPER: stores the given device string directly. Returns nothing.
         self._device = device_str
 
     if self._outside_compilation_cluster:
@@ -351,6 +446,11 @@ class TPUReplicateContext(control_flow_ops.XLAControlFlowContext):
     graph._device_function_stack = self._outer_device_function_stack  # pylint: disable=protected-access
 
   def _ExitOutsideCompilationScope(self):
+    # [FUNCTION DOC]
+    # HELPER: internal glue for outside_compilation and gradient colocation.
+    # Ends the active outside-compilation scope: clears the cluster name and map flag and
+    # restores the device function stack saved on entry. Raises a value error if no scope is
+    # active. Returns nothing.
     if not self._outside_compilation_cluster:
       raise ValueError(
           "Attempted to exit outside_compilation scope when not in scope")
@@ -360,6 +460,10 @@ class TPUReplicateContext(control_flow_ops.XLAControlFlowContext):
     graph._device_function_stack = self._oc_dev_fn_stack  # pylint: disable=protected-access
 
   def Enter(self) -> None:
+    # [FUNCTION DOC]
+    # Enters the context. On first entry captures a copy of the graph's current device function
+    # stack (used later for outside-compilation placement), then defers to the parent class
+    # Enter. Takes no inputs, returns nothing.
     if not self._outer_device_function_stack:
       # Capture the device function stack at the time of first entry
       # since that is the stack that will be used outside_compilation.
@@ -370,11 +474,21 @@ class TPUReplicateContext(control_flow_ops.XLAControlFlowContext):
     super(TPUReplicateContext, self).Enter()
 
   def HostComputeCore(self) -> List[Text]:
+    # [FUNCTION DOC]
+    # Returns the list of "cluster:core index" strings recorded for outside-compilation clusters
+    # that were opened while placed on a replicated TPU core. Returns the internal list itself
+    # (not a copy). No inputs or side effects.
     return self._host_compute_core
 
   def _RemoveExternalControlEdges(
       self,
       op: ops.Operation) -> Tuple[List[ops.Operation], List[ops.Operation]]:
+    # [FUNCTION DOC]
+    # HELPER: used by AddOp to sanitize control dependencies.
+    # Splits the control inputs of an op into internal ones (whose control-flow context is this
+    # context or nested inside it) and external ones. Removes all control inputs from the op and
+    # re-adds only the internal ones. Returns a pair: internal control inputs and external
+    # control inputs (the latter are removed from the op and must be handled by the caller).
     """Remove any external control dependency on this op."""
     internal_control_inputs = []
     external_control_inputs = []
@@ -399,6 +513,17 @@ class TPUReplicateContext(control_flow_ops.XLAControlFlowContext):
     return internal_control_inputs, external_control_inputs
 
   def AddOp(self, op: ops.Operation) -> None:
+    # [FUNCTION DOC]
+    # Called for every op created inside the context. Logs an error for denylisted op types
+    # (placeholders) and records ops in the unsupported list (summaries, print). Raises a
+    # not-implemented error for ops with reference-typed inputs and a value error if the op is
+    # already tagged for another TPU replicate (unless it is a clone). Sets the replicate
+    # attribute, and the outside-compilation attributes (cluster name, map flag) when inside a
+    # cluster. Prevents feeding and fetching of the op unless it is a single-replica
+    # outside-compiled op. Strips external control edges, gives inputless ops a control edge
+    # from the pivot, rewires inputs through AddValue, and converts external control inputs into
+    # identity-based control dependencies. Finally records output names in this and outer
+    # contexts and notifies the outer context. Returns nothing.
     # pylint: disable=protected-access
     if op.type in _DENYLISTED_OPS:
       logging.error(
@@ -482,6 +607,11 @@ class TPUReplicateContext(control_flow_ops.XLAControlFlowContext):
       self._outer_context.AddInnerOp(op)
 
   def AddValue(self, val: core_types.Tensor) -> core_types.Tensor:
+    # [FUNCTION DOC]
+    # Registers a tensor as used in this context and its outer contexts. Input: a tensor.
+    # Returns the tensor to use inside the context: the tensor itself when there is no outer
+    # context, the previously recorded external value if already seen, or the result of the
+    # outer context's AddValue. Side effect: updates the value-name set and external value map.
     """Add `val` to the current context and its outer context recursively."""
     if not self._outer_context:
       return val
@@ -502,12 +632,20 @@ class TPUReplicateContext(control_flow_ops.XLAControlFlowContext):
     return result
 
   def AddInnerOp(self, op: ops.Operation):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: AddOp already notifies the outer context's AddInnerOp, so the outer context
+    # receives the op twice.
+    # Called when an op is created in a nested context. Processes it through AddOp and then
+    # forwards it to the outer context's AddInnerOp if one exists. Returns nothing.
     self.AddOp(op)
     if self._outer_context:
       self._outer_context.AddInnerOp(op)
 
   @property
   def grad_state(self):
+    # [FUNCTION DOC]
+    # Property: gradient loop state of this context. Always returns nothing (null), treating
+    # the context as top-level for gradient purposes.
     # Define the gradient loop state associated with the TPUReplicateContext to
     # be None as the TPUReplicateContext does not get nested nor does the
     # grad_state outside the TPUReplicateContext affect the graph inside so the
@@ -516,15 +654,24 @@ class TPUReplicateContext(control_flow_ops.XLAControlFlowContext):
 
   @property
   def back_prop(self):
+    # [FUNCTION DOC]
+    # Property: whether back-propagation is enabled. Returns the back-prop setting of the
+    # enclosing while context if there is one, otherwise false.
     """Forwards to the enclosing while context, if any."""
     if self.GetWhileContext():
       return self.GetWhileContext().back_prop
     return False
 
   def GetControlPivot(self) -> ops.Operation:
+    # [FUNCTION DOC]
+    # Returns the pivot operation given at construction, which inputless ops depend on.
     return self._pivot
 
   def RequiresUniqueFunctionRetracing(self):
+    # [FUNCTION DOC]
+    # Always returns true: a traced function must be retraced whenever the wrapped TPU
+    # replicate context changes, because the context builds replicated variable handles and
+    # clusters the computation.
     # More context: b/158152827. TPU stack uses the TPUReplicateContext to
     # create replicated variable handles and cluster TPU computations, thus we
     # always retrace a tf.function when the wrapped TPUReplicateContext changes.
@@ -532,6 +679,11 @@ class TPUReplicateContext(control_flow_ops.XLAControlFlowContext):
 
 
 def _enclosing_tpu_context_and_graph() -> Tuple[Any, Any]:
+  # [FUNCTION DOC]
+  # HELPER: locates the TPU replicate context for the variable-handle and outside-compilation code.
+  # Walks from the default graph through enclosing (outer) graphs, and for each graph through
+  # its chain of control-flow contexts, looking for a TPUReplicateContext. Returns a pair of the
+  # context and the graph that holds it. Raises a value error if none is found.
   """Returns the TPUReplicateContext and its associated graph."""
   graph = ops.get_default_graph()
   while graph is not None:
@@ -549,6 +701,12 @@ def _enclosing_tpu_context_and_graph() -> Tuple[Any, Any]:
 
 
 class OutsideCompilationV2Context(control_flow_ops.ControlFlowContext):
+  # [CLASS DOC]
+  # Lightweight control-flow context for outside compilation inside TF2 function graphs, where
+  # no TPUReplicateContext is on the stack. Holds the cluster name and a map-outside-compilation
+  # flag; every op added is tagged with the outside-compilation attribute (and the map attribute
+  # when requested), and is forwarded to the outer context if any. Cannot be exported to a
+  # context definition.
   """The context for outside compilation in Tensorflow 2.0.
 
   Every op added in this context will be assigned an _xla_outside_compilation
@@ -556,24 +714,42 @@ class OutsideCompilationV2Context(control_flow_ops.ControlFlowContext):
   """
 
   def __init__(self, name: Text, is_map_outside_compilation=False):
+    # [FUNCTION DOC]
+    # Constructor. Takes the outside-compilation cluster name (text) and an optional flag
+    # (default false) marking map outside compilation. Initializes the base context and stores both.
     control_flow_ops.ControlFlowContext.__init__(self)
     self._name = name
     self._is_map_outside_compilation = is_map_outside_compilation
 
   def AddOp(self, op: ops.Operation) -> None:
+    # [FUNCTION DOC]
+    # Called for each op created in this context. Forwards the op to the outer context's AddOp
+    # (if any) and then tags the op with the outside-compilation attributes. Returns nothing.
     if self._outer_context:
       self._outer_context.AddOp(op)
     self._set_outside_compilation_attributes(op)
 
   def AddInnerOp(self, op: ops.Operation) -> None:
+    # [FUNCTION DOC]
+    # Called for ops created in nested contexts. Forwards to the outer context's AddInnerOp (if
+    # any) and tags the op with the outside-compilation attributes. Returns nothing.
     if self._outer_context:
       self._outer_context.AddInnerOp(op)
     self._set_outside_compilation_attributes(op)
 
   def to_control_flow_context_def(self, context_def, export_scope=None):
+    # [FUNCTION DOC]
+    # Serialization hook required by the base class; takes a context definition message and an
+    # optional export scope, but always raises a not-implemented error since this context
+    # cannot be exported.
     raise NotImplementedError
 
   def _set_outside_compilation_attributes(self, op: ops.Operation) -> None:
+    # [FUNCTION DOC]
+    # HELPER: tags ops for AddOp and AddInnerOp.
+    # Sets the outside-compilation attribute on the op to the cluster name, and also sets the
+    # map outside-compilation attribute to true if this context is a map context. Mutates the
+    # op; returns nothing.
     # pylint: disable=protected-access
     op._set_attr(
         _OUTSIDE_COMPILATION_ATTR,
@@ -589,6 +765,19 @@ class OutsideCompilationV2Context(control_flow_ops.ControlFlowContext):
 def outside_compilation_impl(
     is_map, computation: Callable[..., Any], *args, **kwargs
 ) -> Any:
+  # [FUNCTION DOC]
+  # HELPER: shared implementation behind outside_compilation and the map variant.
+  # KNOWN ISSUE: the null check on the positional arguments is dead code since variadic
+  # arguments are never null; and the function-graph path does not exit the context if the
+  # computation raises.
+  # Inputs: a flag for map-style outside compilation, the computation (callable) and its
+  # positional and keyword arguments. In a function graph it finds the enclosing TPU context
+  # (if none, logs a warning and just runs the computation), uses and increments that context's
+  # outside-compilation counter to name a cluster, enters an OutsideCompilationV2Context, runs
+  # the computation and exits. In a plain graph it enters an outside-compilation scope on every
+  # TPUReplicateContext in the context chain, runs the computation, then exits them; raises a
+  # not-implemented error if the control-flow context changed during the computation. Returns
+  # whatever the computation returns.
   """Tags ops in `computation` with outside compilation attributes for ordinary `outside_compilation` or `map_outside_compilation`."""
   args = [] if args is None else args
   graph = ops.get_default_graph()
@@ -655,6 +844,11 @@ def outside_compilation_impl(
 def outside_compilation(
     computation: Callable[..., Any], *args, **kwargs
 ) -> Any:
+  # [FUNCTION DOC]
+  # Public v1 API: runs the given computation (callable) with its positional and keyword
+  # arguments so that the ops it creates are placed on the host rather than the TPU. Delegates
+  # to the shared implementation in non-map mode. Returns the computation's result. Outside a
+  # TPU replicate context it just returns the computation result (with a warning in function graphs).
   """Builds part of a computation outside any current TPU replicate scope.
 
   `tf.tpu.outside_compilation()` is used to run ops in `computation` on CPU
@@ -722,6 +916,13 @@ def outside_compilation(
 def experimental_map_outside_compilation(
     computation: Callable[..., Any], *args, **kwargs
 ) -> Any:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it is invalid outside a TPUReplicateContext, but the code
+  # only logs a warning and runs the computation unchanged in function graphs.
+  # Experimental: like outside_compilation but marks the ops as map outside compilation, so the
+  # computation is applied to each shard of a split-sharded input on the host paired with the
+  # owning TPU. Inputs: computation (callable) plus positional and keyword arguments. Returns the
+  # computation's result.
   """Maps `computation` onto shards and puts it outside any current TPU replicate scope.
 
   `experimental_map_outside_compilation(f, x)` maps `f` onto the shards

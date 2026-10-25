@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: helper library for TPU compilation code that needs to reason about tensor sharding.
+# Defines the ShardingPolicy class, which records how many shards and partitions a tensor is
+# split into and along which dimension, and computes sharded, unsharded and unpartitioned
+# shapes. Two module constants give the defaults (one shard, shard dimension zero). Importing
+# has no side effects beyond defining them.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,15 +29,27 @@ _DEFAULT_SHARD_DIMENSION = 0
 
 # TODO(b/36777903) change other parts of tpu.py to use this class.
 class ShardingPolicy(object):
+  # [CLASS DOC]
+  # Mutable holder of the sharding configuration of one tensor: number of shards, number of
+  # partitions (default one), shard dimension, and a frozen flag. Values start unset (except
+  # partitions) and can be set until the policy is frozen; after freezing, setters only accept
+  # the already stored value. Provides shape arithmetic for sharded, unsharded and unpartitioned
+  # shapes and merging with another policy. Created with no arguments.
   """An object use to hold the sharding policy for a Tensor."""
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor. Leaves shards and shard dimension unset (null), sets partitions to one and the
+    # policy as not frozen. Takes no inputs.
     self._number_of_shards = None
     self._number_of_partitions = 1
     self._shard_dimension = None
     self._frozen = False
 
   def __str__(self):
+    # [FUNCTION DOC]
+    # Returns a readable text: "unset" form if shards or shard dimension is unset, otherwise
+    # one giving the shard count and the shard dimension.
     if self.number_of_shards is None or self.shard_dimension is None:
       return "ShardingPolicy(unset)"
     else:
@@ -39,6 +57,10 @@ class ShardingPolicy(object):
               (self.number_of_shards, self.shard_dimension))
 
   def _fill_default_values(self):
+    # [FUNCTION DOC]
+    # HELPER: used by freeze and get_unsharded_shape.
+    # Replaces unset shard count with the default (one) and unset shard dimension with the
+    # default (zero, as a dimension object). Mutates the policy, returns nothing.
     if self._number_of_shards is None:
       self._number_of_shards = _DEFAULT_NUMBER_OF_SHARDS
     if self._shard_dimension is None:
@@ -46,6 +68,9 @@ class ShardingPolicy(object):
           _DEFAULT_SHARD_DIMENSION)
 
   def freeze(self):
+    # [FUNCTION DOC]
+    # Fills any unset values with defaults and marks the policy frozen. Does nothing if already
+    # frozen. No inputs, returns nothing.
     """Prevents further modification to the sharding policy.
 
     Any values that have not been set when freeze is called are set to
@@ -57,10 +82,16 @@ class ShardingPolicy(object):
 
   @property
   def number_of_shards(self):
+    # [FUNCTION DOC]
+    # Property returning the stored shard count, or null if it has not been set.
     """Returns the number of shards in the policy or None if unspecified."""
     return self._number_of_shards
 
   def set_number_of_shards(self, number_of_shards):
+    # [FUNCTION DOC]
+    # Sets the shard count (integer). If frozen, the value must equal the stored one, else a
+    # value error is raised and nothing changes. If not frozen, a positive value is stored and a
+    # non-positive value raises a value error. Returns nothing.
     """Sets the number of shards for the current policy.
 
     If the policy has been frozen then number_of_shards must match the
@@ -88,10 +119,19 @@ class ShardingPolicy(object):
 
   @property
   def number_of_partitions(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it returns None if unspecified, but the value defaults to
+    # one and is never null unless explicitly set to null.
+    # Property returning the stored partition count.
     """Returns the number of partitions of the policy or None if unspecified."""
     return self._number_of_partitions
 
   def set_number_of_partitions(self, number_of_partitions):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring talks about shard_dimension in its description and error
+    # section; the code actually compares the number of partitions.
+    # Sets the partition count. If frozen, a different value raises a value error; otherwise
+    # the value is stored with no validation (not even positivity). Returns nothing.
     """Sets the number of partitions for the current policy.
 
     If the policy has been frozen then shard_dimension must match the
@@ -114,10 +154,18 @@ class ShardingPolicy(object):
 
   @property
   def shard_dimension(self):
+    # [FUNCTION DOC]
+    # Property returning the stored shard dimension (a dimension object) or null if unset.
     """Returns the shard dimension of the policy or None if unspecified."""
     return self._shard_dimension
 
   def set_shard_dimension(self, shard_dimension):
+    # [FUNCTION DOC]
+    # Sets the shard dimension (integer or dimension-like). If frozen, a different value raises
+    # a value error. Otherwise the value is converted to a dimension object, which raises an
+    # error if it cannot be interpreted. Returns nothing.
+    # KNOWN ISSUE: the frozen error message formats the dimensions as integers, which can itself
+    # fail for an unset or non-integer value.
     """Sets the shard dimension for the current policy.
 
     If the policy has been frozen then shard_dimension must match the
@@ -140,6 +188,10 @@ class ShardingPolicy(object):
       self._shard_dimension = tensor_shape.as_dimension(shard_dimension)
 
   def merge(self, other):
+    # [FUNCTION DOC]
+    # Copies the set values of another policy into this one: if the other has a shard count it
+    # is applied via set_number_of_shards, and likewise the shard dimension. Partition count is
+    # not merged. Raises a value error on conflict with a frozen policy. Returns nothing.
     """Merges the policy of another policy into the current policy.
 
     Args:
@@ -155,6 +207,11 @@ class ShardingPolicy(object):
       self.set_shard_dimension(other.shard_dimension)
 
   def get_unpartitioned_shape(self, shape):
+    # [FUNCTION DOC]
+    # Given the shape of a per-partition tensor (shape-like), returns the full shape obtained by
+    # multiplying the shard dimension by the partition count when it is greater than one.
+    # Returns null if the shard dimension or partition count is unset or the shape has no
+    # dimensions. Raises a value error if the shard dimension size is unknown. No mutation.
     """Returns the shape of an unpartitioned Tensor.
 
     When given the shape of a 'sharded-size' Tensor, returns the shape
@@ -182,6 +239,14 @@ class ShardingPolicy(object):
     return tensor_shape.as_shape(dims)
 
   def get_sharded_shape(self, shape, shard_index=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it freezes the policy, but the code never freezes it; and
+    # shard_index is only range-checked, never used to choose a shape.
+    # Returns the shape of one shard given the full tensor shape (shape-like) and an optional
+    # shard index. Returns null if shard count or dimension is unset. Raises a value error if the
+    # index is out of range, the rank is unknown or too small for the shard dimension, the
+    # dimension size is unknown, or it is not divisible by the shard count. With a single shard
+    # the shape is returned unchanged; otherwise the shard dimension is divided by the count.
     """Returns the shape of a shard of a full Tensor.
 
     When given the shape of a 'full-size' Tensor, returns the shape of
@@ -237,6 +302,12 @@ class ShardingPolicy(object):
     return tensor_shape.TensorShape(dims)
 
   def _unshard_shape(self, shape):
+    # [FUNCTION DOC]
+    # HELPER: used by get_unsharded_shape for each shard shape.
+    # Takes a shard shape (shape-like) and returns the shape multiplied along the shard
+    # dimension by the shard count; a single shard returns the shape unchanged. Raises a value
+    # error if the rank is unknown or not larger than the shard dimension; conversion errors
+    # surface as type errors. Assumes the shard count and dimension are set.
     """Return the unsharded shape that would generate a given sharded shape.
 
     Args:
@@ -266,6 +337,11 @@ class ShardingPolicy(object):
     return tensor_shape.TensorShape(dims)
 
   def get_unsharded_shape(self, shapes):
+    # [FUNCTION DOC]
+    # Given a list of shard shapes, returns the shape of the full tensor. First fills default
+    # values into unset fields (a mutation). Raises a value error if the list length differs
+    # from the shard count or if the unsharded versions of the shards are not compatible with the
+    # last one. Returns the first shard's unsharded shape.
     """Returns the shape of an unsharded Tensor given a list of shards.
 
     When given a list of shapes of shards, returns the shape of the

@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# TPU system lifecycle utilities used together with TPU strategies. Provides the implementations
+# behind the public initialize and shutdown functions for the TPU system (they take the
+# resolver class as an argument to avoid duplicated code in other builds), and a query returning
+# all initialized systems. Keeps module-level state: a mapping from TPU name to the topology of
+# initialized systems, the set of local master names, and a monitoring gauge that records the
+# worker address the coordinator connected to (registered at import time).
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -41,6 +48,22 @@ _tpu_worker_address = monitoring.StringGauge(
 
 
 def initialize_tpu_system_impl(cluster_resolver, tpu_cluster_resolver_cls):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says a RuntimeError is raised inside a tf.function, but the code
+  # actually returns the serialized topology in that case; no such error is raised here.
+  # KNOWN ISSUE: the check that the saved eager-run flag is not null is always true, so the
+  # previous run-functions-eagerly setting is always restored.
+  # Initializes the TPU devices. Inputs: an optional cluster resolver (if null one is created
+  # from the resolver class using an empty name, and in eager mode the current device's job is
+  # used for placement) and the resolver class, which must be a cluster resolver subclass having
+  # a hardware feature attribute, else a type error is raised. Clears eager caches and runs
+  # garbage collection first, warns if the TPU was already initialized, then depending on mode:
+  # eager runs a non-autograph function that initializes the system on the first worker (temporarily
+  # disabling eager function execution if it was enabled; an invalid-argument error is converted to
+  # a not-found error), then reinitializes logical devices; legacy graph mode runs the init op in a
+  # new session; inside a function it returns the serialized topology immediately. In the other
+  # modes it builds a topology object, stores it on the resolver, records it in the module
+  # registry, sets the worker address gauge and returns the topology object.
   """Implementation for tpu.experimental.initialize_tpu_system.
 
   Kept separate to avoid tpu_oss code duplication.
@@ -113,6 +136,10 @@ def initialize_tpu_system_impl(cluster_resolver, tpu_cluster_resolver_cls):
   if context.executing_eagerly():
     @def_function.function(autograph=False)
     def _tpu_init_fn():
+      # [FUNCTION DOC]
+      # HELPER: traced function used by initialize_tpu_system_impl in eager mode.
+      # Takes no inputs; calls the system initialization op for the captured job without closing
+      # chips on compilation failure or cancellation, and returns the serialized topology tensor.
       # In TF1, we usually close chips when compilation fails to clear the data
       # in infeed. In TF2, we don't need to do this because infeed is no longer
       # used, so user can recover from TPU compilation failures more smoothly.
@@ -185,6 +212,9 @@ def initialize_tpu_system_impl(cluster_resolver, tpu_cluster_resolver_cls):
 
 
 def get_initialized_tpu_systems():
+  # [FUNCTION DOC]
+  # Returns a shallow copy of the registry mapping TPU names to topology objects for systems
+  # initialized in this process. No inputs; modifying the result does not affect the registry.
   """Returns all currently initialized tpu systems.
 
   Returns:
@@ -194,6 +224,19 @@ def get_initialized_tpu_systems():
 
 
 def shutdown_tpu_system_impl(cluster_resolver, tpu_cluster_resolver_cls):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the RuntimeError raised inside a tf.function says initialize_tpu_system is not
+  # supported, although this is the shutdown function; the docstring also lists a runtime error
+  # for missing TPU devices that is not raised here.
+  # KNOWN ISSUE: the check that the saved eager-run flag is not null is always true.
+  # Shuts down the TPU system. Inputs: optional cluster resolver (if null one is created from the
+  # resolver class and, in eager mode, the current device's job is used) and the resolver class
+  # (must be a cluster resolver subclass with a hardware feature attribute, else a type error).
+  # Warns if the TPU was not initialized. Eager mode: runs a non-autograph function that shuts
+  # the system down on the first worker (temporarily forcing functions to run as graphs), then
+  # clears eager and kernel caches. Legacy graph mode: runs the shutdown op in a new session.
+  # Inside a function: raises a runtime error. Finally removes the TPU from the module registry
+  # of initialized systems. Returns nothing.
   """Implementation for tpu.experimental.shutdown_tpu_system.
 
   Kept separate to avoid tpu_oss code duplication.
@@ -258,6 +301,9 @@ def shutdown_tpu_system_impl(cluster_resolver, tpu_cluster_resolver_cls):
 
     @def_function.function(autograph=False)
     def _tpu_shutdown_fn():
+      # [FUNCTION DOC]
+      # HELPER: traced function used by shutdown_tpu_system_impl in eager mode.
+      # Takes no inputs; calls the system shutdown op for the captured job. Returns nothing.
       tpu.shutdown_system(job=job)
 
     # The TPU_SYSTEM device must match the device used in tpu.shutdown_system
