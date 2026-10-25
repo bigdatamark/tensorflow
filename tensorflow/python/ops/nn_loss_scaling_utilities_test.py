@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Unit tests for the loss scaling helpers in the distributed neural-network implementation module
+# (compute_average_loss and scale_regularization_loss). The tests cover explicit and default global
+# batch sizes, sample weights of several shapes, empty batches, dtype preservation, invalid
+# arguments, and the error raised when the helpers are called in a cross-replica context.
+# Distributed cases run under a mirrored strategy with two CPU devices in graph and eager modes.
+# Nothing is registered at import time; the module runs the test main when executed directly.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,8 +36,16 @@ from tensorflow.python.platform import test as test_lib
 
 
 class LossUtilitiesTest(test_lib.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case covering the loss scaling utilities: average loss over a global batch size and
+  # regularization loss scaling by the number of replicas. It has no shared fixtures; the
+  # distributed tests receive a mirrored two-CPU strategy through the combinations decorator.
 
   def testComputeAverageLossGlobalBatchSize(self):
+    # [FUNCTION DOC]
+    # Checks that the summed per-example losses (five values totalling fifteen) are divided by an
+    # explicit global batch size of ten, giving an average of exactly one and a half.
+    # Takes no inputs, returns nothing, has no side effects.
     per_example_loss = [1, 2, 3, 4, 5]
     loss = nn_impl_distribute.compute_average_loss(
         per_example_loss, global_batch_size=10
@@ -38,6 +53,9 @@ class LossUtilitiesTest(test_lib.TestCase, parameterized.TestCase):
     self.assertEqual(self.evaluate(loss), 1.5)
 
   def testComputeAverageLossGlobalBatchSize_BatchSizeNonScalar(self):
+    # [FUNCTION DOC]
+    # Passes a list-valued (non-scalar) global batch size and asserts a value error whose message
+    # says the global batch size must be scalar. Takes no inputs, returns nothing.
     per_example_loss = [1, 2, 3, 4, 5]
     with self.assertRaisesWithPredicateMatch(
         ValueError, "global_batch_size must be scalar"):
@@ -46,6 +64,9 @@ class LossUtilitiesTest(test_lib.TestCase, parameterized.TestCase):
       )
 
   def testComputeAverageLossGlobalBatchSize_BatchSizeFloat(self):
+    # [FUNCTION DOC]
+    # Passes a floating-point global batch size and asserts a type error whose message says the
+    # global batch size must be an integer. Takes no inputs, returns nothing.
     per_example_loss = [1, 2, 3, 4, 5]
     with self.assertRaisesWithPredicateMatch(
         TypeError, "global_batch_size must be an int"):
@@ -54,6 +75,9 @@ class LossUtilitiesTest(test_lib.TestCase, parameterized.TestCase):
       )
 
   def testComputeAverageLossGlobalBatchSize_BatchSizeNegative(self):
+    # [FUNCTION DOC]
+    # Passes a negative global batch size and asserts an invalid-argument error whose message says
+    # the global batch size must be non-negative. Takes no inputs, returns nothing.
     per_example_loss = [1, 2, 3, 4, 5]
     with self.assertRaisesWithPredicateMatch(
         errors_impl.InvalidArgumentError,
@@ -63,6 +87,9 @@ class LossUtilitiesTest(test_lib.TestCase, parameterized.TestCase):
       )
 
   def testComputeAverageLossGlobalBatchSize_BatchSizeZero(self):
+    # [FUNCTION DOC]
+    # Passes a global batch size of zero with non-empty losses and asserts the result evaluates to
+    # exactly zero rather than raising a division error. Takes no inputs, returns nothing.
     per_example_loss = [1, 2, 3, 4, 5]
     loss = nn_impl_distribute.compute_average_loss(
         per_example_loss, global_batch_size=0
@@ -76,6 +103,11 @@ class LossUtilitiesTest(test_lib.TestCase, parameterized.TestCase):
       )
   )
   def testComputeAverageLossDefaultGlobalBatchSize(self, distribution):
+    # [FUNCTION DOC]
+    # Verifies the default global batch size. Without a strategy (one replica) the average of three
+    # losses is their mean. Under the given two-replica strategy, each replica computes its own
+    # average, and the summed reduction across replicas must equal the same mean.
+    # Input: distribution, the strategy supplied by the combinations decorator. Returns nothing.
     # Without strategy - num replicas = 1
     per_example_loss = constant_op.constant([2.5, 6.2, 5.])
     loss = nn_impl_distribute.compute_average_loss(per_example_loss)
@@ -97,6 +129,10 @@ class LossUtilitiesTest(test_lib.TestCase, parameterized.TestCase):
   )
   def testComputeAverageLossDefaultGlobalBatchSizeEmptyBatch(self,
                                                              distribution):
+    # [FUNCTION DOC]
+    # Verifies that an empty per-example loss tensor yields zero (not a not-a-number value), both
+    # without a strategy and when run per replica under the strategy and summed across replicas.
+    # Input: distribution, the strategy supplied by the combinations decorator. Returns nothing.
     per_example_loss = constant_op.constant([], dtypes.float32)
     loss = nn_impl_distribute.compute_average_loss(per_example_loss)
     self.assertEqual(self.evaluate(loss), 0.0)
@@ -115,6 +151,11 @@ class LossUtilitiesTest(test_lib.TestCase, parameterized.TestCase):
       )
   )
   def testComputeAverageLossSampleWeights(self, distribution):
+    # [FUNCTION DOC]
+    # Under the strategy, checks weighted averaging for three sample weight shapes: a scalar
+    # weight, one weight per example, and a per-time-step weight matrix. After summing the
+    # per-replica results, each is compared with the hand-computed weighted sum divided by the
+    # batch size. Input: distribution, the strategy from the decorator. Returns nothing.
     with distribution.scope():
       # Scalar sample weight
       per_replica_losses = distribution.run(
@@ -152,6 +193,10 @@ class LossUtilitiesTest(test_lib.TestCase, parameterized.TestCase):
       )
   )
   def testComputeAverageLossSampleWeightsEmptyBatch(self, distribution):
+    # [FUNCTION DOC]
+    # Under the strategy, runs the average loss on an empty loss tensor with a scalar weight and
+    # with an empty per-example weight tensor, asserting the reduced result is zero in both cases.
+    # Input: distribution, the strategy from the decorator. Returns nothing.
     empty_rank0 = constant_op.constant([], dtypes.float32)
 
     with distribution.scope():
@@ -175,6 +220,10 @@ class LossUtilitiesTest(test_lib.TestCase, parameterized.TestCase):
           self.evaluate(loss), 0.0)
 
   def testComputeAverageLossInvalidSampleWeights(self):
+    # [FUNCTION DOC]
+    # Passes three losses with two sample weights (mismatched shapes) and an explicit global batch
+    # size, and asserts an incompatible-shapes failure, accepted as either a value error (static
+    # check) or an invalid-argument error (runtime check). Takes no inputs, returns nothing.
     with self.assertRaisesIncompatibleShapesError(
         (ValueError, errors_impl.InvalidArgumentError)):
       nn_impl_distribute.compute_average_loss(
@@ -188,6 +237,10 @@ class LossUtilitiesTest(test_lib.TestCase, parameterized.TestCase):
       )
   )
   def testComputeAverageLossDtype(self, distribution):
+    # [FUNCTION DOC]
+    # Feeds double-precision losses with a scalar integer weight through the strategy and asserts
+    # the reduced loss keeps the double-precision type. Input: distribution, the strategy from the
+    # decorator. Returns nothing.
     with distribution.scope():
       per_example_loss = constant_op.constant([2., 4., 6.],
                                               dtype=dtypes.float64)
@@ -200,6 +253,11 @@ class LossUtilitiesTest(test_lib.TestCase, parameterized.TestCase):
       self.assertEqual(loss.dtype, dtypes.float64)
 
   def testComputeAverageLossInvalidRank(self):
+    # [FUNCTION DOC]
+    # Passes a scalar (rank zero) loss and asserts a value error stating at least rank one is
+    # expected. Then, in graph mode, uses a placeholder of unknown rank, builds the loss, and
+    # asserts running it with a scalar feed raises an invalid-argument error with the same message
+    # (the dynamic rank check). Takes no inputs, returns nothing; opens a cached session.
     per_example_loss = constant_op.constant(2.)
 
     # Static rank
@@ -227,6 +285,10 @@ class LossUtilitiesTest(test_lib.TestCase, parameterized.TestCase):
       )
   )
   def testComputeAverageLossInCrossReplicaContext(self, distribution):
+    # [FUNCTION DOC]
+    # Calls the average loss directly inside the strategy scope (cross-replica context) and asserts
+    # a runtime error saying it must not be called there. Input: distribution, the strategy from
+    # the decorator. Returns nothing.
     with distribution.scope():
       with self.assertRaisesRegex(
           RuntimeError,
@@ -240,6 +302,11 @@ class LossUtilitiesTest(test_lib.TestCase, parameterized.TestCase):
       )
   )
   def testScaleRegularizationLoss(self, distribution):
+    # [FUNCTION DOC]
+    # Checks regularization loss scaling: without a strategy the summed regularization losses are
+    # returned unchanged; under the two-replica strategy each replica scales by the replica count,
+    # so the summed reduction equals the same total. Input: distribution, the strategy from the
+    # decorator. Returns nothing.
     # Without strategy - num replicas = 1
     reg_losses = constant_op.constant([2.5, 6.2, 5.])
     loss = nn_impl_distribute.scale_regularization_loss(reg_losses)
@@ -260,6 +327,10 @@ class LossUtilitiesTest(test_lib.TestCase, parameterized.TestCase):
       )
   )
   def testScaleRegularizationLossInCrossReplicaContext(self, distribution):
+    # [FUNCTION DOC]
+    # Calls the regularization loss scaling function inside the strategy scope (cross-replica
+    # context) and asserts a runtime error saying it cannot be called there. Input: distribution,
+    # the strategy from the decorator. Returns nothing.
     with distribution.scope():
       with self.assertRaisesRegex(
           RuntimeError, "You are calling `scale_regularization_loss` in "
