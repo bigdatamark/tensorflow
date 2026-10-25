@@ -1,3 +1,16 @@
+# [MODULE DOC]
+# Stand-alone script (not a library) that uses the z3 SMT solver to check the algebraic
+# simplifier's rewrite of (A*C)+(B*C) into (A+B)*C when C is a power of two.
+# It builds three half-precision symbolic floats, constrains C to have an all-zero significand,
+# and for each of two rounding modes (round toward zero and round to nearest even) asserts the
+# negation of "before equals after, or both are zero", plus requires that the intermediate values
+# A*C, B*C and A+B are not subnormal, zero or infinite. All constraints go into one solver.
+# Because the failure conditions of both modes are conjoined, an unsatisfiable result means that
+# for every input at least one of the two modes gives equality, matching the docstring.
+# If the solver finds a model it prints a counterexample and the intermediate values; otherwise it
+# prints a proof message.
+# Side effects: all work runs at import time (no main guard), the default rounding mode of z3 is
+# changed globally, and results are printed to standard output. Requires the z3 python bindings.
 # Copyright 2018 The OpenXLA Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# HELPER: Build-time script that generates test data for the file wrapper (embedding file contents
+# in C string literals) tests.
+# Writes a deterministic file of edge-case text: nul characters before every byte value, question
+# mark pairs (possible trigraphs) before every byte value, triple question marks with special
+# characters, 200 thousand random characters from a set of difficult characters, and 1.5 million
+# random characters. Defines a required command-line flag for the output file at import time and
+# runs the application when executed as a script.
 # Copyright 2026 The OpenXLA Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,6 +39,16 @@ _OUTPUT_FILE = flags.DEFINE_string(
 
 
 def main(unused_argv):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: The comment for the third section says it covers every 2-byte sequence from the
+  # interesting set, but pairing the list with itself element by element only yields each
+  # character repeated twice, so only a few of the sequences are produced.
+  # Application entry point; the positional arguments are ignored. Opens the file named by the
+  # output flag for writing as UTF-8 (overwriting it; an unset flag raises an error) and writes
+  # the five sections in order: nul-prefixed byte values 0-255; double question mark plus each
+  # value; triple question marks joined with the paired special characters; 200000 characters
+  # chosen with a fixed random seed from the difficult set; and 1500000 random byte-valued
+  # characters drawn from the same seeded generator. Output is deterministic. Returns nothing.
   with open(_OUTPUT_FILE.value, "w", encoding="utf-8") as f:
     # Nuls followed by every character
     f.write("\0" + "\0".join([chr(x) for x in range(256)]))

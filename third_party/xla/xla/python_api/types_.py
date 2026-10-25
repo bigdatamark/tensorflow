@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# HELPER: Shared lookup tables used by the python_api literal and shape helper modules.
+# Defines a record type pairing an XLA primitive type with the matching numpy dtype, the name of
+# the repeated field in the literal protocol buffer that stores elements of that type, and the
+# plain Python type used when writing elements into that field. Exposes two tables: one keyed by
+# XLA primitive type and one keyed by the string form of the numpy dtype (strings are used because
+# dtype hashing is unreliable in numpy). Covered types are bfloat16, float16/32/64, signed and
+# unsigned 8/16/32/64-bit integers and boolean predicates. Unsigned types reuse the signed integer
+# fields of the literal. Import-time side effect: only builds these module-level tables.
 # Copyright 2018 The OpenXLA Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the 'License');

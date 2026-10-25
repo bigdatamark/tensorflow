@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: Build-time command-line tool that generates C++ headers embedding AMD GPU device
+# library bitcode, used by the GPU LLVM backend build rules.
+# Links the given LLVM bitcode files with the llvm-link program and writes a C++ header holding
+# the linked bitcode as an escaped byte string constant plus an LLVM string reference constant
+# wrapping it, inside a configurable namespace. Run as a script; nothing happens at import time.
 # Copyright 2025 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +31,18 @@ import subprocess
 
 
 def main():
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: with the default empty namespace the generated text reads "namespace  {", which
+  # is an anonymous namespace rather than the global scope.
+  # Command-line entry point. Arguments parsed from the process command line: the path of the
+  # llvm-link binary (required), the output header filename (required), one or more input bitcode
+  # files, an optional C++ namespace (default empty), and a required C++ identifier.
+  # Runs llvm-link with force and standard-output options on an empty input plus each input file
+  # given as an override, capturing its output; a failing tool raises a called-process error.
+  # Formats every output byte as a hexadecimal escape in one string and writes (overwriting) the
+  # header: pragma once, an include of the LLVM string reference header, and in the namespace a
+  # raw character array and a string reference constant named by the identifier (size minus the
+  # terminating character). Returns nothing.
   parser = argparse.ArgumentParser()
   parser.add_argument(
       "--llvm_link_bin", required=True, help="Path to the llvm-link binary"

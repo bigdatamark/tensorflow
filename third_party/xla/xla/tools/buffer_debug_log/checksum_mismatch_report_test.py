@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Unit tests for the checksum_mismatch_report module. Each test parses text-format buffer debug
+# log (and thunk metadata) messages, builds a report through the from-protos factory, and checks
+# either the metadata mapping or the detected mismatches. Runs under absltest; no import-time side
+# effects.
 # Copyright 2025 The OpenXLA Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,8 +26,15 @@ from xla.tools.buffer_debug_log import checksum_mismatch_report
 
 
 class ChecksumMismatchReportTest(absltest.TestCase):
+  # [CLASS DOC]
+  # Test case for the mismatch report factory. No shared fixtures; each test builds its own log
+  # and metadata messages from text.
 
   def test_from_protos_loads_metadata(self):
+    # [FUNCTION DOC]
+    # Uses an empty log and a metadata message describing two thunks (ids 100 and 101, kinds Gemm
+    # and Conv, with profile annotations). Expects the report's metadata mapping to contain one
+    # metadata record for each thunk with the same id, kind and annotation.
     test_log = ""
     test_metadata = """
 thunk_metadata {
@@ -69,6 +81,11 @@ thunk_metadata {
     )
 
   def test_from_protos_finds_mismatches_in_single_proto(self):
+    # [FUNCTION DOC]
+    # One log with two executions of thunk 100 that share the same input checksum but whose
+    # output buffer 1 has different checksums; metadata is empty. Expects the mismatch mapping to
+    # contain thunk 100, keyed by that input checksum set, with buffer 1 mapped to both observed
+    # output checksums.
     test_log = """
 entries {
   thunk_id: 100
@@ -127,6 +144,10 @@ entries {
     )
 
   def test_from_protos_finds_mismatches_in_multiple_protos(self):
+    # [FUNCTION DOC]
+    # Two logs (two module executions) each contain one execution of thunk 100 with identical
+    # inputs but different output checksums, generated from a text template. Expects the same
+    # mismatch result as the single-log case, showing that executions are compared across logs.
     test_log_template = """
 entries {{
   thunk_id: 100
@@ -178,6 +199,9 @@ entries {{
     )
 
   def test_from_protos_does_not_include_consistent_executions(self):
+    # [FUNCTION DOC]
+    # One log with two executions of thunk 100 having identical input and identical output
+    # checksums. Expects the report's mismatch mapping to be empty.
     test_log = """
 entries {
   thunk_id: 100

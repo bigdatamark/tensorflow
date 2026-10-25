@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Python wrapper around the XLA shape protocol buffer, plus factory functions that derive shapes
+# from numpy arrays, nested tuples of arrays, or a dtype with a dimension sequence.
+# Exposes the shape wrapper class (with element type, dimensions, tuple sub-shapes and layout
+# accessors) and the creation helpers. Used by the xla_literal module. Uses the type tables in the
+# types module to map numpy dtypes to XLA primitive types. No import-time side effects.
 # Copyright 2018 The OpenXLA Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the 'License');
@@ -21,6 +27,11 @@ from xla.python_api import types_
 
 
 class Shape(object):
+  # [CLASS DOC]
+  # Convenience wrapper around a shape protocol buffer message. Holds the message as a public
+  # attribute and, for tuple shapes, a Python tuple of the component Shape wrappers. Instances are
+  # built directly with an element type, dimensions and optional layout, or through the factory
+  # functions in this module. Accessor methods are plain methods, not properties.
   """Wraps a xla_data_pb2.ShapeProto message with a convenient Python type.
 
   Provides direct access to the underlying xla_data_pb2.ShapeProto message in
@@ -32,6 +43,14 @@ class Shape(object):
   """
 
   def __init__(self, element_type, dimensions, layout=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: element_type (XLA primitive type code); dimensions (sequence of integer
+    # sizes, or for the tuple type a sequence of Shape wrappers); layout (optional minor-to-major
+    # ordering, ignored for tuples; when omitted a row-major ordering, i.e. descending dimension
+    # indices, is used). Creates a fresh shape message and fills it: tuples copy each component's
+    # message into the tuple list and remember the component wrappers; other types store the
+    # dimensions and layout. Raises a value error if the tuple type is given anything other than
+    # Shape wrappers. No external side effects.
     """Creates a new XLA Shape.
 
     Args:
@@ -62,17 +81,27 @@ class Shape(object):
       self.message.layout.minor_to_major.extend(layout)
 
   def element_type(self):
+    # [FUNCTION DOC]
+    # Returns the XLA primitive element type code stored in the underlying message.
     return self.message.element_type
 
   def is_tuple(self):
+    # [FUNCTION DOC]
+    # Returns true when the element type is the tuple type, false otherwise.
     return self.element_type() == xla_data_pb2.TUPLE
 
   def dimensions(self):
+    # [FUNCTION DOC]
+    # Returns the repeated field of dimension sizes of a non-tuple shape. Raises a value error
+    # for tuple shapes, which have no dimensions (use the tuple sub-shapes accessor instead).
     if self.is_tuple():
       raise ValueError('Tuple shape has no dimensions. Try tuple_shapes()?')
     return self.message.dimensions
 
   def tuple_shapes(self):
+    # [FUNCTION DOC]
+    # Returns the Python tuple of component Shape wrappers recorded at construction. Raises a
+    # value error when called on a non-tuple shape.
     """If this is a tuple, returns its sequence of constituent Shape objects.
 
     Returns:
@@ -86,14 +115,26 @@ class Shape(object):
     return self._tuple_shapes
 
   def layout(self):
+    # [FUNCTION DOC]
+    # Returns the layout message of the underlying shape (empty for tuple shapes). The ordering
+    # list inside it is the minor-to-major dimension order.
     return self.message.layout
 
   @staticmethod
   def from_pyval(pyval):
+    # [FUNCTION DOC]
+    # Static factory: builds a Shape from a numpy array or nested tuple of arrays by delegating to
+    # the module-level numpy shape creator. Raises a key error for unsupported dtypes.
     return CreateShapeFromNumpy(pyval)
 
 
 def _CreateShapeFromNumpy(ndarray):  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # HELPER: Single-array worker for the public numpy shape creator.
+  # Maps the array's dtype to an XLA primitive type via the type table (raises a key error if the
+  # dtype is unsupported), takes the array's shape as dimensions, and picks the layout from memory
+  # order: ascending indices for Fortran (column-major) arrays, descending for others (row-major).
+  # Returns a new Shape wrapper.
   """Create a Shape from a given Numpy array.
 
   Args:
@@ -120,6 +161,10 @@ def _CreateShapeFromNumpy(ndarray):  # pylint: disable=invalid-name
 
 
 def CreateShapeFromNumpy(value):  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # Creates a Shape from a numpy array or a possibly nested tuple of arrays. A tuple becomes a
+  # tuple Shape whose components are created recursively; anything else goes to the private
+  # single-array helper. Returns the new Shape; raises a key error for unsupported dtypes.
   """Create a Shape from a Numpy array or a nested tuple structure thereof.
 
   Args:
@@ -138,6 +183,10 @@ def CreateShapeFromNumpy(value):  # pylint: disable=invalid-name
 
 
 def CreateShapeFromDtypeAndTuple(dtype, shape_tuple):  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # Creates a Shape from a numpy dtype and a sequence of non-negative dimension sizes, using the
+  # default row-major layout. The dtype is looked up by its string form in the type table; raises
+  # a key error if unsupported. Returns the new Shape wrapper. The sizes are not validated.
   """Create a shape from a Numpy dtype and a sequence of nonnegative integers.
 
   Args:

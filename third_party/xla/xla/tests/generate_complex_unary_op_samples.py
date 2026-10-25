@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# HELPER: Developer script that generates the C++ sample table header used by the complex unary
+# operation tests (it is not part of the test run itself).
+# Uses JAX's test utilities and the mpmath arbitrary precision library to sample the complex plane
+# (including special values such as infinities, not-a-number, pi multiples and the smallest and
+# largest floats) for the log1p, tan, arcsin, arcsinh and exp operations in single and double
+# precision, computes high precision reference results and writes them as C++ template structs
+# into a header next to this script. Refuses to run on Apple ARM machines. Importing it has no
+# side effects beyond importing its dependencies; running it as a script overwrites the header.
 """A script to generate the complex_unary_op_samples.h file.
 
 The generated file contains samples and reference values of complex unary
@@ -30,6 +39,12 @@ import numpy as np
 
 
 def disable(op, real, imag):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: The comment says it returns true for problematic samples, but the body discards
+  # all arguments and always returns false, so it is currently a placeholder that never disables
+  # any sample.
+  # Hook deciding whether a sample (operation name, textual real part, textual imaginary part)
+  # should be commented out in the generated table. Returns a boolean; no side effects.
   # Return True to disable samples (real, imag) that are know to be
   # problematic for the given op.
   del op, real, imag
@@ -37,6 +52,21 @@ def disable(op, real, imag):
 
 
 def main():
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: The output file is opened without a context manager and is not closed if an
+  # error occurs before the final close call.
+  # Script entry point, takes an optional first command-line argument naming the target ("xla"
+  # default or "tensorflow", case-insensitive; anything else fails an assertion) which selects the
+  # header include-guard macro. On Apple ARM it prints a warning and returns without writing.
+  # For each operation (log1p, tan, asin, asinh, exp) and each precision (complex64, complex128) it
+  # samples the complex plane (7 by 7 points), evaluates the mpmath reference (with a larger extra
+  # precision multiplier for asin and asinh), converts each real/imaginary value to either a named
+  # constant (pi multiples, min, max, nan, inf, zero) or a scientific-notation literal, and emits
+  # table rows with a power-of-two scale. Rows rejected by the disable hook are commented out;
+  # numbered rows ease locating failures. Only constants actually used are declared, with a
+  # platform-dependent minimum value for 64-bit ARM. Writes (overwriting) the header file in the
+  # script's directory with a license block and one templated struct per operation, then prints
+  # the created file name. Returns nothing.
   machine = platform.machine()
   is_arm_cpu = machine.startswith('aarch') or machine.startswith('arm')
   if is_arm_cpu and platform.system() == 'Darwin':
@@ -99,6 +129,13 @@ def main():
 
       # pylint: disable=cell-var-from-loop
       def _tostr(v):
+        # [FUNCTION DOC]
+        # HELPER: Formatter for the sample generation loop in the main function.
+        # Converts one floating point value of the current precision to its C++ text: a named
+        # constant for plus or minus pi, half pi, quarter pi, three quarters pi, the largest value,
+        # the smallest normal value, infinities, not-a-number and zero; otherwise a scientific
+        # notation literal (7 digits with a float suffix for single precision, 16 digits for
+        # double) with trailing zeros of the mantissa removed. Returns the text; no side effects.
         if v == pi:
           return 'pi'
         if v == -pi:
@@ -142,6 +179,11 @@ def main():
       used_constants = set()
 
       def tostr(v):
+        # [FUNCTION DOC]
+        # HELPER: Wrapper around the private formatter used while generating table rows.
+        # Formats the value and records the resulting name, without any minus sign, in the set of
+        # used constants so that only needed constants get declared (numeric literals are recorded
+        # too but never match a declared constant). Returns the text.
         r = _tostr(v)
         used_constants.add(r.removeprefix('-'))
         return r

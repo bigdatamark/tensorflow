@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Tests for the literal/numpy conversion helpers in the xla_literal module.
+# Defines small array-construction wrappers for float32, float64, int32, int64 and bool, a table
+# of records pairing each constructor with its XLA element type and the literal field getter, and
+# a test case that checks shapes, layouts and element order of converted literals (scalars, 1-D,
+# 2-D, 3-D, row- and column-major, tuples and nested tuples) plus numpy-literal-numpy round trips.
+# Runs under absltest; no import-time side effects other than building the tables.
 # Copyright 2023 The OpenXLA Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the 'License');
@@ -26,26 +33,42 @@ from xla.python_api import xla_literal
 
 
 def NumpyArrayF32(*args, **kwargs):
+  # [FUNCTION DOC]
+  # HELPER: Test utility that builds the numpy arrays used by the literal tests.
+  # Forwards all positional and keyword arguments to numpy array creation, forcing the element
+  # type to 32-bit float. Returns the new array. Passing a dtype keyword would raise a TypeError.
   """Convenience wrapper to create Numpy arrays with a np.float32 dtype."""
   return np.array(*args, dtype=np.float32, **kwargs)
 
 
 def NumpyArrayF64(*args, **kwargs):
+  # [FUNCTION DOC]
+  # HELPER: Test utility that builds the numpy arrays used by the literal tests.
+  # Same as the 32-bit float wrapper but forces 64-bit float elements. Returns the new array.
   """Convenience wrapper to create Numpy arrays with a np.float64 dtype."""
   return np.array(*args, dtype=np.float64, **kwargs)
 
 
 def NumpyArrayS32(*args, **kwargs):
+  # [FUNCTION DOC]
+  # HELPER: Test utility that builds the numpy arrays used by the literal tests.
+  # Same as the float wrappers but forces signed 32-bit integer elements. Returns the new array.
   """Convenience wrapper to create Numpy arrays with a np.int32 dtype."""
   return np.array(*args, dtype=np.int32, **kwargs)
 
 
 def NumpyArrayS64(*args, **kwargs):
+  # [FUNCTION DOC]
+  # HELPER: Test utility that builds the numpy arrays used by the literal tests.
+  # Same as the float wrappers but forces signed 64-bit integer elements. Returns the new array.
   """Convenience wrapper to create Numpy arrays with a np.int64 dtype."""
   return np.array(*args, dtype=np.int64, **kwargs)
 
 
 def NumpyArrayBool(*args, **kwargs):
+  # [FUNCTION DOC]
+  # HELPER: Test utility that builds the numpy arrays used by the literal tests.
+  # Same as the other wrappers but forces boolean elements. Returns the new array.
   """Convenience wrapper to create Numpy arrays with a np.bool dtype."""
   return np.array(*args, dtype=bool, **kwargs)
 
@@ -69,15 +92,37 @@ int_arrays = [ArrayCreatorRecord(NumpyArrayS32, xla_data_pb2.S32,
 
 
 class XlaLiteralTest(absltest.TestCase):
+  # [CLASS DOC]
+  # Test case for the conversion between numpy arrays and XLA literals. Provides custom assertion
+  # helpers (shape, layout, nested tuple shape) and tests that loop over the float array creator
+  # records; the roundtrip test additionally covers integer and boolean arrays.
+  # KNOWN ISSUE: The 64-bit integer creator record in the module-level integer table names the
+  # 64-bit float literal field as its field getter instead of the 64-bit integer field. It is
+  # harmless today because that table is only used by the roundtrip test, which ignores the getter.
 
   def assertShape(self, shape, expected_dimensions, expected_element_type):
+    # [FUNCTION DOC]
+    # HELPER: Custom assertion shared by the tests in this class.
+    # Asserts that the given shape message has the expected element type and exactly the expected
+    # list of dimensions. Fails the test on mismatch; returns nothing.
     self.assertEqual(shape.element_type, expected_element_type)
     self.assertEqual(shape.dimensions, expected_dimensions)
 
   def assertLayout(self, layout, expected_minor_to_major):
+    # [FUNCTION DOC]
+    # HELPER: Custom assertion shared by the tests in this class.
+    # Asserts that the layout message's minor-to-major dimension ordering equals the expected
+    # list. Fails the test on mismatch; returns nothing.
     self.assertEqual(layout.minor_to_major, expected_minor_to_major)
 
   def assertTupleShape(self, shape, expected):
+    # [FUNCTION DOC]
+    # HELPER: Custom assertion shared by the tuple tests in this class.
+    # Asserts the shape is a tuple shape, then walks its sub-shapes in parallel with the expected
+    # specification: nested tuple sub-shapes are checked recursively, other sub-shapes are checked
+    # against an expected pair of dimensions and element type via the shape assertion.
+    # KNOWN ISSUE: The pairwise walk silently stops at the shorter sequence, so a shape with fewer
+    # or more sub-shapes than expected is not detected.
     self.assertEqual(shape.element_type, xla_data_pb2.TUPLE)
     for sub_shape, sub_expected in zip(
         shape.tuple_shapes, expected):
@@ -89,6 +134,9 @@ class XlaLiteralTest(absltest.TestCase):
             sub_shape, expected_dimensions, expected_element_types)
 
   def testConvertNumpyScalar1DToLiteral(self):
+    # [FUNCTION DOC]
+    # For each float type, converts a scalar array to a literal and expects an empty dimension
+    # list, an empty layout and a single stored element close to 1.1.
     for array, etype, pbfield in float_arrays:
       literal = xla_literal.ConvertNumpyArrayToLiteral(array(1.1))
       self.assertShape(literal.shape, [], etype)
@@ -96,6 +144,9 @@ class XlaLiteralTest(absltest.TestCase):
       np.testing.assert_allclose(pbfield(literal), [1.1])
 
   def testConvertNumpyArray1DToLiteral(self):
+    # [FUNCTION DOC]
+    # For each float type, converts a three-element vector and expects dimensions of three, layout
+    # of zero and the three values stored in order.
     for array, etype, pbfield in float_arrays:
       literal = xla_literal.ConvertNumpyArrayToLiteral(
           array([1.1, 2.2, 3.3]))
@@ -104,6 +155,10 @@ class XlaLiteralTest(absltest.TestCase):
       np.testing.assert_allclose(pbfield(literal), [1.1, 2.2, 3.3])
 
   def testConvertNumpyArray2DToLiteral(self):
+    # [FUNCTION DOC]
+    # For each float type, converts a default (row-major) two-by-three matrix and expects
+    # dimensions two and three, minor-to-major layout one then zero, and elements stored row by
+    # row (one through six).
     for array, etype, pbfield in float_arrays:
       literal = xla_literal.ConvertNumpyArrayToLiteral(
           array([[1, 2, 3], [4, 5, 6]]))
@@ -113,6 +168,9 @@ class XlaLiteralTest(absltest.TestCase):
       np.testing.assert_allclose(pbfield(literal), [1, 2, 3, 4, 5, 6])
 
   def testConvertNumpyArray2DToLiteralColumnMajor(self):
+    # [FUNCTION DOC]
+    # For each float type, converts a column-major two-by-three matrix and expects layout zero
+    # then one and elements stored column by column (one, four, two, five, three, six).
     for array, etype, pbfield in float_arrays:
       literal = xla_literal.ConvertNumpyArrayToLiteral(
           array(
@@ -122,6 +180,9 @@ class XlaLiteralTest(absltest.TestCase):
       np.testing.assert_allclose(pbfield(literal), [1, 4, 2, 5, 3, 6])
 
   def testConvertNumpyArray3DToLiteral(self):
+    # [FUNCTION DOC]
+    # For each float type, converts a row-major four-by-two-by-three array and expects those
+    # dimensions, layout two, one, zero, and all 24 values stored in row-major order.
     for array, etype, pbfield in float_arrays:
       literal = xla_literal.ConvertNumpyArrayToLiteral(
           array([[[1, 2, 3], [4, 5, 6]], [[10, 20, 30], [40, 50, 60]], [[
@@ -135,6 +196,10 @@ class XlaLiteralTest(absltest.TestCase):
       ])
 
   def testConvertTupleOfNumpyArray3DToLiteral(self):
+    # [FUNCTION DOC]
+    # For each float type, converts a tuple of three identical 3-D arrays. Expects a tuple shape
+    # whose three members have the array's dimensions and element type, and each member literal to
+    # have the row-major layout and the flattened row-major values.
     for array, etype, pbfield in float_arrays:
       inner_array = array([
           [[1, 2, 3], [4, 5, 6]],
@@ -158,6 +223,10 @@ class XlaLiteralTest(absltest.TestCase):
         np.testing.assert_allclose(pbfield(subliteral), inner_flat)
 
   def testConvertNestedTupleOfNumpyArray3DToLiteral(self):
+    # [FUNCTION DOC]
+    # For each float type, converts a tuple containing an array, an inner tuple of two arrays, and
+    # another array. Expects the nested tuple shape to match and each of the four leaf literals to
+    # have the row-major layout and flattened row-major values.
     for array, etype, pbfield in float_arrays:
       inner_array = array([
           [[1, 2, 3], [4, 5, 6]],
@@ -187,6 +256,9 @@ class XlaLiteralTest(absltest.TestCase):
         np.testing.assert_allclose(pbfield(leaf_literal), inner_flat)
 
   def testConvertNumpyArray3DToLiteralColumnMajor(self):
+    # [FUNCTION DOC]
+    # For each float type, converts a column-major four-by-two-by-three array and expects layout
+    # zero, one, two with the 24 values stored in column-major order.
     for array, etype, pbfield in float_arrays:
       literal = xla_literal.ConvertNumpyArrayToLiteral(
           array(
@@ -202,8 +274,16 @@ class XlaLiteralTest(absltest.TestCase):
       ])
 
   def testNumpyToLiteralToNumpyRoundtrip(self):
+    # [FUNCTION DOC]
+    # Round-trip test: converts numpy data to a literal and back and expects values close to the
+    # originals. Covers a boolean vector, and for float32/64 and int32/64: scalars, 1-D, 2-D and
+    # 3-D arrays, each in both row-major and column-major memory order.
 
     def _DoRoundtripTest(ndarray_in):
+      # [FUNCTION DOC]
+      # HELPER: Inner check used by the round-trip test.
+      # Converts the input array to a literal and back to numpy, then asserts the result is
+      # numerically close to the input. Fails the test on mismatch; returns nothing.
       literal = xla_literal.ConvertNumpyArrayToLiteral(ndarray_in)
       ndarray_out = xla_literal.ConvertLiteralToNumpyArray(literal)
       np.testing.assert_allclose(ndarray_in, ndarray_out)
