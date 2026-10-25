@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Unit tests for the TPU embedding V3 checkpoint adapter: conversion from unsharded tables to
+# the SparseCore stacked layout, conversion between different SparseCore layouts and stackings,
+# and layout comparison. Includes a layout-building helper function. Runs without a TPU; when
+# run as a script it enables v2 behavior and starts the test runner.
 """Tests for tpu_embedding_v3_checkpoint_adapter."""
 
 from tensorflow.core.tpu.kernels import sparse_core_layout_pb2
@@ -37,6 +42,16 @@ def create_layout(
     shard_rotation: int,
     total_rows_per_sparse_core_shard=None,
 ) -> sparse_core_layout_pb2.SparseCoreTableLayout():
+  # [FUNCTION DOC]
+  # HELPER: builds a SparseCore table layout message for the tests in this module.
+  # KNOWN ISSUE: the return annotation calls the layout class (creating a throwaway message at
+  # definition time) instead of naming the type.
+  # Inputs: tables_name, the logical table name; stacked_table_name, the stacked table it
+  # belongs to; num_sparse_cores and num_partitions, counts; unsharded_shape and
+  # unsharded_padded_shape, row/column pairs; row_offset, the row offset inside a core shard;
+  # shard_rotation, the rotation of shards; total_rows_per_sparse_core_shard, optional rows per
+  # core shard (default: padded row count divided by core count).
+  # Returns the filled layout message. No other side effects.
   layout = sparse_core_layout_pb2.SparseCoreTableLayout()
   layout.table_name = tables_name
   layout.stacked_table_name = stacked_table_name
@@ -55,8 +70,19 @@ def create_layout(
 
 
 class TpuEmbeddingV3CheckpointAdapterTest(test.TestCase):
+  # [CLASS DOC]
+  # Unit tests for the TPU embedding V3 checkpoint adapter and its reshard callbacks. Tests
+  # build layouts with the module's layout helper, create an adapter, register callbacks and
+  # check the produced restore keys, slice texts and resharded tensors. No shared fixtures; no
+  # TPU is needed.
 
   def test_adapt_unsharded_to_sharded_simple(self):
+    # [FUNCTION DOC]
+    # Scenario: adapter without checkpoint layouts, one table (20 by 4, padded to 24 by 8,
+    # 8 cores, 2 partitions, rotation 8) whose rows hold their own index. Registers callbacks
+    # for the layout and asks the callback to reshard the unsharded table for the slice that
+    # is the second partition. Asserts the result is the expected interleaved rows (row
+    # values striding by the core count, with zero padding rows and columns).
     adapter = (
         tpu_embedding_v3_checkpoint_adapter.TpuEmbeddingV3CheckpointAdapter(
             None
@@ -97,6 +123,14 @@ class TpuEmbeddingV3CheckpointAdapterTest(test.TestCase):
     )
 
   def test_adapt_unsharded_to_sharded_stacked(self):
+    # [FUNCTION DOC]
+    # Scenario: adapter without checkpoint layouts, two tables ("one" and "two") stacked into
+    # one stacked table with different row offsets and rotations. Registers callbacks and
+    # gets the callback for "one". Asserts: object name is the stacked name; restore inputs
+    # list one key per table (names substituted) and whole-table slice texts; resharding a
+    # partial slice gives the expected interleaving of both tables' shards; resharding the
+    # full range gives the expected full stacked table (with padding rows as zeros); and the
+    # callback stores the checkpoint names and target layouts in layout order (one, two).
     adapter = (
         tpu_embedding_v3_checkpoint_adapter.TpuEmbeddingV3CheckpointAdapter(
             None
@@ -262,12 +296,25 @@ class TpuEmbeddingV3CheckpointAdapterTest(test.TestCase):
     )
 
   def test_adapt_sharded_to_unsharded_simple(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: empty placeholder test; it asserts nothing and always passes. The sharded
+    # to unsharded direction is not implemented in the adapter.
+    # Intended scenario: adapt a sharded single-table checkpoint to an unsharded target.
     pass
 
   def test_adapt_sharded_to_unsharded_stacked(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: empty placeholder test; it asserts nothing and always passes. The sharded
+    # to unsharded direction is not implemented in the adapter.
+    # Intended scenario: adapt a sharded stacked-table checkpoint to an unsharded target.
     pass
 
   def test_is_layouts_same_works(self):
+    # [FUNCTION DOC]
+    # Scenario: adapter built from a checkpoint layouts message holding one table layout.
+    # Asserts the layout comparison returns true for the identical layout, then changes the
+    # core count of that same layout and asserts the comparison returns false. (Both calls
+    # share the mutated message, so the adapter's stored copy is what differs.)
     layout = create_layout(
         tables_name="some_feature",
         stacked_table_name="some_feature",
@@ -290,7 +337,13 @@ class TpuEmbeddingV3CheckpointAdapterTest(test.TestCase):
     self.assertFalse(adapter.is_layouts_same({layout.table_name: layout}))
 
   def test_adapt_to_different_sharded_stacked(self):
-
+    # [FUNCTION DOC]
+    # Scenario: checkpoint layouts have three tables stacked together for 4 cores and 2
+    # partitions; the target layouts use the same stacked table but 8 cores, 4 partitions and
+    # different row offsets. Registers callbacks and gets the one for the stacked name.
+    # Asserts: object name; restore inputs are the single checkpoint key and a slice text
+    # covering the whole source stacked table; and resharding the source stacked table
+    # (given only the first table's data) for a middle slice returns the expected rows.
     source_layouts = {
         "one": create_layout(
             tables_name="one",
@@ -455,7 +508,17 @@ class TpuEmbeddingV3CheckpointAdapterTest(test.TestCase):
     )
 
   def test_adapt_to_different_sc_table_stacking(self):
-
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: several assertions (the second reshard of the "one" callback and the final
+    # reshards of the "two_three" callback) sit outside the named sub-tests, so a failure there
+    # is not attributed to a sub-test.
+    # Scenario: checkpoint has stacked tables (one and two together, three alone); the target
+    # regroups them (one alone, two and three together) with 8 cores and 4 partitions.
+    # For the target "one": asserts the object name, that restore inputs read the source
+    # stacked table whole, and that resharding yields expected rows for two slices (including
+    # padding zeros). For the target "two_three": asserts the object name, that restore
+    # inputs read both source stacked tables whole, and that resharding both source tables
+    # yields the expected rows for two slices.
     source_layouts = {
         "one": create_layout(
             tables_name="one",

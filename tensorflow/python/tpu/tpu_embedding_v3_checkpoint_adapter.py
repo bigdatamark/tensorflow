@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Checkpoint adapter that reshards TPU embedding V3 tables on restore. Provides parsing and
+# formatting of shape-and-slice strings, routines that shard per-table tensors into the
+# SparseCore stacked layout and unshard them back, two reshard callback classes (from
+# unsharded checkpoints, and between different SparseCore layouts), and the adapter class that
+# reads layouts from a checkpoint and picks callbacks. No import-time side effects beyond
+# imports.
 """Checkpoint adapter for TPUEmbedding."""
 
 import collections
@@ -33,6 +40,13 @@ from tensorflow.python.util.protobuf import compare
 def _parse_shard_info_str(
     spec: str,
 ) -> tuple[list[int], trackable_base.ShardInfo]:
+  # [FUNCTION DOC]
+  # HELPER: decodes checkpoint shape-and-slice strings for the resharding callbacks.
+  # Input: spec, a text made of whitespace separated full-shape integers followed by a last
+  # token of colon separated "offset,size" pairs, one per dimension.
+  # Returns a pair: the list of full-shape integers, and a shard-info object holding the
+  # per-dimension offsets and shard sizes. Raises a value error (from integer conversion) or
+  # an index error if the text is malformed. No side effects.
   """Parses shape and shard_info string."""
 
   shape = [int(x) for x in spec.split()[:-1]]
@@ -43,6 +57,11 @@ def _parse_shard_info_str(
 
 
 def _shard_info_str(shape, shard_info) -> str:
+  # [FUNCTION DOC]
+  # HELPER: inverse of the shape-and-slice parser, used to build restore slice specs.
+  # Inputs: shape, a list of full-shape integers; shard_info, an object with per-dimension
+  # offset and shape lists. Returns text with the full shape integers separated by spaces,
+  # a space, then colon separated "offset,size" pairs. No side effects.
   """Created shape and shard_info string."""
 
   full_shape_str = " ".join("%d" % d for d in shape) + " "
@@ -57,9 +76,28 @@ def _shard_from_cpu_to_sc(
     shape_and_slice: str,
     to_shard_layout: Sequence[sparse_core_layout_pb2.SparseCoreTableLayout],
 ) -> tensor.Tensor:
+  # [FUNCTION DOC]
+  # HELPER: core conversion from unsharded per-table values to a SparseCore stacked shard.
+  # KNOWN ISSUE: the offset validity check compares two lists with a lexicographic ordering
+  # instead of comparing each dimension, so it only rejects some invalid offsets, and it
+  # allows an offset equal to the full shape although the message says "less than".
+  # Inputs: feature_values, indexable collection (one entry per table layout) of full
+  # unsharded table tensors; shape_and_slice, a shape-and-slice text for the requested
+  # slice of the stacked variable; to_shard_layout, the list of target table layouts that
+  # make up the stacked table (all share the sparse core and partition counts).
+  # Behavior: pads each table to its padded shape, then for every partition-sized row range
+  # in the requested slice and every sparse core of that partition, takes each table's
+  # strided rows (after applying the table's shard rotation) and concatenates them; the
+  # per-partition results are concatenated along rows.
+  # Returns the resulting tensor. Raises a value error if the offset is invalid or if the
+  # slice row count is not a multiple of the rows in one partition. Logs at verbose level.
   """Shards the feature tables from CPU to SparseCore."""
 
   def pad_value(value, variable_shape, table_shape):
+    # [FUNCTION DOC]
+    # HELPER: pads a table with zero-style constant padding on the bottom and right.
+    # Inputs: value, the table tensor; variable_shape, the padded target shape; table_shape,
+    # the current shape. Returns the padded tensor (padding applied to rows and columns).
     return array_ops.pad(
         value,
         [
@@ -138,6 +176,13 @@ def _unshard_from_sc_to_cpu(
     stacked_table: tensor.Tensor,
     from_shard_layouts: Sequence[sparse_core_layout_pb2.SparseCoreTableLayout],
 ) -> Sequence[tensor.Tensor]:
+  # [FUNCTION DOC]
+  # HELPER: reverses the SparseCore stacking and sharding for restoring from a checkpoint.
+  # Inputs: stacked_table, the full value of a stacked sharded table; from_shard_layouts,
+  # the layouts of the constituent tables as stored in the checkpoint.
+  # For each layout, undoes the sparse core shuffle (using core count, row offset, size per
+  # shard and rotation) and strips the padding down to the table's unsharded shape.
+  # Returns a list of unsharded table tensors in layout order. Logs at verbose level.
   """Undo the shard the feature tables into SparseCore stacked table.
 
   Args:
@@ -177,6 +222,16 @@ def _unshard_from_sc_to_cpu(
 
 
 class EmbeddingUnshardToShardCallback(checkpoint_adapter.ReshardCallback):
+  # [CLASS DOC]
+  # KNOWN ISSUE: the docstring is identical to the one of EmbeddingReshardCallback and does
+  # not say this class converts an unsharded (plain per-table) checkpoint into the sharded
+  # SparseCore layout.
+  # Reshard callback used when the checkpoint holds one plain full tensor per logical table
+  # and the object being restored is a SparseCore stacked sharded variable. It remembers the
+  # object's local name, the checkpoint names of each constituent table, and the target
+  # layouts (the optional unshard layout is stored but unused). Created by the checkpoint
+  # adapter; the restore machinery asks it which keys and slices to read and then calls
+  # reshard on the read values.
   """Reshard callback for embeddings."""
 
   def __init__(
@@ -190,6 +245,13 @@ class EmbeddingUnshardToShardCallback(checkpoint_adapter.ReshardCallback):
           Sequence[sparse_core_layout_pb2.SparseCoreTableLayout]
       ] = None,
   ):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: object_local_name, the name of the stacked variable being
+    # restored; checkpoint_local_names, ordered names of the per-table checkpoint entries
+    # (the first is treated as the main name); to_shard_layout, optional list of target table
+    # layouts; to_unshard_layout, optional layouts of the checkpoint (stored, never used).
+    # Stores all of them on the instance. Raises an index error if the name list is empty.
+    # Returns nothing.
     """Initializes  Reshard callback.
 
     Args:
@@ -208,11 +270,21 @@ class EmbeddingUnshardToShardCallback(checkpoint_adapter.ReshardCallback):
     self._main_checkpoint_name = checkpoint_local_names[0]
 
   def object_name(self) -> str:
+    # [FUNCTION DOC]
+    # Returns the local name of the object being restored, as given at construction.
     return self._object_local_name
 
   def update_restore_inputs(
       self, checkpoint_key: str, shape_and_slice_spec: str
   ) -> tuple[Sequence[str], Sequence[str]]:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the shape and slice input is only logged, never used for the result, and
+    # the target layout is iterated without a check, so it fails if no target layout was given.
+    # Inputs: checkpoint_key, the key requested by the restore; shape_and_slice_spec, the
+    # requested slice text. For each target table layout, builds a key by replacing the main
+    # checkpoint name in the requested key with that table's checkpoint name, and a slice text
+    # covering the table's whole unsharded shape (offset zero).
+    # Returns a pair of lists (keys, slices) for the restore op. Logs at info level.
     """Updates checkpoint key and slice spec acorrding to the resharding plan.
 
     Args:
@@ -259,6 +331,12 @@ class EmbeddingUnshardToShardCallback(checkpoint_adapter.ReshardCallback):
   def reshard(
       self, checkpoint_values: tensor.Tensor, shape_and_slice: str
   ) -> tensor.Tensor:
+    # [FUNCTION DOC]
+    # Inputs: checkpoint_values, the full per-table tensors read from the checkpoint (a
+    # sequence, one per target layout, despite the single-tensor annotation); shape_and_slice,
+    # the slice text of the stacked variable that is wanted. Delegates to the module's
+    # CPU-to-SparseCore sharding routine using the stored target layouts and returns the
+    # resulting tensor slice. Raises a value error for an invalid offset or row count.
     """Reshards the checkpoint values according to the resharding plan.
 
     Args:
@@ -274,6 +352,13 @@ class EmbeddingUnshardToShardCallback(checkpoint_adapter.ReshardCallback):
 
 
 class EmbeddingReshardCallback(checkpoint_adapter.ReshardCallback):
+  # [CLASS DOC]
+  # Reshard callback used when the checkpoint already holds SparseCore stacked tables saved
+  # with a different layout than the one being restored. It keeps the object's local name,
+  # a mapping from checkpoint stacked table names to their constituent table layouts, and the
+  # list of target layouts. On restore it asks for the full stacked tables, unshards them into
+  # per-table tensors and reshards them into the target layout. Created by the checkpoint
+  # adapter when layouts differ.
   """Reshard callback for embeddings."""
 
   def __init__(
@@ -284,6 +369,11 @@ class EmbeddingReshardCallback(checkpoint_adapter.ReshardCallback):
       ],
       to_shard_layouts: Sequence[sparse_core_layout_pb2.SparseCoreTableLayout],
   ):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: object_local_name, the stacked variable name being restored;
+    # from_shard_layouts, mapping from checkpoint stacked table names to their ordered table
+    # layouts; to_shard_layouts, list of target table layouts. Stores them on the instance and
+    # logs at info level. Returns nothing.
     """Initializes  Reshard callback.
 
     Args:
@@ -299,11 +389,22 @@ class EmbeddingReshardCallback(checkpoint_adapter.ReshardCallback):
     self._to_shard_layouts = to_shard_layouts
 
   def object_name(self) -> str:
+    # [FUNCTION DOC]
+    # Returns the local name of the object being restored, as given at construction.
     return self._object_local_name
 
   def update_restore_inputs(
       self, checkpoint_key: str, shape_and_slice_spec: str
   ) -> tuple[Sequence[str], Sequence[str]]:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it returns the full shape, but it returns a pair of
+    # lists (keys, slices); the shape and slice input is only used in a log message.
+    # Inputs: checkpoint_key, the requested key; shape_and_slice_spec, the requested slice
+    # text. For every checkpoint stacked table, builds a key by replacing the object name in
+    # the requested key with the stacked table name, and a slice text covering the whole
+    # stacked table (rows from the first layout's rows per core times core count, columns from
+    # its padded width, offset zero).
+    # Returns a pair of lists (keys, slices). Logs at info level.
     """Return the full shape of the stacked that is passed into restore_v2.
 
     This shape information is required by the restore_v2 process to ensure it
@@ -359,6 +460,14 @@ class EmbeddingReshardCallback(checkpoint_adapter.ReshardCallback):
       checkpoint_values: Sequence[tensor.Tensor],
       shape_and_slice: str,
   ) -> tensor.Tensor:
+    # [FUNCTION DOC]
+    # Inputs: checkpoint_values, sequence of full stacked table tensors read from the
+    # checkpoint, in the order of the source layout mapping; shape_and_slice, slice text of
+    # the wanted part of the target stacked variable. Unshards each stacked table into its
+    # per-table tensors, picks the tables needed by the target layouts by table name, then
+    # shards them into the target layout for the requested slice.
+    # Returns the resulting tensor. Raises a key error if a needed table is missing, and a
+    # value error for an invalid slice. Logs progress and elapsed time at info level.
     # unshard
     stime = time.time()
     logging.info(
@@ -405,6 +514,11 @@ class EmbeddingReshardCallback(checkpoint_adapter.ReshardCallback):
 def _reorg_layouts(
     layouts: Sequence[sparse_core_layout_pb2.SparseCoreTableLayout],
 ) -> Mapping[str, Sequence[sparse_core_layout_pb2.SparseCoreTableLayout]]:
+  # [FUNCTION DOC]
+  # HELPER: groups table layouts by stacked table for the checkpoint adapter.
+  # Input: layouts, a sequence of table layouts. Groups them by stacked table name and sorts
+  # each group by the row offset within the shard. Returns a defaultdict-style mapping from
+  # stacked table name to the sorted list of layouts. No side effects.
   """Reorg the layouts to be in the order of the logical table.
 
     Building a Dict[StackedTableName, SortedList[TableLayout]]
@@ -431,12 +545,25 @@ def _reorg_layouts(
 class TpuEmbeddingV3CheckpointAdapter(
     checkpoint_adapter.AbstractCheckpointAdapter
 ):
+  # [CLASS DOC]
+  # Checkpoint adapter that lets TPU embedding V3 objects be restored when the checkpoint
+  # layout differs from the live layout. State: a mapping from table name to the layouts found
+  # in the checkpoint, and a mapping from checkpoint names to reshard callbacks, filled by
+  # initialize_reshard_callbacks. It decides whether a trackable needs resharding
+  # (is_applicable) and supplies the callback by name (get_reshard_callback). Subclass of the
+  # abstract checkpoint adapter.
   """Adapter for TPU Embedding V3 to handle checkpoint resharding."""
 
   def __init__(
       self,
       layouts: Optional[sparse_core_layout_pb2.SparseCoreTableLayouts] = None,
   ):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says layouts are the "target layouts", but they are the
+    # layouts stored in the checkpoint being restored.
+    # Constructor. Input: layouts, optional collection of table layouts read from a
+    # checkpoint (nothing or empty means the checkpoint has none). Builds a mapping from table
+    # name to layout and an empty callback mapping. Returns nothing.
     """An adapter for TPUEmbeddingV3 checkpoints.
 
     Constructs an adapter for TPUEmbeddingV3 to handle layout changes. between
@@ -453,6 +580,12 @@ class TpuEmbeddingV3CheckpointAdapter(
 
   @classmethod
   def create_from_checkpoint(cls, save_path: str):
+    # [FUNCTION DOC]
+    # Factory. Input: save_path, path prefix of a checkpoint. Opens a checkpoint reader, looks
+    # for the first variable whose name contains the SparseCore layouts key, and parses its
+    # stored bytes as a layouts message. Returns a new adapter built from those layouts, or
+    # one without layouts if the checkpoint has none. Logs the loaded layouts at info level.
+    # Raises errors from the reader if the path is unreadable.
     reader = py_checkpoint_reader.NewCheckpointReader(save_path)
     sparsecore_layouts_str = None
     for name in reader.get_variable_to_dtype_map():
@@ -472,6 +605,15 @@ class TpuEmbeddingV3CheckpointAdapter(
           Mapping[str, sparse_core_layout_pb2.SparseCoreTableLayout]
       ] = None,
   ):
+    # [FUNCTION DOC]
+    # Builds and stores the reshard callbacks for a restore. Input: embedding_layouts,
+    # optional mapping from table name to the live (target) layout.
+    # Cases: if the checkpoint has no layouts and the embedding has some, groups target layouts
+    # by stacked table, sorts by row offset and registers an unshard-to-shard callback keyed
+    # by the first table name. If the embedding has no layouts, raises a not-implemented error
+    # (sharded to unsharded). Otherwise registers a reshard callback per target stacked table
+    # that lists the checkpoint stacked tables containing its tables.
+    # Side effects: fills the callback mapping; logs at info level. Returns nothing.
     if not self._checkpoint_layouts and embedding_layouts:
       # From Unsharded to Sharded
       stacked_name_to_table_names = collections.defaultdict(list)
@@ -523,6 +665,11 @@ class TpuEmbeddingV3CheckpointAdapter(
       )
 
   def is_layouts_same(self, embedding_layouts) -> bool:
+    # [FUNCTION DOC]
+    # Input: embedding_layouts, mapping from table name to the live layout. Raises a value
+    # error if its keys differ from the checkpoint layout keys. Compares each checkpoint
+    # layout with the live one by protocol-buffer equality; logs the first mismatch at info
+    # level. Returns false on any mismatch, true if all match.
     """Returns True if the all the embedding and checkpoint layouts are the same.
 
     Args:
@@ -554,6 +701,13 @@ class TpuEmbeddingV3CheckpointAdapter(
     return True
 
   def is_applicable(self, trackable: trackable_base.Trackable) -> bool:
+    # [FUNCTION DOC]
+    # Decides whether this adapter must reshard the given trackable. Input: trackable, the
+    # object being restored. Returns false if its type name does not look like a V2 or V2-plus
+    # TPU embedding (checked by text to avoid a circular dependency), if neither checkpoint
+    # nor object has layouts, or if both have layouts and they match. Otherwise initializes the
+    # reshard callbacks from the object's layouts (side effect) and returns true. May raise
+    # the errors of is_layouts_same or initialize_reshard_callbacks. Logs at info level.
     # issubclass(trackable, TPUEmbeddingBase) adds circular deps, hence using
     #  a workaround to select the applicable embedding implementations.
     allowed_class_names = [".TPUEmbeddingV2Plus", ".TPUEmbeddingV2"]
@@ -582,6 +736,10 @@ class TpuEmbeddingV3CheckpointAdapter(
   def get_reshard_callback(
       self, name: str
   ) -> Optional[checkpoint_adapter.ReshardCallback]:
+    # [FUNCTION DOC]
+    # Input: name, a checkpoint object name. Returns the registered reshard callback for the
+    # name, or, if absent, for the part before the first slash (so slot variables of an
+    # embedding share its callback), or nothing if neither is registered. No side effects.
     if name in self._checkpoint_to_reshard_callback:
       return self._checkpoint_to_reshard_callback[name]
     # Check if this is slot variable

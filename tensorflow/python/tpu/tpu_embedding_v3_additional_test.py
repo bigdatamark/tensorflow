@@ -12,6 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Additional single and multi worker tests for the TPU embedding V3 layer. Defines a command
+# line flag naming the TPU, two small helpers (per-replica value extraction and an array
+# padding initializer) and one test class covering lookup, stacking and checkpoint restore
+# between TPU and serving embeddings. Needs a TPU; running as a script enables v2 behavior and
+# the MLIR bridge.
 """Additional multi/single worker tests for tpu_embedding_v3."""
 
 import os
@@ -52,6 +58,10 @@ shard_initializer = tpu_embedding_v3_utils.shard_initializer
 
 
 def get_replica_values(per_replica_or_tensor):
+  # [FUNCTION DOC]
+  # HELPER: normalizes strategy outputs for the assertions in this module.
+  # Input: a per-replica distributed value or a plain tensor. Returns the tuple of per-replica
+  # values for a distributed value, otherwise a one-element list holding the input.
   if isinstance(per_replica_or_tensor, values_lib.PerReplica):
     return per_replica_or_tensor.values
   else:
@@ -59,6 +69,12 @@ def get_replica_values(per_replica_or_tensor):
 
 
 def pad_to_shape_initializer(init_mat):
+  # [FUNCTION DOC]
+  # HELPER: builds table initializers from explicit arrays for the tests in this module.
+  # Input: init_mat, a two-dimensional tensor of initial values. Returns an initializer
+  # callable taking a shape and a dtype (dtype ignored) that pads init_mat with constant
+  # padding at the end of rows and columns up to the requested shape. Padding amounts become
+  # negative (an error at call time) if the requested shape is smaller than init_mat.
   """An initializer that pads init_mat out to the given shape."""
   return lambda shape, dtype: array_ops.pad(
       init_mat,
@@ -71,8 +87,22 @@ def pad_to_shape_initializer(init_mat):
 
 
 class TPUEmbeddingLayerV2Test(parameterized.TestCase, test.TestCase):
+  # [CLASS DOC]
+  # Test case for the TPU embedding V3 layer on a real TPU (single or multi worker): initial
+  # values, table stacking, lookup, and restoring checkpoints between the TPU layer and the
+  # serving (CPU) embedding. Fixtures built in setUp: vocabulary size and dimension, a TPU
+  # strategy with an explicit device assignment, sharded initializers, two table configs
+  # (video, user) and their feature configs.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Fixture run before each test. Connects to the TPU named by the flag (connecting to the
+    # cluster when no flag is given), initializes the TPU system, builds a device assignment
+    # from the topology and one replica per core, and creates a TPU strategy; registers a
+    # cleanup that shuts the TPU system down. Defines sharded initializer helpers, the video
+    # and user table and feature configs, and asserts the strategy's device grid has one column
+    # and one row per core. Side effects: TPU system initialization and shutdown. Returns
+    # nothing.
     super().setUp()
     self.vocabulary_size = 128
     self.embedding_dim = 8
@@ -131,6 +161,11 @@ class TPUEmbeddingLayerV2Test(parameterized.TestCase, test.TestCase):
     )
 
   def testSingleTableInitializeAndLookup(self):
+    # [FUNCTION DOC]
+    # Scenario: one table (video) with a row-id initializer; builds the TPU embedding layer
+    # inside the strategy scope with pipelining enabled and runs one compiled step on inputs
+    # that look up every row once. Asserts each replica's returned embeddings are close to the
+    # initializer's expected values for the whole table (rows equal to their row ids).
     # This test sets up devices to lookup the entire table.
 
     feature_config = [self.feature_video]
@@ -146,12 +181,23 @@ class TPUEmbeddingLayerV2Test(parameterized.TestCase, test.TestCase):
 
       @def_function.function
       def train_step(features):
+        # [FUNCTION DOC]
+        # Compiled step used by the single-table test. Input: features, distributed input
+        # values. Runs the inner per-replica function on every replica through the strategy
+        # and returns the per-replica results (the first output of the embedding layer).
         def train_step_fn(features):
+          # [FUNCTION DOC]
+          # Per-replica body: calls the embedding layer on the features and returns the first
+          # element of its output (the looked-up embeddings of the first feature).
           return embedding_layer(features)[0]
 
         return strategy.run(train_step_fn, args=(features,))
 
     def value_fn(ctx):
+      # [FUNCTION DOC]
+      # Input producer for distributed values. Input: ctx, the replica context (ignored).
+      # Returns a list with one sparse tensor that looks up every row id of the vocabulary
+      # exactly once (one id per example), with dense shape of vocabulary size by one.
       del ctx  # unused
       return [
           sparse_tensor.SparseTensor(
@@ -172,12 +218,21 @@ class TPUEmbeddingLayerV2Test(parameterized.TestCase, test.TestCase):
       self.assertAllClose(replica, expected)
 
   def testStackedTableInitializeAndLookup(self):
+    # [FUNCTION DOC]
+    # Scenario: two tables (video and user) with different row-id offsets that are stacked by
+    # the layer. Runs one compiled step looking up every row of both. Asserts each replica's
+    # embeddings for video and user are close to the expected row-id values for each table
+    # (offsets 0 and 1000), showing stacking keeps each table's own initial values.
     # This test sets up devices to lookup the entire table.
     feature_config = [self.feature_video, self.feature_user]
 
     strategy = self._strategy
 
     def value_fn(ctx):
+      # [FUNCTION DOC]
+      # Input producer for distributed values. Input: ctx, the replica context (ignored).
+      # Returns a list of two identical sparse tensors, one per feature, each looking up every
+      # row id of the vocabulary once, with dense shape of vocabulary size by one.
       del ctx  # unused
       return [
           sparse_tensor.SparseTensor(
@@ -203,7 +258,14 @@ class TPUEmbeddingLayerV2Test(parameterized.TestCase, test.TestCase):
 
       @def_function.function
       def train_step(features):
+        # [FUNCTION DOC]
+        # Compiled step used by the stacked-table test. Input: features, distributed input
+        # values for two features. Runs the inner per-replica function on every replica through
+        # the strategy and returns its per-replica results (the first output of the layer).
         def train_step_fn(features):
+          # [FUNCTION DOC]
+          # Per-replica body: calls the embedding layer on the features and returns the first
+          # element of its output (the looked-up embeddings of the first feature).
           return embedding_layer(features)[0]
 
         return strategy.run(train_step_fn, args=(features,))
@@ -224,6 +286,12 @@ class TPUEmbeddingLayerV2Test(parameterized.TestCase, test.TestCase):
       self.assertAllClose(replica_user, expected_user)
 
   def testTwoTablesStackedHaveCorrectInitialValues(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the name promises a check of initial values, but the test only asserts the
+    # number of embedding tables; the initial values are never read or compared.
+    # Scenario: two small tables with the same width and explicit initial arrays, padded by the
+    # sharded initializer. Builds the layer in the strategy scope and asserts the two tables
+    # were stacked into a single embedding table.
     table1_initial_value = np.arange(
         start=100, stop=120, dtype=np.float32
     ).reshape([10, 2])
@@ -263,6 +331,12 @@ class TPUEmbeddingLayerV2Test(parameterized.TestCase, test.TestCase):
       self.assertLen(mid_level_api.embedding_tables, 1)
 
   def testCpuRestoreForNoStackedTables(self):
+    # [FUNCTION DOC]
+    # Scenario: two tables with different widths (so they are not stacked) are saved from the
+    # TPU embedding layer to a checkpoint in a temporary directory. A serving (CPU) embedding
+    # with the same configuration restores it and is built. Asserts the layer had two tables,
+    # the serving embedding has two tables, and looking up row 1 in each table returns the
+    # expected saved initial values (102 and 103 for the first; 209 to 217 for the second).
     table1_initial_value = np.arange(
         start=100, stop=120, dtype=np.float32
     ).reshape([10, 2])
@@ -343,6 +417,13 @@ class TPUEmbeddingLayerV2Test(parameterized.TestCase, test.TestCase):
     )
 
   def testCpuRestoreForStackedTables(self):
+    # [FUNCTION DOC]
+    # Scenario: two tables of equal width are stacked into one variable in the TPU embedding
+    # layer and saved to a checkpoint in a temporary directory; a serving (CPU) embedding with
+    # the same configuration restores it. Asserts the layer had one table, the serving
+    # embedding has two (unstacked on restore), lookups of row 1 give the expected saved values
+    # for each table, then saves the serving embedding as a saved model, loads it back and
+    # asserts the loaded object has two variables.
     table1_initial_value = np.arange(
         start=100, stop=120, dtype=np.float32
     ).reshape([10, 2])
@@ -422,6 +503,13 @@ class TPUEmbeddingLayerV2Test(parameterized.TestCase, test.TestCase):
     self.assertLen(loaded_embedding._variables, 2)
 
   def testUnshardedToTpuRestore(self):
+    # [FUNCTION DOC]
+    # Scenario: one table is created in a serving (CPU, unsharded) embedding and saved to a
+    # checkpoint; a TPU embedding layer with the same configuration restores it and is built.
+    # The test then computes the padded vocabulary size and, for every device in order and each
+    # SparseCore on it, slices the unsharded value with a stride equal to the total shard
+    # count, pads the slice to the shard shape, and asserts the value read from that device
+    # equals the concatenation of the expected padded slices.
     table1 = tpu_embedding_v2_utils.TableConfig(
         vocabulary_size=25,
         dim=6,
@@ -463,6 +551,11 @@ class TPUEmbeddingLayerV2Test(parameterized.TestCase, test.TestCase):
         replicas * cores_per_replica * mid_level_api._num_sc_per_chip
     )
     def get_padded_vocab_size(total_sc_shards, vocab_size):
+      # [FUNCTION DOC]
+      # HELPER: computes the expected padded row count for the restore test.
+      # Inputs: total_sc_shards, number of SparseCore shards; vocab_size, row count. Returns
+      # the smallest positive multiple of eight times the shard count that is at least the
+      # vocabulary size (zero if the vocabulary size is not positive).
       # multiple of (8 * total_sc_shards) which is greater than or equal to
       # vocab size
       result = 0
