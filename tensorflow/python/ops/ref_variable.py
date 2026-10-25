@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Defines RefVariable, the legacy graph-mode variable backed by a reference-typed variable op
+# (as opposed to resource variables), plus the default variable creator that chooses between
+# resource variables and reference variables, and the proto conversion helpers for variable
+# collections. It is only usable when eager execution is disabled.
+# Import-time side effects: registers VariableDef proto conversion functions for the global,
+# trainable, moving-average, local, model, global-step and metric variable graph collections,
+# and registers a tensor conversion function so reference variables can be used as tensors.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -39,6 +47,16 @@ from tensorflow.python.util.deprecation import deprecated
 
 
 def default_variable_creator(next_creator=None, **kwargs):
+  # [FUNCTION DOC]
+  # Innermost variable creator in the creator chain. Input next_creator must be nothing (an
+  # assertion fails otherwise), since this is the last creator. Keyword arguments carry the
+  # variable options (initial value, trainable, collections, validate shape, caching device,
+  # name, variable definition, dtype, expected shape, import scope, constraint, use resource,
+  # synchronization, aggregation, shape, distribute strategy); missing ones default to nothing
+  # (validate shape defaults to true). Decides between resource and reference variables: use the
+  # explicit flag, else the current variable scope setting, else the global resource-variables
+  # toggle, and always resource when executing eagerly. Returns a new resource variable or a
+  # new reference variable. Expected shape is only passed to reference variables.
   """Default variable creator."""
   assert next_creator is None
   initial_value = kwargs.get("initial_value", None)
@@ -98,11 +116,21 @@ def default_variable_creator(next_creator=None, **kwargs):
 
 
 def _to_proto_fn(v, export_scope=None):
+  # [FUNCTION DOC]
+  # HELPER: serializer registered for variable graph collections.
+  # Converts a variable (reference or resource) to its variable definition message by calling
+  # its own conversion method with the optional export scope. Returns the message or nothing if
+  # the variable is outside the export scope.
   """Converts Variable and ResourceVariable to VariableDef for collections."""
   return v.to_proto(export_scope=export_scope)
 
 
 def _from_proto_fn(v, import_scope=None):
+  # [FUNCTION DOC]
+  # HELPER: deserializer registered for variable graph collections.
+  # Given a variable definition message and optional import scope, rebuilds a resource variable
+  # if the message is flagged as a resource, otherwise a legacy variable via the v1 variable
+  # class. Returns the new variable object.
   """Creates Variable or ResourceVariable from VariableDef as needed."""
   if v.is_resource:
     return resource_variable_ops.ResourceVariable.from_proto(
@@ -149,6 +177,15 @@ ops.register_proto_function(
 
 # TODO(apassos): do not repeat all comments here
 class RefVariable(variable_v1.VariableV1, core.Tensor):
+  # [CLASS DOC]
+  # Legacy graph-mode variable implemented with a reference-typed variable op, an initializer
+  # assign op and a cached read snapshot. It can be created from an initial value or recreated
+  # from a variable definition message, registers itself in graph collections, supports assign
+  # and scatter style updates, and converts to a tensor (value or reference). State: the
+  # variable op, initializer op, initial value, snapshot, name, trainable flag,
+  # synchronization, aggregation, caching device, constraint, slice info and graph key. It
+  # cannot be used under eager execution. Subclasses the v1 variable base and the tensor
+  # protocol.
   """Ref-based implementation of variables."""
 
   def __init__(
@@ -167,6 +204,17 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
       synchronization=None,
       aggregation=None,
       shape=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the mutual-exclusion check uses the truthiness of initial_value, so a falsy
+    # initial value (zero, empty list) alongside a variable definition is not rejected, and a
+    # tensor initial value may raise an ambiguity error; also the docstring lists a runtime error
+    # for eager mode, which is actually raised by the argument-based initializer, not here.
+    # Constructor. Marks the variable as graph-mode. If variable_def is given, rebuilds the
+    # variable from the message (raises a value error if an initial value is also given),
+    # otherwise creates the ops from the arguments: initial_value, trainable, collections,
+    # validate_shape, caching_device, name, dtype, expected_shape (ignored), constraint,
+    # synchronization, aggregation and shape. import_scope applies only to proto restoration.
+    # Adds ops to the default graph and adds the variable to collections. Returns nothing.
     """Creates a new variable with value `initial_value`.
 
     The new variable is added to the graph collections listed in `collections`,
@@ -263,6 +311,10 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
           shape=shape)
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the graph-mode flag is always set to true in the constructor, so the branch
+    # that prints the numpy value (eager and not graph mode) can never run; it is dead code.
+    # Builds a short text with the variable name, shape and dtype name. Returns the string.
     if context.executing_eagerly() and not self._in_graph_mode:
       return "<tf.Variable '%s' shape=%s dtype=%s, numpy=%s>" % (
           self.name, self.get_shape(), self.dtype.name,
@@ -284,6 +336,18 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
                       synchronization=None,
                       aggregation=None,
                       shape=None):
+    # [FUNCTION DOC]
+    # HELPER: argument-based initialization used by the constructor.
+    # Validates inputs (initial value required; collections must be a list, tuple or set;
+    # constraint must be callable; each raises a value error), records the graph key, handles
+    # checkpoint initial values, resolves synchronization, aggregation and trainable, and adds
+    # the trainable collection when needed. Inside the init scope it raises a runtime error if
+    # eager execution is active. Creates the variable op (initial value computed under an
+    # initializer scope with colocation attribute if it is a callable, otherwise from the
+    # converted tensor, rejecting initializers inside control flow with a value error), checks
+    # the shape is fully defined when validating, creates the initializer assign op and a read
+    # snapshot (on the caching device or colocated with the variable), and adds the variable to
+    # the collections. Sets many instance attributes. Expected shape is ignored. Returns nothing.
     """Creates a new variable from arguments.
 
     Args:
@@ -462,6 +526,13 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
     self._constraint = constraint
 
   def _init_from_proto(self, variable_def, import_scope=None):
+    # [FUNCTION DOC]
+    # HELPER: restoration path used by the constructor.
+    # Asserts the input is a variable definition message, then looks up the existing graph
+    # elements for the variable, initializer, optional initial value and snapshot (names
+    # prefixed with the optional import scope), restores synchronization, aggregation and
+    # trainable from the message, and restores slice info if present. Caching device and
+    # constraint are reset to nothing. Does not create new ops. Returns nothing.
     """Recreates the Variable object from a `VariableDef` protocol buffer.
 
     Args:
@@ -507,10 +578,16 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
     self._constraint = None
 
   def _as_graph_element(self):
+    # [FUNCTION DOC]
+    # HELPER: hook used by graph lookup to turn this variable into a graph element.
+    # Returns the underlying variable tensor.
     """Conversion function for Graph.as_graph_element()."""
     return self._variable
 
   def value(self):
+    # [FUNCTION DOC]
+    # Returns the cached read snapshot tensor created at construction. It adds no ops; the
+    # tensor is not assignable and may alias the live variable on the same device.
     """Returns the last snapshot of this variable.
 
     You usually do not need to call this method as all ops that need the value
@@ -530,6 +607,9 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
     return self._snapshot
 
   def read_value(self):
+    # [FUNCTION DOC]
+    # Adds a new identity op named read on the variable in the current context (respecting
+    # control dependencies and device scopes) and returns its output tensor.
     """Returns the value of this variable, read in the current context.
 
     Can be different from value() if it's on another device, with control
@@ -541,6 +621,8 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
     return array_ops.identity(self._variable, name="read")
 
   def _ref(self):
+    # [FUNCTION DOC]
+    # HELPER: returns the reference-typed variable tensor, for ops that need to assign to it.
     """Returns a reference to this variable.
 
     You usually do not need to call this method as all ops that need a reference
@@ -557,6 +639,10 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
     return self._variable
 
   def set_shape(self, shape):
+    # [FUNCTION DOC]
+    # Overrides the static shape of both the reference tensor and the snapshot tensor with the
+    # given shape. Mutates graph tensor metadata; may raise a value error if incompatible with
+    # the existing shape. Returns nothing.
     """Overrides the shape for this variable.
 
     Args:
@@ -567,17 +653,27 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
 
   @property
   def trainable(self):
+    # [FUNCTION DOC]
+    # Property returning whether the variable is trainable, as resolved at construction.
     return self._trainable
 
   @property
   def synchronization(self):
+    # [FUNCTION DOC]
+    # Property returning the synchronization mode resolved at construction.
     return self._synchronization
 
   @property
   def aggregation(self):
+    # [FUNCTION DOC]
+    # Property returning the aggregation mode resolved at construction.
     return self._aggregation
 
   def eval(self, session=None):
+    # [FUNCTION DOC]
+    # Evaluates the variable in a session. Input session is optional (default session used if
+    # nothing). Runs the graph, adds no ops, and returns the value as a numpy array. Raises an
+    # error if there is no usable session or the variable is uninitialized.
     """In a session, computes and returns the value of this variable.
 
     This is not a graph construction method, it does not add ops to the graph.
@@ -611,6 +707,9 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
 
   @property
   def initial_value(self):
+    # [FUNCTION DOC]
+    # Property returning the tensor used to initialize the variable (nothing if the variable was
+    # restored from a definition lacking it). Does not run the initializer.
     """Returns the Tensor used as the initial value for the variable.
 
     Note that this is different from `initialized_value()` which runs
@@ -625,6 +724,8 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
 
   @property
   def constraint(self):
+    # [FUNCTION DOC]
+    # Property returning the constraint callable given at construction, or nothing.
     """Returns the constraint function associated with this variable.
 
     Returns:
@@ -634,6 +735,10 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
     return self._constraint
 
   def assign(self, value, use_locking=False, name=None, read_value=True):
+    # [FUNCTION DOC]
+    # Adds an assign op that stores value into the variable. Inputs: value (tensor), use_locking
+    # (lock during the update, default false), name (optional op name), read_value (default true).
+    # Returns the assign output tensor if read_value is true, otherwise the assign operation.
     """Assigns a new value to the variable.
 
     This is essentially a shortcut for `assign(self, value)`.
@@ -656,6 +761,10 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
     return assign.op
 
   def assign_add(self, delta, use_locking=False, name=None, read_value=True):
+    # [FUNCTION DOC]
+    # Adds an in-place add op that adds delta to the variable. Inputs: delta (tensor),
+    # use_locking (default false), name (optional), read_value (default true). Returns the new
+    # value tensor, or the operation itself when read_value is false.
     """Adds a value to this variable.
 
      This is essentially a shortcut for `assign_add(self, delta)`.
@@ -678,6 +787,10 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
     return assign.op
 
   def assign_sub(self, delta, use_locking=False, name=None, read_value=True):
+    # [FUNCTION DOC]
+    # Adds an in-place subtract op that subtracts delta from the variable. Inputs: delta
+    # (tensor), use_locking (default false), name (optional), read_value (default true).
+    # Returns the new value tensor, or the operation itself when read_value is false.
     """Subtracts a value from this variable.
 
     This is essentially a shortcut for `assign_sub(self, delta)`.
@@ -700,6 +813,10 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
     return assign.op
 
   def scatter_sub(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # Subtracts sparse slices (indices and values) from the variable rows. Inputs: sparse_delta
+    # (must be an indexed-slices object), use_locking (default false), name (optional). Raises a
+    # type error otherwise. Returns the tensor holding the updated variable.
     """Subtracts `tf.IndexedSlices` from this variable.
 
     Args:
@@ -724,6 +841,10 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
         name=name)
 
   def scatter_add(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # Adds sparse slices to the variable rows. Inputs: sparse_delta (indexed-slices object),
+    # use_locking (default false), name (optional). Raises a type error if sparse_delta is of
+    # the wrong type. Returns the tensor holding the updated variable.
     """Adds `tf.IndexedSlices` to this variable.
 
     Args:
@@ -748,6 +869,10 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
         name=name)
 
   def scatter_max(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # Replaces variable rows by the element-wise maximum of themselves and the given slices.
+    # Inputs: sparse_delta (indexed-slices object), use_locking (default false), name
+    # (optional). Raises a type error for a wrong type. Returns the updated variable tensor.
     """Updates this variable with the max of `tf.IndexedSlices` and itself.
 
     Args:
@@ -773,6 +898,10 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
         name=name)
 
   def scatter_min(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # Replaces variable rows by the element-wise minimum of themselves and the given slices.
+    # Inputs: sparse_delta (indexed-slices object), use_locking (default false), name
+    # (optional). Raises a type error for a wrong type. Returns the updated variable tensor.
     """Updates this variable with the min of `tf.IndexedSlices` and itself.
 
     Args:
@@ -798,6 +927,10 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
         name=name)
 
   def scatter_mul(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # Multiplies variable rows by the given slices. Inputs: sparse_delta (indexed-slices
+    # object), use_locking (default false), name (optional). Raises a type error for a wrong
+    # type. Returns the updated variable tensor.
     """Multiply this variable by `tf.IndexedSlices`.
 
     Args:
@@ -822,6 +955,10 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
         name=name)
 
   def scatter_div(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # Divides variable rows by the given slices. Inputs: sparse_delta (indexed-slices object),
+    # use_locking (default false), name (optional). Raises a type error for a wrong type.
+    # Returns the updated variable tensor.
     """Divide this variable by `tf.IndexedSlices`.
 
     Args:
@@ -846,6 +983,10 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
         name=name)
 
   def scatter_update(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # Overwrites variable rows with the given slices. Inputs: sparse_delta (indexed-slices
+    # object), use_locking (default false), name (optional). Raises a type error for a wrong
+    # type. Returns the updated variable tensor.
     """Assigns `tf.IndexedSlices` to this variable.
 
     Args:
@@ -870,6 +1011,13 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
         name=name)
 
   def batch_scatter_update(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring promises a type error for a non-indexed-slices input, but no
+    # type check exists here; a wrong type fails with an attribute error instead. Also the
+    # name is passed on but the locking flag semantics follow the state ops helper.
+    # Assigns slices batch-wise: leading dimensions of indices and variable must match.
+    # Inputs: sparse_delta (object with indices and values), use_locking (default false), name
+    # (optional). Delegates to the state ops batch scatter helper and returns its result.
     """Assigns `tf.IndexedSlices` to this variable batch-wise.
 
     Analogous to `batch_gather`. This assumes that this variable and the
@@ -922,6 +1070,10 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
         name=name)
 
   def scatter_nd_sub(self, indices, updates, name=None):
+    # [FUNCTION DOC]
+    # Subtracts update values from individual elements or slices of the variable at the given
+    # multi-dimensional indices. Inputs: indices (integer tensor), updates (tensor), name
+    # (optional). Always uses locking. Returns the tensor with the updated variable.
     """Applies sparse subtraction to individual values or slices in a Variable.
 
     `ref` is a `Tensor` with rank `P` and `indices` is a `Tensor` of rank `Q`.
@@ -971,6 +1123,10 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
         self._variable, indices, updates, use_locking=True, name=name)
 
   def scatter_nd_add(self, indices, updates, name=None):
+    # [FUNCTION DOC]
+    # Adds update values to individual elements or slices of the variable at the given
+    # multi-dimensional indices. Inputs: indices (integer tensor), updates (tensor), name
+    # (optional). Always uses locking. Returns the tensor with the updated variable.
     """Applies sparse addition to individual values or slices in a Variable.
 
     `ref` is a `Tensor` with rank `P` and `indices` is a `Tensor` of rank `Q`.
@@ -1020,6 +1176,10 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
         self._variable, indices, updates, use_locking=True, name=name)
 
   def scatter_nd_update(self, indices, updates, name=None):
+    # [FUNCTION DOC]
+    # Overwrites individual elements or slices of the variable at the given multi-dimensional
+    # indices. Inputs: indices (integer tensor), updates (tensor), name (optional). Always uses
+    # locking. Returns the tensor with the updated variable.
     """Applies sparse assignment to individual values or slices in a Variable.
 
     `ref` is a `Tensor` with rank `P` and `indices` is a `Tensor` of rank `Q`.
@@ -1069,6 +1229,12 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
         self._variable, indices, updates, use_locking=True, name=name)
 
   def scatter_nd_max(self, indices, updates, name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring return section says the result holds the value after a
+    # scattered addition, but the op computes an element-wise maximum.
+    # Replaces elements or slices at the given multi-dimensional indices with the maximum of the
+    # current and update values. Inputs: indices (integer tensor), updates (tensor), name
+    # (optional). Always uses locking. Returns the tensor with the updated variable.
     """Updates this variable with the max of `tf.IndexedSlices` and itself.
 
     `ref` is a `Tensor` with rank `P` and `indices` is a `Tensor` of rank `Q`.
@@ -1102,6 +1268,12 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
         self._variable, indices, updates, use_locking=True, name=name)
 
   def scatter_nd_min(self, indices, updates, name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring return section says the result holds the value after a
+    # scattered addition, but the op computes an element-wise minimum.
+    # Replaces elements or slices at the given multi-dimensional indices with the minimum of the
+    # current and update values. Inputs: indices (integer tensor), updates (tensor), name
+    # (optional). Always uses locking. Returns the tensor with the updated variable.
     """Updates this variable with the min of `tf.IndexedSlices` and itself.
 
     `ref` is a `Tensor` with rank `P` and `indices` is a `Tensor` of rank `Q`.
@@ -1137,6 +1309,11 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
   def _strided_slice_assign(self, begin, end, strides, value, name, begin_mask,
                             end_mask, ellipsis_mask, new_axis_mask,
                             shrink_axis_mask):
+    # [FUNCTION DOC]
+    # HELPER: backs slice-assignment on variables (indexing with assignment).
+    # Forwards begin, end, strides, value, name and the five slice masks (begin, end, ellipsis,
+    # new axis, shrink axis) to the raw strided-slice-assign op using the variable reference.
+    # Returns the op output.
     return gen_array_ops.strided_slice_assign(
         ref=self._ref(),
         begin=begin,
@@ -1152,6 +1329,10 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
 
   @deprecated(None, "Prefer Dataset.range instead.")
   def count_up_to(self, limit):
+    # [FUNCTION DOC]
+    # Deprecated. Adds an op that increments the variable by one and returns the previous value;
+    # when the increment would exceed limit, the op fails with an out-of-range error at run
+    # time. Input limit is the maximum value. Returns the pre-increment value tensor.
     """Increments this variable until it reaches `limit`.
 
     When that Op is run it tries to increment the variable by `1`. If
@@ -1176,6 +1357,11 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
   # Conversion to tensor.
   @staticmethod
   def _TensorConversionFunction(v, dtype=None, name=None, as_ref=False):  # pylint: disable=invalid-name
+    # [FUNCTION DOC]
+    # HELPER: registered converter making variables usable wherever tensors are accepted.
+    # Inputs: v (the variable), dtype (optional requested type), name (ignored), as_ref (return
+    # the reference tensor instead of the value). Raises a value error if the requested dtype is
+    # incompatible with the variable's dtype. Returns the reference tensor or the value snapshot.
     """Utility function for converting a Variable to a Tensor."""
     _ = name
     if dtype and not dtype.is_compatible_with(v.dtype):
@@ -1198,41 +1384,58 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Property returning the cached full name of the variable op.
     """The name of this variable."""
     return self._name
 
   @property
   def initializer(self) -> ops.Operation:
+    # [FUNCTION DOC]
+    # Property returning the assign operation that sets the variable to its initial value.
     """The initializer operation for this variable."""
     return self._initializer_op
 
   @property
   def device(self):
+    # [FUNCTION DOC]
+    # Property returning the device string of the variable op.
     """The device of this variable."""
     return self._variable.device
 
   @property
   def dtype(self) -> dtypes.DType:
+    # [FUNCTION DOC]
+    # Property returning the data type of the variable tensor (the reference type).
     """The `DType` of this variable."""
     return self._variable.dtype
 
   @property
   def op(self) -> ops.Operation:
+    # [FUNCTION DOC]
+    # Property returning the operation that produces the variable tensor.
     """The `Operation` of this variable."""
     return self._variable.op
 
   @property
   def graph(self) -> ops.Graph:
+    # [FUNCTION DOC]
+    # Property returning the graph that contains the variable.
     """The `Graph` of this variable."""
     return self._variable.graph
 
   @property
   def _distribute_strategy(self):
+    # [FUNCTION DOC]
+    # Property that always returns nothing, because reference variables are never created under
+    # a distribution strategy.
     """The `tf.distribute.Strategy` that this variable was created under."""
     return None  # Ref variables are never created inside a strategy.
 
   @property
   def shape(self):
+    # [FUNCTION DOC]
+    # Property returning the static shape of the variable tensor as a shape object.
     """The `TensorShape` of this variable.
 
     Returns:
@@ -1241,6 +1444,12 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
     return self._variable.get_shape()
 
   def to_proto(self, export_scope=None):
+    # [FUNCTION DOC]
+    # Serializes the variable to a variable definition message. Input export_scope is an
+    # optional name scope to strip from node names. If given and the variable name does not
+    # start with it, returns nothing. Otherwise fills variable name, initial value name (if
+    # any), trainable flag, synchronization and aggregation values, initializer name, snapshot
+    # name and optional slice info, and returns the message.
     """Converts a `Variable` to a `VariableDef` protocol buffer.
 
     Args:
@@ -1273,6 +1482,10 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
       return None
 
   def __iadd__(self, other):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: despite being an in-place operator it does not update the variable; it
+    # returns a new tensor equal to the sum, so the name is rebound to a tensor.
+    # Logs a deprecation warning once (first call only) and returns self plus other.
     logging.log_first_n(
         logging.WARN, "Variable += will be deprecated. Use variable.assign_add"
         " if you want assignment to the variable value or 'x = x + y'"
@@ -1280,6 +1493,9 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
     return self + other
 
   def __isub__(self, other):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: not truly in-place; returns a new tensor equal to the difference.
+    # Logs a deprecation warning once and returns self minus other.
     logging.log_first_n(
         logging.WARN, "Variable -= will be deprecated. Use variable.assign_sub"
         " if you want assignment to the variable value or 'x = x - y'"
@@ -1287,6 +1503,9 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
     return self - other
 
   def __imul__(self, other):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: not truly in-place; returns a new tensor equal to the product.
+    # Logs a deprecation warning once and returns self times other.
     logging.log_first_n(
         logging.WARN,
         "Variable *= will be deprecated. Use `var.assign(var * other)`"
@@ -1295,6 +1514,9 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
     return self * other
 
   def __idiv__(self, other):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: legacy Python 2 division hook, not truly in-place; returns a new tensor.
+    # Logs a deprecation warning once and returns self divided by other.
     logging.log_first_n(
         logging.WARN,
         "Variable /= will be deprecated. Use `var.assign(var / other)`"
@@ -1303,6 +1525,9 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
     return self / other
 
   def __itruediv__(self, other):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: not truly in-place; returns a new tensor equal to the quotient.
+    # Logs a deprecation warning once and returns self divided by other.
     logging.log_first_n(
         logging.WARN,
         "Variable /= will be deprecated. Use `var.assign(var / other)`"
@@ -1311,6 +1536,10 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
     return self / other
 
   def __irealdiv__(self, other):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: not a standard Python hook name, so it is likely never called; also not
+    # truly in-place.
+    # Logs a deprecation warning once and returns self divided by other.
     logging.log_first_n(
         logging.WARN,
         "Variable /= will be deprecated. Use `var.assign(var / other)`"
@@ -1319,6 +1548,9 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
     return self / other
 
   def __ipow__(self, other):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: not truly in-place; returns a new tensor equal to the power.
+    # Logs a deprecation warning once and returns self raised to other.
     logging.log_first_n(
         logging.WARN,
         "Variable **= will be deprecated. Use `var.assign(var ** other)`"
@@ -1327,10 +1559,18 @@ class RefVariable(variable_v1.VariableV1, core.Tensor):
     return self**other
 
   def _serialize_to_tensors(self):
+    # [FUNCTION DOC]
+    # HELPER: checkpoint saving hook. Returns a mapping from the standard variable value key to
+    # this variable.
     """Implements Trackable._serialize_to_tensors."""
     return {trackable.VARIABLE_VALUE_KEY: self}
 
   def _restore_from_tensors(self, restored_tensors):
+    # [FUNCTION DOC]
+    # HELPER: checkpoint restore hook. Input is a mapping from keys to restored tensors; takes
+    # the entry for the standard variable value key (missing key raises a key error) and adds
+    # an assign op storing it, validating shape only if the variable shape is fully defined.
+    # Returns the assign result.
     """Implements Trackable._restore_from_tensors."""
     restored_tensor = restored_tensors[trackable.VARIABLE_VALUE_KEY]
     return state_ops.assign(

@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# Python front end for TensorFlow's stateful random number ops. It wraps the generated raw random
+# ops (re-exported here through a wildcard import) with user-friendly functions: normal,
+# truncated normal, uniform, shuffle, multinomial/categorical, gamma and Poisson sampling.
+# Each wrapper converts arguments to tensors of the requested dtype, derives the graph-level and
+# op-level seeds from the global seed machinery, calls the raw op and, where possible, sets the
+# static output shape. Public functions are exported under the tf.random namespace (and legacy
+# v1 names, some deprecated) and support type-based dispatch.
+# Import-time side effects: registers the stateful random ops as not differentiable (except where
+# a gradient is registered elsewhere) and applies the export, dispatch and deprecation decorators.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -45,6 +55,14 @@ def random_normal(shape,
                   dtype=dtypes.float32,
                   seed=None,
                   name=None):
+  # [FUNCTION DOC]
+  # Creates a tensor of normally distributed random values. Inputs: shape (1-D integer tensor or
+  # sequence giving the output shape), mean and stddev (scalars or tensors broadcastable to each
+  # other, converted to the given dtype), dtype (float type, default float32), seed (optional
+  # integer combined with the global seed) and name (optional op name scope). Draws standard
+  # normal samples with the raw op, scales by stddev, adds mean, and sets the static shape when
+  # it can be inferred. Returns the resulting tensor. Conversion or dtype problems surface as
+  # errors from tensor conversion. No state is mutated besides the random op's seed use.
   """Outputs random values from a normal distribution.
 
   Example that generates a new set of random values every time:
@@ -106,6 +124,16 @@ def parameterized_truncated_normal(shape,
                                    dtype=dtypes.float32,
                                    seed=None,
                                    name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says values beyond 2 standard deviations are re-picked, but this
+  # function takes explicit lower and upper bounds (minvals, maxvals, default -2 and 2) in
+  # absolute value space and passes them straight to the raw op; the bounds are not relative to
+  # the mean unless the caller makes them so. The seed argument is documented as an integer only.
+  # Creates random values from a normal distribution truncated to the interval between minvals
+  # and maxvals. Inputs: shape (1-D integer tensor or sequence), means, stddevs, minvals, maxvals
+  # (scalars or tensors converted to dtype), dtype (default float32), seed (optional integer) and
+  # name (optional). Derives both seeds from the seed machinery, calls the raw parameterized
+  # truncated normal op, sets the static shape if known and returns the tensor.
   """Outputs random values from a truncated normal distribution.
 
   The generated values follow a normal distribution with specified mean and
@@ -162,6 +190,13 @@ def truncated_normal(shape,
                      dtype=dtypes.float32,
                      seed=None,
                      name=None):
+  # [FUNCTION DOC]
+  # Creates random values from a normal distribution in which samples more than two standard
+  # deviations from the mean are discarded and redrawn. Inputs: shape (1-D integer tensor or
+  # sequence), mean and stddev (scalars converted to dtype), dtype (floating type, default
+  # float32), seed (optional integer) and name (optional). Samples a standard truncated normal
+  # with the raw op, scales by stddev and shifts by mean, sets the static shape when known and
+  # returns the tensor. Seeds come from the global/op seed logic.
   """Outputs random values from a truncated normal distribution.
 
   The values are drawn from a normal distribution with specified mean and
@@ -217,6 +252,18 @@ def random_uniform(shape,
                    dtype=dtypes.float32,
                    seed=None,
                    name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: an inline comment inside says an identity comparison is used for the fast path,
+  # but the code actually uses an integer type check plus an equality test. Also, only Python
+  # integers 0 and 1 trigger the fast path; float bounds like zero point zero go the slow path.
+  # Creates random values uniformly distributed in the half-open range from minval (inclusive)
+  # to maxval (exclusive). Inputs: shape (1-D integer tensor or sequence), minval (default 0),
+  # maxval (default 1 for floating dtypes, mandatory for integer dtypes), dtype (float16,
+  # bfloat16, float32, float64, int32 or int64; default float32), seed (optional integer) and
+  # name (optional). Returns a tensor of the requested shape and dtype. Integer dtypes use the
+  # integer uniform op directly with converted bounds; float dtypes sample in the unit range and
+  # scale and shift as needed. Raises a value error for an unsupported dtype or when maxval is
+  # missing with an integer dtype. Also sets the static shape of the result when known.
   """Outputs random values from a uniform distribution.
 
   The generated values follow a uniform distribution in the range
@@ -327,6 +374,11 @@ ops.NotDifferentiable("RandomUniform")
 @dispatch.add_dispatch_support
 @deprecation.deprecated_endpoints("random_shuffle")
 def random_shuffle(value, seed=None, name=None):
+  # [FUNCTION DOC]
+  # Randomly permutes a tensor along its first dimension. Inputs: value (tensor to shuffle),
+  # seed (optional integer combined with the global seed) and name (optional). Obtains the two
+  # seeds and calls the raw shuffle op. Returns a tensor with the same shape and dtype as the
+  # input. The input is not modified.
   """Randomly shuffles a tensor along its first dimension.
 
   The tensor is shuffled along dimension 0, such that each `value[j]` is mapped
@@ -364,6 +416,14 @@ ops.NotDifferentiable("RandomShuffle")
 @deprecation.deprecated(
     date=None, instructions="Use `tf.random.categorical` instead.")
 def multinomial(logits, num_samples, seed=None, name=None, output_dtype=None):
+  # [FUNCTION DOC]
+  # Deprecated v1 entry point that draws class indices from a categorical distribution defined
+  # by unnormalized log probabilities. Inputs: logits (2-D tensor of batch by classes),
+  # num_samples (scalar count per row), seed (optional integer), name (optional) and output_dtype
+  # (int32 or int64; None means int64). Opens a name scope and delegates to the shared
+  # implementation. Returns an integer tensor of shape batch by num_samples. Invalid output
+  # dtype raises a value error from the shared implementation. Superseded by the categorical
+  # function.
   """Draws samples from a multinomial distribution.
 
   Example:
@@ -394,6 +454,12 @@ def multinomial(logits, num_samples, seed=None, name=None, output_dtype=None):
 @tf_export("random.categorical")
 @dispatch.add_dispatch_support
 def categorical(logits, num_samples, dtype=None, seed=None, name=None):
+  # [FUNCTION DOC]
+  # Draws samples from a categorical distribution. Inputs: logits (2-D tensor of batch by classes
+  # holding unnormalized log probabilities), num_samples (scalar number of draws per row), dtype
+  # (int32 or int64 output type; None means int64), seed (optional integer) and name (optional).
+  # Opens a name scope and delegates to the shared implementation. Returns an integer tensor of
+  # shape batch by num_samples. Raises a value error for an unsupported dtype.
   """Draws samples from a categorical distribution.
 
   Example:
@@ -422,6 +488,12 @@ def categorical(logits, num_samples, dtype=None, seed=None, name=None):
 
 
 def multinomial_categorical_impl(logits, num_samples, dtype, seed):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation behind the multinomial and categorical public functions.
+  # Converts logits to a tensor, resolves dtype (missing means int64, only int32 and int64
+  # accepted, otherwise raises a value error), derives the two seeds and calls the raw
+  # multinomial op. Returns the integer sample tensor. Inputs: logits, num_samples, dtype, seed
+  # (all required positional).
   """Implementation for random.categorical (v1) and random.categorical (v2)."""
   logits = ops.convert_to_tensor(logits, name="logits")
   dtype = dtypes.as_dtype(dtype) if dtype else dtypes.int64
@@ -439,6 +511,13 @@ ops.NotDifferentiable("Multinomial")
 
 
 def _maybe_set_static_shape_helper(tensor, shape, postfix_tensor):
+  # [FUNCTION DOC]
+  # HELPER: shape-inference glue for the gamma and Poisson samplers.
+  # Only when running in graph (non-eager) mode inside a function-building graph and the tensor
+  # shape is not fully defined: computes the constant value of the sample shape, concatenates
+  # the static shape of postfix_tensor to it and sets that as the tensor's static shape. This
+  # recovers shape information that C++ inference loses across function boundaries. Otherwise
+  # does nothing. Mutates the tensor's static shape; returns nothing.
   if (not context.executing_eagerly() and
       ops.get_default_graph().building_function and
       not tensor.shape.is_fully_defined()):
@@ -457,6 +536,15 @@ def random_gamma(shape,
                  dtype=dtypes.float32,
                  seed=None,
                  name=None):
+  # [FUNCTION DOC]
+  # Draws samples from one or more Gamma distributions. Inputs: shape (1-D integer tensor of the
+  # per-distribution sample shape), alpha (shape parameter, scalar or array), beta (inverse
+  # scale, default 1, broadcast with alpha), dtype (float16, float32 or float64), seed
+  # (optional) and name (optional). Alpha is broadcast against beta, samples are drawn with the
+  # raw gamma op, divided by beta, and floored at the smallest positive value of the dtype to
+  # avoid zero outcomes. Result shape is the sample shape followed by the broadcast parameter
+  # shape. Sets the static shape via the shape helper. Samples are differentiable with respect
+  # to alpha and beta.
   """Draws `shape` samples from each of the given Gamma distribution(s).
 
   `alpha` is the shape parameter describing the distribution(s), and `beta` is
@@ -546,6 +634,11 @@ def random_gamma(shape,
 @dispatch.add_dispatch_support
 @deprecation.deprecated_endpoints("random_poisson")
 def random_poisson(lam, shape, dtype=dtypes.float32, seed=None, name=None):
+  # [FUNCTION DOC]
+  # Legacy (v1) Poisson sampler whose argument order is rate first, then sample shape. Inputs:
+  # lam (rate parameter, scalar or array), shape (1-D integer sample shape), dtype (float16,
+  # float32, float64, int32 or int64), seed (optional) and name (optional). Simply forwards to
+  # the v2 function with the first two arguments swapped and returns its result.
   """Draws `shape` samples from each of the given Poisson distribution(s).
 
   `lam` is the rate parameter describing the distribution(s).
@@ -586,6 +679,12 @@ def random_poisson(lam, shape, dtype=dtypes.float32, seed=None, name=None):
 @tf_export("random.poisson", v1=[])
 @dispatch.add_dispatch_support
 def random_poisson_v2(shape, lam, dtype=dtypes.float32, seed=None, name=None):
+  # [FUNCTION DOC]
+  # Draws samples from Poisson distributions. Inputs: shape (1-D integer sample shape, converted
+  # to an int32 tensor), lam (rate parameter, scalar or array), dtype (float16, float32,
+  # float64, int32 or int64; default float32), seed (optional) and name (optional). Calls the raw
+  # Poisson op with both seeds, then sets the static shape through the shape helper. Returns a
+  # tensor of shape sample shape followed by the shape of lam.
   """Draws `shape` samples from each of the given Poisson distribution(s).
 
   `lam` is the rate parameter describing the distribution(s).
