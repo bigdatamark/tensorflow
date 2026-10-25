@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# Defines the abstract Variable base class that backs the public variable type, plus the
+# synchronization and aggregation enums used by distributed variables, the metaclass allowing
+# variable construction to be redirected, helpers that rewrite initial values to avoid
+# uninitialized dependencies, the PartitionedVariable wrapper, graph-collection accessors
+# (global, local, model, trainable, moving-average variables), initializer builders and
+# uninitialized-variable report utilities.
+# Import-time side effects: installs operator overloads on the variable class, and registers a
+# tensor conversion function for partitioned variables. Public names are exported via the export
+# decorators. Most concrete behavior of the abstract class is implemented elsewhere (for example
+# the resource variable module), and the default creator function here forwards to it lazily.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -46,6 +57,12 @@ from tensorflow.python.util.tf_export import tf_export
 
 
 def default_variable_creator_v2(next_creator=None, **kwds):
+  # [FUNCTION DOC]
+  # Default variable creator for the v2 behavior. Lazily imports the resource variable module
+  # (to avoid a circular import) and forwards to its default creator. Inputs: next_creator, an
+  # optional next creator in the creator chain, and arbitrary keyword arguments describing the
+  # variable (initial value, name, dtype and so on). Returns the newly created variable object.
+  # Errors from the delegate propagate unchanged.
   from tensorflow.python.ops import resource_variable_ops  # pylint: disable=g-import-not-at-top
 
   return resource_variable_ops.default_variable_creator_v2(
@@ -53,9 +70,19 @@ def default_variable_creator_v2(next_creator=None, **kwds):
 
 
 def _make_getter(captured_getter, captured_previous):
+  # [FUNCTION DOC]
+  # HELPER: Variable-creator chaining; binds the loop-dependent values at call time.
+  # Takes a getter function and the previous creator in a chain and returns a new getter that
+  # accepts only keyword arguments and calls the captured getter with the captured previous
+  # creator as its first argument. Exists so closures created in a loop do not share the loop
+  # variables. No side effects.
   """To avoid capturing loop variables."""
 
   def getter(**kwargs):
+    # [FUNCTION DOC]
+    # HELPER: Inner closure returned by the creator-binding helper.
+    # Forwards the keyword arguments to the captured getter together with the captured previous
+    # creator, and returns whatever the getter returns.
     return captured_getter(captured_previous, **kwargs)
 
   return getter
@@ -63,6 +90,11 @@ def _make_getter(captured_getter, captured_previous):
 
 @tf_export("VariableSynchronization")
 class VariableSynchronization(enum.Enum):
+  # [CLASS DOC]
+  # Enumeration of when a distributed variable's copies are synchronized: automatic (decided by
+  # the active distribution strategy), none (single copy), on every write, or on read
+  # (aggregated when read). Plain integer-valued enum members; exported publicly under the
+  # variable synchronization name. Used when constructing variables and validating settings.
   """Indicates when a distributed variable will be synced.
 
   * `AUTO`: Indicates that the synchronization will be determined by the current
@@ -91,6 +123,12 @@ class VariableSynchronization(enum.Enum):
 # LINT.IfChange
 @tf_export("VariableAggregation", v1=[])
 class VariableAggregationV2(enum.Enum):
+  # [CLASS DOC]
+  # Enumeration (v2 public API) of how per-replica updates to a distributed variable are
+  # combined: none (error with several replicas), sum, mean, or only the first replica. Member
+  # integer values must match the corresponding variable protocol buffer enum values. Equality is
+  # defined by integer value and also matches members of the v1 aggregation enum; hashing uses
+  # the member value.
   """Indicates how a distributed variable will be aggregated.
 
   `tf.distribute.Strategy` distributes a model by making multiple copies
@@ -128,9 +166,19 @@ class VariableAggregationV2(enum.Enum):
   ONLY_FIRST_REPLICA = 3
 
   def __hash__(self):
+    # [FUNCTION DOC]
+    # Returns the hash of the member's integer value, so members hash consistently with the
+    # custom equality defined on this enum.
     return hash(self.value)
 
   def __eq__(self, other):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the value comparison only handles members of the v1 aggregation enum; other
+    # objects (including plain integers) compare unequal. Equality between the two enums is
+    # one-directional in effect because the v1 enum defines no custom equality.
+    # Equality for aggregation members. Returns true if the other object is the very same
+    # member, or if it is a member of the v1 aggregation enum with the same integer value;
+    # returns false for anything else. Takes the other object to compare; no side effects.
     if self is other:
       return True
     elif isinstance(other, VariableAggregation):
@@ -141,6 +189,11 @@ class VariableAggregationV2(enum.Enum):
 
 @tf_export(v1=["VariableAggregation"])
 class VariableAggregation(enum.Enum):
+  # [CLASS DOC]
+  # Enumeration (v1 public API) of aggregation modes for distributed variables: none, sum, mean,
+  # only first replica, plus a deprecated alias (only first tower) for the first-replica member.
+  # Its documentation text is copied from the v2 enum at import time with a note about the alias.
+  # Defines hashing by member value but no custom equality.
   NONE = 0
   SUM = 1
   MEAN = 2
@@ -148,6 +201,8 @@ class VariableAggregation(enum.Enum):
   ONLY_FIRST_TOWER = 3  # DEPRECATED
 
   def __hash__(self):
+    # [FUNCTION DOC]
+    # Returns the hash of the member's integer value.
     return hash(self.value)
 
 
@@ -165,6 +220,17 @@ if VariableAggregationV2.__doc__ is not None:
 
 def validate_synchronization_aggregation_trainable(synchronization, aggregation,
                                                    trainable, name):
+  # [FUNCTION DOC]
+  # HELPER: Argument normalization for variable constructors.
+  # KNOWN ISSUE: the defaulted aggregation is a member of the v1 enum while converted values are
+  # members of the v2 enum, so the returned aggregation type is inconsistent.
+  # Normalizes user-supplied synchronization, aggregation and trainable settings. A missing
+  # aggregation becomes the v1 "none" member; a value that is not already a member of either
+  # aggregation enum is converted through the v2 enum. A missing synchronization becomes the
+  # automatic mode, otherwise it is converted through the synchronization enum. A missing
+  # trainable flag becomes true unless synchronization is on-read. The name is only used in
+  # error messages. Returns a tuple of (synchronization, aggregation, trainable).
+  # Raises a value error for an unrecognized aggregation or synchronization value.
   """Given user-provided variable properties, sets defaults and validates."""
   if aggregation is None:
     aggregation = VariableAggregation.NONE
@@ -192,10 +258,20 @@ def validate_synchronization_aggregation_trainable(synchronization, aggregation,
 
 
 class VariableMetaclass(abc.ABCMeta):
+  # [CLASS DOC]
+  # Metaclass of the variable base class (derived from the abstract base class metaclass). It
+  # intercepts instance construction so a class can supply its own construction hook that may
+  # return a ready-made object (for example a different variable implementation).
   """Metaclass to allow construction of tf.Variable to be overridden."""
 
   @traceback_utils.filter_traceback
   def __call__(cls, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Called when the class is invoked to create an instance. If the class has a callable
+    # variable-call hook, it is invoked with all positional and keyword arguments; a non-null
+    # result is returned directly as the created object. Otherwise (no hook, or the hook returns
+    # null) normal construction proceeds through the parent metaclass. Tracebacks from this
+    # frame are filtered. Exceptions from the hook or constructor propagate.
     if hasattr(cls, "_variable_call") and callable(cls._variable_call):
       variable_call = cls._variable_call(*args, **kwargs)
       if variable_call is not None:
@@ -206,6 +282,16 @@ class VariableMetaclass(abc.ABCMeta):
 @tf_export("Variable", v1=[])
 # TODO(mdan): This should subclass core.Tensor, and not all its subclasses?
 class Variable(trackable.Trackable, metaclass=VariableMetaclass):
+  # [CLASS DOC]
+  # Abstract base class of all TensorFlow variables: shared, persistent, mutable state with a
+  # fixed dtype and shape. Most methods here are interface stubs that raise a not-implemented
+  # error; concrete subclasses (such as resource variables) override them. Provides shared
+  # implementations: operator overloading for tensor math (installed after the class body),
+  # conversion to tensors, equality and hashing that depend on the tensor-equality mode, a
+  # reference wrapper for use as dictionary keys, loading values through a session, and
+  # save-slice bookkeeping for partitioned variables (nested save-slice info class). Creating
+  # an instance of the base class itself is routed by the metaclass through the creator chain so
+  # the real implementation is substituted. Trackable for checkpointing.
   """See the [variable guide](https://tensorflow.org/guide/variable).
 
   A variable maintains shared, persistent state manipulated by a program.
@@ -318,6 +404,15 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
                shape=None,
                experimental_enable_variable_lifting=True,
                ):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the abstract constructor documents many arguments but never uses them; it only
+    # raises a not-implemented error. Real construction happens in the metaclass hook or a
+    # subclass.
+    # Abstract constructor. Parameters (all optional keywords): initial value, trainable flag,
+    # shape validation flag, caching device (deprecated, ignored), name, variable definition
+    # protocol buffer, dtype, import scope, constraint function, synchronization mode,
+    # aggregation mode, explicit shape and a flag controlling lifting out of compiled functions.
+    # Always raises a not-implemented error; returns nothing.
     """Creates a new variable with value `initial_value`.
 
     Args:
@@ -387,9 +482,14 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
     raise NotImplementedError
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Abstract string representation; always raises a not-implemented error in the base class.
     raise NotImplementedError
 
   def value(self):
+    # [FUNCTION DOC]
+    # Abstract accessor for the last snapshot of the variable value as a tensor. Takes no
+    # inputs; the base class always raises a not-implemented error.
     """Returns the last snapshot of this variable.
 
     You usually do not need to call this method as all ops that need the value
@@ -409,6 +509,9 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
     raise NotImplementedError
 
   def read_value(self):
+    # [FUNCTION DOC]
+    # Abstract accessor returning the current value as a tensor read in the current context
+    # (device and control dependencies). Always raises a not-implemented error here.
     """Returns the value of this variable, read in the current context.
 
     Can be different from value() if it's on another device, with control
@@ -420,6 +523,9 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
     raise NotImplementedError
 
   def set_shape(self, shape):
+    # [FUNCTION DOC]
+    # Abstract method to override the static shape of the variable with the given tensor shape.
+    # Always raises a not-implemented error in the base class.
     """Overrides the shape for this variable.
 
     Args:
@@ -429,17 +535,30 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
 
   @property
   def trainable(self):
+    # [FUNCTION DOC]
+    # Abstract property for whether gradient tapes watch this variable. Raises a not-implemented
+    # error in the base class.
     raise NotImplementedError
 
   @property
   def synchronization(self):
+    # [FUNCTION DOC]
+    # Abstract property for the synchronization mode of the variable. Raises a not-implemented
+    # error in the base class.
     raise NotImplementedError
 
   @property
   def aggregation(self):
+    # [FUNCTION DOC]
+    # Abstract property for the aggregation mode of the variable. Raises a not-implemented error
+    # in the base class.
     raise NotImplementedError
 
   def eval(self, session=None):
+    # [FUNCTION DOC]
+    # Abstract method that would evaluate the variable in a session (optional session argument;
+    # the default session is meant to be used when omitted) and return a numeric array copy.
+    # Always raises a not-implemented error in the base class; adds no graph operations.
     """In a session, computes and returns the value of this variable.
 
     This is not a graph construction method, it does not add ops to the graph.
@@ -475,6 +594,10 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
       None, "Use Variable.read_value. Variables in 2.X are initialized "
       "automatically both in eager and graph (inside tf.defun) contexts.")
   def initialized_value(self):
+    # [FUNCTION DOC]
+    # Deprecated abstract method meant to return the variable value only after its initializer
+    # has run, for use when initializing other variables. Always raises a not-implemented error
+    # in the base class. Decorated to emit a deprecation warning when called.
     """Returns the value of the initialized variable.
 
     You should use this instead of the variable itself to initialize another
@@ -497,6 +620,9 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
 
   @property
   def initial_value(self):
+    # [FUNCTION DOC]
+    # Abstract property for the tensor used as the initial value (not the initialized value).
+    # Raises a not-implemented error in the base class.
     """Returns the Tensor used as the initial value for the variable.
 
     Note that this is different from `initialized_value()` which runs
@@ -511,6 +637,9 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
 
   @property
   def constraint(self):
+    # [FUNCTION DOC]
+    # Abstract property for the optional constraint function given at construction. Raises a
+    # not-implemented error in the base class.
     """Returns the constraint function associated with this variable.
 
     Returns:
@@ -520,6 +649,10 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
     raise NotImplementedError
 
   def assign(self, value, use_locking=False, name=None, read_value=True):
+    # [FUNCTION DOC]
+    # Abstract method to assign a new value tensor to the variable. Inputs: the value, an
+    # optional locking flag, an optional operation name, and a flag choosing whether to return
+    # the updated variable or just the assign operation. Always raises a not-implemented error.
     """Assigns a new value to the variable.
 
     This is essentially a shortcut for `assign(self, value)`.
@@ -538,6 +671,10 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
     raise NotImplementedError
 
   def assign_add(self, delta, use_locking=False, name=None, read_value=True):
+    # [FUNCTION DOC]
+    # Abstract method to add a delta tensor to the variable, with optional locking flag, name and
+    # a flag choosing between returning the updated variable or the operation. Always raises a
+    # not-implemented error in the base class.
     """Adds a value to this variable.
 
      This is essentially a shortcut for `assign_add(self, delta)`.
@@ -556,6 +693,10 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
     raise NotImplementedError
 
   def assign_sub(self, delta, use_locking=False, name=None, read_value=True):
+    # [FUNCTION DOC]
+    # Abstract method to subtract a delta tensor from the variable, with optional locking flag,
+    # name and a flag choosing between returning the updated variable or the operation. Always
+    # raises a not-implemented error in the base class.
     """Subtracts a value from this variable.
 
     This is essentially a shortcut for `assign_sub(self, delta)`.
@@ -574,6 +715,11 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
     raise NotImplementedError
 
   def scatter_sub(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # Abstract method to subtract a sparse indexed-slices delta from the variable. Takes the
+    # sparse delta, optional locking flag and name. Documented to raise a type error for a
+    # non-indexed-slices delta in implementations; the base class always raises a
+    # not-implemented error.
     """Subtracts `tf.IndexedSlices` from this variable.
 
     Args:
@@ -590,6 +736,9 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
     raise NotImplementedError
 
   def scatter_add(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # Abstract method to add a sparse indexed-slices delta to the variable. Takes the sparse
+    # delta, optional locking flag and name. Base class always raises a not-implemented error.
     """Adds `tf.IndexedSlices` to this variable.
 
     Args:
@@ -606,6 +755,10 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
     raise NotImplementedError
 
   def scatter_max(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # Abstract method to update the variable with the element-wise maximum of itself and a
+    # sparse indexed-slices delta. Takes the delta, optional locking flag and name. Base class
+    # always raises a not-implemented error.
     """Updates this variable with the max of `tf.IndexedSlices` and itself.
 
     Args:
@@ -623,6 +776,10 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
     raise NotImplementedError
 
   def scatter_min(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # Abstract method to update the variable with the element-wise minimum of itself and a
+    # sparse indexed-slices delta. Takes the delta, optional locking flag and name. Base class
+    # always raises a not-implemented error.
     """Updates this variable with the min of `tf.IndexedSlices` and itself.
 
     Args:
@@ -640,6 +797,10 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
     raise NotImplementedError
 
   def scatter_mul(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # Abstract method to multiply the variable by a sparse indexed-slices delta at the given
+    # indices. Takes the delta, optional locking flag and name. Base class always raises a
+    # not-implemented error.
     """Multiply this variable by `tf.IndexedSlices`.
 
     Args:
@@ -656,6 +817,10 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
     raise NotImplementedError
 
   def scatter_div(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # Abstract method to divide the variable by a sparse indexed-slices delta at the given
+    # indices. Takes the delta, optional locking flag and name. Base class always raises a
+    # not-implemented error.
     """Divide this variable by `tf.IndexedSlices`.
 
     Args:
@@ -672,6 +837,10 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
     raise NotImplementedError
 
   def scatter_update(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # Abstract method to assign a sparse indexed-slices delta into the variable at its indices.
+    # Takes the delta, optional locking flag and name. Base class always raises a not-implemented
+    # error.
     """Assigns `tf.IndexedSlices` to this variable.
 
     Args:
@@ -688,6 +857,11 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
     raise NotImplementedError
 
   def batch_scatter_update(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # Abstract method to assign an indexed-slices delta batch-wise, where leading dimensions of
+    # the variable, indices and updates are shared and updates apply on the last index dimension.
+    # Takes the delta, optional locking flag and name. The base class always raises a
+    # not-implemented error.
     """Assigns `tf.IndexedSlices` to this variable batch-wise.
 
     Analogous to `batch_gather`. This assumes that this variable and the
@@ -734,6 +908,10 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
     raise NotImplementedError
 
   def scatter_nd_sub(self, indices, updates, name=None):
+    # [FUNCTION DOC]
+    # Abstract method to subtract update values from individual elements or slices of the
+    # variable selected by an integer index tensor. Takes indices, updates and an optional name.
+    # Base class always raises a not-implemented error.
     """Applies sparse subtraction to individual values or slices in a Variable.
 
     Assuming the variable has rank `P` and `indices` is a `Tensor` of rank `Q`.
@@ -780,6 +958,10 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
     raise NotImplementedError
 
   def scatter_nd_add(self, indices, updates, name=None):
+    # [FUNCTION DOC]
+    # Abstract method to add update values to individual elements or slices of the variable
+    # selected by an integer index tensor. Takes indices, updates and an optional name. Base
+    # class always raises a not-implemented error.
     """Applies sparse addition to individual values or slices in a Variable.
 
     The Variable has rank `P` and `indices` is a `Tensor` of rank `Q`.
@@ -826,6 +1008,10 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
     raise NotImplementedError
 
   def scatter_nd_update(self, indices, updates, name=None):
+    # [FUNCTION DOC]
+    # Abstract method to overwrite individual elements or slices of the variable, selected by an
+    # integer index tensor, with the update values. Takes indices, updates and an optional name.
+    # Base class always raises a not-implemented error.
     """Applies sparse assignment to individual values or slices in a Variable.
 
     The Variable has rank `P` and `indices` is a `Tensor` of rank `Q`.
@@ -872,6 +1058,11 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
     raise NotImplementedError
 
   def sparse_read(self, indices, name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the base class raises an attribute error rather than a not-implemented error
+    # like its sibling stubs, signalling that the method is simply unsupported here.
+    # Abstract method that would gather slices of the variable along the first axis for the
+    # given integer indices (optional name). Always raises an attribute error.
     r"""Gather slices from params axis axis according to indices.
 
     This function supports a subset of tf.gather, see tf.gather for details on
@@ -888,6 +1079,11 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
     raise AttributeError
 
   def gather_nd(self, indices, name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the base class raises an attribute error rather than a not-implemented error
+    # like its sibling stubs, signalling that the method is simply unsupported here.
+    # Abstract method that would gather slices of the variable addressed by an integer index
+    # tensor (optional name). Always raises an attribute error.
     r"""Gather slices from `params` into a Tensor with shape specified by `indices`.
 
     See tf.gather_nd for details.
@@ -904,6 +1100,11 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
 
   @deprecated(None, "Prefer Dataset.range instead.")
   def count_up_to(self, limit):
+    # [FUNCTION DOC]
+    # Deprecated abstract method meant to build an operation that increments the variable by one
+    # until the limit is reached, raising an out-of-range error beyond it, and yields the value
+    # before incrementing. Takes the limit. Always raises a not-implemented error in the base
+    # class.
     """Increments this variable until it reaches `limit`.
 
     When that Op is run it tries to increment the variable by `1`. If
@@ -928,6 +1129,12 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
   @deprecated(None,
               "Prefer Variable.assign which has equivalent behavior in 2.X.")
   def load(self, value, session=None):
+    # [FUNCTION DOC]
+    # Deprecated method that loads a new value into the variable. When executing eagerly it
+    # simply assigns the value. In graph mode it uses the given session, or else the default
+    # session, and runs the variable's initializer operation while feeding the new value as the
+    # initializer's second input; this adds no operations to the graph. Returns nothing.
+    # Raises a value error if no session is passed and no default session exists.
     """Load new value into this variable.
 
     Writes new value to variable's memory. Doesn't add ops to the graph.
@@ -973,6 +1180,11 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
   # Conversion to tensor.
   @staticmethod
   def _TensorConversionFunction(v, dtype=None, name=None, as_ref=False):  # pylint: disable=invalid-name
+    # [FUNCTION DOC]
+    # HELPER: Registered as the tensor conversion function for variables.
+    # Converts variable v to a tensor. The name is ignored. If a dtype is requested and is not
+    # compatible with the variable's dtype, raises a value error. With the reference flag set it
+    # returns the variable's reference tensor, otherwise the variable's current value tensor.
     """Utility function for converting a Variable to a Tensor."""
     _ = name
     if dtype and not dtype.is_compatible_with(v.dtype):
@@ -986,6 +1198,11 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
 
   @classmethod
   def _OverloadAllOperators(cls):  # pylint: disable=invalid-name
+    # [FUNCTION DOC]
+    # HELPER: Class setup run once at import to install operator overloads.
+    # Installs on the class a forwarding overload for every overloadable tensor operator, then
+    # replaces the item-access operator with the variable-specific slicing helper. Mutates the
+    # class; returns nothing.
     """Register overloads for all operators."""
     for operator in tensor_lib.Tensor.OVERLOADABLE_OPERATORS:
       cls._OverloadOperator(operator)
@@ -996,6 +1213,12 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
 
   @classmethod
   def _OverloadOperator(cls, operator):  # pylint: disable=invalid-name
+    # [FUNCTION DOC]
+    # HELPER: Used by the operator overload installer for one operator.
+    # Sets on the class a method for the named operator that reads the variable's value and
+    # applies the corresponding tensor operator to it with the remaining arguments. Equality and
+    # inequality are skipped (defined separately) to avoid infinite recursion when used in sets
+    # or under a gradient tape. The wrapper copies metadata from the tensor operator.
     """Defer an operator overload to `tensor_lib.Tensor`.
 
     We pull the operator out of tensor_lib.Tensor dynamically to avoid ordering
@@ -1014,6 +1237,10 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
     tensor_oper = getattr(tensor_lib.Tensor, operator)
 
     def _run_op(a, *args, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: The generated operator method.
+      # Applies the captured tensor operator to the variable's current value tensor plus any
+      # extra positional and keyword arguments, and returns its result.
       # pylint: disable=protected-access
       return tensor_oper(a.value(), *args, **kwargs)
 
@@ -1021,6 +1248,10 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
     setattr(cls, operator, _run_op)
 
   def __hash__(self):
+    # [FUNCTION DOC]
+    # Hash by object identity, except when tensor equality is enabled and execution is eager
+    # outside functions, where variables are deliberately unhashable: raises a type error telling
+    # the caller to use the reference object as a key instead.
     if (
         tensor_lib.Tensor._USE_EQUALITY
         and ops.executing_eagerly_outside_functions()
@@ -1034,6 +1265,10 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
 
   # TODO(gjn): duplicate of math_ops.tensor_equals, consider removing
   def __eq__(self, other):
+    # [FUNCTION DOC]
+    # With tensor equality enabled and eager execution outside functions, returns the
+    # element-wise equality tensor (shape mismatch yields false instead of an error); otherwise
+    # (legacy graph mode) returns true only for the identical object.
     """Compares two variables element-wise for equality."""
     if (
         tensor_lib.Tensor._USE_EQUALITY
@@ -1046,6 +1281,12 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
 
   # TODO(gjn): duplicate of math_ops.tensor_not_equals, consider removing
   def __ne__(self, other):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it compares for equality, but this is the inequality
+    # operator and returns the element-wise not-equal result.
+    # With tensor equality enabled and eager execution outside functions, returns the
+    # element-wise inequality tensor (shape mismatch yields true instead of an error); otherwise
+    # (legacy graph mode) returns true when the objects are not identical.
     """Compares two variables element-wise for equality."""
     if (
         tensor_lib.Tensor._USE_EQUALITY
@@ -1057,6 +1298,9 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
       return self is not other
 
   def __iter__(self):
+    # [FUNCTION DOC]
+    # Returns an iterator over the variable's current value (read via the read-value method);
+    # iterating works only where the resulting tensor itself is iterable (eager execution).
     """When executing eagerly, iterates over the value of the variable."""
     return iter(self.read_value())
 
@@ -1071,11 +1315,17 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Abstract property for the variable's name; raises a not-implemented error in the base class.
     """The name of this variable."""
     raise NotImplementedError
 
   @property
   def _shared_name(self):
+    # [FUNCTION DOC]
+    # HELPER: Name lookup for checkpoint/shared-resource naming.
+    # Returns the variable name with the output suffix (the part from the first colon on)
+    # removed. Relies on the name property; raises a value error if the name has no colon.
     """The shared name of the variable.
 
       Unlike name(), shared_name doesn't have ":0" suffix. It is user-specified
@@ -1088,31 +1338,43 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
 
   @property
   def initializer(self):
+    # [FUNCTION DOC]
+    # Abstract property for the initializer operation; raises a not-implemented error here.
     """The initializer operation for this variable."""
     raise NotImplementedError
 
   @property
   def device(self):
+    # [FUNCTION DOC]
+    # Abstract property for the device placement; raises a not-implemented error here.
     """The device of this variable."""
     raise NotImplementedError
 
   @property
   def dtype(self):
+    # [FUNCTION DOC]
+    # Abstract property for the element data type; raises a not-implemented error here.
     """The `DType` of this variable."""
     raise NotImplementedError
 
   @property
   def op(self):
+    # [FUNCTION DOC]
+    # Abstract property for the underlying graph operation; raises a not-implemented error here.
     """The `Operation` of this variable."""
     raise NotImplementedError
 
   @property
   def graph(self):
+    # [FUNCTION DOC]
+    # Abstract property for the owning graph; raises a not-implemented error here.
     """The `Graph` of this variable."""
     raise NotImplementedError
 
   @property
   def shape(self):
+    # [FUNCTION DOC]
+    # Abstract property for the static tensor shape; raises a not-implemented error here.
     """The `TensorShape` of this variable.
 
     Returns:
@@ -1121,14 +1383,24 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
     raise NotImplementedError
 
   def get_shape(self) -> tensor_shape.TensorShape:
+    # [FUNCTION DOC]
+    # Returns the variable's static shape (an alias for the shape property).
     """Alias of `Variable.shape`."""
     return self.shape
 
   def _gather_saveables_for_checkpoint(self):
+    # [FUNCTION DOC]
+    # HELPER: Checkpoint integration for the trackable machinery.
+    # Returns a mapping with a single entry, keyed by the standard variable-value key, whose
+    # value is the variable itself, indicating the variable is saveable on its own.
     """For implementing `Trackable`. This object is saveable on its own."""
     return {trackable.VARIABLE_VALUE_KEY: self}
 
   def to_proto(self, export_scope=None):
+    # [FUNCTION DOC]
+    # Abstract method to serialize the variable to a variable-definition protocol buffer,
+    # optionally removing the given name scope; documented to return null when outside the scope.
+    # Always raises a not-implemented error in the base class.
     """Converts a `Variable` to a `VariableDef` protocol buffer.
 
     Args:
@@ -1142,10 +1414,17 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
 
   @staticmethod
   def from_proto(variable_def, import_scope=None):
+    # [FUNCTION DOC]
+    # Abstract static method to rebuild a variable from a variable-definition protocol buffer,
+    # with an optional import name scope. Always raises a not-implemented error here.
     """Returns a `Variable` object created from `variable_def`."""
     raise NotImplementedError
 
   def _set_save_slice_info(self, save_slice_info):
+    # [FUNCTION DOC]
+    # HELPER: Used when a variable is one slice of a partitioned variable.
+    # Stores the given save-slice-info object on the variable (mutates the instance). Returns
+    # nothing.
     """Sets the slice info for this `Variable`.
 
     Args:
@@ -1154,13 +1433,22 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
     self._save_slice_info = save_slice_info
 
   def _get_save_slice_info(self):
+    # [FUNCTION DOC]
+    # HELPER: Companion getter to the save-slice-info setter.
+    # Returns the stored save-slice-info object; raises an attribute error if it was never set.
     return self._save_slice_info
 
   @deprecated(None, "Use ref() instead.")
   def experimental_ref(self):
+    # [FUNCTION DOC]
+    # Deprecated alias that returns the hashable reference object from the ref method.
     return self.ref()
 
   def ref(self):
+    # [FUNCTION DOC]
+    # Returns a hashable identity-based reference wrapper around this variable, usable as a key
+    # in sets and dictionaries because variables themselves are unhashable; its dereference
+    # method gives back the variable. Takes no inputs and has no side effects.
     # tf.Tensor also has the same ref() API.  If you update the
     # documentation here, please update tf.Tensor.ref() as well.
     """Returns a hashable reference object to this Variable.
@@ -1219,6 +1507,18 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
       experimental_enable_variable_lifting=None,
       **kwargs,
     ):
+    # [FUNCTION DOC]
+    # HELPER: Construction hook invoked by the metaclass.
+    # KNOWN ISSUE: the lifting flag defaults to null here whereas the documented constructor
+    # default is true, so an unspecified value reaches the creator as null.
+    # Class method called when the class is invoked. If the class is not exactly the base
+    # variable class (a subclass), returns null so normal construction proceeds. Otherwise
+    # builds a chain of creator functions: starting from the default v2 creator, wraps it with
+    # each creator registered on the default graph's creator stack in order, then calls the
+    # outermost creator. A null aggregation is replaced with the "none" member. All other
+    # arguments (initial value, trainable, shape validation, caching device, name, variable
+    # definition, dtype, import scope, constraint, synchronization, aggregation, shape, lifting
+    # flag, extra keywords) are passed through. Returns the created variable.
     """Variable class getter. Useful to force the signature."""
     if cls is not Variable:
       return None
@@ -1247,6 +1547,12 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
     )
 
   class SaveSliceInfo:
+    # [CLASS DOC]
+    # Plain record describing how a variable is a slice of a larger (partitioned) variable for
+    # checkpoint saving: full variable name, full shape, this slice's offset and this slice's
+    # shape (all stored as public attributes). Can be built from explicit values or from a
+    # protocol buffer, parsed from a spec string, and converted back to a protocol buffer or a
+    # spec string. Internal API, subject to change.
     """Information on how to save this Variable as a slice.
 
     Provides internal support for saving variables as slices of a larger
@@ -1267,6 +1573,12 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
                  var_shape=None,
                  save_slice_info_def=None,
                  import_scope=None):
+      # [FUNCTION DOC]
+      # Initializes the record. If a slice-info protocol buffer is given (and non-empty), the
+      # name is read from it with the optional import name scope prepended, and the full shape,
+      # offset and shape are copied into lists; it must be the right protocol buffer type or an
+      # assertion fails. Otherwise the four explicit values (name, full shape, offset, shape,
+      # all optional and defaulting to null) are stored as given. Sets four attributes.
       """Create a `SaveSliceInfo`.
 
       Args:
@@ -1297,6 +1609,11 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
 
     @property
     def spec(self):
+      # [FUNCTION DOC]
+      # Builds the slice specification string used for saving: the full shape dimensions
+      # separated by spaces, a space, then for each dimension the offset and slice size joined by
+      # a comma, with pairs joined by colons. Fails with a type error if shape or offset values
+      # are null.
       """Computes the spec string used for saving."""
       full_shape_str = " ".join("%d" % d for d in self.full_shape) + " "
       sl_spec = ":".join(
@@ -1305,6 +1622,13 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
 
     @classmethod
     def from_spec(cls, spec: str) -> Self:
+      # [FUNCTION DOC]
+      # Class method inverse of the spec property. Takes a spec string (full shape integers
+      # separated by spaces, then colon-separated per-dimension offset,size pairs) and returns a
+      # new instance with full shape, offset and shape lists filled in (the name stays null).
+      # An empty or null spec returns an empty instance. Raises a value error when there is no
+      # space-separated shape part, when a full shape entry is not an integer, when a pair is not
+      # exactly two comma-separated items, or when an offset or size is not an integer.
       """Parses a SaveSliceInfo spec string and returns a SaveSliceInfo object.
 
       Args:
@@ -1372,6 +1696,10 @@ class Variable(trackable.Trackable, metaclass=VariableMetaclass):
       )
 
     def to_proto(self, export_scope=None):
+      # [FUNCTION DOC]
+      # Serializes to a slice-info protocol buffer. When no export scope is given, or the full
+      # name starts with it, returns a buffer with the name (scope stripped), full shape, offset
+      # and shape copied. Otherwise returns null. Takes the optional export name scope.
       """Returns a SaveSliceInfoDef() proto.
 
       Args:
@@ -1400,6 +1728,13 @@ Variable._OverloadAllOperators()  # pylint: disable=protected-access
 
 
 def _try_guard_against_uninitialized_dependencies(name, initial_value):
+  # [FUNCTION DOC]
+  # HELPER: Graph-mode variable construction support for initial values.
+  # Best-effort rewrite of an initial-value tensor so that dependencies on other variables use
+  # those variables' initialized values. Takes the new variable's name (used to name any new
+  # operations) and the initial value tensor. Raises a type error if the value is not a tensor.
+  # If the dependency graph has a cycle, returns the tensor unchanged; otherwise returns the
+  # (possibly rewritten) tensor. May add operations to the graph.
   """Attempt to guard against dependencies on uninitialized variables.
 
   Replace references to variables in `initial_value` with references to the
@@ -1439,6 +1774,11 @@ _UNKNOWN, _STARTED, _FINISHED = range(3)
 
 
 def _has_cycle(op, state):
+  # [FUNCTION DOC]
+  # HELPER: Cycle check used before rewriting initial values.
+  # Depth-first search over an operation's data and control inputs, recording per-operation
+  # progress (started or finished) by operation name in the provided mapping. Returns true if a
+  # cycle is reachable from the given operation, false otherwise. Mutates the state mapping.
   """Detect cycles in the dependencies of `initial_value`."""
   op_state = state.get(op.name, _UNKNOWN)
   if op_state == _STARTED:
@@ -1455,6 +1795,11 @@ def _has_cycle(op, state):
 
 
 def _safe_initial_value_from_tensor(name, tensor, op_cache):
+  # [FUNCTION DOC]
+  # HELPER: Tensor-level step of the initial value rewrite.
+  # Looks up (or computes and caches in the provided mapping from operation names to operations)
+  # the rewritten version of the tensor's producing operation and returns the output of that
+  # operation at the same output index. Inputs: variable name, tensor, memo mapping (mutated).
   """Replace dependencies on variables with their initialized values.
 
   Args:
@@ -1478,6 +1823,16 @@ def _safe_initial_value_from_tensor(name, tensor, op_cache):
 
 
 def _safe_initial_value_from_op(name, op, op_cache):
+  # [FUNCTION DOC]
+  # HELPER: Operation-level step of the initial value rewrite.
+  # Returns the operation unchanged for variable-initialization checks, variable reads and
+  # conditional operations. For variable operations, looks up the variable in the global or local
+  # collections and returns its initialized-value operation if found (else the operation itself).
+  # For other operations, recursively rewrites all inputs; if any input changed, creates a new
+  # operation in the same graph (switch-on-reference becomes switch, name is the old name plus
+  # the variable name with colons replaced by underscores, same output types and attributes)
+  # and returns it; otherwise returns the original. Inputs: variable name, operation, memo
+  # mapping (passed down). Side effect: may create graph operations.
   """Replace dependencies on variables with their initialized values.
 
   Args:
@@ -1529,6 +1884,12 @@ def _safe_initial_value_from_op(name, op, op_cache):
 
 
 def _find_initialized_value_for_variable(variable_op):
+  # [FUNCTION DOC]
+  # HELPER: Looks up the variable object behind a variable operation.
+  # Searches the global then local variable collections of the operation's graph for a variable
+  # whose name matches the operation name (with or without the first-output suffix) and returns
+  # its initialized value. Returns null if none is found or if a collection holds an incomplete
+  # user-defined variable type that lacks needed attributes.
   """Find the initialized value for a variable op.
 
   To do so, lookup the variable op in the variables collection.
@@ -1555,6 +1916,13 @@ def _find_initialized_value_for_variable(variable_op):
 
 
 class PartitionedVariable:
+  # [CLASS DOC]
+  # Container for a variable that has been split into several partition variables (graph-mode
+  # only, not compatible with eager execution). Holds the overall name, shape, dtype, partition
+  # counts per axis, the partition variables sorted by their offset, and a cached tensor slot.
+  # Supports iteration over partitions, length, concatenation into one tensor, shape and dtype
+  # queries, and assignment methods that fan out to the partitions. Registered for tensor
+  # conversion at import time. Not a subclass of the variable base class.
   """A container for partitioned `Variable` objects.
 
   @compatibility(eager) `tf.PartitionedVariable` is not compatible with
@@ -1567,6 +1935,16 @@ class PartitionedVariable:
   """
 
   def __init__(self, name, shape, dtype, variable_list, partitions):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the validation loop re-checks every variable's slice info (and the shape and
+    # partition length equality) on each iteration, so the checks are redundant and quadratic.
+    # Validates and stores the partitioned variable. Inputs: overall name, overall shape (list of
+    # integers), dtype, list of partition variables, and per-axis partition counts. Raises a
+    # type error if the variable list or partitions is not a list or tuple; a value error if
+    # any partition count is below one, the variable list is empty, any partition lacks save slice
+    # info, the shape and partitions lengths differ, or a partition's full shape differs from the
+    # given shape. Stores the partition list sorted by slice offset, and the other values, and
+    # initializes the cached tensor to null.
     """Creates a new partitioned variable wrapper.
 
     Variables passed via the variable_list must contain a save_slice_info
@@ -1620,10 +1998,15 @@ class PartitionedVariable:
     self._as_tensor = None
 
   def __iter__(self):
+    # [FUNCTION DOC]
+    # Returns an iterator over the partition variables in offset order.
     """Return an iterable for accessing the underlying partition Variables."""
     return iter(self._variable_list)
 
   def __len__(self):
+    # [FUNCTION DOC]
+    # Returns the number of partition variables. Raises a value error if the variable is
+    # partitioned along more than one axis, since a single length would be ambiguous.
     num_partition_axes = len(self._partition_axes())
     if num_partition_axes > 1:
       raise ValueError("Cannot get a length for %d > 1 partition axes" %
@@ -1631,12 +2014,23 @@ class PartitionedVariable:
     return len(self._variable_list)
 
   def _partition_axes(self):
+    # [FUNCTION DOC]
+    # HELPER: Axis lookup for concatenation and assignment.
+    # Returns a list of axes that are actually split (count greater than one); if no axis is
+    # split, returns a list holding only axis zero.
     if all(p == 1 for p in self._partitions):
       return [0]
     else:
       return [i for i, p in enumerate(self._partitions) if p > 1]
 
   def _concat(self):
+    # [FUNCTION DOC]
+    # HELPER: Builds the concatenated tensor for as-tensor conversion.
+    # With one partition, returns an identity of it named after the overall name (outside any
+    # name scope). Otherwise concatenates the partitions along the single split axis inside a
+    # name scope derived from the overall name, then returns an identity of the result outside
+    # any name scope. Raises a not-implemented error if more than one axis is split. Adds graph
+    # operations and keeps control dependencies of the current scope.
     """Returns the overall concatenated value as a `Tensor`.
 
     This is different from using the partitioned variable directly as a tensor
@@ -1665,6 +2059,10 @@ class PartitionedVariable:
       return array_ops.identity(concatenated, name=self._name)
 
   def as_tensor(self):
+    # [FUNCTION DOC]
+    # Returns the overall concatenated value as one tensor, built with control dependencies
+    # cleared so the result does not inherit those of the calling scope. Raises a not-implemented
+    # error for multi-axis partitioning. Adds graph operations.
     """Returns the overall concatenated value as a `Tensor`.
 
     The returned tensor will not inherit the control dependencies from the scope
@@ -1679,6 +2077,11 @@ class PartitionedVariable:
 
   @staticmethod
   def _TensorConversionFunction(v, dtype=None, name=None, as_ref=False):
+    # [FUNCTION DOC]
+    # HELPER: Registered as the tensor conversion function for partitioned variables.
+    # Converts v to a tensor via its as-tensor method. The name is ignored. Raises a value error
+    # if a requested dtype is incompatible with the variable's dtype, and a not-implemented
+    # error if a reference is requested.
     # pylint: disable=invalid-name
     _ = name
     if dtype is not None and not dtype.is_compatible_with(v.dtype):
@@ -1693,32 +2096,59 @@ class PartitionedVariable:
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Returns the overall name given at construction.
     return self._name
 
   @property
   def dtype(self):
+    # [FUNCTION DOC]
+    # Returns the element data type given at construction.
     return self._dtype
 
   @property
   def shape(self):
+    # [FUNCTION DOC]
+    # Returns the overall shape (same as the get-shape method).
     return self.get_shape()
 
   @property
   def _distribute_strategy(self):
+    # [FUNCTION DOC]
+    # HELPER: Compatibility hook expected by distribution code.
+    # Always returns null since partitioned variables are not created under a distribution
+    # strategy.
     """The `tf.distribute.Strategy` that this variable was created under."""
     # NOTE(yuefengz): Today, no partitioned variables in a distribute strategy.
     return None
 
   def get_shape(self) -> tensor_shape.TensorShape:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: annotated as returning a tensor shape object but returns the raw shape value
+    # (the list of integers) passed to the constructor.
+    # Returns the overall shape stored at construction.
     return self._shape
 
   def _get_variable_list(self):
+    # [FUNCTION DOC]
+    # HELPER: Internal accessor used by saving code.
+    # Returns the offset-sorted list of partition variables.
     return self._variable_list
 
   def _get_partitions(self):
+    # [FUNCTION DOC]
+    # HELPER: Internal accessor used by saving code.
+    # Returns the per-axis partition counts given at construction.
     return self._partitions
 
   def _apply_assign_fn(self, assign_fn, value):
+    # [FUNCTION DOC]
+    # HELPER: Shared implementation of the three assignment methods.
+    # Splits the value across partitions and calls the given function (taking a partition and its
+    # part of the value) for each, returning the list of results in partition order. The value may
+    # be a list (asserted to have one entry per partition), another partitioned variable
+    # (iterated), or a tensor split along the partition axis using each partition's size. Raises
+    # a not-implemented error for multi-axis partitioning. May add graph operations.
     partition_axes = self._partition_axes()
     if len(partition_axes) > 1:
       raise NotImplementedError(
@@ -1745,6 +2175,10 @@ class PartitionedVariable:
     return op_list
 
   def assign(self, value, use_locking=False, name=None, read_value=True):
+    # [FUNCTION DOC]
+    # Assigns the value across all partitions. Takes the value (list, partitioned variable or
+    # tensor), optional locking flag, name and read-value flag. Returns the list of per-partition
+    # assign results, or when read-value is false the list of their operations.
     assign_fn = lambda var, r_value: var.assign(
         r_value, use_locking=use_locking, name=name, read_value=read_value)
     assign_list = self._apply_assign_fn(assign_fn, value)
@@ -1753,6 +2187,9 @@ class PartitionedVariable:
     return [assign.op for assign in assign_list]
 
   def assign_add(self, value, use_locking=False, name=None, read_value=True):
+    # [FUNCTION DOC]
+    # Adds the value to all partitions (each partition receives its part). Same inputs and
+    # return conventions as the assign method.
     assign_fn = lambda var, r_value: var.assign_add(
         r_value, use_locking=use_locking, name=name, read_value=read_value)
     assign_list = self._apply_assign_fn(assign_fn, value)
@@ -1761,6 +2198,9 @@ class PartitionedVariable:
     return [assign.op for assign in assign_list]
 
   def assign_sub(self, value, use_locking=False, name=None, read_value=True):
+    # [FUNCTION DOC]
+    # Subtracts the value from all partitions (each partition receives its part). Same inputs and
+    # return conventions as the assign method.
     assign_fn = lambda var, r_value: var.assign_sub(
         r_value, use_locking=use_locking, name=name, read_value=read_value)
     assign_list = self._apply_assign_fn(assign_fn, value)
@@ -1771,6 +2211,10 @@ class PartitionedVariable:
 
 @tf_export(v1=["global_variables"])
 def global_variables(scope=None):
+  # [FUNCTION DOC]
+  # Returns the list of variables in the global-variables graph collection of the default graph,
+  # optionally filtered by an optional scope string matched against names as a prefix-style
+  # regular expression. Read-only.
   """Returns global variables.
 
   Global variables are variables that are shared across machines in a
@@ -1807,11 +2251,19 @@ def global_variables(scope=None):
 @tf_export(v1=["all_variables"])
 @deprecated("2017-03-02", "Please use tf.global_variables instead.")
 def all_variables():
+  # [FUNCTION DOC]
+  # Deprecated alias that returns the global variables list. Takes no inputs; emits a
+  # deprecation warning when called.
   """Use `tf.compat.v1.global_variables` instead."""
   return global_variables()
 
 
 def _all_saveable_objects(scope=None):
+  # [FUNCTION DOC]
+  # HELPER: Used by checkpoint saving code to collect everything that must be saved.
+  # Returns the concatenation of the global-variables collection and the saveable-objects
+  # collection, optionally filtered by an optional scope string (prefix-style regular
+  # expression match on names).
   """Returns all variables and `SaveableObject`s that must be checkpointed.
 
   Args:
@@ -1831,6 +2283,10 @@ def _all_saveable_objects(scope=None):
 
 @tf_export(v1=["local_variables"])
 def local_variables(scope=None):
+  # [FUNCTION DOC]
+  # Returns the list of variables in the local-variables graph collection (per-process, usually
+  # not checkpointed), optionally filtered by an optional scope string matched as a prefix-style
+  # regular expression. Read-only.
   """Returns local variables.
 
   Local variables - per process variables, usually not saved/restored to
@@ -1859,6 +2315,9 @@ def local_variables(scope=None):
 
 @tf_export(v1=["model_variables"])
 def model_variables(scope=None):
+  # [FUNCTION DOC]
+  # Returns the list of variables in the model-variables graph collection, optionally filtered
+  # by an optional scope string matched as a prefix-style regular expression. Read-only.
   """Returns all variables in the MODEL_VARIABLES collection.
 
   Args:
@@ -1876,6 +2335,9 @@ def model_variables(scope=None):
 
 @tf_export(v1=["trainable_variables"])
 def trainable_variables(scope=None):
+  # [FUNCTION DOC]
+  # Returns the list of variables in the trainable-variables graph collection, optionally
+  # filtered by an optional scope string matched as a prefix-style regular expression. Read-only.
   """Returns all variables created with `trainable=True`.
 
   When passed `trainable=True`, the `Variable()` constructor automatically
@@ -1906,6 +2368,9 @@ def trainable_variables(scope=None):
 
 @tf_export(v1=["moving_average_variables"])
 def moving_average_variables(scope=None):
+  # [FUNCTION DOC]
+  # Returns the list of variables in the moving-average-variables graph collection, optionally
+  # filtered by an optional scope string matched as a prefix-style regular expression. Read-only.
   """Returns all variables that maintain their moving averages.
 
   If an `ExponentialMovingAverage` object is created and the `apply()`
@@ -1928,6 +2393,11 @@ def moving_average_variables(scope=None):
 
 @tf_export(v1=["initializers.variables", "variables_initializer"])
 def variables_initializer(var_list, name="init"):
+  # [FUNCTION DOC]
+  # Builds one operation that runs the initializers of all given variables. Inputs: list of
+  # variables and an optional operation name (default "init"). In graph mode with a non-empty
+  # list, returns a grouped operation over their initializers; in eager mode or for an empty
+  # list, returns a no-op with that name. Adds graph operations.
   """Returns an Op that initializes a list of variables.
 
   After you launch the graph in a session, you can run the returned Op to
@@ -1961,12 +2431,19 @@ def variables_initializer(var_list, name="init"):
 @tf_should_use.should_use_result
 @deprecated("2017-03-02", "Use `tf.variables_initializer` instead.")
 def initialize_variables(var_list, name="init"):
+  # [FUNCTION DOC]
+  # Deprecated alias of the variables initializer builder; passes the list and name through and
+  # returns its result. Warns on use and the result is flagged if left unused.
   """See `tf.compat.v1.variables_initializer`."""
   return variables_initializer(var_list, name=name)
 
 
 @tf_export(v1=["initializers.global_variables", "global_variables_initializer"])
 def global_variables_initializer():
+  # [FUNCTION DOC]
+  # Returns an operation initializing all variables in the global-variables collection. In eager
+  # mode it returns a no-op named for this initializer; in graph mode it builds the grouped
+  # initializer for the global variables. Takes no inputs.
   """Returns an Op that initializes global variables.
 
   This is just a shortcut for `variables_initializer(global_variables())`
@@ -1988,12 +2465,19 @@ def global_variables_initializer():
 @tf_should_use.should_use_result
 @deprecated("2017-03-02", "Use `tf.global_variables_initializer` instead.")
 def initialize_all_variables():
+  # [FUNCTION DOC]
+  # Deprecated alias of the global variables initializer; returns its operation. Warns on use
+  # and the result is flagged if left unused.
   """See `tf.compat.v1.global_variables_initializer`."""
   return global_variables_initializer()
 
 
 @tf_export(v1=["initializers.local_variables", "local_variables_initializer"])
 def local_variables_initializer():
+  # [FUNCTION DOC]
+  # Returns an operation initializing all variables in the local-variables collection. In eager
+  # mode it returns a no-op named for this initializer; in graph mode it builds the grouped
+  # initializer for the local variables. Takes no inputs.
   """Returns an Op that initializes all local variables.
 
   This is just a shortcut for `variables_initializer(local_variables())`
@@ -2015,6 +2499,9 @@ def local_variables_initializer():
 @tf_should_use.should_use_result
 @deprecated("2017-03-02", "Use `tf.local_variables_initializer` instead.")
 def initialize_local_variables():
+  # [FUNCTION DOC]
+  # Deprecated alias of the local variables initializer; returns its operation. Warns on use
+  # and the result is flagged if left unused.
   """See `tf.compat.v1.local_variables_initializer`."""
   return local_variables_initializer()
 
@@ -2022,6 +2509,16 @@ def initialize_local_variables():
 @tf_export(v1=["assert_variables_initialized"])
 @tf_should_use.should_use_result
 def assert_variables_initialized(var_list=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it returns an operation that raises a failed-precondition
+  # error when a variable is uninitialized; in fact it only builds rank operations on the
+  # variables, which fail at run time if reading an uninitialized variable fails. It is
+  # documented as obsolete.
+  # Builds an operation that reads the rank of each variable (colocated with it, no
+  # optimization) as an initialization check. Input: optional list of variables, defaulting to
+  # global plus local variables; if that is empty, falls back to old-style variable operations in
+  # the default graph. Returns null if there are no variables, the single rank tensor if there is
+  # one, otherwise a stacked tensor of ranks. Adds graph operations.
   """Returns an Op to check if variables are initialized.
 
   NOTE: This function is obsolete and will be removed in 6 months.  Please
@@ -2066,6 +2563,14 @@ def assert_variables_initialized(var_list=None):
 @tf_should_use.should_use_result
 def report_uninitialized_variables(var_list=None,
                                    name="report_uninitialized_variables"):
+  # [FUNCTION DOC]
+  # Builds operations that produce a one-dimensional string tensor of the names of variables that
+  # are not yet initialized. Inputs: optional variable list (default global plus local variables,
+  # falling back to old-style variable operations in the default graph) and an optional name for
+  # the name scope. Everything is placed on the device given by an environment variable
+  # (default first CPU). Returns an empty string constant if there are no variables; otherwise a
+  # boolean mask of non-initialized variables applied to the variable names. Adds graph
+  # operations; reads the environment variable at call time.
   """Adds ops to list the names of uninitialized variables.
 
   When run, it returns a 1-D tensor containing the names of uninitialized
