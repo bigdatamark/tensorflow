@@ -1,3 +1,12 @@
+# [PACKAGE DOC]
+# Public Python API of the XLA codegen test library, shared by the backend-specific test
+# libraries. Re-exports under stable names the classes of the native extension module: HLO
+# building blocks (module, module config, computation, instruction, opcode, comparison direction,
+# dot and scatter dimension numbers), buffer assignment, and the backend-independent kernel
+# abstractions (kernel spec, kernel runner, emitter bases, LLVM and MLIR kernel definitions,
+# emitters and sources), plus the function that builds an HLO computation from instructions.
+# Import-time side effect: imports the native extension, which must be built; this file defines
+# no logic of its own. The utilities module in this package adds literal-creation helpers.
 # Copyright 2024 The OpenXLA Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

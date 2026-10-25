@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Tests for lowering tiled (xtile dialect) MLIR kernels on the XLA CPU backend. Each test supplies
+# a small MLIR module text that extracts tiles from input buffers, applies operations (transpose,
+# add, dot, reduce, broadcast, reshape, compare) and inserts the result into an output buffer;
+# the shared compare_kernel helper emits the kernel, JIT-compiles it, runs it on generated inputs
+# and compares the output with a numpy reference function.
+# Contains the InputSpec helper class, the random-array and comparison helpers and the test class.
+# No import-time side effects beyond defining the create_literal alias.
 # Copyright 2024 The OpenXLA Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,8 +35,15 @@ create_literal = testlib_utilities.create_literal_from_np
 
 
 class InputSpec:
+  # [CLASS DOC]
+  # HELPER: small value holder used by compare_kernel to describe the inputs of a test kernel.
+  # Stores only the shape (tuple of dimension sizes) of one input array in the public attribute
+  # shape. Used to generate the concrete input data for that input.
 
   def __init__(self, shape: tuple[int, ...]):
+    # [FUNCTION DOC]
+    # Constructor. Takes the shape (tuple of non-negative ints) of the input array and stores it
+    # unchanged in the shape attribute. Returns nothing, performs no validation.
     """Initializes the InputSpec.
 
     Args:
@@ -38,6 +53,11 @@ class InputSpec:
 
 
 def get_random_array(shape: tuple[int, ...], dtype: np.dtype) -> np.ndarray:
+  # [FUNCTION DOC]
+  # HELPER: produces filler data for the output buffer in compare_kernel.
+  # Returns a numpy array of the given shape with values drawn uniformly from -5 to 5 using a
+  # freshly seeded (non-deterministic) random generator, then cast to dtype. Casting truncates
+  # for integer types and maps values to 0/1-like booleans for bool. No other side effects.
   rng = np.random.default_rng()
   return rng.uniform(low=-5, high=5, size=shape).astype(dtype)
 
@@ -52,6 +72,24 @@ def compare_kernel(
     expected_output: Callable[[np.ndarray, ...], np.ndarray],
     maxulp: Optional[int] = None,
 ) -> None:
+  # [FUNCTION DOC]
+  # HELPER: shared driver used by every test in this file to emit, run and verify a tiled kernel.
+  # KNOWN ISSUE: the type annotation of expected_output uses an ellipsis inside the argument list
+  # of Callable, which is not a valid Callable signature for a variable number of arguments.
+  # KNOWN ISSUE: relies on the numpy bool alias for dtype comparison, which only exists in newer
+  # numpy versions.
+  # Inputs: ir is the MLIR module text; kernel_name is the entry function name inside it;
+  # num_workgroups is the number of workgroups (used as the x dimension of the grid, with y and z
+  # equal to one); input_specs is an iterable of InputSpec describing each input array;
+  # output_shape is the shape of the output buffer; dtype is the numpy element type used for
+  # inputs and output; expected_output is a callback taking the numpy inputs and returning the
+  # reference result; maxulp is optional: if absent the result must match exactly, otherwise it
+  # must match within that many units in the last place.
+  # Behavior: emits the kernel with the MLIR test kernel emitter, creates a kernel runner with a
+  # JIT compiler built from a default HLO module config, generates inputs as ascending ranges
+  # (for bool, alternating 0/1 values), fills the output with random data so unwritten elements
+  # are detected, runs the kernel with inputs followed by the output, and compares.
+  # Returns nothing; raises an assertion error on mismatch. Compilation errors propagate.
   mlir_emitter = cpu_testlib.MlirTestKernelEmitter(
       ir, kernel_name, (num_workgroups, 1, 1)
   )
@@ -63,6 +101,11 @@ def compare_kernel(
   )
 
   def get_input(spec: InputSpec):
+    # [FUNCTION DOC]
+    # HELPER: builds the deterministic input array for one InputSpec inside compare_kernel.
+    # Returns an array of the spec's shape holding ascending integers 0..n-1 cast to the
+    # enclosing dtype; for the bool dtype it instead returns alternating 0 and 1 values stored
+    # as 8-bit integers. Uses the dtype of the enclosing call; no side effects.
     if dtype == np.bool:
       return (
           np.arange(np.prod(spec.shape), dtype=np.int8).reshape(spec.shape) % 2
@@ -87,8 +130,15 @@ def compare_kernel(
 
 
 class XtileLoweringTest(absltest.TestCase):
+  # [CLASS DOC]
+  # Test case covering lowering and execution of xtile-dialect kernels on the CPU backend. Stateless;
+  # each test method embeds an MLIR module and a numpy reference and delegates to compare_kernel.
 
   def test_slice(self):
+    # [FUNCTION DOC]
+    # Test: a single tile of 64x64 is extracted from a 5x5 float32 buffer (larger than the buffer,
+    # so the extract and insert must be masked), transposed, and inserted into a 5x5 output.
+    # Runs with one workgroup and asserts the output equals the transposed input exactly.
     # Check that masked extract / insert works.
     ir = """
       module @tiled_slice {
@@ -116,6 +166,10 @@ class XtileLoweringTest(absltest.TestCase):
     )
 
   def test_strided(self):
+    # [FUNCTION DOC]
+    # Test: extracts a 4x32 tile with strides 21 and 2 from a 64x64 float32 buffer and inserts it
+    # densely into a 4x32 output. One workgroup. Asserts the output equals the input sliced with
+    # those strides, exactly.
     ir = """
       module @tiled_slice {
         xtile.entry_func @tiled_slice(
@@ -140,6 +194,10 @@ class XtileLoweringTest(absltest.TestCase):
     )
 
   def test_transpose(self):
+    # [FUNCTION DOC]
+    # Test: tiled transpose of a 4096x4096 float32 buffer. Each of 262144 tiles (8x8) computes its
+    # offsets from the tile id through indexing maps, transposes the tile and writes it at the
+    # swapped offsets. Run with 8 workgroups; asserts exact equality with the numpy transpose.
     ir = """
       module @tiled_transpose {
         xtile.entry_func @tiled_transpose(
@@ -167,6 +225,12 @@ class XtileLoweringTest(absltest.TestCase):
     )
 
   def test_add_tranpose(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the test name has a typo (tranpose instead of transpose); the same misspelling
+    # is used in the MLIR module and kernel names, so it is harmless but misleading.
+    # Test: for a 4096x4096 float32 buffer, each 8x8 tile transposes the tile at offsets
+    # (a, b), adds the tile at the swapped offsets (b, a), and writes the sum at (b, a).
+    # Run with 8 workgroups; asserts the output equals the input plus its transpose, exactly.
     ir = """
       module @add_tranpose {
         xtile.entry_func @add_tranpose(
@@ -196,6 +260,10 @@ class XtileLoweringTest(absltest.TestCase):
     )
 
   def test_dot_single_tile(self):
+    # [FUNCTION DOC]
+    # Test: one tile computes a general dot of an 8x16 and a 16x8 float32 operand (contracting
+    # dimension 1 with 0) into an 8x8 output. One workgroup. Asserts the result matches numpy
+    # matrix multiplication within 5 ulp.
     ir = """
       module @dot_single_tile {
         xtile.entry_func @dot_single_tile(
@@ -225,6 +293,10 @@ class XtileLoweringTest(absltest.TestCase):
     )
 
   def test_dot_scalar_output(self):
+    # [FUNCTION DOC]
+    # Test: a dot that contracts both dimensions of an 8x16 and a 16x8 float32 operand (pairing
+    # dimension 1 with 0 and 0 with 1), giving a scalar result inserted into a rank-zero output.
+    # One workgroup. Asserts the result matches the numpy tensor dot over those axes within 8 ulp.
     ir = """
       module @test_dot_scalar_output {
         xtile.entry_func @test_dot_scalar_output(
@@ -254,6 +326,11 @@ class XtileLoweringTest(absltest.TestCase):
     )
 
   def test_dot_fusion_single_tile(self):
+    # [FUNCTION DOC]
+    # Test: fused computation in one tile: two 8x16 float32 inputs are added, the sum is
+    # multiplied by a 16-element vector (taken from a 16x1 buffer) via a dot, and the hyperbolic
+    # tangent of the 8-element result is written to an 8x1 output. One workgroup. Asserts the
+    # result matches the numpy equivalent within 5 ulp.
     ir = """
       module @dot_fusion_single_tile {
         xtile.entry_func @dot_fusion_single_tile(
@@ -291,6 +368,14 @@ class XtileLoweringTest(absltest.TestCase):
     )
 
   def test_reduction_add_inner(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the MLIR module declares float32 buffers but the test runs the comparison with
+    # the 32-bit integer dtype, so the generated integer inputs and output do not match the
+    # kernel's declared element type; it also uses a 1024-row buffer with 4 workgroups although
+    # the tiling info declares 128 tiles of 8 rows.
+    # Test: each tile reduces an 8x32 slice over its inner (last) dimension with addition and
+    # inserts an 8-element result into a 1024-element output. The init value is taken from a
+    # scalar buffer. Asserts exact equality with the numpy row sums plus the init value.
     ir = """
       module @reduction_add_inner {
         xtile.entry_func @reduction_add_inner(
@@ -323,6 +408,12 @@ class XtileLoweringTest(absltest.TestCase):
     )
 
   def test_reduction_add_outer(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the numpy reference ignores the init value (it only sums over axis 0), which
+    # matches the result only because the generated init input is zero.
+    # Test: each of 4 tiles reduces a 1024x8 slice of a 1024x32 float32 buffer over its outer
+    # (first) dimension using an explicit adding reducer region, writing an 8-element piece of
+    # a 32-element output. Four workgroups. Asserts exact equality with the numpy column sums.
     ir = """
       module @reduction_add_outer {
         xtile.entry_func @reduction_add_outer(
@@ -359,6 +450,10 @@ class XtileLoweringTest(absltest.TestCase):
     )
 
   def test_reduction_middle(self):
+    # [FUNCTION DOC]
+    # Test: reduces the middle dimension of an 8x4x2 float32 tile with an adding reducer, giving
+    # an 8x2 output. One workgroup. The init value is ignored by the numpy reference (it is zero
+    # in the generated data). Asserts exact equality with the numpy sum over axis 1.
     ir = """
       module @reduction_add_middle {
         xtile.entry_func @reduction_add_middle(
@@ -392,6 +487,10 @@ class XtileLoweringTest(absltest.TestCase):
     )
 
   def test_reduction_outer_inner(self):
+    # [FUNCTION DOC]
+    # Test: reduces the first and last dimensions of an 8x4x2 float32 tile at once with an adding
+    # reducer, giving a 4-element output. One workgroup. Asserts exact equality with the numpy
+    # sum over axes 0 and 2.
     ir = """
       module @reduction_add_outer_inner {
         xtile.entry_func @reduction_add_outer_inner(
@@ -425,6 +524,10 @@ class XtileLoweringTest(absltest.TestCase):
     )
 
   def test_broadcast_in_dim_inner(self):
+    # [FUNCTION DOC]
+    # Test: broadcasts a 4-element float32 tile into a 32x4 tile, mapping the input to the last
+    # dimension, and writes it to a 32x4 output. One workgroup. Asserts the output equals the
+    # numpy broadcast of the input to that shape.
     ir = """
       module @broadcast_in_dim_inner {
         xtile.entry_func @broadcast_in_dim_inner(
@@ -450,6 +553,10 @@ class XtileLoweringTest(absltest.TestCase):
     )
 
   def test_broadcast_in_dim_outer(self):
+    # [FUNCTION DOC]
+    # Test: broadcasts a 4-element float32 tile into a 4x32 tile, mapping the input to the first
+    # dimension, and writes it to a 4x32 output. One workgroup. Asserts the output equals the
+    # transpose of the numpy broadcast of the input to 32x4.
     ir = """
       module @broadcast_in_dim_outer {
         xtile.entry_func @broadcast_in_dim_outer(
@@ -475,6 +582,12 @@ class XtileLoweringTest(absltest.TestCase):
     )
 
   def test_i1_reshape_transpose(self):
+    # [FUNCTION DOC]
+    # Test: boolean (i1) handling in a bitcast-copy-like fusion. Extracts a 2x4 tile of 8-bit
+    # integers from a 2x3 buffer (masked out of bounds), compares it with zero to get booleans,
+    # reshapes and transposes the booleans, widens them back to 8-bit integers, and inserts them
+    # into a 2x3x1 output. One workgroup, bool dtype (inputs alternate 0 and 1). Asserts the
+    # output equals the input, exactly.
     ir = """
       module @__compute_module_bitcast_copy_fusion {
         xtile.entry_func @bitcast_copy_fusion(

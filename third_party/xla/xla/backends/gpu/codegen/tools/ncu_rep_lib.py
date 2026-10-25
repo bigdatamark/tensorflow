@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# HELPER: library behind the ncu_rep command-line tool, split out so it can be unit tested.
+# KNOWN ISSUE: the original docstring refers to a file named ncu_rep_main.py, but the tool is
+# in the file ncu_rep.py.
+# Works on the table (list of rows of strings) obtained from the CSV export of a Nsight Compute
+# report: the first row holds column names, the second row units, and the rest one row per kernel.
+# Provides converting the table into per-kernel metric mappings, aggregating metrics over several
+# kernels (max, min, sum or first value depending on the metric name suffix), filtering kernels
+# by id, name pattern or position, and writing metrics as markdown, CSV, JSON or raw text.
+# Defines the names of the kernel name and id columns. No import-time side effects.
 # Copyright 2025 The OpenXLA Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,6 +42,13 @@ KERNEL_ID_FIELD = "ID"
 def get_metrics_by_kernel(
     rows: list[list[str]],
 ) -> list[dict[str, tuple[str, str]]]:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it returns a dictionary of metrics by kernel, but it returns
+  # a list with one mapping per kernel. It also builds a name-to-index mapping that is never used.
+  # Input: rows, a list of string lists; row 0 is the column names, row 1 the units, and each
+  # following row one kernel. Returns a list with one mapping per kernel row, from column name to
+  # a pair of the cell value and the unit of that column. Raises an index error if the table has
+  # fewer than two rows or rows shorter than the header. No side effects.
   """Converts ncu-rep table to a dictionary of metrics by kernel.
 
   Args:
@@ -54,6 +71,12 @@ def get_metrics_by_kernel(
 
 
 def aggregate(metric_values: list[float], metric_name: str):
+  # [FUNCTION DOC]
+  # HELPER: combines the per-kernel values of one metric for aggregate_kernel_metrics.
+  # Inputs: metric_values, a non-empty list of floats; metric_name, the metric name. If the name
+  # ends with the max suffix returns the maximum, with the min suffix the minimum, with the sum
+  # suffix the total; any other name returns the first value. An empty list raises a value error
+  # (or an index error for the first-value case). No side effects.
   """Aggregates metric values using a function based on the metric name.
 
   If metric name does not match any of the known patterns, the first value from
@@ -78,6 +101,16 @@ def aggregate(metric_values: list[float], metric_name: str):
 def aggregate_kernel_metrics(
     metrics: list[str], kernel_metrics: list[dict[str, tuple[str, str]]]
 ) -> list[list[str]]:
+  # [FUNCTION DOC]
+  # Inputs: metrics, the names of metrics to report; kernel_metrics, a list of per-kernel
+  # mappings from metric name to a (value text, unit) pair. Raises a usage error if the kernel
+  # list is empty, a requested metric is missing in some kernel, or the unit of a metric differs
+  # between kernels. Values are parsed as floats after removing thousands separators (commas).
+  # Each metric's values are combined by the aggregate helper (max, min, sum or first value by
+  # name suffix). Returns a list of three-element rows (name, value text, unit), in order of first
+  # appearance of the requested metrics; values that are whole numbers are printed as integers,
+  # others rounded to two decimals. Duplicate names in metrics are collected once per kernel.
+  # The parameter kernel_metrics is rebound locally to the output list; inputs are not mutated.
   """Aggregates and returns the metrics for the given kernels.
 
   Args:
@@ -118,6 +151,17 @@ def aggregate_kernel_metrics(
 def filter_kernels(
     kernels: list[dict[str, tuple[str, str]]], condition: str
 ) -> list[dict[str, tuple[str, str]]]:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring's description of the supported expressions is run together (the
+  # three forms are not separated); also the after filter compares ids as text and, when the
+  # matching kernels are found, keeps everything following the last match.
+  # Inputs: kernels, a list of per-kernel mappings (as made by the table conversion function);
+  # condition, a text filter. Forms: "id:" followed by an id keeps kernels whose id text equals
+  # it; "name:" followed by a regular expression keeps kernels whose name contains a match;
+  # "after:" followed by another filter keeps the kernels that come after the last kernel
+  # matched by that inner filter (if the inner filter matches nothing it logs a warning and
+  # returns all kernels unchanged). Returns the filtered list. Raises a usage error for any other
+  # prefix. A malformed regular expression raises a regex error.
   """Filters kernels by a condition.
 
   Args:
@@ -151,6 +195,12 @@ def filter_kernels(
 
 
 def write_metrics_markdown(out: TextIO, metrics: list[list[str]]):
+  # [FUNCTION DOC]
+  # Writes the metrics to the text stream out as a markdown-like table with a header line
+  # (Metric, Value, Unit), a separator line and one line per metric, padding the name column on
+  # the right and the value column on the left to the widest entries. Input metrics is a list of
+  # three-element rows (name, value, unit). Raises a value error if metrics is empty. Returns
+  # nothing; side effect is writing to out.
   """Formats metrics in markdown."""
   name_width = max(len(m[0]) for m in metrics)
   value_width = max(max(len(m[1]) for m in metrics), len("value"))
@@ -170,6 +220,10 @@ def write_metrics_markdown(out: TextIO, metrics: list[list[str]]):
 
 
 def write_metrics_csv(out: TextIO, metrics: list[list[str]]):
+  # [FUNCTION DOC]
+  # Writes the metrics to the text stream out as CSV with newline line endings: a header row
+  # (metric, value, unit) followed by each (name, value, unit) row of metrics. Returns nothing;
+  # side effect is writing to out.
   """Formats metrics in csv."""
   writer = csv.writer(out, lineterminator="\n")
   writer.writerow(["metric", "value", "unit"])
@@ -177,6 +231,10 @@ def write_metrics_csv(out: TextIO, metrics: list[list[str]]):
 
 
 def write_metrics_json(out: TextIO, metrics: list[list[str]]):
+  # [FUNCTION DOC]
+  # Writes the metrics to the text stream out as one JSON object mapping each metric name to an
+  # object with its value text and unit, keys sorted, followed by a newline. A repeated metric
+  # name keeps the last entry. Returns nothing; side effect is writing to out.
   """Formats metrics in JSON."""
   data = {}
   for name, value, unit in metrics:
@@ -186,6 +244,10 @@ def write_metrics_json(out: TextIO, metrics: list[list[str]]):
 
 
 def write_metrics_raw(out: TextIO, metrics: list[list[str]]):
+  # [FUNCTION DOC]
+  # Writes only the value and unit of each metric row to the text stream out, one line per
+  # metric as the value, a space and the unit (names are omitted). Returns nothing; side effect
+  # is writing to out.
   """Formats metrics in raw."""
   for _, value, unit in metrics:
     out.write(f"{value} {unit}\n")

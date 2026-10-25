@@ -1,3 +1,13 @@
+# [PACKAGE DOC]
+# Public Python API of the XLA CPU codegen test library. Re-exports, under stable names, the
+# classes and free functions implemented in the native extension module (a compiled pybind
+# module in this package): kernel emitters (computation, concatenate, dot, elemental, scatter,
+# LLVM IR test and MLIR test emitters), the HLO and JIT compilers, the kernel runner, the MLIR
+# context, target machine features, and functions to emit a fusion kernel, lower to LLVM IR and
+# run the fusion wrapper pass.
+# Import-time side effect: imports the native extension, which must be built; the module itself
+# defines no logic. Sibling modules (utilities and the tests) use these names to build HLO
+# modules and run generated CPU kernels.
 # Copyright 2024 The OpenXLA Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

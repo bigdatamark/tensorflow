@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Tests for the XLA CPU dot (matrix/vector product) kernel emitter. Each test builds a small HLO
+# module containing a single dot instruction, emits a kernel with either the generic elemental
+# emitter or the dedicated dot emitter, JIT-compiles it, runs it on literals and compares the
+# result with numpy within a maximum ulp tolerance. Tests are parameterized over emitter type,
+# operand shapes and many integer/float dtypes.
+# Import-time side effect: sets the XLA_FLAGS environment variable to disable multi-threaded
+# eigen, because the dot emitter refuses to emit for some shapes when it is enabled.
+# Also defines module-level aliases and the list of emitters and dtypes under test.
 # Copyright 2024 The OpenXLA Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -39,6 +48,13 @@ def create_input(
     shape: Sequence[int],
     dtype: np.dtype,
 ) -> np.ndarray:
+  # [FUNCTION DOC]
+  # HELPER: builds deterministic test input arrays for the dot kernel tests.
+  # Creates an evenly spaced sequence of values between the two ends of value_range (inclusive),
+  # cast to the given dtype, and reshapes it to the given shape. The number of elements is the
+  # product of the shape dimensions (one element for an empty shape, i.e. a scalar).
+  # Inputs: value_range is a (start, stop) pair of floats; shape is a sequence of ints; dtype is
+  # a numpy dtype. Returns the numpy array. No side effects; reshape errors propagate from numpy.
   size = np.prod(shape) if shape else 1
   result = np.linspace(
       value_range[0], value_range[1], size, dtype=dtype
@@ -69,6 +85,10 @@ dtypes_to_test = [
 
 
 class DotKernelTest(parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case covering the CPU dot kernel emitters. It holds no state; each test
+  # method builds its own HLO module, emitter, JIT compiler and kernel runner, and compares
+  # against numpy for the combinations of emitter type, shape and dtype.
 
   @parameterized.product(
       emitter_type=emitter_types,
@@ -76,6 +96,15 @@ class DotKernelTest(parameterized.TestCase):
       dtype=dtypes_to_test,
   )
   def test_vector_matrix_dot(self, emitter_type, rhs_shape, dtype):
+    # [FUNCTION DOC]
+    # Test: vector-times-tensor dot. The left operand is a vector whose length equals the first
+    # dimension of rhs_shape; the right operand has shape rhs_shape. Both are filled with evenly
+    # spaced values in 0..20 of the given dtype. The dot contracts dimension 0 of both operands,
+    # so the output has the remaining dimensions of the right operand.
+    # Builds parameters, a dot instruction, an HLO module and buffer assignment, JIT-compiles,
+    # creates the emitter of emitter_type, emits the kernel and runs it on the literals.
+    # Asserts that the output equals numpy tensordot over axis 0 within 10 ulp.
+    # Parameters come from the parameterized product of emitter type, rhs shape and dtype.
     value_range = (0.0, 20.0)
     lhs_np = create_input(value_range, rhs_shape[0], dtype)
     rhs_np = create_input(value_range, rhs_shape, dtype)
@@ -130,6 +159,14 @@ class DotKernelTest(parameterized.TestCase):
       dtype=dtypes_to_test,
   )
   def test_matrix_multiplication(self, emitter_type, shapes, dtype):
+    # [FUNCTION DOC]
+    # Test: matrix-times-matrix dot for several small and medium shape pairs. Contracts the
+    # last dimension of the left operand with the first of the right operand; the output shape
+    # is the left shape without its last dimension followed by the right shape without its first.
+    # Skips (via the test framework skip) the float16 case for the dedicated dot emitter, which
+    # does not support it. Otherwise builds the HLO module, emits and JIT-compiles the kernel
+    # with the given emitter type, runs it, and asserts the result matches numpy matrix
+    # multiplication within 10 ulp. Parameters: emitter type, pair of shapes, dtype.
     if dtype == np.float16 and emitter_type is testlib_cpu.DotKernelEmitter:
       self.skipTest("float16 is not supported by the dot emitter")
 

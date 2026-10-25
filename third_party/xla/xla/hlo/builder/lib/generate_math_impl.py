@@ -1,3 +1,15 @@
+# [MODULE DOC]
+# HELPER: developer script (not part of runtime code) that generates the C++ header math_impl.h.
+# KNOWN ISSUE: the original docstring says the output is math_impl.cc, but the script writes
+# math_impl.h.
+# It produces XLA builder implementations of complex and real arcsine (functions named
+# AsinComplex and AsinReal) using the external functional_algorithms package. It traces the library's algorithms,
+# fills in missing pieces for the XLA client target, simplifies the graph, renders it as C++ code
+# with the algorithm docstring as a comment, and writes the header, with license text, a note that
+# it is generated, include guard and namespaces, next to this script.
+# Import-time side effects: tries to import the optional functional_algorithms package; on failure
+# only emits a warning and leaves the module reference empty, after which the main function does
+# nothing. Running as a program calls main.
 """A script to generate math_impl.h.
 
 Prerequisites:
@@ -23,6 +35,23 @@ except ImportError as msg:
 
 
 def main():
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the up-to-date check ends with a literal zero in its condition, so it never
+  # triggers and the file is always regenerated (dead code); the file is read and written with
+  # manual open and close calls that leak the handle if an error occurs.
+  # KNOWN ISSUE: the variable named target first holds the chosen output flavor text and is then
+  # overwritten by the functional_algorithms code generation target, which is confusing; and if
+  # the first algorithm has no docstring, appending to the sources list fails with an index error.
+  # Entry point. Takes no parameters; reads an optional first command-line argument, either xla
+  # (default) or tensorflow, case-insensitively, which only selects the include guard macro name
+  # (an assertion error is raised for any other value). If the optional library is missing it
+  # returns at once. If its version is older than 0.3.1 it warns and returns. Then, for each of
+  # the two arcsine algorithms, looks the algorithm up in the library (warning and skipping it
+  # if absent), traces it into a graph with the XLA client target, simplifies it, names it, renders
+  # it as C++ and collects it with the algorithm docstring as a leading comment. Joins the pieces,
+  # and overwrites math_impl.h in the script's directory with the license header, generated-file
+  # notice, include guard, includes, namespaces, formatting-off markers and the generated source.
+  # Returns nothing; reports the created path through a warning.
   if fa is None:
     return
   target = (sys.argv[1] if len(sys.argv) > 1 else "xla").lower()

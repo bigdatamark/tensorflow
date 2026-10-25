@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Tests for the CPU kernel runner of the XLA CPU test library. One test feeds hand-written LLVM IR
+# (an elementwise 32-bit integer add using the kernel call frame ABI) through the LLVM test kernel
+# emitter, the other feeds an MLIR module (a loop that sums a 1024x32 float tensor) through the
+# MLIR test kernel emitter. Each is run with the kernel runner and the result is checked.
+# No import-time side effects beyond defining the create_literal alias.
 # Copyright 2024 The OpenXLA Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,8 +30,17 @@ create_literal = testlib_utilities.create_literal_from_np
 
 
 class LLvmKernelRunnerTest(absltest.TestCase):
+  # [CLASS DOC]
+  # Test case for running kernels defined by raw LLVM IR through the CPU kernel runner.
+  # Stateless; no shared fixtures.
 
   def test_llvm_ir_kernel_runner(self):
+    # [FUNCTION DOC]
+    # Test: defines LLVM IR for a function that, for the thread index in the call frame, adds
+    # the corresponding elements of the first two argument buffers and stores the sum in the
+    # third. Emits it with the LLVM test kernel emitter for a grid of four threads, creates a
+    # runner with a default JIT compiler, runs it on three 4-element int32 literals (1..4, 5..8
+    # and zeros) and asserts the third equals the elementwise sum of the first two.
     ir = """
         %struct.XLA_CPU_KernelCallFrame = type { ptr, ptr, i64, ptr }
         %struct.XLA_CPU_KernelArg = type { ptr, i64 }
@@ -71,8 +86,16 @@ class LLvmKernelRunnerTest(absltest.TestCase):
 
 
 class MlirKernelRunnerTest(absltest.TestCase):
+  # [CLASS DOC]
+  # Test case for running kernels defined by MLIR through the CPU kernel runner.
+  # Stateless; no shared fixtures.
 
   def test_mlir_kernel_runner(self):
+    # [FUNCTION DOC]
+    # Test: an MLIR function sums all elements of a 1024x32 float tensor with a loop over an
+    # indexing map and inserts the sum into a one-element output tensor. Emitted with the MLIR
+    # test kernel emitter (single thread), run on a tensor of ones and a zero output; asserts the
+    # output scalar equals the sum of the input (1024 times 32).
     ir = """
       #indexing_map = #xla.indexing_map<"()[s0, s1] -> (s0, s1), domain: s0 in [0, 1023], s1 in [0, 31]">
       module attributes {dlti.dl_spec = #dlti.dl_spec<index = 32 : i32>} {

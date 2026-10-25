@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test for the XLA CPU concatenate kernel emitter. Builds an HLO concatenate of several random
+# arrays, emits a kernel with the dedicated concatenate emitter, JIT-compiles and runs it, and
+# compares with numpy concatenation. Parameterized over input layout mode, element dtype and
+# concatenation dimension. No import-time side effects beyond defining module-level aliases.
 # Copyright 2024 The OpenXLA Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +34,9 @@ HloInstruction = base_testlib.HloInstruction
 
 
 class ConcatenateKernelRunnerTest(parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case for the CPU concatenate kernel emitter. Stateless; the single test
+  # method builds everything it needs (literals, HLO module, emitter, JIT compiler, runner).
 
   @parameterized.product(
       cycle_layout=[True, False],
@@ -48,6 +56,15 @@ class ConcatenateKernelRunnerTest(parameterized.TestCase):
       concat_dimension=[0, 1, 2],
   )
   def test_concatenate(self, cycle_layout, dtype, concat_dimension):
+    # [FUNCTION DOC]
+    # Test: concatenates five random 4x4x4 arrays (values scaled to 0..10 and cast to dtype)
+    # along concat_dimension (0, 1 or 2) using the CPU concatenate kernel emitter.
+    # When cycle_layout is true, each input literal gets a different rotated minor-to-major
+    # layout to exercise the emitter's slower general path; otherwise default layouts are used.
+    # Creates HLO parameters and a concatenate instruction, builds the module and buffer
+    # assignment, emits the kernel (asserted to be non-null), runs it on the input literals plus
+    # a zero-initialized output literal, and asserts exact equality with numpy concatenation.
+    # Parameters are supplied by the parameterized product of layout flag, dtype and dimension.
     num_inputs = 5
     shape = (4, 4, 4)
     np_inputs = [

@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Backend-independent tests for the codegen test library extension: building an HLO module from
+# instructions and printing it, round-tripping a numpy array through a literal, and running the
+# dummy add kernel runner provided by the extension. Defines no import-time side effects beyond a
+# create_literal alias.
 # Copyright 2024 The OpenXLA Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,8 +29,17 @@ create_literal = testlib_utilities.create_literal_from_np
 
 
 class HloModuleParse(absltest.TestCase):
+  # [CLASS DOC]
+  # KNOWN ISSUE: the name suggests parsing HLO text, but the test builds the module from
+  # instructions rather than parsing.
+  # Test case for constructing an HLO module through the extension API. Stateless.
 
   def test_from_instruction(self):
+    # [FUNCTION DOC]
+    # Test: creates a 4-element int32 parameter and a sine instruction on it, builds a module
+    # named after the instruction with a computation from those, and asserts the printed module
+    # text contains, in order, the module header, the parameter line, the root sine line and the
+    # closing brace.
     shape = xla_extension.Shape.array_shape(np.dtype(np.int32), (4,))
     hlo_parameter = _extension.HloInstruction.create_parameter(
         0, shape, "input"
@@ -51,16 +65,26 @@ class HloModuleParse(absltest.TestCase):
 
 
 class LiteralFromNpTest(absltest.TestCase):
+  # [CLASS DOC]
+  # Test case for the numpy-to-literal conversion helper. Stateless.
 
   def test_output_same_as_input(self):
+    # [FUNCTION DOC]
+    # Test: converts a 4-element int32 array to a literal and asserts that viewing the literal
+    # as a numpy array gives the original values.
     array = np.array([1, 2, 3, 4], dtype=np.int32)
     got = create_literal(array)
     np.testing.assert_array_equal(np.asarray(got), array)
 
 
 class DummyKernelRunnerTest(absltest.TestCase):
+  # [CLASS DOC]
+  # Test case for the dummy add kernel runner exposed by the extension. Stateless.
 
   def test_dummy_kernel(self):
+    # [FUNCTION DOC]
+    # Test: runs the dummy add kernel runner on two 4-element int32 input literals and a zeroed
+    # output literal, and asserts the output equals the elementwise sum of the inputs.
     runner = _extension.DummyAddKernelRunner()
     in_arg1 = create_literal(np.array([1, 2, 3, 4], dtype=np.int32))
     in_arg2 = create_literal(np.array([5, 6, 7, 8], dtype=np.int32))

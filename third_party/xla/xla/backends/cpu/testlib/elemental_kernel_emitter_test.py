@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Tests for the XLA CPU elemental kernel emitter. Three parameterized test classes check that
+# kernels emitted for (1) elementwise unary/binary/ternary opcodes such as sine, add, power,
+# clamp, (2) comparison instructions in all directions and (3) map and reduce computations given
+# as HLO text produce the same results as numpy, across shapes and dtypes. Each test builds or
+# parses an HLO module, emits a kernel with the elemental emitter, JIT-compiles and runs it.
+# Also defines helpers: an input generator, an erf wrapper for numpy and a frozen dataclass that
+# pairs an HLO opcode with its numpy reference, input range and decimal precision.
+# No import-time side effects beyond defining module-level aliases.
 # Copyright 2024 The OpenXLA Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -41,6 +50,14 @@ def create_input(
     dtype: np.dtype,
     shuffle: bool = False,
 ) -> np.ndarray:
+  # [FUNCTION DOC]
+  # HELPER: builds deterministic (or shuffled) test input arrays for the elemental emitter tests.
+  # Creates evenly spaced values between the two ends of value_range (a pair of floats,
+  # inclusive) cast to dtype and reshaped to shape (a sequence of ints; empty means a scalar
+  # with one element). If shuffle is true (default false) and the result is not a scalar, the
+  # values are shuffled in place along the first axis using the global numpy random state, so
+  # the output is then non-deterministic. Returns the array.
+  # Note that an infinite range, as used for the is-finite test, yields non-finite values.
   size = np.prod(shape) if shape else 1
   result = np.linspace(
       value_range[0], value_range[1], size, dtype=dtype
@@ -53,11 +70,24 @@ def create_input(
 
 
 def np_erf(x):
+  # [FUNCTION DOC]
+  # HELPER: numpy reference for the error function used by the erf opcode test.
+  # Applies the standard-library error function elementwise over the numpy array x and returns
+  # an array with the same element type as x. Raises a type error for non-numeric input.
   return np.vectorize(math.erf, otypes=[x.dtype])(x)
 
 
 @dataclasses.dataclass(frozen=True)
 class ElementalHloOpcodeDef:
+  # [CLASS DOC]
+  # HELPER: immutable test-case descriptor for the elemental opcode tests.
+  # KNOWN ISSUE: the np_op annotation puts an ellipsis inside the Callable argument list, which
+  # is not a valid way to say variable number of arguments.
+  # Fields: op, the HLO opcode under test; np_op, the numpy reference callable taking one array
+  # per opcode operand; input_ranges, the (low, high) range of generated input values (default
+  # minus one to one); decimal_precision, number of decimals for the comparison (default 6).
+  # Supports unpacking into those four values and a short readable representation used in the
+  # generated test names.
   op: HloOpcode
   np_op: Callable[[np.ndarray, ...], np.ndarray]
   input_ranges: tuple[float, float] = (-1.0, 1.0)
@@ -65,11 +95,18 @@ class ElementalHloOpcodeDef:
 
   # For simple unpacking
   def __iter__(self):
+    # [FUNCTION DOC]
+    # Iterates over the four fields in order (opcode, numpy reference, input range, decimal
+    # precision) so an instance can be unpacked like a sequence. Returns an iterator; no side
+    # effects.
     return iter(
         (self.op, self.np_op, self.input_ranges, self.decimal_precision)
     )
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns a short string made of the opcode name followed by the input range in parentheses.
+    # This string appears in the generated parameterized test names. No side effects.
     return f"{self.op.name}({self.input_ranges})"
 
 
@@ -116,6 +153,14 @@ class ElementalHloOpcodeDef:
     dtype=[np.dtype(np.float32), np.dtype(np.float64)],
 )
 class ElementalKernelRunnerTest(parameterized.TestCase):
+  # [CLASS DOC]
+  # KNOWN ISSUE: the power entry uses the numpy pow alias that exists only in numpy 2 and later,
+  # and the is-finite entry uses an infinite input range, so its inputs are not meaningful
+  # linearly spaced finite values.
+  # Parameterized test case (decorated to run over a product of opcode definitions, shapes and
+  # float32/float64 dtypes) checking elementwise opcodes against numpy through the elemental
+  # kernel emitter. The decorator list covers math, arithmetic, min/max, sign, rounding, tanh,
+  # atan2, erf and clamp. Stateless.
 
   def test_elemental_kernel_emitter(
       self,
@@ -123,6 +168,14 @@ class ElementalKernelRunnerTest(parameterized.TestCase):
       shape: tuple[int, ...],
       dtype: np.dtype,
   ):
+    # [FUNCTION DOC]
+    # Test: for one opcode definition, shape and dtype. Determines the opcode arity, creates that
+    # many identical evenly spaced inputs in the definition's range, computes the numpy expected
+    # output, builds HLO parameters and a variadic instruction for the opcode, builds the module,
+    # emits a kernel with the elemental emitter (asserted non-null), saves the kernel IR text
+    # (because the runner consumes the kernel definition), runs the kernel and asserts the output
+    # equals the expected values to the definition's decimal precision, with the IR text as the
+    # failure message. Fails if the opcode has no known arity.
 
     [op, np_op, input_ranges, decimal_precision] = op_def
 
@@ -202,8 +255,18 @@ class ElementalKernelRunnerTest(parameterized.TestCase):
     ],
 )
 class ElementalComparisonKernelRunnerTest(parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case (over six comparison directions with their numpy equivalents, three
+  # shapes and eleven integer and float dtypes) for compare instructions emitted by the
+  # elemental kernel emitter. Stateless.
 
   def test_elemental_comparision_kernel_emitter(self, op_def, shape, dtype):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the method name misspells comparison; also relies on the numpy bool alias.
+    # Test: compares two independently shuffled evenly spaced arrays (range 0..20 for unsigned
+    # types, minus ten to ten otherwise) elementwise with the given direction. Builds a compare
+    # instruction with a boolean output, emits and runs the kernel, and asserts the boolean
+    # output exactly equals the numpy comparison.
     [direction, np_op] = op_def
 
     is_unsigned = np.issubdtype(dtype, np.unsignedinteger)
@@ -262,8 +325,17 @@ class ElementalComparisonKernelRunnerTest(parameterized.TestCase):
     ],
 )
 class HloModuleKernelRunnerTest(parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case (over three input shapes and eleven dtypes) for kernels emitted from
+  # HLO text containing map and reduce instructions with sub-computations, via the elemental
+  # kernel emitter. Stateless.
 
   def test_map(self, input_dimensions, dtype):
+    # [FUNCTION DOC]
+    # Test: parses an HLO module whose entry maps a doubling computation (multiply by constant
+    # two) over an array of the given dimensions and dtype, emits and runs the elemental kernel
+    # on a shuffled input in range 0..10, and asserts the output exactly equals twice the input.
+    # The HLO text is built with string formatting of shapes, hence doubled braces in the text.
     scalar_shape = xla_extension.Shape.scalar_shape(dtype)
     shape = xla_extension.Shape.array_shape(dtype, input_dimensions)
 
@@ -311,6 +383,16 @@ class HloModuleKernelRunnerTest(parameterized.TestCase):
     )
 
   def test_reduce(self, input_dimensions, dtype):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: reduction dimension sets are only built with sizes from one up to rank minus
+    # one, so full reductions are never tested and rank-one inputs run no iterations at all
+    # (the test passes without checking anything).
+    # KNOWN ISSUE: for the 8-bit signed dtype the output shape is declared as 16-bit signed while
+    # the reducer computation and operands stay 8-bit, so the HLO types disagree.
+    # Test: for each non-empty proper subset of dimensions, parses an HLO module that reduces the
+    # input with an add computation and a scalar initial value parameter, emits and runs the
+    # elemental kernel, and asserts the output is within 3 units in the last place of the numpy
+    # add-reduction over those axes with the initial value. Inputs are evenly spaced 0..10.
     # Iterate over all combinations of reduce dimensions.
     for reduce_dimensions in itertools.chain.from_iterable(
         itertools.combinations(range(len(input_dimensions)), r)

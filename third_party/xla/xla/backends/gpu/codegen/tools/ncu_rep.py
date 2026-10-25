@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# Command-line tool that prints selected metrics from an NVIDIA Nsight Compute report file
+# (ncu-rep). It runs the ncu binary (found on the path, otherwise a default CUDA install
+# location) to export the report as CSV in raw page format, parses the table, optionally filters
+# kernels, aggregates the requested metrics across the selected kernels and prints them as
+# markdown, CSV, JSON or raw text. The parsing, filtering and formatting logic lives in the
+# companion library module so it can be unit tested.
+# Import-time side effects: defines absl command-line flags (metric names, output format, kernel
+# filter, list kernels, list metrics), resolves the ncu binary path into a module-level variable
+# and logs it at info level.
+# Entry point: the main function, run through the absl application runner when executed.
 # Copyright 2025 The OpenXLA Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -72,6 +83,23 @@ logging.info("ncu binary: %s", ncu_bin)
 
 
 def main(argv: Sequence[str]) -> None:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the usage text in the module docstring is garbled (it runs the metric option
+  # into the words about printing all metric names).
+  # KNOWN ISSUE: builds a mapping from column names to indexes that is never used, and leaves a
+  # commented-out alternative locale line behind.
+  # Entry point of the tool. Input: argv, the command-line arguments after flag parsing; it must
+  # contain exactly the program name and one report file path, otherwise a usage error is raised;
+  # a usage error is also raised if the file does not exist or if filters match no kernel.
+  # Runs the ncu binary on the file with CSV output, base units and the raw page, forcing the
+  # locale to US English UTF-8 in the child environment for consistent number formatting; a
+  # failing ncu process raises a called-process error. Parses the CSV rows; if the list-metrics
+  # flag is set prints every column name and returns. Otherwise extracts per-kernel metrics,
+  # applies each kernel filter in order, and, if the list-kernels flag is set, prints the id and
+  # name of each remaining kernel and returns. If several kernels remain, writes an
+  # aggregation notice to standard error. Aggregates the requested metrics and writes them to
+  # standard output in the chosen format (csv, json, raw, or markdown by default).
+  # Returns nothing.
   if len(argv) != 2:
     raise app.UsageError("provide .ncu-rep file path")
   input_file_name = argv[1]
