@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Aggregation module that re-exports the deprecated distribution classes (Bernoulli, Beta,
+# Categorical, Dirichlet, DirichletMultinomial, Exponential, Gamma, Laplace, Multinomial, Normal,
+# StudentT, Uniform) together with everything public from the distribution base module and the
+# KL divergence module, so users can import them from one place. Contains no logic of its own.
+# Import-time side effects: imports all those submodules with deprecation warnings silenced
+# during the imports, then deletes the temporary deprecation module name from its namespace.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

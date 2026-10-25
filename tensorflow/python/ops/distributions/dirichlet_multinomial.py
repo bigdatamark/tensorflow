@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Defines the deprecated (v1 only) Dirichlet-Multinomial compound distribution over vectors of
+# non-negative integer class counts that sum to a given total count, with class probabilities
+# drawn from a Dirichlet. Exposes the class DirichletMultinomial through the module export list
+# and builds on the generic Distribution base class and the distribution utility helpers.
+# Import-time side effects: registers the class with the public API export decorator.
+# Also defines a shared documentation note appended to the probability-method docstrings.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -49,6 +56,15 @@ with `self.concentration` and `self.total_count`."""
 
 @tf_export(v1=["distributions.DirichletMultinomial"])
 class DirichletMultinomial(distribution.Distribution):
+  # [CLASS DOC]
+  # Dirichlet-Multinomial compound distribution (a Beta-Binomial generalization) over count
+  # vectors whose last dimension is the number of classes K (at least 2) and whose entries sum
+  # to total_count. Holds three tensors: total_count (number of trials per draw), concentration
+  # (positive Dirichlet parameters, last axis is the event dimension) and total_concentration
+  # (concentration summed over the last axis). Subclasses the generic Distribution, with samples
+  # that are not reparameterized, and implements the private hooks (shapes, sampling, log/prob,
+  # mean, covariance, variance) used by the public methods. Created from array-likes for total
+  # count and concentration; deprecated in favor of the separate probability library.
   """Dirichlet-Multinomial compound distribution.
 
   The Dirichlet-Multinomial distribution is parameterized by a (batch of)
@@ -174,6 +190,20 @@ class DirichletMultinomial(distribution.Distribution):
                validate_args=False,
                allow_nan_stats=True,
                name="DirichletMultinomial"):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says the concentration dtype matches "n", but no parameter
+    # named n exists (it means total_count); the docstring also implies total_count may be
+    # broadcast freely, yet sampling only supports a scalar total count (see sampling hook).
+    # Constructor. Converts total_count and concentration to tensors; when validate_args is
+    # true, requires total_count to be non-negative integer valued and concentration to have a
+    # valid categorical event shape and be positive. Stores total_count, concentration and the
+    # concentration sum over the last axis, and initializes the base Distribution with the
+    # concentration dtype and no reparameterization.
+    # Inputs: total_count (non-negative float array-like, broadcastable to the batch shape);
+    # concentration (positive float array-like, last dimension is the class count); validate_args
+    # (default false); allow_nan_stats (default true); name (default "DirichletMultinomial").
+    # Outputs: none. Side effects: ops created in a name scope; deprecation decorator logs a
+    # one-time warning. Raises assertion/invalid-argument errors only when validate_args is true.
     """Initialize a batch of DirichletMultinomial distributions.
 
     Args:
@@ -228,33 +258,67 @@ class DirichletMultinomial(distribution.Distribution):
 
   @property
   def total_count(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the stored tensor of trial counts per draw. No side effects.
     """Number of trials used to construct a sample."""
     return self._total_count
 
   @property
   def concentration(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the stored concentration tensor (last axis is the class
+    # dimension). No side effects.
     """Concentration parameter; expected prior counts for that coordinate."""
     return self._concentration
 
   @property
   def total_concentration(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the concentration summed over the last axis, computed once in
+    # the constructor. No side effects.
     """Sum of last dim of concentration parameter."""
     return self._total_concentration
 
   def _batch_shape_tensor(self):
+    # [FUNCTION DOC]
+    # HELPER: Base-class hook for the public batch shape tensor method.
+    # Returns the dynamic shape of the total concentration (concentration without its last
+    # axis) as an integer vector tensor. Note total_count does not contribute to the batch shape.
     return array_ops.shape(self.total_concentration)
 
   def _batch_shape(self):
+    # [FUNCTION DOC]
+    # HELPER: Base-class hook for the static batch shape property.
+    # Returns the static shape of the total concentration (possibly partially unknown).
     return self.total_concentration.get_shape()
 
   def _event_shape_tensor(self):
+    # [FUNCTION DOC]
+    # HELPER: Base-class hook for the public event shape tensor method.
+    # Returns a one-element integer vector tensor with the size of the last concentration
+    # dimension (the number of classes).
     return array_ops.shape(self.concentration)[-1:]
 
   def _event_shape(self):
+    # [FUNCTION DOC]
+    # HELPER: Base-class hook for the static event shape property.
+    # Returns the static shape of the last concentration dimension as a one-dimensional shape.
+    # Raises a value error if the concentration rank is unknown or below 1.
     # Event shape depends only on total_concentration, not "n".
     return self.concentration.get_shape().with_rank_at_least(1)[-1:]
 
   def _sample_n(self, n, seed=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the number of draws is taken from the whole total_count tensor and passed as
+    # the sample count of the multinomial op, which requires a scalar; a batched (non-scalar)
+    # total_count will fail or misbehave even though the constructor docs allow broadcasting.
+    # HELPER: Base-class hook used by the public sample method.
+    # Draws n samples in two stages: gamma variates with the concentration as shape are
+    # turned into log values and used as unnormalized logits (equivalent to sampling Dirichlet
+    # class probabilities), then a multinomial op draws total_count categorical outcomes per
+    # row, which are one-hot encoded and summed into class counts. Inputs: n is the number of
+    # samples; seed is an optional random seed (a derived seed is used for the second stage).
+    # Returns a tensor of shape [n] + batch shape + [K] with the distribution dtype.
     n_draws = math_ops.cast(self.total_count, dtype=dtypes.int32)
     k = self.event_shape_tensor()[0]
     unnormalized_logits = array_ops.reshape(
@@ -275,6 +339,13 @@ class DirichletMultinomial(distribution.Distribution):
 
   @distribution_util.AppendDocstring(_dirichlet_multinomial_sample_note)
   def _log_prob(self, counts):
+    # [FUNCTION DOC]
+    # HELPER: Base-class hook for the public log probability method (docstring gets an
+    # appended note).
+    # Optionally validates counts (non-negative integer form and last-axis sum equal to
+    # total_count when validate_args is set), then returns lbeta(concentration + counts) minus
+    # lbeta(concentration) plus the log of the combinatorial coefficient for total_count and
+    # counts. Returns a tensor of the broadcast batch shape.
     counts = self._maybe_assert_valid_sample(counts)
     ordered_prob = (
         special_math_ops.lbeta(self.concentration + counts)
@@ -284,9 +355,17 @@ class DirichletMultinomial(distribution.Distribution):
 
   @distribution_util.AppendDocstring(_dirichlet_multinomial_sample_note)
   def _prob(self, counts):
+    # [FUNCTION DOC]
+    # HELPER: Base-class hook for the public probability method.
+    # Returns the exponential of the log probability of the count tensor; same input
+    # requirements and validation as the log probability hook.
     return math_ops.exp(self._log_prob(counts))
 
   def _mean(self):
+    # [FUNCTION DOC]
+    # HELPER: Base-class hook for the public mean method.
+    # Returns total_count times concentration divided by total concentration (broadcast on the
+    # last axis); shape is the broadcast of batch shape plus class dimension.
     return self.total_count * (self.concentration /
                                self.total_concentration[..., array_ops.newaxis])
 
@@ -309,6 +388,11 @@ class DirichletMultinomial(distribution.Distribution):
       ```
       """)
   def _covariance(self):
+    # [FUNCTION DOC]
+    # HELPER: Base-class hook for the public covariance method (docstring gets an appended
+    # formula note).
+    # Builds the negative outer product of (scale term times mean) with itself and replaces its
+    # diagonal with the variance. Returns a tensor of shape batch shape + [K, K].
     x = self._variance_scale_term() * self._mean()
     # pylint: disable=invalid-unary-operand-type
     return array_ops.matrix_set_diag(
@@ -318,11 +402,19 @@ class DirichletMultinomial(distribution.Distribution):
         self._variance())
 
   def _variance(self):
+    # [FUNCTION DOC]
+    # HELPER: Base-class hook for the public variance method.
+    # With x = scale * mean, returns x * (total_count * scale - x) per class. Output shape is
+    # batch shape plus class dimension.
     scale = self._variance_scale_term()
     x = scale * self._mean()
     return x * (self.total_count * scale - x)
 
   def _variance_scale_term(self):
+    # [FUNCTION DOC]
+    # HELPER: Shared by the covariance and variance computations.
+    # Returns the square root of (1 + c0 / total_count) / (1 + c0), where c0 is the total
+    # concentration with a trailing axis added for broadcasting against the class dimension.
     """Helper to `_covariance` and `_variance` which computes a shared scale."""
     # We must take care to expand back the last dim whenever we use the
     # total_concentration.
@@ -330,6 +422,12 @@ class DirichletMultinomial(distribution.Distribution):
     return math_ops.sqrt((1. + c0 / self.total_count) / (1. + c0))
 
   def _maybe_assert_valid_concentration(self, concentration, validate_args):
+    # [FUNCTION DOC]
+    # HELPER: Constructor validation helper.
+    # Inputs: concentration tensor; validate_args flag. If false, returns concentration as is.
+    # Otherwise embeds a categorical event-shape check (rank at least 1, class count within the
+    # dtype and index limits) and ties the result to an assertion that all entries are
+    # positive; failures raise invalid-argument errors.
     """Checks the validity of the concentration parameter."""
     if not validate_args:
       return concentration
@@ -342,6 +440,11 @@ class DirichletMultinomial(distribution.Distribution):
     ], concentration)
 
   def _maybe_assert_valid_sample(self, counts):
+    # [FUNCTION DOC]
+    # HELPER: Count validation helper for the density methods.
+    # Returns counts unchanged if validate_args is false. Otherwise checks they are
+    # non-negative integer valued and ties them to an assertion that the last-axis sum equals
+    # total_count; failures raise invalid-argument errors. Returns the (possibly wrapped) counts.
     """Check counts for proper shape, values, then return tensor version."""
     if not self.validate_args:
       return counts

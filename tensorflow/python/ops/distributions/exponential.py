@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Defines the deprecated (v1 only) Exponential distribution, implemented as a Gamma distribution
+# with concentration fixed at one, and a variant whose rate is passed through a softplus
+# transform. Exposes the classes Exponential and ExponentialWithSoftplusRate via the module
+# export list; only Exponential is registered with the public API export decorator (import-time
+# side effect). Depends on the Gamma distribution module for most behavior.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,6 +41,12 @@ __all__ = [
 
 @tf_export(v1=["distributions.Exponential"])
 class Exponential(gamma.Gamma):
+  # [CLASS DOC]
+  # Exponential distribution over positive reals parameterized by a positive rate (inverse
+  # scale; mean is one over rate). Subclass of Gamma that always uses a concentration of one.
+  # Holds the rate tensor; overrides the parameter-shape helper, the log survival function and
+  # sampling (inverse-transform of uniform variates) while inheriting the other statistics from
+  # Gamma. Created from a rate array-like; deprecated in favor of the separate probability library.
   """Exponential distribution.
 
   The Exponential distribution is parameterized by an event `rate` parameter.
@@ -80,6 +92,16 @@ class Exponential(gamma.Gamma):
                validate_args=False,
                allow_nan_stats=True,
                name="Exponential"):
+    # [FUNCTION DOC]
+    # Constructor. Converts rate to a tensor inside a name scope, then initializes the parent
+    # Gamma with a scalar concentration of one (same dtype as rate) and that rate. Afterwards it
+    # overwrites the stored parameters with this class's own constructor arguments and appends
+    # the rate tensor to the graph parents list.
+    # Inputs: rate (positive float array-like, equal to one over the mean); validate_args
+    # (default false) enables parameter checks in the parent; allow_nan_stats (default true);
+    # name (default "Exponential"). Outputs: none. Side effects: ops created in a name scope;
+    # deprecation decorator logs a one-time warning. Invalid rates raise assertion errors only
+    # when validate_args is true.
     """Construct Exponential distribution with parameter `rate`.
 
     Args:
@@ -113,16 +135,34 @@ class Exponential(gamma.Gamma):
 
   @staticmethod
   def _param_shapes(sample_shape):
+    # [FUNCTION DOC]
+    # HELPER: Static helper used by the base class parameter-shape utilities.
+    # Input: sample_shape, a shape given as a list or tensor of integers. Returns a mapping
+    # with a single entry, rate, whose value is the sample shape converted to a 32-bit integer
+    # tensor (the rate has the same shape as the samples' batch).
     return {"rate": ops.convert_to_tensor(sample_shape, dtype=dtypes.int32)}
 
   @property
   def rate(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the rate tensor (inverse scale) given at construction.
     return self._rate
 
   def _log_survival_function(self, value):
+    # [FUNCTION DOC]
+    # HELPER: Base-class hook for the public log survival function method.
+    # Input: value, tensor of points (non-negative expected). Returns the log probability
+    # density at value minus the log of the rate, which equals minus rate times value (the
+    # exact log of the survival function) for non-negative values. No validation is done here.
     return self._log_prob(value) - math_ops.log(self._rate)
 
   def _sample_n(self, n, seed=None):
+    # [FUNCTION DOC]
+    # HELPER: Base-class hook used by the public sample method.
+    # Draws n samples by inverse-transform sampling: uniform variates in the open interval
+    # between the smallest positive normal number and one, then minus log of the uniform divided
+    # by the rate. Inputs: n number of samples; seed optional random seed. Returns a tensor of
+    # shape [n] plus the rate shape with the distribution dtype. Uses the random generator.
     shape = array_ops.concat([[n], array_ops.shape(self._rate)], 0)
     # Uniform variates must be sampled from the open-interval `(0, 1)` rather
     # than `[0, 1)`. To do so, we use `np.finfo(self.dtype.as_numpy_dtype).tiny`
@@ -141,6 +181,11 @@ class Exponential(gamma.Gamma):
 
 
 class ExponentialWithSoftplusRate(Exponential):
+  # [CLASS DOC]
+  # Exponential distribution whose rate parameter is the softplus transform of an unconstrained
+  # input, guaranteeing a positive rate. Adds no state beyond the parent class and is not
+  # exported in the public API; deprecated in favor of building an Exponential from a softplus
+  # of the rate directly.
   """Exponential with softplus transform on `rate`."""
 
   @deprecation.deprecated(
@@ -152,6 +197,14 @@ class ExponentialWithSoftplusRate(Exponential):
                validate_args=False,
                allow_nan_stats=True,
                name="ExponentialWithSoftplusRate"):
+    # [FUNCTION DOC]
+    # Constructor. Inside a name scope, applies softplus to the raw rate input and passes the
+    # result to the Exponential constructor along with the validation and NaN flags, then
+    # replaces the stored parameters with this class's own constructor arguments.
+    # Inputs: rate (unconstrained float array-like, mapped to a positive value); validate_args
+    # (default false); allow_nan_stats (default true); name (default
+    # "ExponentialWithSoftplusRate"). Outputs: none. Side effects: ops created; the
+    # deprecation decorator logs a one-time warning.
     parameters = dict(locals())
     with ops.name_scope(name, values=[rate]) as name:
       super(ExponentialWithSoftplusRate, self).__init__(
