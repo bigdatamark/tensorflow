@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# Defines linear operators acting like (batch) circulant matrices, block circulant matrices and
+# nested block circulant matrices, all described by their frequency-domain spectrum rather than by
+# a dense matrix. Exposes a private base class (shared FFT-based matmul, solve, determinant, trace,
+# diagonal, eigenvalue and condition-number logic) and three public classes for block depth 1, 2
+# and 3 (circulant, 2-D block circulant, 3-D nested block circulant), plus a public function that
+# builds an exponentiated-power convolution kernel whose FFT can serve as a spectrum, and a
+# private helper converting tensors to complex dtype. Import-time side effects: builds two module
+# level tables mapping block depth to the forward and inverse FFT operations, registers the public
+# classes for export and makes them composite-tensor types. Not a helper module.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -50,6 +60,20 @@ def exponential_power_convolution_kernel(
     divisor=None,
     zero_inflation=None,
 ):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring formula omits the leading minus sign: the code computes the
+  # exponential of the NEGATIVE sum over dimensions of (absolute scaled distance from the grid
+  # midpoint, divided by that dimension's length scale) raised to the power, divided by the divisor,
+  # so the kernel decays away from the center instead of growing. Distances are measured on a
+  # unit-interval grid per dimension, not as multi-indices divided by the grid shape.
+  # Builds a real convolution kernel on a grid. Inputs: grid_shape, a list of 1 to 3 integers (the
+  # size along each dimension); length_scale, a vector of floats with one entry per dimension;
+  # power, optional scalar (default 2); divisor, optional scalar (default equal to power);
+  # zero_inflation, optional scalar in zero to one that mixes the kernel with a unit impulse at the
+  # origin (skipped when null or zero). Process: places evenly spaced points on the unit interval
+  # per dimension, computes the exponentiated distance, circularly shifts so the peak sits at the
+  # origin index, then optionally blends with the impulse. Returns a tensor of shape grid_shape with
+  # the dtype of length_scale. No side effects; no explicit input validation.
   """Make an exponentiated convolution kernel.
 
   In signal processing, a [kernel]
@@ -165,6 +189,17 @@ def exponential_power_convolution_kernel(
 #   common filters.
 # TODO(langmore) Support rectangular Toeplitz matrices.
 class _BaseLinearOperatorCirculant(linear_operator.LinearOperator):
+  # [CLASS DOC]
+  # HELPER: shared implementation base for the public circulant, 2-D block circulant and 3-D
+  # nested block circulant operators.
+  # Represents a (batch of) square matrix that is diagonalized by the discrete Fourier transform
+  # over the trailing block_depth dimensions; the operator is stored only as its spectrum (the
+  # diagonal in the Fourier basis). State: the spectrum tensor, the block depth (1, 2 or 3), and
+  # the name. The operator's matrix size is the product of the trailing spectrum dimensions.
+  # Implements shape, matmul, solve, determinant, log determinant, trace, diagonal, eigenvalue,
+  # condition number, assertions and convolution kernel via FFTs. Also implements adjoint, inverse
+  # and product/solve with other operators of the same kind by operating on the spectrum. Not
+  # user facing; subclasses fix the block depth.
   """Base class for circulant operators.  Not user facing.
 
   `LinearOperator` acting like a [batch] [[nested] block] circulant matrix.
@@ -180,6 +215,20 @@ class _BaseLinearOperatorCirculant(linear_operator.LinearOperator):
                is_square: bool = True,
                parameters=None,
                name="LinearOperatorCirculant"):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the error message for a real spectrum with is_self_adjoint false claims the
+    # argument must be true "when spectrum is complex"; the check actually fires when the spectrum
+    # dtype is NOT complex. The docstring's type error for a disallowed spectrum dtype is not
+    # raised here.
+    # Initializes the base operator. Inputs: spectrum, tensor of shape batch dims plus 1 to 3
+    # block dims; block_depth, integer 1, 2 or 3; input_output_dtype, dtype used for inputs and
+    # outputs (default complex64, may differ from the spectrum dtype); is_non_singular,
+    # is_self_adjoint, is_positive_definite: optional hints; is_square, hint that must not be
+    # false (default true); parameters, mapping of constructor arguments stored by the base class;
+    # name, string name scope (also stored on the instance). Raises a value error if block_depth
+    # is not 1, 2 or 3, if the spectrum rank is statically less than block_depth, if a real
+    # spectrum is declared not self-adjoint, or if is_square is false. A real spectrum forces
+    # self-adjoint true. Stores block depth and spectrum, then calls the base constructor.
     r"""Initialize an `_BaseLinearOperatorCirculant`.
 
     Args:
@@ -247,6 +296,11 @@ class _BaseLinearOperatorCirculant(linear_operator.LinearOperator):
           name=name)
 
   def _check_spectrum_and_return_tensor(self, spectrum):
+    # [FUNCTION DOC]
+    # HELPER: validation/conversion helper for the base constructor.
+    # Converts the spectrum to a tensor (leaving variable-like references alone) and, if its rank
+    # is statically known to be smaller than the block depth, raises a value error. Returns the
+    # tensor. Relies on the block depth already being set on the instance.
     """Static check of spectrum.  Then return `Tensor` version."""
     spectrum = linear_operator_util.convert_nonref_to_tensor(spectrum,
                                                              name="spectrum")
@@ -260,6 +314,9 @@ class _BaseLinearOperatorCirculant(linear_operator.LinearOperator):
 
   @property
   def block_depth(self):
+    # [FUNCTION DOC]
+    # Property returning the block depth as a plain integer: 1 for circulant, 2 for block
+    # circulant, 3 for nested block circulant.
     """Depth of recursively defined circulant blocks defining this `Operator`.
 
     With `A` the dense representation of this `Operator`,
@@ -292,12 +349,22 @@ class _BaseLinearOperatorCirculant(linear_operator.LinearOperator):
     return self._block_depth
 
   def block_shape_tensor(self):
+    # [FUNCTION DOC]
+    # Returns the shape of the trailing block dimensions of the spectrum as an integer tensor
+    # (static constant when fully known, otherwise computed at runtime). Delegates to the private
+    # variant with default arguments.
     """Shape of the block dimensions of `self.spectrum`."""
     # If spectrum.shape = [s0, s1, s2], and block_depth = 2,
     # block_shape = [s1, s2]
     return self._block_shape_tensor()
 
   def _block_shape_tensor(self, spectrum_shape=None):
+    # [FUNCTION DOC]
+    # HELPER: computes the block shape tensor for block_shape_tensor and batch broadcasting.
+    # Input: spectrum_shape, optional integer tensor holding a (possibly broadcast) spectrum shape;
+    # if null the runtime shape of the stored spectrum is used. If the static block shape is fully
+    # defined, returns it as a constant tensor (ignoring spectrum_shape); otherwise returns the
+    # last block_depth entries of the shape tensor.
     if self.block_shape.is_fully_defined():
       return linear_operator_util.shape_tensor(
           self.block_shape.as_list(), name="block_shape")
@@ -307,6 +374,11 @@ class _BaseLinearOperatorCirculant(linear_operator.LinearOperator):
     return spectrum_shape[-self.block_depth:]
 
   def _linop_adjoint(self) -> "_BaseLinearOperatorCirculant":
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the new operator is built without passing the input/output dtype, so it falls
+    # back to the default complex64 even if this operator uses a different dtype.
+    # Returns the adjoint as a new base circulant operator whose spectrum is the complex conjugate
+    # of this one (unchanged for real spectra), with the same block depth and property hints.
     spectrum = self.spectrum
     if spectrum.dtype.is_complex:
       spectrum = math_ops.conj(spectrum)
@@ -321,6 +393,10 @@ class _BaseLinearOperatorCirculant(linear_operator.LinearOperator):
         is_square=True)
 
   def _linop_inverse(self) -> "_BaseLinearOperatorCirculant":
+    # [FUNCTION DOC]
+    # Returns the inverse as a new base circulant operator whose spectrum is the elementwise
+    # reciprocal of this spectrum, keeping block depth, hints and this operator's dtype. Zero
+    # spectrum entries are not checked.
     return _BaseLinearOperatorCirculant(
         spectrum=1. / self.spectrum,
         block_depth=self.block_depth,
@@ -335,6 +411,13 @@ class _BaseLinearOperatorCirculant(linear_operator.LinearOperator):
       left_operator: "_BaseLinearOperatorCirculant",
       right_operator: linear_operator.LinearOperator,
   ) -> linear_operator.LinearOperator:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the resulting operator does not carry over an input/output dtype, so it
+    # defaults to complex64.
+    # Product of two circulant operators of the same kind: if the right operator is a base
+    # circulant operator and the left operator is an instance of the right operator's type, returns
+    # a new circulant operator whose spectrum is the elementwise product of the two spectra (same
+    # block depth, hints combined assuming commuting operators). Otherwise defers to the base class.
     if (not isinstance(right_operator, _BaseLinearOperatorCirculant)
         or not isinstance(left_operator, type(right_operator))):
       return super()._linop_matmul(left_operator, right_operator)
@@ -356,6 +439,12 @@ class _BaseLinearOperatorCirculant(linear_operator.LinearOperator):
       left_operator: "_BaseLinearOperatorCirculant",
       right_operator: linear_operator.LinearOperator,
   ) -> linear_operator.LinearOperator:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the resulting operator does not carry over an input/output dtype, so it
+    # defaults to complex64.
+    # Solve of the left circulant operator against a right circulant operator of the same kind:
+    # returns a new circulant operator whose spectrum is the right spectrum divided elementwise by
+    # the left spectrum, with combined hints. Otherwise defers to the base class implementation.
     if (not isinstance(right_operator, _BaseLinearOperatorCirculant)
         or not isinstance(left_operator, type(right_operator))):
       return super()._linop_solve(left_operator, right_operator)
@@ -374,13 +463,24 @@ class _BaseLinearOperatorCirculant(linear_operator.LinearOperator):
 
   @property
   def block_shape(self):
+    # [FUNCTION DOC]
+    # Property returning the static shape of the trailing block dimensions of the spectrum (the
+    # last block_depth entries of its shape).
     return self.spectrum.shape[-self.block_depth:]
 
   @property
   def spectrum(self) -> tensor.Tensor:
+    # [FUNCTION DOC]
+    # Property returning the stored spectrum tensor (batch dims followed by block dims).
     return self._spectrum
 
   def _vectorize_then_blockify(self, matrix):
+    # [FUNCTION DOC]
+    # HELPER: prepares a batch matrix for FFT-based matmul and solve.
+    # Input: matrix, tensor of shape batch dims, rows, columns. Rotates the axes so the column
+    # axis comes first (turning each column into a vector in a batch), then reshapes the vector
+    # axis into the block shape. Uses static shapes when everything is fully defined, else dynamic.
+    # Returns a tensor of shape columns, batch dims, block dims. No side effects.
     """Shape batch matrix to batch vector, then blockify trailing dimensions."""
     # Suppose
     #   matrix.shape = [m0, m1, m2, m3],
@@ -411,6 +511,11 @@ class _BaseLinearOperatorCirculant(linear_operator.LinearOperator):
     return array_ops.reshape(vec, final_shape)
 
   def _unblockify(self, x):
+    # [FUNCTION DOC]
+    # HELPER: inverse of the blockify reshape used by matmul, solve, eigenvalues and condition.
+    # Input: x, tensor whose last block_depth dimensions are block dimensions. Returns x reshaped
+    # so those dimensions are flattened into one (their product), leaving leading dims unchanged.
+    # Uses static shapes when known, otherwise dynamic ones.
     """Flatten the trailing block dimensions."""
     # Suppose
     #   x.shape = [v0, v1, v2, v3],
@@ -438,6 +543,10 @@ class _BaseLinearOperatorCirculant(linear_operator.LinearOperator):
     return array_ops.reshape(x, flat_shape)
 
   def _unblockify_then_matricize(self, vec):
+    # [FUNCTION DOC]
+    # HELPER: converts FFT-domain results back to batch-matrix layout in matmul and solve.
+    # Input: vec, tensor of shape columns, batch dims, block dims. Flattens the block dims, then
+    # rotates the leading axis to the end so the result has shape batch dims, rows, columns.
     """Flatten the block dimensions then reshape to a batch matrix."""
     # Suppose
     #   vec.shape = [v0, v1, v2, v3],
@@ -459,6 +568,12 @@ class _BaseLinearOperatorCirculant(linear_operator.LinearOperator):
     return matrix
 
   def _fft(self, x):
+    # [FUNCTION DOC]
+    # HELPER: forward DFT used by matmul and solve.
+    # KNOWN ISSUE: the docstring says the result has complex64 dtype, but the input is converted
+    # to complex64 only for dtypes other than double and complex; float64 input gives complex128.
+    # Converts x to a complex tensor and applies the 1-D, 2-D or 3-D forward FFT matching the
+    # block depth over the trailing dimensions. Returns the complex tensor.
     """FFT along the last self.block_depth dimensions of x.
 
     Args:
@@ -472,6 +587,12 @@ class _BaseLinearOperatorCirculant(linear_operator.LinearOperator):
     return _FFT_OP[self.block_depth](x_complex)
 
   def _ifft(self, x):
+    # [FUNCTION DOC]
+    # HELPER: inverse DFT used by matmul, solve and the convolution kernel.
+    # KNOWN ISSUE: the docstring says the result has complex64 dtype, but float64 or complex128
+    # inputs give complex128 output.
+    # Converts x to a complex tensor and applies the inverse FFT of the dimensionality matching the
+    # block depth over the trailing dimensions. Returns the complex tensor.
     """IFFT along the last self.block_depth dimensions of x.
 
     Args:
@@ -485,6 +606,11 @@ class _BaseLinearOperatorCirculant(linear_operator.LinearOperator):
     return _IFFT_OP[self.block_depth](x_complex)
 
   def convolution_kernel(self, name="convolution_kernel"):
+    # [FUNCTION DOC]
+    # Public method returning the convolution kernel whose DFT is the spectrum. Input: name, string
+    # name scope for the created ops. Computes the inverse FFT of the (complex-converted) spectrum
+    # and casts the result to the operator's dtype; casting to a real dtype drops the imaginary
+    # part. Returns a tensor of the same shape as the spectrum.
     """Convolution kernel corresponding to `self.spectrum`.
 
     The `D` dimensional DFT of this kernel is the frequency domain spectrum of
@@ -501,6 +627,9 @@ class _BaseLinearOperatorCirculant(linear_operator.LinearOperator):
       return math_ops.cast(h, self.dtype)
 
   def _shape(self):
+    # [FUNCTION DOC]
+    # Returns the static operator shape: the spectrum's batch dimensions followed by N and N,
+    # where N is the product of the block dimensions (unknown if any block dimension is unknown).
     s_shape = self._spectrum.shape
     # Suppose spectrum.shape = [a, b, c, d]
     # block_depth = 2
@@ -520,6 +649,10 @@ class _BaseLinearOperatorCirculant(linear_operator.LinearOperator):
     return batch_shape.concatenate(n_x_n)
 
   def _shape_tensor(self, spectrum=None):
+    # [FUNCTION DOC]
+    # Returns the dynamic operator shape as an integer tensor: batch dims followed by N and N, with
+    # N the product of the block dims. Input: spectrum, optional tensor to use instead of the
+    # stored spectrum (used when the spectrum has been batch-broadcast); defaults to the stored one.
     spectrum = self.spectrum if spectrum is None else spectrum
     # See self.shape for explanation of steps
     s_shape = array_ops.shape(spectrum)
@@ -530,6 +663,12 @@ class _BaseLinearOperatorCirculant(linear_operator.LinearOperator):
     return array_ops.concat((batch_shape, n_x_n), 0)
 
   def assert_hermitian_spectrum(self, name="assert_hermitian_spectrum"):
+    # [FUNCTION DOC]
+    # Public method returning an assertion op that the spectrum is Hermitian, i.e. the operator
+    # corresponds to a real matrix. Input: name, string name scope. Computes the convolution
+    # kernel and asserts every absolute imaginary part is below a tolerance equal to machine
+    # epsilon of the real dtype times the domain dimension (assuming linear error growth); the
+    # failure message says the spectrum was not Hermitian. Returns the assertion op.
     """Returns an `Op` that asserts this operator has Hermitian spectrum.
 
     This operator corresponds to a real-valued matrix if and only if its
@@ -552,11 +691,17 @@ class _BaseLinearOperatorCirculant(linear_operator.LinearOperator):
           message="Spectrum was not Hermitian")
 
   def _assert_non_singular(self):
+    # [FUNCTION DOC]
+    # Returns an assertion op failing if any spectrum entry has zero modulus (singular operator).
     return linear_operator_util.assert_no_entries_with_modulus_zero(
         self.spectrum,
         message="Singular operator:  Spectrum contained zero values.")
 
   def _assert_positive_definite(self):
+    # [FUNCTION DOC]
+    # Returns an assertion op that the real part of every spectrum entry is strictly positive,
+    # which is equivalent to positive definiteness because the operator is a Fourier-basis
+    # diagonal matrix.
     # This operator has the action  Ax = F^H D F x,
     # where D is the diagonal matrix with self.spectrum on the diag.  Therefore,
     # <x, Ax> = <Fx, DFx>,
@@ -568,6 +713,10 @@ class _BaseLinearOperatorCirculant(linear_operator.LinearOperator):
         math_ops.real(self.spectrum), message=message)
 
   def _assert_self_adjoint(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the inner comment ends with "See docstring" but refers to nothing specific.
+    # Returns an assertion op that every spectrum entry has zero imaginary part; the operator is
+    # self-adjoint exactly when its spectrum is real.
     # Recall correspondence between symmetry and real transforms.  See docstring
     return linear_operator_util.assert_zero_imag_part(
         self.spectrum,
@@ -576,6 +725,13 @@ class _BaseLinearOperatorCirculant(linear_operator.LinearOperator):
         ))
 
   def _broadcast_batch_dims(self, x, spectrum):
+    # [FUNCTION DOC]
+    # HELPER: aligns batch dimensions of the argument and the spectrum for matmul and solve.
+    # Inputs: x, batch matrix tensor; spectrum, spectrum tensor (possibly already conjugated or
+    # complex-converted). Reshapes the spectrum to a batch of column vectors, broadcasts batch
+    # dimensions of both together (adding zeros if required), then restores the block shape on the
+    # broadcast spectrum. Returns a pair: broadcast x and broadcast spectrum. Fails at graph or run
+    # time if the batch shapes are incompatible.
     """Broadcast batch dims of batch matrix `x` and spectrum."""
     spectrum = tensor_conversion.convert_to_tensor_v2_with_dispatch(
         spectrum, name="spectrum"
@@ -603,6 +759,11 @@ class _BaseLinearOperatorCirculant(linear_operator.LinearOperator):
     return x, spectrum
 
   def _cond(self):
+    # [FUNCTION DOC]
+    # Returns the condition number per batch member: the ratio of the largest to the smallest
+    # absolute spectrum entry (these are the singular values, since the operator is diagonalized by
+    # the unitary Fourier basis). A zero smallest entry yields infinity/NaN. The dangling "So in all
+    # cases," comment is an unfinished remark.
     # Regardless of whether the operator is real, it is always diagonalizable by
     # the Fourier basis F. I.e.  A = F S F^H, with S a diagonal matrix
     # containing the spectrum. We then have:
@@ -614,11 +775,21 @@ class _BaseLinearOperatorCirculant(linear_operator.LinearOperator):
             math_ops.reduce_min(abs_singular_values, axis=-1))
 
   def _eigvals(self):
+    # [FUNCTION DOC]
+    # Returns the eigenvalues, which are the spectrum entries, with the block dimensions flattened
+    # into one trailing axis of length N.
     return tensor_conversion.convert_to_tensor_v2_with_dispatch(
         self._unblockify(self.spectrum)
     )
 
   def _matmul(self, x, adjoint=False, adjoint_arg=False):
+    # [FUNCTION DOC]
+    # Multiplies the operator (or its adjoint) by a batch matrix. Inputs: x, tensor; adjoint, if
+    # true use the conjugated spectrum; adjoint_arg, if true take the conjugate transpose of x
+    # first. Method: convert the spectrum to complex (conjugate if adjoint), cast x to that dtype,
+    # broadcast batch dimensions, reshape x to blocked vectors, forward FFT, multiply by the
+    # spectrum, inverse FFT, reshape back to a matrix, and cast to the operator's dtype (casting a
+    # complex result to a real dtype discards the imaginary part). Returns the product tensor.
     x = linalg.adjoint(x) if adjoint_arg else x
     # With F the matrix of a DFT, and F^{-1}, F^H the inverse and Hermitian
     # transpose, one can show that F^{-1} = F^{H} is the IDFT matrix.  Therefore
@@ -642,17 +813,29 @@ class _BaseLinearOperatorCirculant(linear_operator.LinearOperator):
     return math_ops.cast(y, self.dtype)
 
   def _determinant(self):
+    # [FUNCTION DOC]
+    # Returns the determinant per batch member: the product of all spectrum entries over the block
+    # axes, cast to the operator's dtype.
     axis = [-(i + 1) for i in range(self.block_depth)]
     det = math_ops.reduce_prod(self.spectrum, axis=axis)
     return math_ops.cast(det, self.dtype)
 
   def _log_abs_determinant(self):
+    # [FUNCTION DOC]
+    # Returns the log of the absolute determinant per batch member: the sum over block axes of the
+    # log of the absolute spectrum entries, cast to the operator's dtype.
     axis = [-(i + 1) for i in range(self.block_depth)]
     lad = math_ops.reduce_sum(
         math_ops.log(math_ops.abs(self.spectrum)), axis=axis)
     return math_ops.cast(lad, self.dtype)
 
   def _solve(self, rhs, adjoint=False, adjoint_arg=False):
+    # [FUNCTION DOC]
+    # Solves the system for a batch matrix right-hand side. Inputs: rhs, tensor; adjoint, if true
+    # use the conjugated spectrum; adjoint_arg, if true conjugate-transpose rhs first. Method: as
+    # in matmul but divides the forward FFT of rhs by the spectrum before the inverse FFT.
+    # Zero spectrum entries give infinities/NaNs; no singularity check. Unlike matmul, rhs is not
+    # cast to the spectrum dtype. Returns the solution cast to the operator's dtype.
     rhs = linalg.adjoint(rhs) if adjoint_arg else rhs
     spectrum = _to_complex(self.spectrum)
     if adjoint:
@@ -667,6 +850,11 @@ class _BaseLinearOperatorCirculant(linear_operator.LinearOperator):
     return math_ops.cast(x, self.dtype)
 
   def _diag_part(self):
+    # [FUNCTION DOC]
+    # Returns the matrix diagonal per batch member. All diagonal entries of a circulant operator
+    # equal the trace divided by N, so this computes that value from the trace and broadcasts it
+    # across a ones tensor of the diagonal shape (using static shapes if fully defined, else
+    # dynamic). For an empty (0 by 0) operator this yields an empty tensor.
     # Get ones in shape of diag, which is [B1,...,Bb, N]
     # Also get the size of the diag, "N".
     if self.shape.is_fully_defined():
@@ -695,6 +883,11 @@ class _BaseLinearOperatorCirculant(linear_operator.LinearOperator):
     return diag_value[..., array_ops.newaxis] * ones_diag
 
   def _trace(self):
+    # [FUNCTION DOC]
+    # Returns the trace per batch member: the sum of the spectrum over the block axes. For a real
+    # operator dtype only the real part is summed; for complex dtype the imaginary part is also
+    # summed unless the operator is known to be self-adjoint (then it is zero). Result is cast to
+    # the operator's dtype.
     # The diagonal of the [[nested] block] circulant operator is the mean of
     # the spectrum.
     # Proof:  For the [0,...,0] element, this follows from the IDFT formula.
@@ -730,16 +923,32 @@ class _BaseLinearOperatorCirculant(linear_operator.LinearOperator):
 
   @property
   def _composite_tensor_fields(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: names an input/output dtype field, but operators created by this base class's
+    # own adjoint, inverse, matmul and solve shortcuts get no parameters mapping at all, so
+    # that field is only recorded for instances built through the public subclasses.
+    # Property naming the constructor arguments that are tensor components: the spectrum and the
+    # input/output dtype.
     return ("spectrum", "input_output_dtype")
 
   @property
   def _experimental_parameter_ndims_to_matrix_ndims(self):
+    # [FUNCTION DOC]
+    # Property mapping the spectrum parameter to its number of matrix (non-batch) dimensions,
+    # which equals the block depth.
     return {"spectrum": self.block_depth}
 
 
 @tf_export("linalg.LinearOperatorCirculant")
 @linear_operator.make_composite_tensor
 class LinearOperatorCirculant(_BaseLinearOperatorCirculant):
+  # [CLASS DOC]
+  # Public linear operator acting like a (batch of) circulant matrix, defined by a spectrum tensor
+  # of shape batch dims plus N (the DFT of the generating convolution kernel). Block depth is
+  # fixed at 1. Matrix products and solves are done with FFTs without materializing the matrix.
+  # Inherits all behavior from the private base class and only adds the constructor and
+  # subclass-typed adjoint, inverse, matmul and solve shortcuts. Created by passing a spectrum and
+  # optional dtype and property hints; exported publicly and a composite tensor.
   """`LinearOperator` acting like a circulant matrix.
 
   This operator acts like a circulant matrix `A` with
@@ -933,6 +1142,13 @@ class LinearOperatorCirculant(_BaseLinearOperatorCirculant):
                is_positive_definite: bool = None,
                is_square: bool = True,
                name="LinearOperatorCirculant"):
+    # [FUNCTION DOC]
+    # Constructs a block-depth-1 circulant operator. Inputs: spectrum, tensor of shape batch dims
+    # plus N; input_output_dtype, dtype for inputs and outputs (default complex64); is_non_singular,
+    # is_self_adjoint, is_positive_definite: optional hints; is_square, must not be false (default
+    # true); name, string name scope. Records the constructor arguments as the parameters mapping
+    # and forwards to the base constructor with block depth 1. Raises a value error if is_square is
+    # false or if a real spectrum is declared not self-adjoint. Returns nothing.
     r"""Initialize an `LinearOperatorCirculant`.
 
     This `LinearOperator` is initialized to have shape `[B1,...,Bb, N, N]`
@@ -997,6 +1213,11 @@ class LinearOperatorCirculant(_BaseLinearOperatorCirculant):
         name=name)
 
   def _linop_adjoint(self) -> "LinearOperatorCirculant":
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the adjoint is built without passing the input/output dtype, so it resets to
+    # the default complex64 even if this operator uses another dtype.
+    # Returns the adjoint as a new circulant operator with the conjugated spectrum (unchanged if
+    # real) and the same property hints.
     spectrum = self.spectrum
     if spectrum.dtype.is_complex:
       spectrum = math_ops.conj(spectrum)
@@ -1010,6 +1231,9 @@ class LinearOperatorCirculant(_BaseLinearOperatorCirculant):
         is_square=True)
 
   def _linop_inverse(self) -> "LinearOperatorCirculant":
+    # [FUNCTION DOC]
+    # Returns the inverse as a new circulant operator whose spectrum is the elementwise reciprocal,
+    # keeping hints and this operator's dtype. Zero entries are not checked.
     return LinearOperatorCirculant(
         spectrum=1. / self.spectrum,
         is_non_singular=self.is_non_singular,
@@ -1023,6 +1247,11 @@ class LinearOperatorCirculant(_BaseLinearOperatorCirculant):
       left_operator: "LinearOperatorCirculant",
       right_operator: linear_operator.LinearOperator,
   ) -> linear_operator.LinearOperator:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the product does not carry over an input/output dtype (defaults to complex64).
+    # Product shortcut: if the right operator is a circulant operator and the left operator is an
+    # instance of its type, returns a circulant operator with the elementwise product spectrum and
+    # combined commuting hints; otherwise defers to the base class implementation.
     if not isinstance(
         right_operator, LinearOperatorCirculant
     ) or not isinstance(left_operator, type(right_operator)):
@@ -1049,6 +1278,12 @@ class LinearOperatorCirculant(_BaseLinearOperatorCirculant):
       left_operator: "LinearOperatorCirculant",
       right_operator: linear_operator.LinearOperator,
   ) -> linear_operator.LinearOperator:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: unlike the matmul shortcut it does not verify the left operator's type, and the
+    # result does not carry over an input/output dtype (defaults to complex64).
+    # Solve shortcut: if the right operator is a circulant operator, returns a circulant operator
+    # whose spectrum is the right spectrum divided elementwise by the left spectrum, with combined
+    # hints; otherwise defers to the base class implementation.
     if not isinstance(right_operator, LinearOperatorCirculant):
       return super()._linop_solve(left_operator, right_operator)
 
@@ -1067,6 +1302,12 @@ class LinearOperatorCirculant(_BaseLinearOperatorCirculant):
 @tf_export("linalg.LinearOperatorCirculant2D")
 @linear_operator.make_composite_tensor
 class LinearOperatorCirculant2D(_BaseLinearOperatorCirculant):
+  # [CLASS DOC]
+  # Public linear operator acting like a (batch of) block circulant matrix with circulant blocks,
+  # defined by a spectrum tensor of shape batch dims plus N0 and N1 (the 2-D DFT of the kernel);
+  # the matrix size is N0 times N1. Block depth is fixed at 2 and FFT-based computations are
+  # inherited from the private base class. Adds the constructor and same-type adjoint, inverse,
+  # matmul and solve shortcuts. Exported publicly and a composite tensor.
   """`LinearOperator` acting like a block circulant matrix.
 
   This operator acts like a block circulant matrix `A` with
@@ -1194,6 +1435,13 @@ class LinearOperatorCirculant2D(_BaseLinearOperatorCirculant):
                is_positive_definite: bool = None,
                is_square: bool = True,
                name="LinearOperatorCirculant2D"):
+    # [FUNCTION DOC]
+    # Constructs a block-depth-2 operator. Inputs: spectrum, tensor of shape batch dims plus N0 and
+    # N1; input_output_dtype, dtype for inputs and outputs (default complex64); is_non_singular,
+    # is_self_adjoint, is_positive_definite: optional hints; is_square, must not be false (default
+    # true); name, string name scope. Records the arguments as the parameters mapping and forwards
+    # to the base constructor with block depth 2. Raises a value error if is_square is false or a
+    # real spectrum is declared not self-adjoint. Returns nothing.
     r"""Initialize an `LinearOperatorCirculant2D`.
 
     This `LinearOperator` is initialized to have shape `[B1,...,Bb, N, N]`
@@ -1252,6 +1500,11 @@ class LinearOperatorCirculant2D(_BaseLinearOperatorCirculant):
         name=name)
 
   def _linop_adjoint(self) -> "LinearOperatorCirculant2D":
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the adjoint is built without the input/output dtype, so it resets to the
+    # default complex64 even if this operator uses another dtype.
+    # Returns the adjoint as a new 2-D operator with the conjugated spectrum (unchanged if real)
+    # and the same property hints.
     spectrum = self.spectrum
     if spectrum.dtype.is_complex:
       spectrum = math_ops.conj(spectrum)
@@ -1265,6 +1518,9 @@ class LinearOperatorCirculant2D(_BaseLinearOperatorCirculant):
         is_square=True)
 
   def _linop_inverse(self) -> "LinearOperatorCirculant2D":
+    # [FUNCTION DOC]
+    # Returns the inverse as a new 2-D operator whose spectrum is the elementwise reciprocal,
+    # keeping hints and this operator's dtype. Zero entries are not checked.
     return LinearOperatorCirculant2D(
         spectrum=1. / self.spectrum,
         is_non_singular=self.is_non_singular,
@@ -1278,6 +1534,11 @@ class LinearOperatorCirculant2D(_BaseLinearOperatorCirculant):
       left_operator: "LinearOperatorCirculant2D",
       right_operator: linear_operator.LinearOperator,
   ) -> linear_operator.LinearOperator:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the product does not carry over an input/output dtype (defaults to complex64).
+    # Product shortcut: if the right operator is a 2-D operator and the left operator is an
+    # instance of its type, returns a 2-D operator with the elementwise product spectrum and
+    # combined commuting hints; otherwise defers to the base class implementation.
     if not isinstance(
         right_operator, LinearOperatorCirculant2D
     ) or not isinstance(left_operator, type(right_operator)):
@@ -1304,6 +1565,12 @@ class LinearOperatorCirculant2D(_BaseLinearOperatorCirculant):
       left_operator: "LinearOperatorCirculant2D",
       right_operator: linear_operator.LinearOperator,
   ) -> linear_operator.LinearOperator:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: unlike the matmul shortcut it does not verify the left operator's type, and the
+    # result does not carry over an input/output dtype (defaults to complex64).
+    # Solve shortcut: if the right operator is a 2-D operator, returns a 2-D operator whose
+    # spectrum is the right spectrum divided elementwise by the left spectrum, with combined hints;
+    # otherwise defers to the base class implementation.
     if not isinstance(right_operator, LinearOperatorCirculant2D):
       return super()._linop_solve(left_operator, right_operator)
 
@@ -1322,6 +1589,12 @@ class LinearOperatorCirculant2D(_BaseLinearOperatorCirculant):
 @tf_export("linalg.LinearOperatorCirculant3D")
 @linear_operator.make_composite_tensor
 class LinearOperatorCirculant3D(_BaseLinearOperatorCirculant):
+  # [CLASS DOC]
+  # Public linear operator acting like a (batch of) nested block circulant matrix, defined by a
+  # spectrum tensor of shape batch dims plus N0, N1 and N2 (the 3-D DFT of the kernel); the matrix
+  # size is N0 times N1 times N2. Block depth is fixed at 3 and FFT-based computations are
+  # inherited from the private base class. Adds the constructor and same-type adjoint, inverse,
+  # matmul and solve shortcuts. Exported publicly and a composite tensor.
   """`LinearOperator` acting like a nested block circulant matrix.
 
   This operator acts like a block circulant matrix `A` with
@@ -1422,6 +1695,15 @@ class LinearOperatorCirculant3D(_BaseLinearOperatorCirculant):
                is_positive_definite: bool = None,
                is_square: bool = True,
                name="LinearOperatorCirculant3D"):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring's summary line names the 1-D circulant class instead of this 3-D
+    # class.
+    # Constructs a block-depth-3 operator. Inputs: spectrum, tensor of shape batch dims plus N0, N1
+    # and N2; input_output_dtype, dtype for inputs and outputs (default complex64); is_non_singular,
+    # is_self_adjoint, is_positive_definite: optional hints; is_square, must not be false (default
+    # true); name, string name scope. Records the arguments as the parameters mapping and forwards
+    # to the base constructor with block depth 3. Raises a value error if is_square is false or a
+    # real spectrum is declared not self-adjoint. Returns nothing.
     """Initialize an `LinearOperatorCirculant`.
 
     This `LinearOperator` is initialized to have shape `[B1,...,Bb, N, N]`
@@ -1480,6 +1762,11 @@ class LinearOperatorCirculant3D(_BaseLinearOperatorCirculant):
         name=name)
 
   def _linop_adjoint(self) -> "LinearOperatorCirculant3D":
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the adjoint is built without the input/output dtype, so it resets to the
+    # default complex64 even if this operator uses another dtype.
+    # Returns the adjoint as a new 3-D operator with the conjugated spectrum (unchanged if real)
+    # and the same property hints.
     spectrum = self.spectrum
     if spectrum.dtype.is_complex:
       spectrum = math_ops.conj(spectrum)
@@ -1493,6 +1780,9 @@ class LinearOperatorCirculant3D(_BaseLinearOperatorCirculant):
         is_square=True)
 
   def _linop_inverse(self) -> "LinearOperatorCirculant3D":
+    # [FUNCTION DOC]
+    # Returns the inverse as a new 3-D operator whose spectrum is the elementwise reciprocal,
+    # keeping hints and this operator's dtype. Zero entries are not checked.
     return LinearOperatorCirculant3D(
         spectrum=1. / self.spectrum,
         is_non_singular=self.is_non_singular,
@@ -1506,6 +1796,11 @@ class LinearOperatorCirculant3D(_BaseLinearOperatorCirculant):
       left_operator: "LinearOperatorCirculant3D",
       right_operator: linear_operator.LinearOperator,
   ) -> linear_operator.LinearOperator:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the product does not carry over an input/output dtype (defaults to complex64).
+    # Product shortcut: if the right operator is a 3-D operator and the left operator is an
+    # instance of its type, returns a 3-D operator with the elementwise product spectrum and
+    # combined commuting hints; otherwise defers to the base class implementation.
     if not isinstance(
         right_operator, LinearOperatorCirculant3D
     ) or not isinstance(left_operator, type(right_operator)):
@@ -1532,6 +1827,12 @@ class LinearOperatorCirculant3D(_BaseLinearOperatorCirculant):
       left_operator: "LinearOperatorCirculant3D",
       right_operator: linear_operator.LinearOperator,
   ) -> linear_operator.LinearOperator:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: unlike the matmul shortcut it does not verify the left operator's type, and the
+    # result does not carry over an input/output dtype (defaults to complex64).
+    # Solve shortcut: if the right operator is a 3-D operator, returns a 3-D operator whose
+    # spectrum is the right spectrum divided elementwise by the left spectrum, with combined hints;
+    # otherwise defers to the base class implementation.
     if not isinstance(right_operator, LinearOperatorCirculant3D):
       return super()._linop_solve(left_operator, right_operator)
 
@@ -1548,6 +1849,10 @@ class LinearOperatorCirculant3D(_BaseLinearOperatorCirculant):
 
 
 def _to_complex(x):
+  # [FUNCTION DOC]
+  # HELPER: dtype normalization for the FFT-based circulant computations.
+  # Input: x, a tensor. Returns x unchanged if already complex; otherwise casts it to complex128
+  # if it is float64, and to complex64 for every other dtype (including float16 and float32).
   if x.dtype.is_complex:
     return x
   dtype = dtypes.complex64

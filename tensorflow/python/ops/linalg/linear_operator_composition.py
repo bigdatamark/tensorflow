@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Defines LinearOperatorComposition, a LinearOperator representing the product of one or more
+# operators applied right to left (the first operator is applied last). It exposes the public
+# operator class (exported under the linalg namespace) with composed shape computation, matmul,
+# solve, determinant, log-determinant, Cholesky and non-singularity assertions that delegate to the
+# component operators, plus a private helper that decides when a composition must be
+# self-adjoint. Import-time side effects: the class is registered for public export and made into
+# a composite-tensor type. Not a helper module.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,6 +43,15 @@ __all__ = ["LinearOperatorComposition"]
 @tf_export("linalg.LinearOperatorComposition")
 @linear_operator.make_composite_tensor
 class LinearOperatorComposition(linear_operator.LinearOperator):
+  # [CLASS DOC]
+  # Linear operator equal to the matrix product of a non-empty list of operators, which must share
+  # a dtype and have chained inner dimensions (domain of one matches range of the next) and
+  # broadcastable batch shapes. Holds the operator list as its state. Nothing is materialized:
+  # matmul applies the operators in turn, solve applies component solves in the opposite order, and
+  # determinants multiply (or sum, in log form) the component values. Subclasses LinearOperator and
+  # automatically infers some property hints (non-singular, self-adjoint, square, positive
+  # definite) from its components. Created by passing the list of operators and optional hints;
+  # exported publicly and a composite tensor.
   """Composes one or more `LinearOperators`.
 
   This operator composes one or more linear operators `[op1,...,opJ]`,
@@ -120,6 +137,17 @@ class LinearOperatorComposition(linear_operator.LinearOperator):
                is_positive_definite=None,
                is_square=None,
                name=None):
+    # [FUNCTION DOC]
+    # Builds the composition. Inputs: operators, a non-empty iterable of linear operators with
+    # one common dtype; is_non_singular, is_self_adjoint, is_positive_definite, is_square:
+    # optional boolean hints (default null); name, optional string (default: component operator
+    # names joined by a separator). Hints are auto-set when provable and contradicted hints are
+    # rejected: all components non-singular forces non-singular; a self-adjoint composition (single
+    # self-adjoint operator or A times A-adjoint form) forces self-adjoint; A times A-adjoint form
+    # forces square, and with non-singular also positive definite. Raises a value error for an
+    # empty list or any contradicted false hint, and a type error if dtypes differ (also checks
+    # the argument is a proper iterable). Stores the operator list and calls the base constructor
+    # inside a name scope. Returns nothing.
     r"""Initialize a `LinearOperatorComposition`.
 
     `LinearOperatorComposition` is initialized with a list of operators
@@ -217,9 +245,17 @@ class LinearOperatorComposition(linear_operator.LinearOperator):
 
   @property
   def operators(self):
+    # [FUNCTION DOC]
+    # Property returning the list of component operators, in composition order.
     return self._operators
 
   def _shape(self):
+    # [FUNCTION DOC]
+    # Returns the static shape of the composition: broadcast of all component batch shapes
+    # followed by (range dimension of the first operator, domain dimension of the last). Checks
+    # that each operator's domain dimension is compatible with the next operator's range dimension
+    # and raises a value error (from the shape utilities) if not or if batch shapes cannot
+    # broadcast.
     # Get final matrix shape.
     domain_dimension = self.operators[0].domain_dimension
     for operator in self.operators[1:]:
@@ -240,6 +276,12 @@ class LinearOperatorComposition(linear_operator.LinearOperator):
     return batch_shape.concatenate(matrix_shape)
 
   def _shape_tensor(self):
+    # [FUNCTION DOC]
+    # Returns the dynamic shape as an integer tensor. If the static shape is fully known, returns
+    # it as a constant. Otherwise builds the matrix part from the first operator's range dimension
+    # and last operator's domain dimension tensors, and finds the broadcast batch shape by adding
+    # dummy zero tensors of each component batch shape and reading the result's shape. Dimension
+    # compatibility is not asserted at graph level.
     # Avoid messy broadcasting if possible.
     if self.shape.is_fully_defined():
       return ops.convert_to_tensor(
@@ -262,6 +304,13 @@ class LinearOperatorComposition(linear_operator.LinearOperator):
     return array_ops.concat((batch_shape, matrix_shape), 0)
 
   def _linop_cholesky(self) -> linear_operator.LinearOperator:
+    # [FUNCTION DOC]
+    # Returns the Cholesky factor as a lower-triangular operator. If the composition is exactly
+    # two operators in the form L times L-adjoint with L lower triangular, reuses L (returned
+    # directly if L is positive definite, else rows are divided by the sign of its diagonal to make
+    # the diagonal positive, with hints derived from L). Otherwise densifies the composition and
+    # runs a dense Cholesky, wrapping the result as lower triangular (non-singular, not
+    # self-adjoint, square). Assumes the composition is positive definite (base class checks).
     """Computes Cholesky(LinearOperatorComposition)."""
     # L @ L.H will be handled with special code below. Why is L @ L.H the most
     # important special case?
@@ -271,6 +320,10 @@ class LinearOperatorComposition(linear_operator.LinearOperator):
     # So these would not appear in a LinearOperatorComposition unless explicitly
     # constructed as such. So the most important thing to check is L @ L.H.
     def _is_llt_product(self):
+      # [FUNCTION DOC]
+      # HELPER: local predicate used by the Cholesky computation of the composition.
+      # Returns true only if the composition has exactly two operators, they form the
+      # A-times-A-adjoint pattern, and the first is a lower-triangular operator; otherwise false.
       """Determines if linop = L @ L.H for L = LinearOperatorLowerTriangular."""
       if len(self.operators) != 2:
         return False
@@ -322,6 +375,11 @@ class LinearOperatorComposition(linear_operator.LinearOperator):
     )
 
   def _matmul(self, x, adjoint=False, adjoint_arg=False):
+    # [FUNCTION DOC]
+    # Multiplies the composition (or its adjoint) by x. Applies each component's matmul in
+    # sequence: for the plain case from the last operator to the first; for the adjoint case from
+    # the first to the last (each with adjoint set). adjoint_arg applies only to the first applied
+    # operator, adjusting x. Returns the resulting tensor; errors come from component operators.
     # If self.operators = [A, B], and not adjoint, then
     # matmul_order_list = [B, A].
     # As a result, we return A.matmul(B.matmul(x))
@@ -337,18 +395,28 @@ class LinearOperatorComposition(linear_operator.LinearOperator):
     return result
 
   def _determinant(self):
+    # [FUNCTION DOC]
+    # Returns the determinant of the composition as the product of the components' determinants.
     result = self.operators[0].determinant()
     for operator in self.operators[1:]:
       result *= operator.determinant()
     return result
 
   def _log_abs_determinant(self):
+    # [FUNCTION DOC]
+    # Returns the log absolute determinant as the sum of the components' log absolute
+    # determinants.
     result = self.operators[0].log_abs_determinant()
     for operator in self.operators[1:]:
       result += operator.log_abs_determinant()
     return result
 
   def _solve(self, rhs, adjoint=False, adjoint_arg=False):
+    # [FUNCTION DOC]
+    # Solves the composed system for rhs by successive component solves, in the opposite order to
+    # matmul: first to last for the plain case, last to first for the adjoint case. adjoint_arg
+    # applies to the first solve only. Assumes every component is square and invertible; no
+    # least-squares fallback is implemented (see the TODO). Returns the solution tensor.
     # TODO(langmore) Implement solve using solve_ls if some intermediate
     # operator maps to a high dimensional space.
     # In that case, an exact solve may still be possible.
@@ -368,6 +436,10 @@ class LinearOperatorComposition(linear_operator.LinearOperator):
     return solution
 
   def _assert_non_singular(self):
+    # [FUNCTION DOC]
+    # If every component is square, returns a grouped assertion of each component's
+    # non-singularity check; otherwise falls back to the base class check (which works on the
+    # dense or generic form).
     if all(operator.is_square for operator in self.operators):
       asserts = [operator.assert_non_singular() for operator in self.operators]
       return control_flow_ops.group(asserts)
@@ -375,14 +447,24 @@ class LinearOperatorComposition(linear_operator.LinearOperator):
 
   @property
   def _composite_tensor_fields(self):
+    # [FUNCTION DOC]
+    # Property naming the constructor arguments that are tensor components: the operators list.
     return ("operators",)
 
   @property
   def _experimental_parameter_ndims_to_matrix_ndims(self):
+    # [FUNCTION DOC]
+    # Property mapping the operators parameter to a list with one zero per component operator
+    # (no trailing matrix dimensions are attributed at this level).
     return {"operators": [0] * len(self.operators)}
 
 
 def _composition_must_be_self_adjoint(operators):
+  # [FUNCTION DOC]
+  # HELPER: used by the LinearOperatorComposition constructor to auto-set the self-adjoint hint.
+  # Input: list of linear operators. Returns true if the composition is provably self-adjoint:
+  # a single self-adjoint operator, or operators in A times A-adjoint form. Returns false when it
+  # is not self-adjoint or when this cannot be determined (some cases are missed). No side effects.
   """Runs some checks to see if composition operators must be SA.
 
   Args:
