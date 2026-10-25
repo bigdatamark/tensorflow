@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Defines TPUEmbeddingV0, the mid level TPU embedding API that does not use embedding hardware.
+# Exposes one exported class. Import-time side effect: export registration only.
 """Mid level API for TPU Embeddings without Embedding Accelerator."""
 
 from typing import Any, Dict, Iterable, Optional, Text, Union
@@ -37,6 +40,14 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export("tpu.experimental.embedding.TPUEmbeddingV0")
 class TPUEmbeddingV0(tpu_embedding_base.TPUEmbeddingBase):
+  # [CLASS DOC]
+  # KNOWN ISSUE: the docstring example refers to an embedding_table attribute and mixes names;
+  # the real accessor is the embedding_tables property.
+  # Mid level embedding API for TPUs without embedding hardware: tables are replicated on every
+  # device and lookups run as ordinary dense ops on the TPU core. Created under a TPU strategy
+  # from a feature config and an optimizer; calls build lazily and exposes the table variables and
+  # an embedding_lookup method handling dense, sparse and ragged inputs. Registered for export
+  # as the public TPUEmbeddingV0 symbol. Holds the strategy and a built flag.
   """The TPUEmbedding mid level API running on TPU without Embedding accelerator.
 
   NOTE: This mid level API is not intended for large embedding table lookup.
@@ -131,6 +142,11 @@ class TPUEmbeddingV0(tpu_embedding_base.TPUEmbeddingBase):
       self,
       feature_config: Union[tpu_embedding_v2_utils.FeatureConfig, Iterable],  # pylint:disable=g-bare-generic
       optimizer: Optional[tpu_embedding_v2_utils._Optimizer]):  # pylint:disable=protected-access
+    # [FUNCTION DOC]
+    # Constructor. Inputs: feature_config is a feature config or nested structure of them;
+    # optimizer is an embedding optimizer or nothing. Calls the base constructor, records the
+    # current distribution strategy, and marks the object as not yet built.
+    # Raises a runtime error if the current strategy is not a TPU strategy.
     super(TPUEmbeddingV0, self).__init__(feature_config, optimizer)
     self._strategy = distribute_lib.get_strategy()
     if not isinstance(self._strategy,
@@ -143,6 +159,9 @@ class TPUEmbeddingV0(tpu_embedding_base.TPUEmbeddingBase):
   @property
   def embedding_tables(
       self) -> Dict[tpu_embedding_v2_utils.TableConfig, tf_variables.Variable]:
+    # [FUNCTION DOC]
+    # Read-only property. Builds the variables if needed and returns a mapping from each table
+    # config to its parameter variable (slot variables are excluded). Side effect: may build.
     """Returns a dict of embedding tables, keyed by `TableConfig`."""
     self._maybe_build()
     # Only return the tables and not the slot variables.
@@ -153,6 +172,11 @@ class TPUEmbeddingV0(tpu_embedding_base.TPUEmbeddingBase):
 
   def _create_variables_and_slots(
       self) -> Dict[Text, Dict[Text, tf_variables.Variable]]:
+    # [FUNCTION DOC]
+    # HELPER: variable creation hook called by the base class build step.
+    # Creates, for every table config, a trainable parameter variable plus slot variables through
+    # the base class helper, keyed by table name. Returns a mapping from table name to a mapping
+    # of 'parameters' and slot names to variables. Side effect: creates variables.
     """Create variables for TPU embeddings.
 
     Note that this will always ensure that the variable is created under the
@@ -169,6 +193,11 @@ class TPUEmbeddingV0(tpu_embedding_base.TPUEmbeddingBase):
     return variables
 
   def _maybe_build(self):
+    # [FUNCTION DOC]
+    # HELPER: lazy-build guard for the embedding tables property.
+    # Builds the variables once if not already built, inside an init scope so the build runs
+    # eagerly even while tracing a function. Takes nothing, returns nothing.
+    # The built flag is expected to be set by the base class build method.
     if not self._built:
       # This can be called while tracing a function, so we wrap the
       # initialization code with init_scope so it runs eagerly, this means that
@@ -183,6 +212,13 @@ class TPUEmbeddingV0(tpu_embedding_base.TPUEmbeddingBase):
       embeddings: tensor.Tensor,
       weight: tensor.Tensor,
       combiner: Optional[Text] = None) -> tensor.Tensor:
+    # [FUNCTION DOC]
+    # HELPER: reduces looked-up embeddings over the second to last axis for lookups.
+    # Inputs: embeddings (already multiplied by weights), weight tensor of matching layout, and
+    # combiner name (sum, mean or sqrtn; nothing means mean). Sum adds the embeddings; mean divides
+    # by the summed weights; sqrtn divides by the square root of the summed squared weights; the
+    # divisions give zero where the denominator is zero. Returns the reduced tensor. Raises a
+    # value error for any other combiner name. No side effects.
     """Apply the combiner to the embedding look up result on second to last axis.
 
     Args:
@@ -217,6 +253,11 @@ class TPUEmbeddingV0(tpu_embedding_base.TPUEmbeddingBase):
   def _pad_or_truncate_with_sequence_length(
       self, embeddings: tensor.Tensor, sequence_length: int
   ) -> tensor.Tensor:
+    # [FUNCTION DOC]
+    # HELPER: sequence-feature post-processing for the sparse lookup.
+    # Makes the sequence axis (second axis) of a rank 3 embedding tensor exactly the requested
+    # length: slices it if longer, zero pads at the end if shorter or equal. Inputs: embeddings
+    # tensor and the target sequence length (integer). Returns the adjusted tensor. No side effects.
     """Pad or truncate the embedding lookup result based on the sequence length.
 
     Args:
@@ -241,6 +282,17 @@ class TPUEmbeddingV0(tpu_embedding_base.TPUEmbeddingBase):
   def embedding_lookup(self,
                        features: Any,
                        weights: Optional[Any] = None) -> Any:
+    # [FUNCTION DOC]
+    # Public lookup entry point. Inputs: features is a nested structure (matching the feature
+    # config) of dense, sparse or ragged tensors; weights is nothing or a structure matching
+    # features whose entries may be nothing; weights must be of the same kind as their inputs.
+    # Builds the tables if not yet built, checks the structures, then per feature: dense inputs
+    # use a plain lookup; sparse and ragged inputs go through the dedicated helpers.
+    # Returns a structure like the feature config holding the embedding results.
+    # Raises a value error when weights are given for dense input, when weight type differs from
+    # input type, when weights are given for a sequence feature, when a dense input is given for a
+    # sequence feature, or when an input is not a tensor, sparse or ragged tensor; structure
+    # mismatches raise from the nest utilities. Side effect: may create variables via build.
     """Apply embedding lookup on TPUs using Tensorcore.
 
     Note that all the sparse and ragged tensors will be converted to dense
@@ -310,6 +362,16 @@ class TPUEmbeddingV0(tpu_embedding_base.TPUEmbeddingBase):
       weight: Optional[sparse_tensor.SparseTensor],
       table: tf_variables.Variable,
       feature: tpu_embedding_v2_utils.FeatureConfig) -> tensor.Tensor:
+    # [FUNCTION DOC]
+    # HELPER: per-feature lookup used by embedding_lookup for sparse inputs.
+    # Looks up embeddings for a sparse id tensor. Inputs: inp is the sparse ids; weight is a
+    # sparse weight tensor or nothing (unit weights); table is the embedding table variable;
+    # feature is the feature config (combiner, output shape, max sequence length).
+    # Steps: densifies ids and weights on the host via outside compilation, gathers embeddings,
+    # multiplies by the weights, then pads or truncates along the sequence axis for sequence
+    # features without an output shape, otherwise applies the table combiner over the second to
+    # last axis. Returns the embedding tensor. Raises nothing itself (the combiner helper may
+    # raise a value error for an unknown combiner). Side effect: outside compilation on the TPU.
     """Embedding lookup for sparse tensor based on its feature config.
 
     Args:
@@ -326,6 +388,13 @@ class TPUEmbeddingV0(tpu_embedding_base.TPUEmbeddingBase):
     # indices and values can change for different batch which can cause
     # the program to re-compile.
     def sparse_to_dense_computation(inp, weight):
+      # [FUNCTION DOC]
+      # HELPER: runs on the host (outside TPU compilation) for the sparse lookup helper.
+      # Converts a sparse id tensor and an optional sparse weight tensor into dense tensors.
+      # Inputs: inp is the sparse id tensor; weight is a sparse tensor of the same layout or
+      # nothing, in which case weights of one (float32) are created at the input's indices.
+      # Returns a pair of dense tensors (ids, weights), padded with zeros where entries are
+      # missing. Raises nothing itself; has no side effects.
       if weight is None:
         weight = sparse_tensor.SparseTensor(
             inp.indices,
@@ -355,6 +424,22 @@ class TPUEmbeddingV0(tpu_embedding_base.TPUEmbeddingBase):
       weight: Optional[ragged_tensor.RaggedTensor],
       table: tf_variables.Variable,
       feature: tpu_embedding_v2_utils.FeatureConfig) -> tensor.Tensor:
+    # [FUNCTION DOC]
+    # HELPER: per-feature lookup used by embedding_lookup for ragged inputs.
+    # KNOWN ISSUE: the docstring says the output shape is checked against the first dim of the
+    # input, but the real check requires the output shape element count to equal or be a multiple
+    # of the batch size.
+    # Looks up embeddings for a rank 2 ragged id tensor. Inputs: inp is the ragged ids; weight is
+    # a ragged weight tensor or nothing; table is the embedding table variable; feature is the
+    # feature config (table combiner and dim, output shape, max sequence length).
+    # Steps: validates rank, converts to dense on the host via outside compilation, gathers
+    # embeddings, multiplies by weights, then either combines over the second to last axis
+    # (default, or when output shape element count equals the batch size) or leaves the sequence
+    # axis in place (sequence features). When an output shape is set the result is reshaped to
+    # that shape plus the embedding dimension.
+    # Returns the dense embedding tensor. Raises a value error if the input is not rank 2 or the
+    # output shape is not compatible with the batch size (raised from the nested converter).
+    # Side effects: eager evaluation inside an init scope; outside compilation on the TPU.
     """Embedding lookup for ragged tensor based on its feature config.
 
     Args:
@@ -380,6 +465,20 @@ class TPUEmbeddingV0(tpu_embedding_base.TPUEmbeddingBase):
     # splits and values can change for different batch which can cause
     # the program to re-compile.
     def ragged_to_dense_outside_compilation(inp, weight, batch_size, feature):
+      # [FUNCTION DOC]
+      # HELPER: runs on the host (outside TPU compilation) for the ragged lookup helper.
+      # Converts a rank 2 ragged input and its optional ragged weight into dense tensors.
+      # Inputs: inp is the ragged id tensor; weight is a ragged weight tensor or nothing (then
+      # weights of one are created with the same row splits); batch_size is the static first
+      # dimension of the input; feature is the feature config (output shape, max sequence length).
+      # Behavior: for a sequence feature without output shape, the input is padded or truncated to
+      # batch size by max sequence length and weights become all ones. If an output shape is set,
+      # its element count is computed eagerly; equal to batch size means normal dense conversion;
+      # a larger exact multiple means pad/truncate to the quotient as sequence length with unit
+      # weights. Otherwise the plain dense conversion of input and weight is returned.
+      # Returns a pair of dense tensors (ids, weights). Raises a value error if the output shape
+      # element count is not a multiple of the batch size (and not equal to it).
+      # Side effect: evaluates the output shape product eagerly inside an init scope.
       if weight is None:
         weight = ragged_tensor.RaggedTensor.from_row_splits(
             array_ops.ones_like(inp.values, dtype=dtypes.float32),
