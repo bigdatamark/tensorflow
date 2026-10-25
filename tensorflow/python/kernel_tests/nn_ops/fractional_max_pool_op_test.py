@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Tests for the fractional max pooling op and its gradient op in the nn_ops kernel tests.
+# Defines two test classes. The forward tests compare the output of the public fractional max
+# pool function against a pure numpy reference that uses the returned row and column pooling
+# sequences, and also cover determinism errors and invalid pooling ratios. The gradient tests
+# compare the fractional max pool gradient with the regular max pool gradient where the two
+# coincide, check numeric gradient error, and check error handling for invalid sequences.
+# Importing the module only imports the nn gradient registrations; the tests run via the
+# standard test main entry point when executed as a script.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,12 +40,24 @@ from tensorflow.python.platform import test
 
 
 class FractionalMaxPoolTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the forward fractional max pool op. Holds a class-level seeded numpy random
+  # generator and a fixed op seed so results are reproducible. Contains numpy reference
+  # implementations of pooling along rows and columns (helpers) used to validate the op output,
+  # plus tests for input options, dtypes, shapes, pooling ratios, determinism and invalid inputs.
 
   # Random number generate with seed.
   _PRNG = np.random.RandomState(341261)
   _SEED = 123456
 
   def _MaxPoolAlongRows(self, input_matrix, row_seq, overlapping):
+    # [FUNCTION DOC]
+    # HELPER: numpy reference pooling used by the expected-result computation in these tests.
+    # Takes a 2-D numpy matrix, a cumulative row boundary sequence and a flag for overlapping
+    # windows. For each consecutive pair of boundaries it takes the column-wise maximum over the
+    # rows in that window; with overlapping the window end is extended by one row, clipped to the
+    # last boundary. Returns a 2-D matrix with one row per window and the original column count.
+    # A sentinel zero row is stacked first and removed at the end. No side effects.
     """Perform max pool along row of a 2-D matrix based on row_seq.
 
     Args:
@@ -61,6 +82,12 @@ class FractionalMaxPoolTest(test.TestCase):
     return output_image[1:, :]
 
   def _MaxPoolAlongCols(self, input_matrix, col_seq, overlapping):
+    # [FUNCTION DOC]
+    # HELPER: numpy reference pooling along columns, used by the expected-result computation.
+    # Takes a 2-D numpy matrix, a cumulative column boundary sequence and an overlapping flag.
+    # Implemented by transposing the matrix, pooling along rows with the row helper, and
+    # transposing back. Returns a 2-D matrix with the original row count and one column per
+    # window. No side effects.
     """Perform max pool along column of a 2-D matrix based on col_seq.
 
     Args:
@@ -79,6 +106,13 @@ class FractionalMaxPoolTest(test.TestCase):
 
   def _GetExpectedFractionalMaxPoolResult(self, input_tensor, row_seq, col_seq,
                                           overlapping):
+    # [FUNCTION DOC]
+    # HELPER: builds the expected output of fractional max pooling for the tests.
+    # Takes a 4-D numpy input (batch, rows, columns, channels), cumulative row and column
+    # boundary sequences returned by the op, and the overlapping flag. For every batch and
+    # channel slice it pools along rows then along columns with the numpy helpers and writes the
+    # result into a zero-initialized output array of the input dtype. Returns that 4-D array.
+    # No side effects.
     """Get expected fractional max pool result.
 
     row_seq and col_seq together defines the fractional pooling region.
@@ -110,6 +144,13 @@ class FractionalMaxPoolTest(test.TestCase):
 
   def _ValidateFractionalMaxPoolResult(self, input_tensor, pooling_ratio,
                                        pseudo_random, overlapping):
+    # [FUNCTION DOC]
+    # HELPER: shared assertion routine for the forward pooling tests.
+    # Runs the v2 fractional max pool function on the input with the given pooling ratio,
+    # pseudo-random and overlapping flags and the class seed, inside a cached session, and
+    # evaluates the pooled output plus row and column sequences. It computes the numpy expected
+    # result from those sequences and asserts the shape and the values (close) match. Returns
+    # nothing; fails the test on mismatch.
     """Validate FractionalMaxPool's result against expected.
 
     Expected result is computed given input_tensor, and pooling region defined
@@ -138,6 +179,13 @@ class FractionalMaxPoolTest(test.TestCase):
       self.assertAllClose(expected, actual)
 
   def _testVisually(self):
+    # [FUNCTION DOC]
+    # HELPER: manual debugging aid, not collected as a test because of the leading underscore.
+    # Builds a small random integer 6x6 single-channel tensor for both overlapping settings,
+    # runs fractional max pool without pseudo-random mode, computes the numpy expected result,
+    # and prints the sequences, the input with pooling regions marked, the op output and the
+    # expected output. Makes no assertions; side effect is printing to standard output and
+    # advancing the class random generator.
     """Manual test by printing out intermediate result of a small random tensor.
 
     Since _GetExpectedFractionalMaxPoolResult is 'automated', it feel safer to
@@ -192,6 +240,10 @@ class FractionalMaxPoolTest(test.TestCase):
         print(expected_result[0, :, :, 0])
 
   def testAllInputOptions(self):
+    # [FUNCTION DOC]
+    # Test: for every combination of pseudo-random and overlapping flags, generates a random
+    # float tensor of shape 5x20x30x3 with values in a symmetric range and a non-integer
+    # pooling ratio, and asserts the op output matches the numpy reference.
     """Try all possible input options for fractional_max_pool.
     """
     num_batches = 5
@@ -208,6 +260,9 @@ class FractionalMaxPoolTest(test.TestCase):
             overlapping)
 
   def testIntegerTensorInput(self):
+    # [FUNCTION DOC]
+    # Test: uses a random integer-typed input tensor of shape 5x20x30x3 with pseudo-random and
+    # overlapping pooling, and asserts the op output matches the numpy reference.
     """Test it works fine when input tensor is integer type.
     """
     num_batches = 5
@@ -223,6 +278,10 @@ class FractionalMaxPoolTest(test.TestCase):
                                           pseudo_random, overlapping)
 
   def testDifferentTensorShapes(self):
+    # [FUNCTION DOC]
+    # Test: loops over batch sizes 1 and 3, channel counts 1 and 3, and row and column sizes
+    # 10, 20 and 50, using random float input, pseudo-random and overlapping pooling, and
+    # asserts each op result matches the numpy reference.
     """Test different shapes of input tensor.
 
     Mainly test different combinations of num_rows and num_cols.
@@ -241,6 +300,10 @@ class FractionalMaxPoolTest(test.TestCase):
                 overlapping)
 
   def testLargePoolingRatio(self):
+    # [FUNCTION DOC]
+    # Test: uses pooling ratios well above 2 (square roots of 11, 37 and 27) on a random
+    # 3x30x50x3 tensor with pseudo-random overlapping pooling, and asserts the op output matches
+    # the numpy reference for each row and column ratio combination.
     """Test when pooling ratio is not within [1, 2).
     """
     pseudo_random = True
@@ -259,6 +322,9 @@ class FractionalMaxPoolTest(test.TestCase):
                                               pseudo_random, overlapping)
 
   def testDivisiblePoolingRatio(self):
+    # [FUNCTION DOC]
+    # Test: pooling ratio of exactly 2 on rows and columns of a random 3x30x50x3 tensor, a case
+    # regular max pooling could also handle; asserts the op output matches the numpy reference.
     """Test when num of rows/cols can evenly divide pooling ratio.
 
     This is a case regular max pooling can handle. Should be handled by
@@ -278,6 +344,12 @@ class FractionalMaxPoolTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testDifferentInputTensorShape(self):
+    # [FUNCTION DOC]
+    # Test (graph mode only, deprecated-v1 decorator): builds one placeholder with unknown
+    # batch, row and column sizes and three channels, applies the v2 op with ratio 1.5 and no
+    # pseudo-random or overlapping mode, and runs the same graph twice in one session with zero
+    # inputs of shapes 3x32x32x3 and 4x45x45x3. Asserts the output shape equals the numpy
+    # reference shape each time.
     """Runs the operation in one session with different input tensor shapes."""
     with self.cached_session() as sess:
       input_holder = array_ops.placeholder(dtypes.float32,
@@ -305,6 +377,11 @@ class FractionalMaxPoolTest(test.TestCase):
       self.assertSequenceEqual(expected.shape, actual.shape)
 
   def testDeterminismExceptionThrowing(self):
+    # [FUNCTION DOC]
+    # Test: with deterministic ops enabled, calling the v2 op without a seed must raise a value
+    # error saying a non-zero seed is required, while passing a seed works. The older v1-style
+    # function without both seeds raises a value error requiring both seeds to be non-zero, and
+    # succeeds when both seeds and the deterministic flag are given. Uses random float input.
     tensor_shape = (5, 20, 20, 3)
     rand_mat = self._PRNG.random_sample(tensor_shape) * 1000 - 500
     with test_util.deterministic_ops():
@@ -321,6 +398,10 @@ class FractionalMaxPoolTest(test.TestCase):
           rand_mat, [1, 1.5, 1.5, 1], seed=1, seed2=1, deterministic=True)
 
   def testPoolingRatioHasMoreDimThanInput(self):
+    # [FUNCTION DOC]
+    # Test: calls the raw generated op on a tiny 1x1x1x4 int64 tensor with a pooling ratio
+    # larger than the input size in dimension 1, and expects an invalid-argument error whose
+    # message says the pooling ratio is higher than the input dimension size.
     with self.cached_session() as _:
       with self.assertRaisesRegex(
           errors.InvalidArgumentError,
@@ -339,6 +420,10 @@ class FractionalMaxPoolTest(test.TestCase):
         self.evaluate(result)
 
   def testPoolingRatioIllegalSmallValue(self):
+    # [FUNCTION DOC]
+    # Test: calls the raw generated op with a negative pooling ratio on a zero 3x30x30x3 input
+    # and expects either an invalid-argument error or a value error (the message differs by
+    # TF2 behavior mode) mentioning that the ratio cannot be smaller than 1 or is negative.
     with self.cached_session() as _:
       # Whether turn on `TF2_BEHAVIOR` generates different error messages
       with self.assertRaisesRegex(
@@ -356,6 +441,9 @@ class FractionalMaxPoolTest(test.TestCase):
         self.evaluate(result)
 
   def testPoolingIllegalRatioForBatch(self):
+    # [FUNCTION DOC]
+    # Test: a pooling ratio of 2 in the batch dimension is not supported; expects the op on a
+    # zero 3x30x50x3 input to raise an unimplemented error when evaluated.
     with self.cached_session() as _:
       with self.assertRaises(errors.UnimplementedError):
         result = nn_ops.fractional_max_pool(
@@ -367,6 +455,11 @@ class FractionalMaxPoolTest(test.TestCase):
 
 
 class FractionalMaxPoolGradTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the fractional max pool gradient op. Verifies it against regular max pool
+  # gradients where pooling regions coincide, via numeric gradient error checks, and for
+  # tie-breaking behavior and invalid pooling sequences. Holds a seeded numpy random generator
+  # and a fixed op seed as class attributes.
   """Tests for FractionalMaxPoolGrad.
 
   Two types of tests for FractionalMaxPoolGrad.
@@ -399,6 +492,11 @@ class FractionalMaxPoolGradTest(test.TestCase):
   _SEED = 123456
 
   def _GenerateUniqueRandomInputTensor(self, shape):
+    # [FUNCTION DOC]
+    # HELPER: creates test input with all-distinct values so max locations are unambiguous.
+    # Takes the desired shape, builds consecutive float32 numbers for every element, shuffles
+    # them in place with the class random generator (side effect: advances its state), and
+    # returns them reshaped as a float32 numpy array.
     """Generate 'unique' random input tensor.
 
     'Unique' means there's no collision values in the tensor, all elements are
@@ -419,6 +517,12 @@ class FractionalMaxPoolGradTest(test.TestCase):
     return x.reshape(shape)
 
   def testDirectNotUseOverlapping(self):
+    # [FUNCTION DOC]
+    # Test: for several batch, window and channel sizes, runs regular max pool with stride equal
+    # to window (valid padding) on unique random input, computes its gradient for a random
+    # integer output backprop, then runs the fractional max pool gradient with equally spaced
+    # non-overlapping row and column boundaries. Asserts the shape and values equal the regular
+    # max pool gradient.
     for num_batches in [1, 3]:
       for row_window_size in [2, 5]:
         for col_window_size in [2, 4]:
@@ -454,6 +558,11 @@ class FractionalMaxPoolGradTest(test.TestCase):
               self.assertAllClose(input_backprop, fmp_input_backprop)
 
   def testDirectUseOverlapping(self):
+    # [FUNCTION DOC]
+    # Test: like the non-overlapping direct test, but regular max pool uses stride one smaller
+    # than the window, and the fractional gradient gets matching boundaries (last boundary
+    # bumped by one) with overlapping enabled. Asserts shape and values equal the regular max
+    # pool gradient.
     for num_batches in [1, 3]:
       for row_window_size in [2, 5]:
         for col_window_size in [2, 4]:
@@ -492,6 +601,10 @@ class FractionalMaxPoolGradTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testAllInputOptionsThroughGradientError(self):
+    # [FUNCTION DOC]
+    # Test (graph mode only): for each pseudo-random and overlapping combination, applies the v2
+    # op to a 1x7x13x1 unique input with small random noise added, and computes the numeric
+    # versus analytic gradient error. Asserts the error is below a small margin.
     input_shape = (1, 7, 13, 1)
     input_data = self._GenerateUniqueRandomInputTensor(input_shape)
     # Add some randomness to make input_data not so 'integer'
@@ -523,6 +636,10 @@ class FractionalMaxPoolGradTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testDifferentTensorShapesThroughGradientError(self):
+    # [FUNCTION DOC]
+    # Test (graph mode only): loops over several batch, row, column and channel sizes with
+    # pseudo-random overlapping pooling, and checks the numeric versus analytic gradient error
+    # of the v2 op on unique noisy input is below a small margin.
     pseudo_random = True
     overlapping = True
     pooling_ratio = [1, math.sqrt(3), math.sqrt(2), 1]
@@ -557,6 +674,12 @@ class FractionalMaxPoolGradTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testLargePoolingRatioThroughGradientError(self):
+    # [FUNCTION DOC]
+    # Test (graph mode only): uses large pooling ratios on a 1x17x23x1 unique noisy input with
+    # overlapping, non-pseudo-random pooling. The expected output shape is the integer quotient
+    # of input shape and ratio. Asserts the gradient error is below a small margin.
+    # KNOWN ISSUE: the output shape is computed by truncating the division, which may not match
+    # the true op output shape; the test relies on this agreeing.
     input_shape = (1, 17, 23, 1)
     input_data = self._GenerateUniqueRandomInputTensor(input_shape)
     # Add some randomness to make input_data not so 'integer'
@@ -586,6 +709,11 @@ class FractionalMaxPoolGradTest(test.TestCase):
       self.assertLess(gradient_error, error_margin)
 
   def testWhenRepeatedMaxValueInPoolingRegion(self):
+    # [FUNCTION DOC]
+    # Test: fixes a 4x4 input with repeated maxima, explicit pooling sequences and output
+    # backprop values, and runs the fractional max pool gradient op both without and with
+    # overlapping. Asserts the shapes and the exact expected input gradients, which pins the
+    # tie-breaking behavior (first max found scanning row by row receives the gradient).
     """Test when there's repeating value in pooling region.
 
     There's no formal definition for what the gradient should be when there're
@@ -658,6 +786,10 @@ class FractionalMaxPoolGradTest(test.TestCase):
                           input_backprop_overlapping)
 
   def testInvalidSeqRaiseErrorForFractionalMaxPoolGrad(self):
+    # [FUNCTION DOC]
+    # Test: gradient op given constant float tensors of shape 1x7x13x1 and all-zero row and
+    # column pooling sequences of length five (not a valid increasing sequence) with
+    # overlapping enabled; expects an invalid-argument error on evaluation.
     with self.assertRaises(errors.InvalidArgumentError):
       with self.cached_session():
         overlapping = True
@@ -681,6 +813,10 @@ class FractionalMaxPoolGradTest(test.TestCase):
         self.evaluate(t)
 
   def testEmptySeqRaisesErrorForFractionalMaxPoolGrad(self):
+    # [FUNCTION DOC]
+    # Test: gradient op given scalar (rank zero) row and column pooling sequences instead of
+    # vectors; expects an invalid-argument error whose message says the sequence must be a
+    # vector.
     with self.assertRaisesRegex(
         errors.InvalidArgumentError, "must be a vector"
     ):
@@ -711,6 +847,10 @@ class FractionalMaxPoolGradTest(test.TestCase):
       self.evaluate(t)
 
   def testOverLargeSeqRaiseErrorForFractionalMaxPoolGrad(self):
+    # [FUNCTION DOC]
+    # Test: gradient op given plain nested lists and pooling sequences containing a huge
+    # negative value, non-overlapping; expects an invalid-argument error on evaluation instead
+    # of out-of-range memory access.
     with self.assertRaises(errors.InvalidArgumentError):
       with self.cached_session():
         overlapping = False
