@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Test module verifying that Keras code loaded lazily by SavedModel loading registers the
+# optimizer identifier. Run as a standard TensorFlow test main; no import-time side effects.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,8 +25,15 @@ from tensorflow.python.eager import test
 # Some of the Keras code load should be triggered so that it will inject proper
 # functionality like registering the optimizer class for SavedModel.
 class KerasInjectionTest(tf.test.TestCase):
+  # [CLASS DOC]
+  # Test case checking that loading a SavedModel triggers Keras-side registration of the optimizer
+  # class without the test touching Keras code directly. No shared fixtures.
 
   def test_keras_optimizer_injected(self):
+    # [FUNCTION DOC]
+    # Scenario: load the checked-in test SavedModel containing an optimizer with slot variables
+    # (located through the test source directory helper). Asserts that the registered identifiers
+    # of the SavedModel loader include the optimizer identifier, showing Keras injected it.
     save_path = test.test_src_dir_path(
         'cc/saved_model/testdata/OptimizerSlotVariableModule')
     _ = tf.saved_model.load(save_path)

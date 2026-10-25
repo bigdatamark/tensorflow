@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Tools for serializing functions into SavedModel protocol buffers: function specs, concrete
+# functions (with bound input node indices and signatures), bare concrete functions and
+# polymorphic functions, plus a utility that rewrites concrete functions capturing cached variable
+# reads so they capture the variables instead. Counterpart of the function deserialization module.
+# Used by the SavedModel saver. No import-time side effects beyond imports.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +31,13 @@ from tensorflow.python.util import nest
 
 
 def _serialize_function_spec(function_spec):
+  # [FUNCTION DOC]
+  # HELPER: used by the serialize_* functions in this module.
+  # Converts a function spec object into a function spec protocol buffer. The argument spec is
+  # encoded with annotations deliberately removed; the input signature is encoded; the method flag
+  # is always false; the jit compile setting (unset/true/false) is mapped to its enum value.
+  # Returns the new proto. Raises a type error if the first argument is named self (an unbound
+  # method cannot be serialized).
   """Serialize a FunctionSpec object into its proto representation."""
   if (
       function_spec.fullargspec.args
@@ -60,6 +73,12 @@ def _serialize_function_spec(function_spec):
 
 
 def serialize_concrete_function(concrete_function, node_ids):
+  # [FUNCTION DOC]
+  # Builds a saved-concrete-function proto. Inputs: the concrete function and node_ids, a mapping
+  # from captured objects to their node indices in the saved object graph. Bound inputs are the
+  # node indices of the function's captured inputs; the canonicalized input signature and the
+  # output signature are encoded structures. Returns the proto. Raises a key error with an
+  # explanatory message if a captured tensor is not in node_ids (unsupported or unreachable).
   """Build a SavedConcreteFunction."""
   bound_inputs = []
   try:
@@ -87,6 +106,12 @@ def serialize_concrete_function(concrete_function, node_ids):
 
 # TODO(b/203440205): Support FunctionType directly.
 def get_preinitialized_function_spec(concrete_function):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: default values are collected into an unordered set of values without parameter
+  # names, so the association between a default and its parameter is lost.
+  # Builds an unconstrained function spec (parameter types removed) from the concrete function's
+  # function type, named after the function and not a method. Returns nothing/null if the function
+  # has no structured input signature, is a wrapped function, or has no function type.
   """Generates an unconstrained FunctionSpec from FunctionType."""
   # TODO(b/203440205): SavedModel does not support FunctionType on its own
   # without a FuncGraph signature.
@@ -118,6 +143,10 @@ def get_preinitialized_function_spec(concrete_function):
 
 
 def serialize_bare_concrete_function(concrete_function):
+  # [FUNCTION DOC]
+  # Builds a saved-bare-concrete-function proto holding the function name, the number of allowed
+  # positional arguments and the argument keywords (read from private attributes), plus a
+  # serialized pre-initialized function spec when one can be derived. Returns the proto.
   """Build a SavedBareConcreteFunction."""
   # pylint: disable=protected-access
   proto = saved_object_graph_pb2.SavedBareConcreteFunction(
@@ -132,6 +161,10 @@ def serialize_bare_concrete_function(concrete_function):
 
 
 def serialize_function(function, concrete_functions):
+  # [FUNCTION DOC]
+  # Builds a saved-function proto for a polymorphic function: its serialized function spec and the
+  # names of the given concrete functions (any iterable of concrete functions). Returns the proto.
+  # Raises a type error if the function spec has an unbound self parameter.
   """Build a SavedFunction proto."""
   proto = saved_object_graph_pb2.SavedFunction()
 
@@ -143,6 +176,15 @@ def serialize_function(function, concrete_functions):
 
 
 def wrap_cached_variables(concrete_function):
+  # [FUNCTION DOC]
+  # Replaces captured cached variable reads by direct variable reads for saving. Looks at the
+  # function graph's captures; for each captured tensor that came from a cached variable, a fresh
+  # read of the variable is made in a new outer graph and temporarily swapped in as the external
+  # capture. If nothing was cached, returns the original function. Otherwise builds an inner
+  # concrete function, an outer graph function calling it, and a new concrete function carrying
+  # the original argument keywords and positional count. The original function's captures are
+  # restored before returning. Returns the new concrete function. Side effect: temporarily mutates
+  # the captures of the input function's graph.
   """Wraps the concrete function if it uses cached read tensors.
 
   This function creates a new concrete function that captures variables
@@ -191,6 +233,9 @@ def wrap_cached_variables(concrete_function):
   )
 
   def wrap_function(*args):
+    # [FUNCTION DOC]
+    # HELPER: traced body for the outer graph in wrap_cached_variables. Calls the inner concrete
+    # function with the given flat arguments and its own captured inputs and returns the result.
     return inner_concrete._call_flat(list(args), inner_concrete.captured_inputs)  # pylint:disable=protected-access
 
   args = nest.flatten(concrete_function.structured_input_signature,

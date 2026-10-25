@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Tools for deserializing saved functions. Rebuilds polymorphic functions (restored functions that
+# dispatch among saved concrete functions), bare concrete functions, and whole function libraries
+# from SavedModel protocol buffers, renaming functions and shared resource names so loads do not
+# collide, re-registering custom gradients, and restoring function types from saved function specs.
+# Used by the SavedModel loader. Import-time side effects: none beyond imports and a regular
+# expression constant for cleaning inference-wrapper function names.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -44,6 +51,9 @@ from tensorflow.python.util import tf_inspect
 
 
 def _is_tensor(t):
+  # [FUNCTION DOC]
+  # HELPER: type check used when matching call arguments against restored function signatures.
+  # Returns true if the value t is a tensor or a resource variable, false otherwise.
   return isinstance(
       t, (tensor.Tensor, resource_variable_ops.BaseResourceVariable))
 
@@ -51,6 +61,15 @@ def _is_tensor(t):
 # TODO(b/205016027): Update this to just use ConcreteFunction.__call__ with the
 # structured signature.
 def _call_concrete_function(function, inputs):
+  # [FUNCTION DOC]
+  # HELPER: executes the chosen concrete function for restored polymorphic functions.
+  # Calls a restored concrete function with structured inputs (a pair of positional and keyword
+  # arguments matching the function's structured input signature). The inputs are flattened
+  # against the expected signature; tensor-spec slots are converted to tensors (using the spec
+  # dtype as a hint), variable-spec slots contribute the variable handle, other slots are
+  # dropped. The flat call is made with the function's captured inputs. Returns the function
+  # output, or nothing/null if the result is an operation. Does not verify that non-tensor
+  # inputs match. Raises whatever structure flattening or tensor conversion raises on mismatch.
   """Calls a restored Function with structured inputs.
 
   This differs from `function.__call__` in that inputs and outputs are
@@ -85,6 +104,11 @@ def _call_concrete_function(function, inputs):
 
 
 def _try_convert_to_tensor_spec(arg, dtype_hint):
+  # [FUNCTION DOC]
+  # HELPER: lets signature matching accept values convertible to tensors.
+  # Tries to convert arg to a tensor (with dtype_hint as preferred type) inside a scratch function
+  # graph so the current context is not polluted, and returns a tensor spec with the resulting
+  # shape and dtype. Returns nothing/null if conversion raises a type or value error.
   """Returns None or TensorSpec obtained if `arg` is converted to tensor."""
   try:
     # Note: try conversion in a FuncGraph to avoid polluting current context.
@@ -96,6 +120,15 @@ def _try_convert_to_tensor_spec(arg, dtype_hint):
 
 
 def _concrete_function_callable_with(function, inputs, allow_conversion):
+  # [FUNCTION DOC]
+  # HELPER: overload resolution for restored functions.
+  # Decides whether a concrete function can be called with inputs (positional/keyword pair).
+  # The inputs must be structurally compatible with the function's structured input signature.
+  # For tensor specs: when allow_conversion is true the argument is first converted to a spec;
+  # it must then be a tensor/variable/spec with equal dtype and a compatible shape. For other
+  # type specs the spec must be compatible with the argument. For tensor-valued arguments where
+  # a plain value was expected, identity must match; other values must compare equal.
+  # Returns true or false; never raises for structure mismatches. No side effects.
   """Returns whether concrete `function` can be called with `inputs`."""
   expected_structure = function.graph.structured_input_signature
   try:
@@ -126,6 +159,13 @@ def _concrete_function_callable_with(function, inputs, allow_conversion):
 
 
 def _deserialize_function_spec_as_nonmethod(function_spec_proto):
+  # [FUNCTION DOC]
+  # HELPER: rebuilds function specs while loading a saved model.
+  # Decodes a function spec protocol buffer into a function spec object. The argument spec and
+  # input signature are decoded; if the proto says it was a method (or the first argument is named
+  # self) the leading self argument is removed so the function behaves as a non-method. The jit
+  # compile enum is mapped to unset/true/false. Returns the new function spec. Raises a
+  # not-implemented error if it is a method but has no named arguments.
   """Deserialize a FunctionSpec object from its proto representation."""
   typeless_fullargspec = nested_structure_coder.decode_proto(
       function_spec_proto.fullargspec)
@@ -168,6 +208,13 @@ def _deserialize_function_spec_as_nonmethod(function_spec_proto):
 
 # TODO(b/203440205): Set FunctionType with ConcreteFunction constructor.
 def set_preinitialized_function_spec(concrete_fn, spec):
+  # [FUNCTION DOC]
+  # Sets the function type of a restored concrete function from a function spec. If spec is
+  # nothing/null the function type is cleared. Otherwise the spec's parameters are made
+  # unconstrained (no type), the concrete function's structured input signature is canonicalized
+  # against it using the spec's default values, and the output type is derived from the graph's
+  # structured outputs. The resulting function type replaces the private function type of
+  # concrete_fn (mutated in place). Returns nothing. Captures are added later at restore time.
   """Set the FunctionType of the ConcreteFunction using FunctionSpec."""
   if spec is None:
     concrete_fn._function_type = None  # pylint: disable=protected-access
@@ -207,6 +254,13 @@ def set_preinitialized_function_spec(concrete_fn, spec):
 # keyword arguments would yield different ConcreteFunctions.
 def setup_bare_concrete_function(saved_bare_concrete_function,
                                  concrete_functions):
+  # [FUNCTION DOC]
+  # Makes a restored bare concrete function (one saved without a wrapping polymorphic function)
+  # callable. Inputs: the saved bare-concrete-function proto and a mapping from concrete function
+  # names to restored concrete functions. Looks up the function by name, sets its argument
+  # keywords and number of positional arguments from the proto, applies the saved function spec
+  # (if present) as its function type, and adds it to the current graph. Returns that concrete
+  # function. Mutates the looked-up function. Raises a key error if the name is missing.
   """Makes a restored bare concrete function callable."""
   concrete_function = concrete_functions[
       saved_bare_concrete_function.concrete_function_name]
@@ -225,12 +279,23 @@ def setup_bare_concrete_function(saved_bare_concrete_function,
 
 
 class RestoredFunction(def_function.Function):
+  # [CLASS DOC]
+  # A polymorphic function recreated from a saved model. It wraps a generated Python body that
+  # dispatches to the already-built concrete functions, holds the list of concrete functions,
+  # the function type and the default values from the saved function spec. Autograph is disabled
+  # and frequent-tracing warnings are suppressed. Created by recreate_function.
   """Wrapper class for a function that has been restored from saved state.
 
   See `def_function.Function`.
   """
 
   def __init__(self, python_function, name, function_spec, concrete_functions):
+    # [FUNCTION DOC]
+    # Constructs the restored function. python_function is the dispatching body, name its name,
+    # function_spec supplies the jit-compile setting, function type and default values, and
+    # concrete_functions is the list of concrete functions it may dispatch to. Calls the parent
+    # constructor with autograph off, stores the three values, and disables the frequent tracing
+    # warning. Returns nothing.
     # TODO(b/205016819): We may enable autograph once exceptions are supported.
     super(RestoredFunction, self).__init__(
         python_function,
@@ -247,6 +312,10 @@ class RestoredFunction(def_function.Function):
 
   @property
   def _run_functions_eagerly(self):
+    # [FUNCTION DOC]
+    # Property override that always reports false, so the global run-functions-eagerly setting is
+    # ignored and calls always go through the stored concrete function graphs (the original Python
+    # function is unavailable).
     # We do not have access to the original python function, and thus, we
     # cannot meaningfully do anything but call our concrete function graphs
     # under the hood.
@@ -260,13 +329,27 @@ class RestoredFunction(def_function.Function):
     return False
 
   def _list_all_concrete_functions(self):
+    # [FUNCTION DOC]
+    # Returns the concrete functions held by this restored function (no tracing is done).
     return self.concrete_functions
 
   def _list_all_concrete_functions_for_serialization(self):
+    # [FUNCTION DOC]
+    # Returns the same stored concrete functions, used when re-saving a loaded function.
     return self.concrete_functions
 
 
 def recreate_function(saved_function, concrete_functions):
+  # [FUNCTION DOC]
+  # Rebuilds a callable polymorphic function from a saved-function proto. concrete_functions maps
+  # names to restored concrete functions; the saved function spec is converted to a non-method
+  # spec and applied to each referenced concrete function (mutating them). A dispatching body is
+  # created that picks, at call time, the first concrete function whose signature accepts the
+  # arguments (first without conversions, then allowing tensor conversion) and calls it. The body
+  # is wrapped in a RestoredFunction and decorated to carry the saved argument spec. Returns the
+  # decorated function. Calling it raises a value error when no concrete functions exist, when a
+  # function has a missing captured input (unsupported parameter-server partitioned variables),
+  # or when no signature matches (the message lists all options).
   """Creates a `Function` from a `SavedFunction`.
 
   Args:
@@ -296,6 +379,12 @@ def recreate_function(saved_function, concrete_functions):
       saved_function.function_spec)
 
   def restored_function_body(*args, **kwargs):
+    # [FUNCTION DOC]
+    # Dispatcher invoked when the restored function is called with arbitrary positional and keyword
+    # arguments (already canonicalized). Tries each saved concrete function in order, first without
+    # and then with argument conversion, and returns the result of the first compatible one.
+    # Raises a value error if there are no concrete functions, if any function has an
+    # unavailable (null) captured input, or if nothing matches (message lists every option).
     """Calls a restored function or raises an error if no matching function."""
     if not saved_function.concrete_functions:
       raise ValueError("Found zero restored functions for caller function.")
@@ -322,6 +411,10 @@ def recreate_function(saved_function, concrete_functions):
     signature_descriptions = []
 
     def _pretty_format_positional(positional):
+      # [FUNCTION DOC]
+      # HELPER: builds the error message for restored_function_body.
+      # Formats a sequence of positional arguments as a count line followed by one pretty-printed
+      # bullet per argument; returns the string.
       return "Positional arguments ({} total):\n    * {}".format(
           len(positional),
           "\n    * ".join(pprint.pformat(a) for a in positional))
@@ -360,6 +453,20 @@ def load_function_def_library(library,
                               saved_object_graph=None,
                               load_shared_name_suffix=None,
                               wrapper_function=None):
+  # [FUNCTION DOC]
+  # Loads every function of a function library proto as a concrete function without captured
+  # inputs. Inputs: library (function definition library), saved_object_graph (optional; supplies
+  # structured input signatures and outputs by original name), load_shared_name_suffix (optional
+  # string making shared names unique; generated from a unique id if omitted), wrapper_function
+  # (optional callable applied to each created concrete function). Steps: re-register custom
+  # gradients under new generated op types, sort functions topologically by dependency, fix each
+  # function definition in place (rename functions, uniquify shared names), build a graph for it
+  # (in a temporary graph when executing eagerly), restore gradient functions, attach dependencies,
+  # drop the input-shapes attribute, build the concrete function, optionally wrap it, add it to the
+  # graph, and register its gradient if one was saved. Functions containing TensorRT engine ops are
+  # also added to the default graph (workaround). Returns a mapping from original function names to
+  # concrete functions. Raises a value error on cyclic dependencies. Side effects: mutates the
+  # library's function definitions, registers gradients globally, adds functions to graphs.
   """Load a set of functions as concrete functions without captured inputs.
 
   Functions names are manipulated during load such that they do not overlap
@@ -502,15 +609,28 @@ def load_function_def_library(library,
 
 
 def _gen_gradient_func(func):
+  # [FUNCTION DOC]
+  # HELPER: gradient registration in load_function_def_library.
+  # Builds a gradient function for a restored function func: the returned callable ignores the
+  # op, replaces missing (null) incoming gradients with zeros shaped like the function inputs,
+  # and calls func on them. Returns that callable.
   """Wraps a deserialized function."""
 
   def gradient_func(unused_op, *result_grads):
+    # [FUNCTION DOC]
+    # Gradient callable registered for a restored function. The op argument is unused; result_grads
+    # are the incoming gradients, with null entries replaced by zeros (using the matching function
+    # input for shape and type). Returns the outputs of calling the function on the gradients.
     # Replace all `None` arguments, because the traced custom gradient function
     # expects tensors. Replacing with zeros is correct since the `None` values
     # occur when the gradient is unconnected, and thus the gradient is
     # "statically proven to be zero." See `tf.UnconnectedGradients` for details.
 
     def none_to_zero(x, t):
+      # [FUNCTION DOC]
+      # HELPER: fills unconnected gradients. Returns x unchanged unless it is null; then returns
+      # zeros shaped like tensor t (fully defined shape), or zeros with unknown dimensions set
+      # to one (when the rank is known), or a scalar zero when the rank is unknown, in t's dtype.
       if x is not None:
         return x
 
@@ -536,6 +656,15 @@ def _gen_gradient_func(func):
 
 def _restore_gradient_functions(func_graph, renamed_functions,
                                 loaded_gradients):
+  # [FUNCTION DOC]
+  # HELPER: gradient restoration step of load_function_def_library.
+  # For every op in func_graph: function-call ops get the default gradient function of the renamed
+  # function they call (looked up by name in renamed_functions); ops carrying a custom gradient
+  # op type found in loaded_gradients make the corresponding function record the op's input count
+  # and input names as its positional-argument count and keywords. Mutates ops and functions.
+  # Returns nothing. Raises a key error if a called function is not in renamed_functions.
+  # KNOWN ISSUE: the existing docstring below says default gradient only, but the code also
+  # updates argument metadata for custom gradient functions.
   """Populate function op's _gradient_function with default gradient."""
   for op in func_graph.get_operations():
     # TODO(b/205024208): This code assumes that the gradient registered for this
@@ -557,6 +686,13 @@ def _restore_gradient_functions(func_graph, renamed_functions,
 
 
 def _sort_function_defs(library, function_deps):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the cycle error is raised with two separate arguments (message and detail) rather
+  # than one formatted message, so the error text renders as a pair of strings.
+  # HELPER: ordering step of load_function_def_library.
+  # Returns the function definitions of the library as a list in topological order, dependencies
+  # first, given function_deps (mapping from function name to the names it depends on).
+  # Raises a value error if a cycle prevents all functions from being ordered.
   """Return a topologic sort of FunctionDefs in a library."""
   edges = collections.defaultdict(list)
   in_count = collections.defaultdict(lambda: 0)
@@ -589,6 +725,11 @@ def _sort_function_defs(library, function_deps):
 
 
 def _get_gradient_op_type(node_def):
+  # [FUNCTION DOC]
+  # HELPER: gradient discovery for function loading.
+  # Returns the custom gradient op type (bytes) stored in the node definition's gradient attribute,
+  # or nothing/null if absent or if the node is a function-call op (stateful partitioned call or
+  # partitioned call).
   """Returns the custom gradient op type."""
   if ("_gradient_op_type" in node_def.attr and
       node_def.op not in ["StatefulPartitionedCall", "PartitionedCall"]):
@@ -597,6 +738,14 @@ def _get_gradient_op_type(node_def):
 
 
 def fix_node_def(node_def, functions, shared_name_suffix):
+  # [FUNCTION DOC]
+  # Rewrites a node definition in place for loading. Inputs: node_def, functions (mapping from
+  # original function name to concrete function), shared_name_suffix (string). If the op itself
+  # is a function it is renamed; function-valued attributes (single or list) are renamed. Hash
+  # table ops lacking node-name sharing get it turned on and the suffix extended with a unique id.
+  # If the op definition has a shared-name attribute, the node's shared name (existing, default or
+  # node name) gets the suffix appended so loads do not share resources. Returns nothing.
+  # Raises a key error if a referenced function is missing from functions.
   """Replace functions calls and shared names in `node_def`."""
   if node_def.op in functions:
     node_def.op = functions[node_def.op].name
@@ -638,6 +787,11 @@ def fix_node_def(node_def, functions, shared_name_suffix):
 
 def _fix_fdef_in_place(fdef, functions, shared_name_suffix,
                        new_gradient_op_types):
+  # [FUNCTION DOC]
+  # HELPER: per-function preparation in load_function_def_library.
+  # Mutates function definition fdef: fixes every node (see fix_node_def), replaces gradient op
+  # types using new_gradient_op_types, logs a warning if some node has a custom gradient that was
+  # not saved, and renames the function to a cleaned name. Returns the original function name.
   """Fixes a FunctionDef proto to be loaded in current context.
 
   In particular, when loading a function library into an eager context, one
@@ -678,6 +832,13 @@ def _fix_fdef_in_place(fdef, functions, shared_name_suffix,
 
 
 def _list_function_deps(fdef, library_function_names, library_gradient_names):
+  # [FUNCTION DOC]
+  # HELPER: dependency discovery for load_function_def_library.
+  # Returns the set of function names that fdef depends on: functions called directly as ops,
+  # gradient functions of nodes with custom gradient types, and otherwise function-valued
+  # attributes (single or list).
+  # KNOWN ISSUE: attribute-based functions are only scanned for nodes that are neither library
+  # functions nor library gradients (else-branch), so such attributes on those nodes are missed.
   """Find functions referenced in `fdef`."""
   # TODO(b/205023953): Recurse into list attributes and into NameAttrList attrs
   # both when listing deps and when fixing them. `function_def_to_graph` also
@@ -705,6 +866,9 @@ _FUNCTION_WRAPPER_NAME_REGEX = r"^%s(.*)_\d+$" % (function_lib._INFERENCE_PREFIX
 
 
 def _clean_function_name(name):
+  # [FUNCTION DOC]
+  # HELPER: cosmetic name cleanup. If name looks like an inference wrapper name (prefix, original
+  # name, underscore, digits), returns the original name part; otherwise returns name unchanged.
   """Vanity function to keep the function names comprehensible."""
   # Note: each time a function is wrapped into `function_lib.ConcreteFunction`
   # its name becomes "__inference_<orig>_xyz".

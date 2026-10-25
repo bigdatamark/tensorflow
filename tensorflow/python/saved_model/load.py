@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Imports a trackable object from a SavedModel (the TF2 loading path). Provides the public load
+# and partial-load functions, a TF2-detection helper, and the internal Loader class that rebuilds
+# the object graph, functions, variables and checkpoint state, plus a wrapper for concrete
+# functions under distribution strategies. TF1-style SavedModels are delegated to the v1-in-v2
+# loader. Also records load metrics and fingerprint information. Import-time side effects: exports
+# the public load APIs and defines the built-in registration table and the metrics label.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -79,6 +86,12 @@ _BUILT_IN_REGISTRATIONS = {
 
 
 def _unused_handle():
+  # [FUNCTION DOC]
+  # HELPER: used by the distribution-aware function wrapper when loading under a strategy.
+  # Creates a resource-typed placeholder that must never be executed. An assertion operation that
+  # always fails (with a message about running cross-replica graphs in a replica context) is
+  # made a control dependency of the placeholder. When building a function graph in graph mode,
+  # the graph is marked as unsaveable with an explanatory message. Returns the placeholder.
   """Returns a placeholder as a handle that is not supposed to be accessed."""
   error_message = ("Trying to access a placeholder that is not supposed to be "
                    "executed. This means you are executing a graph generated "
@@ -102,6 +115,12 @@ def _unused_handle():
 
 
 class _WrapperFunction(function.ConcreteFunction):
+  # [CLASS DOC]
+  # HELPER: wrapper used by the loader so restored concrete functions behave correctly under
+  # distribution strategies. It shallow-copies the state of an existing concrete function and
+  # overrides the flat call so that distributed-variable captures are resolved to resource handles
+  # in replica context (or when saving a non-distributed model), and to never-executed
+  # placeholders in cross-replica context. Created via the function-library loading step.
   """A class wraps a concrete function to handle different distributed contexts.
 
   The reason for wrapping a concrete function is because the _captured_inputs
@@ -118,15 +137,28 @@ class _WrapperFunction(function.ConcreteFunction):
   """
 
   def __init__(self, concrete_function):
+    # [FUNCTION DOC]
+    # Copies all instance attributes of the given concrete function into this wrapper (shallow
+    # copy; the parent constructor is not called). Returns nothing.
     # Shallow copy the concrete_function
     self.__dict__.update(vars(concrete_function))
 
   def _call_flat(self, args, captured_inputs):
+    # [FUNCTION DOC]
+    # Calls the function with flat tensor args and the list of captured inputs. Distributed
+    # variables among the captured inputs are replaced by their handle when running in a replica
+    # context or while saving a non-distributed version; in cross-replica context they are replaced
+    # by a placeholder that fails if executed. Other captures are unchanged. Returns whatever the
+    # parent flat call returns.
 
     def get_handle(x):
+      # [FUNCTION DOC]
+      # HELPER: returns the resource handle of a distributed variable, or x unchanged otherwise.
       return x.handle if distribute_utils.is_distributed_variable(x) else x
 
     def get_unused_handle(x):
+      # [FUNCTION DOC]
+      # HELPER: returns a never-executed placeholder for a distributed variable, else x unchanged.
       return _unused_handle() if distribute_utils.is_distributed_variable(x)   \
           else x
 
@@ -147,10 +179,31 @@ class _WrapperFunction(function.ConcreteFunction):
 
 
 class Loader(object):
+  # [CLASS DOC]
+  # HELPER: internal engine behind loading an object-based SavedModel. Given the object graph and
+  # saved model protos, it deserializes concrete functions, optionally filters which nodes to
+  # load, orders nodes by dependency, recreates every object (variables, functions, assets,
+  # resources, constants, user objects, registered types), wires the edges between them, restores
+  # checkpoint values and set-ups function captures. State: the proto, export directory, options,
+  # restored concrete functions and their aliases, node filters and the path-to-id map, the
+  # created nodes with their attribute setters, and the ordered node ids. Everything is done in the
+  # constructor; callers then read the result with the get method.
   """Helper class to load an object-based SavedModel."""
 
   def __init__(self, object_graph_proto, saved_model_proto, export_dir,
                ckpt_options, save_options, filters):
+    # [FUNCTION DOC]
+    # Performs the whole load. Inputs: object_graph_proto (saved object graph), saved_model_proto
+    # (provides the first meta graph: asset file defs, node attributes, function library, function
+    # aliases), export_dir (path of the SavedModel), ckpt_options (checkpoint options),
+    # save_options (the load options object; despite the name it is the load options),
+    # filters (null to load all nodes, else a list of dotted node paths or a mapping from paths
+    # to existing objects or object/setter pairs). Steps: load the function library with the
+    # distribution wrapper; optionally build the alias mapping (warning for unknown functions);
+    # resolve filters into node ids; order nodes; load nodes and edges; restore the checkpoint
+    # unless skipping is requested; initialize capturable resources (adding the initializer to the
+    # table-initializer collection in graph mode). Raises errors from the called helpers.
+    # Side effects: logging, graph collections, mutation of passed-in filter objects.
     meta_graph = saved_model_proto.meta_graphs[0]
     self._asset_file_def = meta_graph.asset_file_def
     self._operation_attributes = {
@@ -231,6 +284,11 @@ class Loader(object):
           ops.add_to_collection(ops.GraphKeys.TABLE_INITIALIZERS, init_op)
 
   def _convert_node_paths_to_ints(self):
+    # [FUNCTION DOC]
+    # Translates the dotted string paths in the node filters into integer node ids by walking the
+    # object graph from the root. Returns null if there are no filters, otherwise a mapping from
+    # path to id. Raises a value error if a path does not start with the root name or a child is
+    # missing, and a type error if a filter key is not a string.
     """Maps all string node paths in node_filters to the int node ids."""
     if self._node_filters is None:
       return None
@@ -253,6 +311,13 @@ class Loader(object):
     return path_to_int
 
   def _retrieve_all_filtered_nodes(self):
+    # [FUNCTION DOC]
+    # Breadth-first traversal of the object graph starting from the filtered paths, collecting ids
+    # of all nodes (including descendants) that must be loaded. For pre-created objects supplied in
+    # the filters, their existing child dependencies are registered as already loaded (with a
+    # do-nothing setter for existing data structures). Mutates the path-to-id map and loaded nodes.
+    # Returns null when no filter is set or the root is included (load everything); otherwise the
+    # set of node ids. Raises a type error if a supplied object is not trackable.
     """Traverses through the object graph to get the IDs of all nodes to load.
 
     As a side-effect, if node_filters is a dictionary that contains already-
@@ -310,12 +375,18 @@ class Loader(object):
     return all_filtered_nodes
 
   def _find_node_child(self, node_id, child_name, path):
+    # [FUNCTION DOC]
+    # HELPER: path resolution. Returns the node id of the child with the given local name under
+    # node_id; path is used only for the error message. Raises a value error if absent.
     for reference in self._proto.nodes[node_id].children:
       if reference.local_name == child_name:
         return reference.node_id
     raise ValueError(f"Unable to find node {path}.")
 
   def _load_all(self):
+    # [FUNCTION DOC]
+    # Recreates all nodes, connects their edges, sets up captures for concrete functions outside
+    # the object graph, and restores checkpoint save/restore functions on nodes. Returns nothing.
     """Loads all nodes and functions from the SavedModel and their edges."""
     self._load_nodes()
     self._load_edges()
@@ -326,6 +397,12 @@ class Loader(object):
     self._load_checkpoint_save_and_restore_functions()
 
   def _load_checkpoint_save_and_restore_functions(self):
+    # [FUNCTION DOC]
+    # For every loaded node, restores its checkpoint functions. If the only saveable object is the
+    # serialize-to-tensors entry, the node's serialize and restore-from-tensors functions are set
+    # from the referenced loaded functions. Otherwise legacy saveable object factories are
+    # recreated from named pairs of save and restore functions (sharing one lazily created
+    # session holder). Mutates private attributes of nodes. Returns nothing.
     """Restores the checkpoint-related save/restore functions to all nodes."""
     temp_session = [None]
     for node_id, proto in self._iter_all_nodes():
@@ -353,6 +430,10 @@ class Loader(object):
                                                            temp_session))
 
   def _load_edges(self):
+    # [FUNCTION DOC]
+    # Adds attribute edges from each node to its children. If a filter excluded the root, creates
+    # a dummy root and intermediate base user objects along each filtered path and attaches the
+    # loaded nodes, for checkpoint compatibility. Returns nothing; mutates created objects.
     """Adds edges from objects to other objects and functions."""
     for node_id, object_proto in self._iter_all_nodes():
       self._add_object_graph_edges(object_proto, node_id)
@@ -373,6 +454,13 @@ class Loader(object):
           setattr(current_node, path[-1], loaded_node)
 
   def _add_object_graph_edges(self, proto, node_id):
+    # [FUNCTION DOC]
+    # Sets each child of the node (named in proto's children) as an attribute of the node using
+    # the node's setter. If a child is named for the call operator and the object is not callable,
+    # installs a call method on the object's type (which affects the whole class, not just the
+    # instance, despite the per-instance comment). Returns nothing.
+    # KNOWN ISSUE: the inline comment says the call hook is added per instance, but the code sets
+    # it on the object's type.
     """Adds edges from an object to its children."""
     obj = self._nodes[node_id]
     setter = self._node_setters[node_id]
@@ -386,6 +474,9 @@ class Loader(object):
         setattr(type(obj), "__call__", _call_attribute)
 
   def _setup_remaining_functions(self):
+    # [FUNCTION DOC]
+    # Sets up captures for every saved concrete function (in sorted name order) that has not yet
+    # been set up, e.g. gradient functions not reachable from the object graph. Returns nothing.
     concrete_function_names = sorted(self._proto.concrete_functions.keys())
     for name in concrete_function_names:
       if name in self._restored_concrete_functions:
@@ -393,6 +484,10 @@ class Loader(object):
       self._setup_function_captures(name, self._nodes)
 
   def _setup_function_captures(self, concrete_function_name, nodes):
+    # [FUNCTION DOC]
+    # Restores the captured inputs of one concrete function once (idempotent, tracked in the
+    # restored set). The function's bound input node ids are mapped through nodes (mapping from
+    # node id to object) and passed to the capture restoration utility. Returns nothing.
     """Setup captures and variables in a restored function."""
     if concrete_function_name in self._restored_concrete_functions:
       return
@@ -403,6 +498,9 @@ class Loader(object):
     restore_captures.restore_captures(concrete_function, inputs)
 
   def _initialize_loaded_nodes(self):
+    # [FUNCTION DOC]
+    # HELPER: splits the already-loaded (user supplied) nodes into two new mappings from node id
+    # to object and from node id to setter. Returns both.
     nodes = {}
     node_setters = {}
     for node_id, (node, setter) in self._loaded_nodes.items():
@@ -411,6 +509,11 @@ class Loader(object):
     return nodes, node_setters
 
   def _get_node_dependencies(self, proto):
+    # [FUNCTION DOC]
+    # Collects what must exist before a saved object can be created. Input: a saved object proto.
+    # Returns a mapping with its declared dependencies by name, plus (for functions and bare
+    # concrete functions) the bound input node ids of their concrete functions keyed by the id
+    # itself, plus (for resources) the resource creator child under its name. No side effects.
     """Returns a dictionary of all dependencies of an object.
 
     Args:
@@ -439,6 +542,14 @@ class Loader(object):
     return dependencies
 
   def _generate_ordered_node_ids(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the cycle error message concatenates string pieces without separating spaces
+    # ("dependenciesin", "pleasefile"), so the text reads incorrectly.
+    # Computes node ids (all, or the filtered subset) in an order where dependencies come first.
+    # Builds a dependency map from each node's dependencies (skipped for already-created nodes),
+    # and adds slot-variable ordering: a slot variable depends on its optimizer, its original
+    # variable, and the previous slot of the same optimizer. Returns the ordered list. Raises a
+    # value error if a dependency is outside the filter, or if a dependency cycle exists.
     """Orders the node ids so that dependencies appear first."""
     if self._filtered_nodes is None:
       unordered_ids = range(len(self._proto.nodes))
@@ -495,10 +606,18 @@ class Loader(object):
                        " the SavedModel.")
 
   def _iter_all_nodes(self):
+    # [FUNCTION DOC]
+    # Generator yielding pairs of node id and saved object proto for the ordered node ids.
     for node_id in self._ordered_node_ids:
       yield node_id, self._proto.nodes[node_id]
 
   def _load_nodes(self):
+    # [FUNCTION DOC]
+    # Creates the object for every saved node in dependency order. Pre-supplied nodes are kept;
+    # optimizer slot variables are created through the optimizer's slot-adding method (using the
+    # original variable and slot name); other nodes are recreated from their proto. If the root
+    # was not loaded, a dummy base user object stands in as root. Sets the node list (indexed by
+    # node id, null for unloaded) and the node setters mapping. Returns nothing.
     """Load all saved objects."""
     # `nodes` maps from node ids to recreated objects
     # `node_setters` maps from node ids to setter functions
@@ -546,6 +665,14 @@ class Loader(object):
     self._node_setters = node_setters
 
   def _restore_checkpoint(self):
+    # [FUNCTION DOC]
+    # Restores variable values from the SavedModel's variables checkpoint into the loaded object
+    # graph rooted at node 0, with the checkpoint file prefix constant created on the CPU. With
+    # partial checkpoints allowed, expects partial matches and asserts the match is non-trivial;
+    # otherwise asserts that all existing objects matched. In graph mode it additionally wires the
+    # restore operations into variable initializers or the table-initializer collection. Raises a
+    # not-implemented error in graph mode for objects using registered savers or whose state
+    # cannot be restored. Returns nothing.
     """Load state from checkpoint into the deserialized objects."""
     variables_path = path_helpers.get_variables_path(self._export_dir)
     # TODO(b/205010730): Clean use of private methods of TrackableSaver.
@@ -599,6 +726,12 @@ class Loader(object):
                 f"Unable to restore state of object {obj} from the checkpoint.")
 
   def adjust_debug_info_func_names(self, debug_info):
+    # [FUNCTION DOC]
+    # Builds a new graph debug info message from debug_info: the file list is copied and each trace
+    # key (node name, at sign, function name) is rewritten so the function part becomes the name of
+    # the restored concrete function's definition signature, or empty if the function is not among
+    # the restored ones. Name-to-trace-id entries are not copied. Returns the new message.
+    # Raises a value error if a key does not contain exactly one at sign.
     """Rewrite func names in the debug info by using the concrete func names."""
     output_debug_info = graph_debug_info_pb2.GraphDebugInfo()
     output_debug_info.files[:] = debug_info.files
@@ -613,11 +746,23 @@ class Loader(object):
     return output_debug_info
 
   def get(self, node_id):
+    # [FUNCTION DOC]
+    # Returns the loaded object for a node, given either an integer node id or a dotted node path
+    # string (resolved through the path-to-id map). Raises a key error for unknown paths, an index
+    # error for out-of-range ids. Returns null for nodes that were filtered out.
     if isinstance(node_id, str):
       node_id = self._node_path_to_id[node_id]
     return self._nodes[node_id]
 
   def _recreate(self, proto, node_id, nodes):
+    # [FUNCTION DOC]
+    # Creates the Python object for one saved object proto. Looks up a registered class by the
+    # proto's registered name, falling back to built-in kinds (asset, resource, constant). If a
+    # class is found, it deserializes the object from the proto using already created dependency
+    # objects (taken from nodes), export directory, asset file defs and operation attributes, and
+    # picks a child setter (the class's trackable-child adder if the object is trackable, else the
+    # plain attribute setter). Otherwise uses the default per-kind creation. Returns the object and
+    # its setter. Raises errors from deserialization or for unknown kinds.
     """Creates a Python object from a SavedObject protocol buffer.
 
     Args:
@@ -655,6 +800,11 @@ class Loader(object):
       return self._recreate_default(proto, node_id, dependencies)
 
   def _recreate_default(self, proto, node_id, deps):
+    # [FUNCTION DOC]
+    # Default creation by object kind for objects without a registered class: user object,
+    # function, bare concrete function, variable, or captured tensor. deps is the mapping of
+    # dependency objects. Returns the object and its setter. Raises a value error listing the
+    # supported kinds when the kind is unknown.
     """Creates a Python object from a SavedObject protocol buffer."""
     factory = {
         "user_object": (
@@ -674,6 +824,12 @@ class Loader(object):
     return factory[kind]()
 
   def _recreate_user_object(self, proto, node_id):
+    # [FUNCTION DOC]
+    # Instantiates a user object from a saved user-object proto. For optimizers, first tries to
+    # import the Keras optimizer modules (tf_keras legacy or v2 optimizers, then keras ones) so that
+    # the optimizer type is registered; raises an import error if none can be imported. Then looks
+    # up a revived type by identifier; if none is found, returns a generic base user object
+    # instead. Returns the (object, setter) pair as given by the callee. Side effect: imports.
     """Instantiates a SavedUserObject."""
     if proto.identifier == "optimizer":
       # Make sure that the Keras optimizers module is imported. This is needed
@@ -706,17 +862,33 @@ class Loader(object):
     return looked_up
 
   def _recreate_base_user_object(self, proto=None, node_id=None):
+    # [FUNCTION DOC]
+    # Creates a generic trackable placeholder object for a user object that has no registered type.
+    # The proto and node_id arguments are accepted for interface compatibility and ignored. A fresh
+    # class is defined per call so each instance can be made individually callable. Returns the new
+    # instance together with the plain attribute setter.
     del proto, node_id
     # Note: each user object has its own class. This allows making each one
     # individually callable by adding a `__call__` method to the classes of
     # the objects instances that have a `__call__` property.
 
     class _UserObject(autotrackable.AutoTrackable):
+      # [CLASS DOC]
+      # HELPER: empty automatically tracked object type, created freshly for each placeholder user
+      # object so that a call method can be attached to one object's class without affecting others.
       pass
 
     return _UserObject(), setattr
 
   def _recreate_function(self, proto, dependencies):
+    # [FUNCTION DOC]
+    # Recreates a polymorphic function from a saved function proto using the function
+    # deserialization module, then sets up captures for each of its concrete functions using the
+    # dependency mapping. If function aliases are being loaded and all its concrete functions have
+    # an alias, then the alias entry (a list of concrete functions) is replaced by the restored
+    # function when the sets of function names match; otherwise a warning is logged. Returns the
+    # function and the plain attribute setter. Raises an assertion error if the alias entry is not
+    # a list.
     fn = function_deserialization.recreate_function(
         proto, self._concrete_functions)
     for name in proto.concrete_functions:
@@ -757,12 +929,23 @@ class Loader(object):
     return fn, setattr
 
   def _recreate_bare_concrete_function(self, proto, dependencies):
+    # [FUNCTION DOC]
+    # Recreates a bare concrete function from its proto: sets it up for calling, restores its
+    # captures from dependencies, and returns the function with the plain attribute setter.
     fn = function_deserialization.setup_bare_concrete_function(
         proto, self._concrete_functions)
     self._setup_function_captures(proto.concrete_function_name, dependencies)
     return fn, setattr
 
   def _recreate_variable(self, proto):
+    # [FUNCTION DOC]
+    # Creates an uninitialized variable from a saved variable proto (name, shape, dtype,
+    # trainability, synchronization, aggregation, device). The synchronization, aggregation and
+    # trainable settings are validated first. Creation happens under a low-priority variable
+    # creator that makes uninitialized variables so a distribution strategy's creator can take
+    # precedence; the saved device is used when the variable policy saves devices, soft placement
+    # is on and a device was saved. Returns the variable and the plain attribute setter. Values are
+    # restored later from the checkpoint.
     name = proto.name if proto.name else None
     if name is not None:
       dbg_name = name
@@ -774,6 +957,9 @@ class Loader(object):
             name=dbg_name))
 
     def uninitialized_variable_creator(next_creator, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: variable creator hook for _recreate_variable. Ignores the next creator and returns
+      # an uninitialized resource variable built from the keyword arguments.
       """A variable creator that creates uninitialized variables."""
       del next_creator
       return resource_variable_ops.UninitializedVariable(**kwargs)
@@ -808,17 +994,32 @@ class Loader(object):
             aggregation=aggregation), setattr
 
   def _get_tensor_from_fn(self, proto):
+    # [FUNCTION DOC]
+    # Finds the captured tensor named in the proto inside the graph of the referenced restored
+    # concrete function. Returns the tensor and the plain attribute setter. Raises a key error if
+    # the function or tensor name is unknown.
     outer_graph = self._concrete_functions[proto.concrete_function].graph
     captured_tensor = outer_graph.get_tensor_by_name(proto.name)
     return captured_tensor, setattr
 
 
 def _call_attribute(instance, *args, **kwargs):
+  # [FUNCTION DOC]
+  # HELPER: installed as the call method on loaded objects that have a call attribute but are not
+  # otherwise callable. Forwards all arguments to the instance's call attribute and returns its
+  # result.
   return instance.__call__(*args, **kwargs)
 
 
 @tf_export("saved_model.load", v1=["saved_model.load_v2"])
 def load(export_dir, tags=None, options=None):
+  # [FUNCTION DOC]
+  # Public entry point (exported as the saved-model load function) that loads a complete
+  # SavedModel. export_dir is the directory (string or path-like); tags is an optional tag or
+  # sequence of tags selecting the meta graph; options is an optional load options object.
+  # Delegates to the partial loader with no filters and returns the root trackable object, which
+  # has a signatures attribute. Raises a value error if tags do not match; other errors propagate
+  # from the loader. Side effects: reads files, updates metrics and logs.
   """Load a SavedModel from `export_dir`.
 
   Signatures associated with the SavedModel are available as functions:
@@ -915,6 +1116,22 @@ def load(export_dir, tags=None, options=None):
 
 @tf_export("__internal__.saved_model.load_partial", v1=[])
 def load_partial(export_dir, filters, tags=None, options=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the existing docstring examples are malformed (unterminated code fence, missing
+  # prompts).
+  # Core loader behind the load functions. Inputs: export_dir, filters (null/empty to load all, or
+  # a list or mapping of dotted node paths, optionally mapping to existing objects), tags
+  # (optional, a single tag or sequence or set), options (optional load options; defaults made).
+  # Parses the SavedModel and its debug info. For a TF2 object-graph model (exactly one meta graph
+  # with an object graph): records metrics, byte-swaps tensor content on big-endian hosts,
+  # validates tags (value error on mismatch), builds a Loader inside an init scope (a not-found
+  # error is converted into a file-not-found error with a hint about the io device option), then
+  # attaches adjusted debug info, TensorFlow version and git version to the root, and the function
+  # aliases if requested (value error if the root already has that attribute). For TF1 models, node
+  # filters are rejected with a value error and the v1-in-v2 loader is used. Afterwards it records
+  # the read path, reads the fingerprint (logging and recording metrics on missing/bad files) and
+  # sets the path/singleprint metric. Returns a mapping from filter paths to loaded objects when
+  # filters are given for a TF2 model, otherwise a mapping with the single key for the root.
   """Partially load a SavedModel (saved from V2).
 
   Similar to `tf.saved_model.load`, but with an additional argument that
@@ -1109,6 +1326,14 @@ def load_partial(export_dir, filters, tags=None, options=None):
 
 
 def is_tf2_saved_model(export_dir):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: if the fingerprint is readable but its saved object graph hash is zero, the
+  # function falls through to the TF1 answer without parsing the meta graph, which can misreport
+  # a TF2 model written without that hash.
+  # Tells whether the SavedModel in export_dir (directory string) uses TF2 semantics. First reads
+  # the fingerprint and answers true if the saved object graph hash is nonzero. If reading fails
+  # for any reason, parses the SavedModel proto and answers true when it has one meta graph with
+  # an object graph. Otherwise returns false. Logs the decision. Errors from parsing propagate.
   """Identifies if an exported SavedModel is a TF2 SavedModel.
 
   There are differences in SavedModel semantics between TF1 and TF2 that are

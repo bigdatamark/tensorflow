@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Defines and publicly exports the options class used when loading SavedModels. Depends on the
+# save options module for the variable policy enum. Import-time side effect: registers the class
+# with the public API export mechanism.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,6 +24,11 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export("saved_model.LoadOptions", v1=[])
 class LoadOptions(object):
+  # [CLASS DOC]
+  # Plain options holder passed to SavedModel loading functions (exported publicly as the
+  # saved-model load options class). Uses fixed slots for these attributes: allow partial
+  # checkpoint, experimental io device, experimental skip checkpoint, experimental variable policy
+  # and experimental load function aliases. Created by users and read by the loader.
   """Options for loading a SavedModel.
 
   This function may be used in the `options` argument in functions that
@@ -37,6 +46,15 @@ class LoadOptions(object):
                experimental_skip_checkpoint=False,
                experimental_variable_policy=None,
                experimental_load_function_aliases=False):
+    # [FUNCTION DOC]
+    # Stores the loading options. Inputs (all optional): allow_partial_checkpoint (bool, default
+    # false; tolerate variables absent from the checkpoint), experimental_io_device (device name
+    # string or null; device used to access the filesystem), experimental_skip_checkpoint (bool,
+    # default false; do not restore checkpoints), experimental_variable_policy (variable policy
+    # enum, its string value, or null; converted to a policy enum value, null meaning default),
+    # experimental_load_function_aliases (bool, default false; attach function aliases to the
+    # loaded object). Returns nothing. Raises whatever the policy conversion raises for an invalid
+    # value.
     """Creates an object that stores options for SavedModel loading.
 
     *When to set `allow_partial_checkpoint=True`?*

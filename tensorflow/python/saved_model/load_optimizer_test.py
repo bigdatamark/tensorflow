@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Test module checking that a SavedModel with an optimizer loads and exposes slot variables even
+# when Keras is not imported. Run as a standard TensorFlow test main; no import-time side effects.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,8 +24,14 @@ from tensorflow.python.saved_model import load
 
 
 class LoadOptimizerTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering loading of SavedModels that contain optimizers. No shared fixtures.
 
   def test_load_optimizer_without_keras(self):
+    # [FUNCTION DOC]
+    # Scenario: load the checked-in test SavedModel with an optimizer slot variable module without
+    # the Keras module imported. Asserts that the slot variable obtained from the loaded optimizer
+    # for the loaded variable is a variable instance.
     # Make sure that a SavedModel w/ optimizer can be loaded without the Keras
     # module imported.
     save_path = test.test_src_dir_path(
