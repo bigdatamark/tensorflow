@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# HELPER: provides a decorator that forces a function to be called with keyword arguments
+# only, to prevent argument-order mistakes. Uses the shared decorator validation helper.
+# No import-time side effects.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +25,13 @@ from tensorflow.python.util import decorator_utils
 
 
 def keyword_args_only(func):
+  # [FUNCTION DOC]
+  # Decorator factory that forces a function to be called with keyword arguments only.
+  # Input: func, a callable (validated immediately; a value error is raised if it is not
+  # callable). Output: a wrapper that preserves the wrapped function's metadata. The wrapper
+  # raises a value error naming the function and the offending positional arguments if called
+  # with any positional argument; otherwise it forwards all keyword arguments and returns the
+  # wrapped function's result. No other side effects.
   """Decorator for marking specific function accepting keyword args only.
 
   This decorator raises a `ValueError` if the input `func` is called with any
@@ -40,6 +51,10 @@ def keyword_args_only(func):
   decorator_utils.validate_callable(func, "keyword_args_only")
   @functools.wraps(func)
   def new_func(*args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: wrapper produced by keyword_args_only. Inputs: any positional and keyword
+    # arguments. Raises a value error if any positional argument is present; otherwise calls
+    # the wrapped function with the keyword arguments and returns its result.
     """Keyword args only wrapper."""
     if args:
       raise ValueError(

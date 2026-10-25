@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Test module for the lazy loader: checks that documentation-test discovery does not load the
+# module, that the warning is emitted once on first load, and that pickling yields the real module.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,8 +30,15 @@ from tensorflow.python.util import tf_inspect
 
 
 class LazyLoaderTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for the lazy loader: documentation-test discovery must not trigger a load, and a
+  # configured warning is emitted exactly once on first load.
 
   def testDocTestDoesNotLoad(self):
+    # [FUNCTION DOC]
+    # Scenario: a module object holding a lazy loader for a standard path module; run the
+    # documentation-test finder over it.
+    # Asserts the attribute is a lazy loader both before and after (i.e. nothing was loaded).
     module = types.ModuleType("mytestmodule")
     module.foo = lazy_loader.LazyLoader("foo", module.__dict__, "os.path")
 
@@ -41,6 +51,11 @@ class LazyLoaderTest(test.TestCase):
 
   @test.mock.patch.object(logging, "warning", autospec=True)
   def testLazyLoaderMock(self, mock_warning):
+    # [FUNCTION DOC]
+    # Scenario: the warning logging function is replaced by a mock (passed in as mock_warning);
+    # a lazy loader targeting this very test module is created with a warning message.
+    # Asserts: no warning at creation; setting an attribute loads the module and logs exactly
+    # one warning; reading it back logs no further warning; the value is unchanged.
     name = LazyLoaderTest.__module__
     lazy_loader_module = lazy_loader.LazyLoader(
         "lazy_loader_module", globals(), name, warning="Test warning.")
@@ -56,8 +71,14 @@ class LazyLoaderTest(test.TestCase):
 
 
 class PickleTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests pickling support of the lazy loader.
 
   def testPickleLazyLoader(self):
+    # [FUNCTION DOC]
+    # Scenario: lazy loader pointing at the current test module is pickled and unpickled.
+    # Asserts the restored object is the real module (name matches, and it exposes this file's
+    # PickleTest class).
     name = PickleTest.__module__  # Try to pickle current module.
     lazy_loader_module = lazy_loader.LazyLoader(
         "lazy_loader_module", globals(), name)

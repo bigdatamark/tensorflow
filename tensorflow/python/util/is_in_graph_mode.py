@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# HELPER: tiny helper module exposing a callable flag-check that reports whether the program is
+# in graph mode. It always reports true by default; other modules may replace the callable to
+# change the answer. Defines no functions or classes of its own (only an anonymous function).
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

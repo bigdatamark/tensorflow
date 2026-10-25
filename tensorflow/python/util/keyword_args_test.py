@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Test module for the keyword-arguments-only decorator, checking accepted keyword calls and
+# rejected positional or mixed calls.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,14 +22,25 @@ from tensorflow.python.util import keyword_args
 
 
 class KeywordArgsTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for the keyword_args_only decorator.
 
   def test_keyword_args_only(self):
+    # [FUNCTION DOC]
+    # Scenario: a plain two-argument function and a decorated function that delegates to it.
+    # Asserts: the plain function works positionally and by keyword; the decorated one works by
+    # keyword; calling the decorated one with all positional or with mixed positional and
+    # keyword arguments raises a value error saying it only accepts keyword arguments.
 
     def func_without_decorator(a, b):
+      # [FUNCTION DOC]
+      # HELPER: returns the sum of its two arguments.
       return a + b
 
     @keyword_args.keyword_args_only
     def func_with_decorator(a, b):
+      # [FUNCTION DOC]
+      # HELPER: decorated function; delegates to the undecorated function and returns the sum.
       return func_without_decorator(a, b)
 
     self.assertEqual(3, func_without_decorator(1, 2))

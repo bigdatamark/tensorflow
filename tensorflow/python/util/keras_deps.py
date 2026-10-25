@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: dependency-inversion registry through which TensorFlow gets Keras functions without
+# importing Keras. Keras registers four functions (call context, clear session, get session,
+# load model) via exported register functions; consumers fetch them with the matching getters,
+# which return the null value until registered. State is four module-level variables.
+# Import-time side effect: the register functions are exported to the public API machinery.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,44 +43,73 @@ _KERAS_LOAD_MODEL_FUNCTION = None
 # Register functions
 @tf_export('__internal__.register_call_context_function', v1=[])
 def register_call_context_function(func):
+  # [FUNCTION DOC]
+  # Registers the Keras function that returns the layer call context. Input: func, a callable
+  # (any object is accepted, nothing is validated). Returns nothing. Side effect: replaces the
+  # module-level stored function, overwriting any earlier registration. Exported publicly under
+  # the internal namespace for the TensorFlow API only (not the v1 API).
   global _KERAS_CALL_CONTEXT_FUNCTION
   _KERAS_CALL_CONTEXT_FUNCTION = func
 
 
 @tf_export('__internal__.register_clear_session_function', v1=[])
 def register_clear_session_function(func):
+  # [FUNCTION DOC]
+  # Registers the Keras function that clears the current Keras session. Input: func, a callable
+  # (not validated). Returns nothing. Side effect: replaces the module-level stored function,
+  # overwriting any earlier registration. Exported in the internal namespace (not v1).
   global _KERAS_CLEAR_SESSION_FUNCTION
   _KERAS_CLEAR_SESSION_FUNCTION = func
 
 
 @tf_export('__internal__.register_get_session_function', v1=[])
 def register_get_session_function(func):
+  # [FUNCTION DOC]
+  # Registers the Keras function that returns the current Keras session. Input: func, a
+  # callable (not validated). Returns nothing. Side effect: replaces the module-level stored
+  # function, overwriting any earlier registration. Exported in the internal namespace (not v1).
   global _KERAS_GET_SESSION_FUNCTION
   _KERAS_GET_SESSION_FUNCTION = func
 
 
 @tf_export('__internal__.register_load_model_function', v1=[])
 def register_load_model_function(func):
+  # [FUNCTION DOC]
+  # Registers the Keras function that loads a saved model. Input: func, a callable (not
+  # validated). Returns nothing. Side effect: replaces the module-level stored function,
+  # overwriting any earlier registration. Exported in the internal namespace (not v1).
   global _KERAS_LOAD_MODEL_FUNCTION
   _KERAS_LOAD_MODEL_FUNCTION = func
 
 
 # Get functions
 def get_call_context_function():
+  # [FUNCTION DOC]
+  # Returns the registered call-context function, or the null value if none was registered yet.
+  # No inputs, no side effects.
   global _KERAS_CALL_CONTEXT_FUNCTION
   return _KERAS_CALL_CONTEXT_FUNCTION
 
 
 def get_clear_session_function():
+  # [FUNCTION DOC]
+  # Returns the registered clear-session function, or the null value if none was registered
+  # yet. No inputs, no side effects.
   global _KERAS_CLEAR_SESSION_FUNCTION
   return _KERAS_CLEAR_SESSION_FUNCTION
 
 
 def get_get_session_function():
+  # [FUNCTION DOC]
+  # Returns the registered get-session function, or the null value if none was registered yet.
+  # No inputs, no side effects.
   global _KERAS_GET_SESSION_FUNCTION
   return _KERAS_GET_SESSION_FUNCTION
 
 
 def get_load_model_function():
+  # [FUNCTION DOC]
+  # Returns the registered load-model function, or the null value if none was registered yet.
+  # No inputs, no side effects.
   global _KERAS_LOAD_MODEL_FUNCTION
   return _KERAS_LOAD_MODEL_FUNCTION

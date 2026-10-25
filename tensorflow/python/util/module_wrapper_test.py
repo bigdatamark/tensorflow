@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test module for the module wrapper: wrapper identity, deprecation warnings, lazy loading,
+# caching, overrides, export list, lite handling, compat.v1 instrumentation, deletion and pickling.
+# Import-time side effect: raises the wrapper module's per-module warning limit to five.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,18 +31,31 @@ module_wrapper._PER_MODULE_WARNING_LIMIT = 5
 
 
 class MockModule(types.ModuleType):
+  # [CLASS DOC]
+  # HELPER: empty module subclass used as a stand-in module to be wrapped in the tests.
   pass
 
 
 class DeprecationWrapperTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests the wrapper's module identity and its deprecation-warning behavior.
 
   def testWrapperIsAModule(self):
+    # [FUNCTION DOC]
+    # Scenario: wrap a mock module. Asserts the wrapper is recognized as a module.
     module = MockModule('test')
     wrapped_module = module_wrapper.TFModuleWrapper(module, 'test')
     self.assertTrue(tf_inspect.ismodule(wrapped_module))
 
   @test.mock.patch.object(logging, 'warning', autospec=True)
   def testDeprecationWarnings(self, mock_warning):
+    # [FUNCTION DOC]
+    # Scenario: the logging warning function is mocked (mock_warning). A mock module has three
+    # attributes; two of them are registered in the global rename table (mutating it as a side
+    # effect that is never undone). The module is wrapped and the attributes read.
+    # Asserts: no warning before any read; reading the first renamed attribute logs one warning;
+    # reading the unrenamed one logs none; reading the second renamed attribute logs a second;
+    # re-reading it does not warn again; wrapped values equal the originals.
     module = MockModule('test')
     module.foo = 1
     module.bar = 2
@@ -65,8 +82,15 @@ class DeprecationWrapperTest(test.TestCase):
 
 
 class LazyLoadingWrapperTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests the wrapper's lazy loading of public APIs, caching in the fast dictionary, local
+  # overrides, export list handling, lite handling, compat.v1 instrumentation and deletion.
 
   def testLazyLoad(self):
+    # [FUNCTION DOC]
+    # Scenario: wrapper with a public API map pointing to a standard-library module and a class,
+    # deprecation off. Asserts each is absent from the fast cache before first access, resolves
+    # to the real object on access, and is present in the cache afterwards.
     module = MockModule('test')
     apis = {'cmd': ('', 'cmd'), 'ABCMeta': ('abc', 'ABCMeta')}
     wrapped_module = module_wrapper.TFModuleWrapper(
@@ -82,6 +106,10 @@ class LazyLoadingWrapperTest(test.TestCase):
     self.assertTrue(wrapped_module._fastdict_key_in('ABCMeta'))
 
   def testLazyLoadLocalOverride(self):
+    # [FUNCTION DOC]
+    # Scenario: after lazily loading a mapped name, overwrite it and add a new attribute through
+    # the wrapper. Asserts reads return the new values and the fast cache holds the new values
+    # for both the overridden and the added name.
     # Test that we can override and add fields to the wrapped module.
     module = MockModule('test')
     apis = {'cmd': ('', 'cmd')}
@@ -99,6 +127,10 @@ class LazyLoadingWrapperTest(test.TestCase):
     self.assertEqual(wrapped_module._fastdict_get('cgi'), 2)
 
   def testLazyLoadDict(self):
+    # [FUNCTION DOC]
+    # Scenario: wrapper with one mapped name. Asserts the name is not in the wrapper dictionary
+    # until first accessed, is then added with the real module, and that setting a new
+    # attribute also adds it to the dictionary.
     # Test that we can override and add fields to the wrapped module.
     module = MockModule('test')
     apis = {'cmd': ('', 'cmd')}
@@ -115,6 +147,10 @@ class LazyLoadingWrapperTest(test.TestCase):
     self.assertEqual(wrapped_module.__dict__['cmd2'], _cmd)
 
   def testLazyLoadWildcardImport(self):
+    # [FUNCTION DOC]
+    # Scenario: wrapper over a module with a private attribute and a public API map; add a new
+    # attribute. Asserts the export list contains the added name and the mapped name, and does
+    # not contain the private attribute.
     # Test that public APIs are in __all__.
     module = MockModule('test')
     module._should_not_be_public = 5
@@ -127,6 +163,10 @@ class LazyLoadingWrapperTest(test.TestCase):
     self.assertNotIn('_should_not_be_public', wrapped_module.__all__)
 
   def testLazyLoadCorrectLiteModule(self):
+    # [FUNCTION DOC]
+    # Scenario: the wrapped module already has a lite attribute (five) but the wrapper is created
+    # with has-lite set and a map entry for lite. Asserts reading lite returns the object from
+    # the map, not the pre-existing value.
     # If set, always load lite module from public API list.
     module = MockModule('test')
     apis = {'lite': ('', 'cmd')}
@@ -137,6 +177,9 @@ class LazyLoadingWrapperTest(test.TestCase):
     self.assertEqual(wrapped_module.lite, _cmd)
 
   def testInitCachesAttributes(self):
+    # [FUNCTION DOC]
+    # Scenario: construct a wrapper. Asserts that construction already cached a fast-dictionary
+    # helper name, an internal reserved-prefix name, and the export list attribute.
     module = MockModule('test')
     wrapped_module = module_wrapper.TFModuleWrapper(module, 'test')
     self.assertTrue(wrapped_module._fastdict_key_in('_fastdict_key_in'))
@@ -144,6 +187,15 @@ class LazyLoadingWrapperTest(test.TestCase):
     self.assertTrue(wrapped_module._fastdict_key_in('__all__'))
 
   def testCompatV1APIInstrumenting(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: a chained assignment near the end rebinds the earlier compat.v1 mock variable
+    # to the new compat.v2.compat.v1 mock; harmless but confusing and unused afterwards.
+    # Scenario: three wrappers (plain tensorflow, tensorflow.compat.v1, and
+    # tensorflow.compat.v2.compat.v1 module names) each with a lazily mapped name.
+    # Asserts the class-level usage flag starts false; accessing the mapped name on the plain
+    # one leaves it false; creating the compat.v1 wrapper leaves it false, accessing the
+    # name sets it true; after manually resetting it, the same holds for the nested v2 compat.v1
+    # name. Mutates and resets the class flag.
     self.assertFalse(module_wrapper.TFModuleWrapper.compat_v1_usage_recorded)
     apis = {'cosh': ('', 'cmd')}
 
@@ -170,6 +222,10 @@ class LazyLoadingWrapperTest(test.TestCase):
     self.assertTrue(module_wrapper.TFModuleWrapper.compat_v1_usage_recorded)
 
   def testDelAttr(self):
+    # [FUNCTION DOC]
+    # Scenario: set an attribute through the wrapper, read it, delete it, then repeat.
+    # Asserts the value is readable after setting and that after deletion the attribute no
+    # longer exists, both times (deletion cleans all caches so re-setting works).
     module = MockModule('test')
     wrapped_module = module_wrapper.TFModuleWrapper(module, 'test')
     setattr(wrapped_module, 'foo', 1)
@@ -184,8 +240,14 @@ class LazyLoadingWrapperTest(test.TestCase):
 
 
 class PickleTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests pickling of the module wrapper.
 
   def testPickleSubmodule(self):
+    # [FUNCTION DOC]
+    # Scenario: wrap a mock module named after the current test module, then pickle and
+    # unpickle it. Asserts the restored object has the same name and exposes this file's
+    # PickleTest class (i.e. it is the real module).
     name = PickleTest.__module__  # The current module is a submodule.
     module = module_wrapper.TFModuleWrapper(MockModule(name), name)
     restored = pickle.loads(pickle.dumps(module))

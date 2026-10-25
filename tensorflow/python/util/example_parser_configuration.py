@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Converts a graph operation that parses serialized examples (original or version-2 kind) into
+# an example-parser configuration message describing, per feature name, the fixed-length or
+# variable-length feature settings and the names of the operation's output tensors. Exposes one
+# public function; two private helpers handle each operation version. Requires a session to
+# evaluate constant inputs. No import-time side effects.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,6 +26,17 @@ from tensorflow.python.framework import tensor_util
 
 
 def extract_example_parser_configuration(parse_example_op, sess):
+  # [FUNCTION DOC]
+  # Public entry point that builds an example-parser configuration description from a graph
+  # operation that parses serialized examples.
+  # Inputs: parse_example_op is a graph operation whose type must be the original parse-example
+  # kind or the version-2 kind; sess is a v1-style session used to evaluate the constant inputs
+  # (feature keys and dense defaults) of that operation.
+  # Output: returns the configuration message (feature map keyed by feature name) produced by
+  # the matching private extractor.
+  # Raises a value error if the operation type is neither of the two supported kinds; the
+  # private extractors may also raise value errors when attributes are inconsistent.
+  # Side effects: runs the session once to evaluate the operation inputs.
   """Returns an ExampleParserConfig proto.
 
   Args:
@@ -42,6 +59,17 @@ def extract_example_parser_configuration(parse_example_op, sess):
 
 
 def _extract_from_parse_example(parse_example_op, sess):
+  # [FUNCTION DOC]
+  # HELPER: implements the original parse-example branch of extract_example_parser_configuration.
+  # Reads the sparse/dense counts, types and dense shapes from the operation attributes and
+  # validates that their lengths agree with the counts. Skips the first two inputs (serialized
+  # data and names), then evaluates the remaining inputs in the session: sparse keys, dense keys
+  # and dense default values. For each dense feature it records the default value, shape, dtype
+  # and the name of the output tensor holding values; for each sparse feature it records the dtype
+  # and the output tensor names for indices, values and dense shapes.
+  # Inputs: parse_example_op (operation) and sess (session). Returns the filled configuration.
+  # Raises a value error when attribute lengths, the input count or the fetched result count are
+  # inconsistent. Side effect: one session run.
   """Extract ExampleParserConfig from ParseExample op."""
   config = example_parser_configuration_pb2.ExampleParserConfiguration()
 
@@ -131,6 +159,18 @@ def _extract_from_parse_example(parse_example_op, sess):
 
 
 def _extract_from_parse_example_v2(parse_example_op, sess):
+  # [FUNCTION DOC]
+  # HELPER: implements the version-2 branch of extract_example_parser_configuration.
+  # KNOWN ISSUE: consistency checks use bare assertions (not value errors as the sibling helper
+  # does), so they vanish under optimized mode; the two deletions of the ragged index variables
+  # just before the error are pointless bookkeeping, since the function raises right after.
+  # Reads dense types, sparse count/types, ragged types and dense shapes from the attributes,
+  # evaluates inputs after the first two (sparse keys, dense keys, ragged keys, dense defaults)
+  # in the session, and fills the configuration with fixed-length entries for dense features
+  # and variable-length entries for sparse features, including output tensor names.
+  # Inputs: parse_example_op (operation) and sess (session). Returns the configuration.
+  # Raises a value error if any ragged features exist (unsupported by the proto); assertion
+  # errors if counts or input numbers disagree. Side effect: one session run.
   """Extract ExampleParserConfig from ParseExampleV2 op."""
   config = example_parser_configuration_pb2.ExampleParserConfiguration()
 

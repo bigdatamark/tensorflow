@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: wrapper machinery for TensorFlow API modules. Provides a module-type wrapper that
+# lazily imports public symbols, issues limited deprecation warnings using the generated rename
+# table, records compat.v1 usage in a monitoring gauge, and keeps caches consistent; plus helper
+# functions for rename lookup and detecting existing deprecation decorators.
+# Import-time side effects: creates a boolean monitoring gauge named for compat.v1 usage and
+# obtains the fast module type class.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,12 +37,24 @@ compat_v1_usage_gauge = monitoring.BoolGauge('/tensorflow/api/compat/v1',
 
 
 def get_rename_v2(name):
+  # [FUNCTION DOC]
+  # Looks up the recommended replacement for a renamed public symbol in the generated rename
+  # table. Input: name, the full dotted symbol name (string). Returns the replacement name
+  # string, or the null value if the symbol is not in the table. No side effects.
   if name not in all_renames_v2.symbol_renames:
     return None
   return all_renames_v2.symbol_renames[name]
 
 
 def _call_location():
+  # [FUNCTION DOC]
+  # HELPER: used only by the wrapper's deprecation-warning method to report user code location.
+  # KNOWN ISSUE: the docstring says it returns the caller location, but it actually walks up
+  # three stack frames from itself (past the attribute hook and the warning method), which is
+  # a heuristic that breaks if the call chain changes; it enforces this by asserting that its
+  # direct caller has the expected name (the assertion is lost under optimized mode).
+  # Returns a string of the form file name, colon, line number of the located frame (stops
+  # early if the stack is shorter). Raises an assertion error if called from anywhere else.
   """Extracts the caller filename and line number as a string.
 
   Returns:
@@ -59,10 +78,19 @@ def _call_location():
 
 
 def contains_deprecation_decorator(decorators):
+  # [FUNCTION DOC]
+  # HELPER: used by has_deprecation_decorator.
+  # Input: decorators, a list of decorator records (each with a decorator name). Returns true
+  # if any record is named as the deprecation decorator, otherwise false.
   return any(d.decorator_name == 'deprecated' for d in decorators)
 
 
 def has_deprecation_decorator(symbol):
+  # [FUNCTION DOC]
+  # Decides whether a symbol is already marked deprecated so the wrapper need not warn again.
+  # Input: symbol, any object. Unwraps decorators; true if any is the deprecation decorator.
+  # Otherwise, for plain functions and non-classes returns false; for a class, checks the
+  # decorators on its constructor. Returns a boolean; no side effects.
   """Checks if given object has a deprecation decorator.
 
   We check if deprecation decorator is in decorators as well as
@@ -88,6 +116,16 @@ def has_deprecation_decorator(symbol):
 
 
 class TFModuleWrapper(FastModuleType):
+  # [CLASS DOC]
+  # Module-type wrapper around a TensorFlow API module that (1) lazily imports public symbols
+  # listed in a mapping of name to (module, attribute) location, (2) emits at most a limited
+  # number of deprecation warnings for renamed symbols, (3) records compat.v1 usage once in a
+  # monitoring gauge, and (4) keeps the wrapped module, the wrapper's dictionary, the export
+  # list and the fast attribute cache consistent on set and delete. Internal state lives in
+  # attributes prefixed with a reserved marker (wrapped module, module name, public API map,
+  # warning flags/counters, has-lite flag, compat.v1 flag, checked-name set). The class attribute
+  # compat_v1_usage_recorded ensures the usage gauge is set only once per process. It installs
+  # its own attribute-access and fallback callbacks on the fast module type machinery.
   """Wrapper for TF modules to support deprecation messages and lazyloading."""
   # Ensures that compat.v1 API usage is recorded at most once
   compat_v1_usage_recorded = False
@@ -99,6 +137,19 @@ class TFModuleWrapper(FastModuleType):
       public_apis=None,
       deprecation=True,
       has_lite=False):
+    # [FUNCTION DOC]
+    # Builds the wrapper. Inputs: wrapped, the module object to wrap; module_name, the short
+    # name used when composing full symbol names for rename lookups (may be empty); public_apis,
+    # optional mapping from symbol name to a pair of module path and attribute (an empty module
+    # path means import the attribute itself as a module); deprecation, whether to print
+    # deprecation warnings (default true); has_lite, whether the lite subpackage should be
+    # loaded from the public API map (default false).
+    # Initializes the base type with the wrapped module's name, registers the fallback and
+    # attribute-access callbacks, copies the wrapped module's dictionary, stores the internal
+    # state, and sets the export list: from the public API names if given, else the wrapped
+    # module's list, else all its public (non-underscore) names (which is also stored on the
+    # wrapped module). Initializes the checked-names set and warning counter.
+    # Side effects: mutates the wrapped module (export list).
     super(TFModuleWrapper, self).__init__(wrapped.__name__)
     FastModuleType.set_getattr_callback(self, TFModuleWrapper._getattr)
     FastModuleType.set_getattribute_callback(self,
@@ -131,6 +182,16 @@ class TFModuleWrapper(FastModuleType):
     self._tfmw_warning_count = 0
 
   def _tfmw_add_deprecation_warning(self, name, attr):
+    # [FUNCTION DOC]
+    # HELPER: used by the attribute-access hooks to warn about renamed symbols.
+    # KNOWN ISSUE: the call location is computed twice (once for the check, once for the log
+    # message); the second call happens from the same frame so it is harmless but redundant.
+    # Inputs: name, the attribute name; attr, the attribute value. If the per-module warning
+    # limit has not been reached and the name was not already checked, marks it checked, builds
+    # the full dotted name, and if it has a rename and the value is not already decorated as
+    # deprecated and the call location is not a synthetic one (starting with an angle bracket),
+    # logs a warning naming the location, old name and replacement and increments the counter.
+    # Returns true if a warning was logged, otherwise false.
     """Print deprecation warning for attr with given name if necessary."""
     if (self._tfmw_warning_count < _PER_MODULE_WARNING_LIMIT and
         name not in self._tfmw_deprecated_checked):
@@ -154,6 +215,14 @@ class TFModuleWrapper(FastModuleType):
     return False
 
   def _tfmw_import_module(self, name):
+    # [FUNCTION DOC]
+    # HELPER: lazy-import step used by the attribute hooks.
+    # Input: name, a key that must exist in the public API map (otherwise a key error is
+    # raised, or a type error if the map is null). If this wrapper is for compat.v1 and the name
+    # is not "app" and usage was not yet recorded, sets the class flag and sets the monitoring
+    # gauge to true. Then imports the module (or the attribute from the module) given by the
+    # map, stores it on the wrapped module, in this wrapper's dictionary and in the fast cache.
+    # Returns the imported object. Side effects: imports, gauge update, three caches updated.
     """Lazily loading the modules."""
     # We ignore 'app' because it is accessed in __init__.py of tf.compat.v1.
     # That way, if a user only imports tensorflow.compat.v1, it is not
@@ -176,6 +245,15 @@ class TFModuleWrapper(FastModuleType):
     return attr
 
   def _getattribute(self, name):
+    # [FUNCTION DOC]
+    # Callback installed in place of the normal attribute-access hook (see its docstring).
+    # Input: name, the attribute being read. For the lite subpackage, when has-lite is set,
+    # imports it through the public API map, sets it on the wrapped module, caches it and
+    # returns it. Otherwise does a plain lookup (raising an attribute error if missing, which
+    # lets the fallback callback run). Dunder names and the wrapper's own reserved-prefix names
+    # are cached and returned. For other names, if deprecation printing is on and a warning was
+    # issued, the value is not cached (so the warning limit logic can be revisited); otherwise
+    # it is cached in the fast dictionary. Returns the attribute value.
     # pylint: disable=g-doc-return-or-yield,g-doc-args
     """Imports and caches pre-defined API.
 
@@ -216,6 +294,13 @@ class TFModuleWrapper(FastModuleType):
     return attr
 
   def _getattr(self, name):
+    # [FUNCTION DOC]
+    # Callback installed as the fallback hook, called when default lookup fails.
+    # Input: name, the attribute name. First tries the wrapped module; if that raises an
+    # attribute error, re-raises it when there is no public API map or the name is not in it,
+    # otherwise lazily imports the symbol. Then, if deprecation printing is enabled, may log a
+    # deprecation warning (result ignored). Returns the attribute value. Side effects: lazy
+    # import and caching, possible warning log.
     # pylint: disable=g-doc-return-or-yield,g-doc-args
     """Imports and caches pre-defined API.
 
@@ -244,6 +329,12 @@ class TFModuleWrapper(FastModuleType):
     return attr
 
   def __setattr__(self, arg, val):
+    # [FUNCTION DOC]
+    # Sets an attribute. Inputs: arg (name string) and val (any value). For names that do not
+    # start with the reserved internal prefix, also sets the value on the wrapped module and in
+    # this wrapper's dictionary, appends the name to the export list if absent (except the
+    # export list itself), and refreshes the fast cache entry if the name is already cached.
+    # In all cases then performs the base-class assignment. Returns nothing.
     if not arg.startswith('_tfmw_'):
       setattr(self._tfmw_wrapped_module, arg, val)
       self.__dict__[arg] = val
@@ -255,6 +346,10 @@ class TFModuleWrapper(FastModuleType):
     super(TFModuleWrapper, self).__setattr__(arg, val)
 
   def __dir__(self):
+    # [FUNCTION DOC]
+    # Returns the list of attribute names. With a public API map: the union of the map's names
+    # and the wrapped module's public (non-underscore) names, in unspecified order. Without a
+    # map: the wrapped module's full name listing.
     if self._tfmw_public_apis:
       return list(
           set(self._tfmw_public_apis.keys()).union(
@@ -266,6 +361,14 @@ class TFModuleWrapper(FastModuleType):
       return dir(self._tfmw_wrapped_module)
 
   def __delattr__(self, name):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: for non-internal names, deletion fails with a key error if the name is not
+    # in the wrapper's own dictionary or the fast cache (for example a lazily listed symbol that
+    # was never loaded), after already deleting it from the wrapped module; a stale commented
+    # out duplicate deletion line remains at the end of the method.
+    # Deletes an attribute. Reserved-prefix names are deleted via the base class. Other names
+    # are deleted from the wrapped module, the wrapper's dictionary, the export list (if
+    # listed) and the fast cache. Input: name (string). Returns nothing.
     if name.startswith('_tfmw_'):
       super(TFModuleWrapper, self).__delattr__(name)
     else:
@@ -277,7 +380,13 @@ class TFModuleWrapper(FastModuleType):
       # delattr(self._tfmw_wrapped_module, name)
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns the text form of the wrapped module, so the wrapper looks like the original.
     return self._tfmw_wrapped_module.__repr__()
 
   def __reduce__(self):
+    # [FUNCTION DOC]
+    # Pickle support: instructs the unpickler to import the module by this wrapper's name
+    # instead of serializing it. Returns a pair of the import function and a one-item tuple
+    # holding the module name.
     return importlib.import_module, (self.__name__,)
