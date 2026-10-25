@@ -1,4 +1,11 @@
 #!/usr/bin/python
+# [MODULE DOC]
+# Command line tool that copies a TensorFlow nightly wheel and re-tags it for another Python
+# version. Takes the path of an existing wheel and a two-digit Python version; derives the package
+# name, version and tags from the file name with a nightly-wheel pattern, rewrites the Python tag
+# inside the wheel metadata, and writes a new wheel with the renamed tag next to the original.
+# Defines the file name pattern and the wheel name template as module constants. Helper script for
+# the CI build; no import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -38,12 +45,28 @@ BINARY_STRING_TEMPLATE = "%s-%s-%s.whl"
 
 
 def check_existence(filename):
+  # [FUNCTION DOC]
+  # HELPER: validates a path for the copy script. Input: file or directory path. Raises a runtime
+  # error saying it was not found if the path does not exist; otherwise returns nothing.
   """Check the existence of file or dir."""
   if not os.path.exists(filename):
     raise RuntimeError("%s not found." % filename)
 
 
 def copy_binary(directory, origin_tag, new_tag, version, package):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the new wheel path is built by plain string concatenation of directory and file
+  # name, so it relies on the directory text ending with a path separator (true for the pattern
+  # used by the caller); the process working directory is changed to a temporary folder and never
+  # restored; if creating the temporary folder fails, the cleanup step refers to an unset name.
+  # Creates a wheel renamed for a different Python tag. Inputs: directory (folder holding the
+  # original wheel, with trailing separator), origin_tag and new_tag (platform and Python tag
+  # texts), version and package (name parts). Prints a message, opens the original wheel archive,
+  # extracts it into a fresh temporary folder (changing the working directory there), replaces the
+  # old interpreter tag with the new one in the wheel metadata file, then zips the dist-info,
+  # data, tensorflow and tensorflow_core folders into a new compressed wheel in directory. Always
+  # removes the temporary folder afterwards. Raises file or search errors if inputs are
+  # inconsistent (a missing tag pattern gives an attribute error). Returns nothing.
   """Rename and copy binaries for different python versions.
 
   Args:
@@ -92,6 +115,14 @@ def copy_binary(directory, origin_tag, new_tag, version, package):
 
 
 def main():
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: if the file name does not match the nightly wheel pattern, the match result is
+  # empty and accessing its groups raises an attribute error instead of a clear message; the
+  # docstring's requirements section describes arguments loosely.
+  # Script entry point. Parses required options for the wheel path and the new two-digit Python
+  # version, makes the path absolute and checks it exists (runtime error otherwise), extracts the
+  # directory, package, version and platform tag from the file name, builds the new tag by
+  # replacing the old Python version number, and calls the copy function. Returns nothing.
   """This script copies binaries.
 
   Requirements:

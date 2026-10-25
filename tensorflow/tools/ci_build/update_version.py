@@ -1,4 +1,17 @@
 #!/usr/bin/python
+# [MODULE DOC]
+# KNOWN ISSUE: the readme update uses a POSIX character class that Python's regular expression
+# engine does not understand, so that substitution likely never matches as intended; the nightly
+# option help text and the main description text are copy-pasted and unrelated to the behavior.
+# Command line tool (run from the TensorFlow source root) that bumps the TensorFlow version in
+# the source tree. Reads the current version from the bazel configuration file and the version
+# bzl file, computes a new version from either an explicit version option or the nightly option
+# (current version with a development suffix holding today's date), rewrites the version bzl,
+# the bazel configuration (wheel type, build date, version suffix) and the readme, prints the
+# major, minor and patch transition, and finally greps the source directory for lingering
+# references to the old version strings. Defines module constants for file paths and for the two
+# version kinds (snapshot and nightly), plus a small version value class. Helper tool for release
+# and CI automation; no import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -48,6 +61,10 @@ SNAPSHOT_VERSION = 0
 
 
 def check_existence(filename):
+  # [FUNCTION DOC]
+  # HELPER: precondition check for the version update script.
+  # Raises a runtime error telling the user to run from the TensorFlow source root if the given
+  # file or directory path does not exist; otherwise returns nothing.
   """Check the existence of file or dir."""
   if not os.path.exists(filename):
     raise RuntimeError("%s not found. Are you under the TensorFlow source root"
@@ -55,12 +72,23 @@ def check_existence(filename):
 
 
 def check_all_files():
+  # [FUNCTION DOC]
+  # HELPER: runs the existence check for every relevant path (source directory, version bzl,
+  # readme and bazel configuration file). Raises a runtime error for the first missing one.
+  # Takes no inputs, returns nothing.
   """Check all relevant files necessary for upgrade."""
   for file_name in RELEVANT_FILES:
     check_existence(file_name)
 
 
 def replace_string_in_line(search, replace, filename):
+  # [FUNCTION DOC]
+  # HELPER: in-place regular expression replacement in a text file.
+  # KNOWN ISSUE: the docstring mentions sed, but the code uses Python's regular expression
+  # substitution; the search text is a Python pattern, not a sed one. Also the file is truncated
+  # before the substitution result is written, so an error in between would lose its contents.
+  # Inputs: search (pattern), replace (replacement text, may use group references) and filename.
+  # Reads the whole file, then rewrites it with every match replaced. Returns nothing.
   """Replace with sed when regex is required."""
   with open(filename, "r") as source:
     content = source.read()
@@ -69,9 +97,18 @@ def replace_string_in_line(search, replace, filename):
 
 
 class Version(object):
+  # [CLASS DOC]
+  # Value object for a semantic version of TensorFlow. Holds major, minor and patch as text, an
+  # identifier string (such as a release candidate or development suffix, including its leading
+  # dash or empty), the version kind (snapshot or nightly) and a cached full string of the form
+  # major.minor.patch plus identifier. Created through the constructor or the static parser from
+  # text; the identifier can be replaced afterwards, which refreshes the cached string.
   """Version class object that stores SemVer version information."""
 
   def __init__(self, major, minor, patch, identifier_string, version_type):
+    # [FUNCTION DOC]
+    # Constructor. Stores the major, minor and patch texts, the identifier suffix text and the
+    # version kind constant, then computes the cached full version string. No validation.
     """Constructor.
 
     Args:
@@ -89,20 +126,35 @@ class Version(object):
     self._update_string()
 
   def _update_string(self):
+    # [FUNCTION DOC]
+    # HELPER: recomputes the cached full version string as major.minor.patch followed by the
+    # identifier string, storing it on the instance. Returns nothing.
     self.string = "%s.%s.%s%s" % (self.major,
                                   self.minor,
                                   self.patch,
                                   self.identifier_string)
 
   def __str__(self):
+    # [FUNCTION DOC]
+    # Returns the cached full version string (major.minor.patch plus identifier).
     return self.string
 
   def set_identifier_string(self, identifier_string):
+    # [FUNCTION DOC]
+    # Replaces the identifier suffix text (for example a development date suffix) and refreshes
+    # the cached full version string. Returns nothing.
     self.identifier_string = identifier_string
     self._update_string()
 
   @property
   def pep_440_str(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: for non-snapshot (nightly) versions the patch number is left out and the
+    # identifier is used in its place (major.minor.identifier), which looks like a bug or at least
+    # a surprising format.
+    # Read-only property returning a package-index friendly version text with all dashes removed.
+    # For snapshot versions the form is major.minor.patch plus identifier; for other kinds it is
+    # major.minor plus identifier (no patch).
     if self.version_type == SNAPSHOT_VERSION:
       return_string = "%s.%s.%s%s" % (self.major,
                                       self.minor,
@@ -117,6 +169,14 @@ class Version(object):
 
   @staticmethod
   def parse_from_string(string, version_type):
+    # [FUNCTION DOC]
+    # Static factory. Inputs: version text such as major.minor.patch optionally followed by a dash
+    # and an identifier, and the version kind constant. Validates loosely (a search, not a full
+    # match, for digits, digits, alphanumerics) and raises a runtime error naming the string if
+    # invalid. Splits into major, minor and the rest, separates the patch from the identifier at
+    # the first dash (the identifier keeps its leading dash, or is empty) and returns a new
+    # version object. Note a string with fewer than two dots can still pass the check only if the
+    # pattern appears; otherwise unpacking fails with a value error.
     """Returns version object from Semver string.
 
     Args:
@@ -144,6 +204,11 @@ class Version(object):
 
 
 def _get_regex_match(line, regex, is_last_match=False):
+  # [FUNCTION DOC]
+  # HELPER: single-line regular expression lookup used when reading the bazel and bzl files.
+  # Inputs: a text line, a pattern with one capture group, and a flag saying whether a match
+  # means the scan is finished. Returns a pair: the first captured group and the flag when the
+  # pattern is found anywhere in the line, otherwise a null value and false.
   match = re.search(regex, line)
   if match:
     return (match.group(1), is_last_match)
@@ -151,6 +216,16 @@ def _get_regex_match(line, regex, is_last_match=False):
 
 
 def get_current_semver_version():
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: both input files are opened and never closed; if the version line is not found
+  # the version text stays empty or null and splitting it into three parts fails with an error;
+  # when the suffix line is never found the suffix variable becomes null (no match resets it).
+  # Reads the current version of the source tree. Scans the bazel configuration file for the wheel
+  # type, wheel build date and wheel version suffix settings (stopping at the suffix line), then
+  # scans the version bzl file for the quoted three-part version number. The kind is nightly when
+  # the wheel type is nightly, otherwise snapshot. The identifier is a development marker with the
+  # build date for nightly; for snapshot it is the optional development marker with the date plus
+  # the suffix. Returns a version object; takes no inputs.
   """Returns a Version object of current version.
 
   Returns:
@@ -216,6 +291,13 @@ def get_current_semver_version():
 
 
 def update_readme(old_version, new_version):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the search pattern uses a POSIX bracket class for alphanumerics, which Python's
+  # regular expression engine treats as an ordinary character set (not alphanumerics), so the
+  # readme is probably not updated as intended.
+  # Rewrites version references in the readme file: replaces text of the form old major.old
+  # minor.something followed by a dash with the new version's package-index style string followed
+  # by a dash. Inputs: old and new version objects. Modifies the readme file; returns nothing.
   """Update README."""
   pep_440_str = new_version.pep_440_str
   replace_string_in_line(r"%s\.%s\.([[:alnum:]]+)-" % (old_version.major,
@@ -224,10 +306,15 @@ def update_readme(old_version, new_version):
 
 
 def _get_mmp(version):
+  # [FUNCTION DOC]
+  # HELPER: returns the major.minor.patch text (no identifier) of a version object.
   return "%s.%s.%s" % (version.major, version.minor, version.patch)
 
 
 def _get_wheel_type(version):
+  # [FUNCTION DOC]
+  # HELPER: maps a version object to the wheel type setting text: nightly for the nightly kind,
+  # snapshot for anything else.
   if version.version_type == NIGHTLY_VERSION:
     return "nightly"
   else:
@@ -235,6 +322,9 @@ def _get_wheel_type(version):
 
 
 def _get_wheel_build_date(version):
+  # [FUNCTION DOC]
+  # HELPER: extracts the eight digit build date that follows the development marker in the
+  # identifier string of a version object. Returns the date text, or an empty text if absent.
   date_match = re.search(".*dev([0-9]{8}).*", version.identifier_string)
   if date_match:
     return date_match.group(1)
@@ -242,12 +332,19 @@ def _get_wheel_build_date(version):
 
 
 def _get_wheel_version_suffix(version):
+  # [FUNCTION DOC]
+  # HELPER: returns the identifier string of a version object with the development marker and
+  # its build date removed (what remains is the wheel version suffix, possibly empty).
   return version.identifier_string.replace(
       "-dev{}".format(_get_wheel_build_date(version)), ""
   )
 
 
 def update_tf_version_bzl(old_version, new_version):
+  # [FUNCTION DOC]
+  # Rewrites the version bzl file, replacing the assignment of the old major.minor.patch with the
+  # new one. Inputs: old and new version objects. Modifies the file in place; returns nothing.
+  # The old version text is used as a regular expression (dots match any character).
   """Update tf_version.bzl."""
   old_mmp = _get_mmp(old_version)
   new_mmp = _get_mmp(new_version)
@@ -259,6 +356,12 @@ def update_tf_version_bzl(old_version, new_version):
 
 
 def update_bazelrc(old_version, new_version):
+  # [FUNCTION DOC]
+  # Rewrites three repository environment settings in the bazel configuration file: the wheel
+  # type, the wheel build date and the wheel version suffix, each replaced from the old version's
+  # value to the new version's value (derived from the version kinds and identifier strings).
+  # Inputs: old and new version objects. Modifies the file in place (three passes); returns
+  # nothing.
   """Update .bazelrc."""
   old_wheel_type = _get_wheel_type(old_version)
   new_wheel_type = _get_wheel_type(new_version)
@@ -286,6 +389,9 @@ def update_bazelrc(old_version, new_version):
 
 
 def major_minor_change(old_version, new_version):
+  # [FUNCTION DOC]
+  # Returns true if the major or the minor component differs between the two version objects,
+  # false otherwise (patch and identifier are ignored). No side effects.
   """Check if a major or minor change occurred."""
   major_mismatch = old_version.major != new_version.major
   minor_mismatch = old_version.minor != new_version.minor
@@ -295,6 +401,12 @@ def major_minor_change(old_version, new_version):
 
 
 def check_for_lingering_string(lingering_string):
+  # [FUNCTION DOC]
+  # Searches the source directory recursively (with the external grep program) for the given old
+  # version text, with dots escaped, and prints the result. If grep finds nothing (it exits with a
+  # failure status) the list is empty. When matches exist, prints a warning followed by each
+  # match line (file, line number and matched text); the output contains a trailing empty entry.
+  # Otherwise prints a confirmation. Input: the text to search for. Returns nothing.
   """Check for given lingering strings."""
   formatted_string = lingering_string.replace(".", r"\.")
   try:
@@ -317,6 +429,11 @@ def check_for_lingering_string(lingering_string):
 
 
 def check_for_old_version(old_version, new_version):
+  # [FUNCTION DOC]
+  # Looks for leftover references to the old version: checks the old full version string and its
+  # package-index style string, and, when the major or minor part changed, also the old release
+  # branch name (r, major, dot, minor). Inputs: old and new version objects. Prints results via
+  # the lingering string check; returns nothing.
   """Check for old version references."""
   for old_ver in [old_version.string, old_version.pep_440_str]:
     check_for_lingering_string(old_ver)
@@ -327,6 +444,18 @@ def check_for_old_version(old_version, new_version):
 
 
 def main():
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the argument parser description (cherry picking automation) and the help text
+  # of the nightly option (disable the service provisioning step) are copy-pasted and do not
+  # describe this script; without either option the empty version text fails validation; the
+  # docstring says one of version or nightly is required but nothing enforces exclusivity.
+  # Script entry point. Parses the optional version text and nightly flag, verifies the relevant
+  # files exist, reads the current version, and builds the new one: with the nightly flag it is
+  # the explicit version (if given) or the current major, minor and patch, with a development
+  # suffix of today's date and the nightly kind; otherwise it is the parsed explicit version as a
+  # snapshot. Then updates the version bzl, bazel configuration and readme files, prints the
+  # major, minor and patch transitions, and checks for lingering old version strings.
+  # Raises a runtime error for invalid or missing files or version text. Returns nothing.
   """This script updates all instances of version in the tensorflow directory.
 
   Requirements:

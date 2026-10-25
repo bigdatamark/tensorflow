@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Command line script that summarizes the output log of the oneDNN benchmark shell script.
+# It reads the log file named by the first command line argument, extracts the average runtime
+# (microseconds) for each combination of model, batch size and oneDNN setting (off or on), and
+# prints a comma separated table with columns model, batch, vanilla runtime, oneDNN runtime and
+# speedup (vanilla divided by oneDNN), using a question mark where a result is unavailable.
+# Module-level state: a results mapping keyed by (model, batch, oneDNN flag), a set of model names,
+# a set of batch sizes and a two-value parser state enumeration. The parsing function fills these
+# globals as a side effect. Importing has no side effects beyond creating them. Not a helper module.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -39,6 +48,17 @@ State = enum.Enum("State", "FIND_CONFIG_OR_MODEL FIND_RUNNING_TIME")
 
 
 def parse_results(lines):
+  # [FUNCTION DOC]
+  # Runs a two-state line scanner over the log lines. In the find-config-or-model state, a line
+  # announcing a batch size and oneDNN flag updates the current batch and flag (and records the
+  # batch size); any other line must name a model graph file, whose name becomes the current model
+  # (recorded in the models set; an assertion fails if no model name is found) and the scanner
+  # moves to the find-running-time state. In that state a line with an average time after the
+  # no-stats marker stores the float under (model, batch, oneDNN flag) in the global results
+  # mapping (asserting none of these are unset); a line without it is re-examined in the first state
+  # (the index is not advanced) because models that cannot run produce no result line.
+  # Input: list of text lines. Raises a runtime error if the state is unknown. Returns nothing;
+  # mutates the module globals for results, models and batch sizes.
   """Parses benchmark results from run_onednn_benchmarks.sh.
 
   Stores results in a global dict.
@@ -86,6 +106,12 @@ def parse_results(lines):
 
 
 def main():
+  # [FUNCTION DOC]
+  # Script entry point. Reads all lines of the file whose path is the first command line argument
+  # (an index error if missing), parses them into the global results, then prints a header and one
+  # line per sorted model and sorted batch size with the vanilla (flag 0) and oneDNN (flag 1)
+  # runtimes, and their ratio with two decimals when both exist; missing values print as a question
+  # mark. Returns nothing; writes to standard output.
   filename = sys.argv[1]
   with open(filename, "r") as f:
     lines = f.readlines()

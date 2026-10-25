@@ -1,4 +1,14 @@
 #!/usr/bin/env python
+# [MODULE DOC]
+# HELPER: CI consistency check script for the system-libraries build configuration.
+# Run as a script with the TensorFlow source folder as the first argument (missing argument gives
+# an index error; a non-directory gives a value error). Verifies that the list of valid library
+# names defined in the system libraries configuration bzl file matches the set of external
+# repository rules (in the workspace bzl files of the tensorflow folder and of each third party
+# folder) that declare a system build file, and that each referenced system build file exists.
+# Prints the problems found and exits with status 1 if any, otherwise 0. All work happens at
+# import time (no main guard): it builds path globals, validates inputs, scans files, prints and
+# terminates the process.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -43,10 +53,21 @@ if not os.path.isfile(workspace0_path):
   raise ValueError('Could not find workspace0.bzl at %s' % workspace0_path)
 
 def extract_valid_libs(filepath):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the file content is executed as Python code (needs trusted input), and a file
+  # without the valid libraries list raises a key error.
+  # Evaluates the given configuration bzl file as Python source with a stubbed repository rule
+  # function (which ignores its arguments) available, in separate global and local namespaces, and
+  # returns the set of names found in the list named VALID_LIBS defined by that file.
+  # Input: path of the file. Side effects: reads the file and executes its code.
   """Evaluate syslibs_configure.bzl, return the VALID_LIBS set from that file."""
 
   # Stub only
   def repository_rule(**kwargs):  # pylint: disable=unused-variable
+    # [FUNCTION DOC]
+    # HELPER: stub standing in for the build system's repository rule function while the
+    # configuration file is evaluated. Accepts any keyword arguments, discards them, returns
+    # nothing.
     del kwargs
 
   # Populates VALID_LIBS
@@ -59,6 +80,15 @@ def extract_valid_libs(filepath):
 
 
 def extract_system_builds(filepath):
+  # [FUNCTION DOC]
+  # Scans a workspace bzl file line by line (stripped). A line starting with the name assignment
+  # sets the current rule name (the text after the prefix without the final character and
+  # quotes); a line starting with the system build file assignment appends the current name to
+  # the library names and the target to the build file list. The target must start with a double
+  # slash (checked by an assertion); it is converted to a relative path by dropping that prefix
+  # and replacing the colon with a path separator. KNOWN ISSUE: if a system build file line comes
+  # before any name line, the recorded library name is null.
+  # Input: file path. Returns a pair of lists: library names and relative build file paths.
   """Extract the 'name' argument of all rules with a system_build_file argument."""
   lib_names = []
   system_build_files = []

@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: CI build helper script that prints the full TensorFlow wheel version string.
+# Command line: required wheel type (nightly or release) and required wheel version (arguments
+# may also be read from a file via an at-prefixed argument). Prints the version wrapped in double
+# quotes; for nightly wheels a development suffix with today's date (year, month, day) is
+# appended, for release wheels the version is printed unchanged. Does its work only when run as a
+# script; importing has no side effects.
 # Copyright 2025 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,6 +26,11 @@ import time
 
 
 def parse_args():
+  # [FUNCTION DOC]
+  # HELPER: command line parsing for the version calculation script.
+  # Defines the required wheel type option (nightly or release) and the required wheel version
+  # option, enables reading arguments from a file, parses the process arguments and returns the
+  # namespace of parsed values. Exits the process with a usage error on invalid input.
   """Arguments parser."""
   parser = argparse.ArgumentParser(
       description="Helper for TensorFlow version calculation",

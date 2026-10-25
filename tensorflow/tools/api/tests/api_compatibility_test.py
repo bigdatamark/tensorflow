@@ -1,3 +1,21 @@
+# [MODULE DOC]
+# KNOWN ISSUE: the command line flags are declared with a boolean conversion on the raw argument
+# text, so any non-empty value (including the text false) turns the flag on; only omitting the flag
+# or passing an empty value yields false. The helper that builds the ignored-type mapping also has
+# an operator precedence problem (see its own doc).
+# Public API backwards-compatibility test for TensorFlow. It walks the public symbols of the
+# tensorflow package (top level, compat v1 and compat v2), converts every public module, class and
+# function into a protocol buffer description, and compares them with golden text-format files
+# stored next to the test data (one file per API object, with capital letters in object names
+# encoded as a dash plus lowercase letter). Differences fail the test unless the update_goldens
+# flag is set, in which case golden files are deleted, created or rewritten. Also verifies that no
+# public class subclasses a generated protocol buffer message.
+# Command line flags (parsed only when run as a script): update_goldens (default false),
+# only_test_core_api (default true; skips keras-related and other non-core packages and
+# tolerates missing TensorBoard summary symbols) and verbose_diffs (default true).
+# Import-time side effects: imports tensorflow, detects whether TensorBoard is importable, and
+# resolves the paths of the README and update-warning data files. The flags object and golden
+# folder paths are set only by the script entry point. Not a helper module.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -78,6 +96,14 @@ _API_GOLDEN_FOLDER_V2 = None
 
 
 def _InitPathConstants():
+  # [FUNCTION DOC]
+  # HELPER: sets up the golden-file folder globals used by the API compatibility test.
+  # Computes the location of the version 2 root golden file relative to the test data directory
+  # and stores the directory containing it as the version 2 golden folder; the version 1 folder
+  # is the sibling directory named v1. When the update_goldens flag is set, symbolic links are
+  # resolved first so new files are created in the real source tree. Reads the module flags
+  # object (must already be parsed) and sets two module-level globals. Takes no arguments,
+  # returns nothing.
   global _API_GOLDEN_FOLDER_V1
   global _API_GOLDEN_FOLDER_V2
   root_golden_path_v2 = os.path.join(resource_loader.get_data_files_path(),
@@ -102,6 +128,15 @@ _V2_APIS_FROM_KERAS = ['initializers', 'losses', 'metrics', 'optimizers']
 
 
 def _KeyToFilePath(key, api_version):
+  # [FUNCTION DOC]
+  # HELPER: maps API object keys to golden file paths for the compatibility test.
+  # Converts a dotted API object name (key) into the path of its golden text-format file:
+  # each uppercase letter becomes a dash followed by the lowercase letter, and the extension
+  # pbtxt is appended. The folder is the version 2 golden folder when api_version is 2, otherwise
+  # the version 1 folder. Keys beginning with the experimental numpy prefix are redirected to a
+  # separate numpy API golden folder located several directories up. Requires the golden folder
+  # globals to have been initialized. Returns the path as text; no side effects. The wildcard key
+  # works too, producing a glob pattern.
   """From a given key, construct a filepath.
 
   Filepath will be inside golden folder for api_version.
@@ -115,6 +150,10 @@ def _KeyToFilePath(key, api_version):
   """
 
   def _ReplaceCapsWithDash(matchobj):
+    # [FUNCTION DOC]
+    # HELPER: regex substitution callback for the key-to-path conversion.
+    # Receives a regular expression match of one uppercase letter and returns a dash followed by
+    # that letter in lowercase. No side effects.
     match = matchobj.group(0)
     return '-%s' % (match.lower())
 
@@ -132,9 +171,18 @@ def _KeyToFilePath(key, api_version):
 
 
 def _FileNameToKey(filename):
+  # [FUNCTION DOC]
+  # HELPER: inverse of the key-to-path conversion, used when loading golden files.
+  # Takes a golden file name or path, strips the directory and extension, and turns every dash
+  # followed by a lowercase letter into the uppercase letter, returning the API object key as
+  # text. No side effects.
   """From a given filename, construct a key we use for api objects."""
 
   def _ReplaceDashWithCaps(matchobj):
+    # [FUNCTION DOC]
+    # HELPER: regex substitution callback for the file-name-to-key conversion.
+    # Receives a match of a dash plus a lowercase letter and returns just the uppercase letter.
+    # No side effects.
     match = matchobj.group(0)
     return match[1].upper()
 
@@ -146,6 +194,13 @@ def _FileNameToKey(filename):
 
 
 def _VerifyNoSubclassOfMessageVisitor(path, parent, unused_children):
+  # [FUNCTION DOC]
+  # HELPER: visitor callback passed to the public API traversal by the no-subclass tests.
+  # Inputs: path (dotted name of the visited object without the tf prefix), parent (the visited
+  # object) and the list of its children (unused). Does nothing unless the object is a class
+  # derived from the generated protocol buffer message base class, and ignores the base class
+  # itself. Raises a not-implemented error naming the object when such a class does not list the
+  # message base class directly among its bases (i.e. is an indirect subclass). Returns nothing.
   """A Visitor that crashes on subclasses of generated proto classes."""
   # If the traversed object is a proto Message class
   if not (isinstance(parent, type) and issubclass(parent, message.Message)):
@@ -160,19 +215,37 @@ def _VerifyNoSubclassOfMessageVisitor(path, parent, unused_children):
 
 
 def _FilterNonCoreGoldenFiles(golden_file_list):
+  # [FUNCTION DOC]
+  # HELPER: removes golden files of non-core packages (currently keras) from a list of file paths.
+  # Input: list of golden file paths. Returns a new list without files whose base name starts
+  # with the tensorflow-dot-package prefix of any non-core package. Input is not modified.
   """Filter out non-core API pbtxt files."""
   return _FilterGoldenFilesByPrefix(golden_file_list, _NON_CORE_PACKAGES)
 
 
 def _FilterV1KerasRelatedGoldenFiles(golden_file_list):
+  # [FUNCTION DOC]
+  # HELPER: removes golden files for the version 1 APIs that come from keras (layers and the nn
+  # rnn cell package) from a list of golden file paths. Returns a new filtered list; the input
+  # is not modified.
   return _FilterGoldenFilesByPrefix(golden_file_list, _V1_APIS_FROM_KERAS)
 
 
 def _FilterV2KerasRelatedGoldenFiles(golden_file_list):
+  # [FUNCTION DOC]
+  # HELPER: removes golden files for the version 2 APIs that come from keras (initializers,
+  # losses, metrics and optimizers) from a list of golden file paths. Returns a new filtered
+  # list; the input is not modified.
   return _FilterGoldenFilesByPrefix(golden_file_list, _V2_APIS_FROM_KERAS)
 
 
 def _FilterGoldenFilesByPrefix(golden_file_list, package_prefixes):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation of the golden file filters.
+  # Inputs: list of golden file paths and a list of package names. Each name is turned into the
+  # prefix tensorflow, dot, name, dot. Returns a new list that keeps only paths whose final path
+  # component (after the last slash) does not start with any of those prefixes. Input is not
+  # modified.
   filtered_file_list = []
   filtered_package_prefixes = ['tensorflow.%s.' % p for p in package_prefixes]
   for f in golden_file_list:
@@ -184,6 +257,18 @@ def _FilterGoldenFilesByPrefix(golden_file_list, package_prefixes):
 
 
 def _FilterGoldenProtoDict(golden_proto_dict, omit_golden_symbols_map):
+  # [FUNCTION DOC]
+  # HELPER: strips selected symbols from API object descriptions before comparison.
+  # KNOWN ISSUE: callers pass a plain text value (not a list) for the is_instance case; the
+  # membership test then works as a substring check on that text, which only works by accident.
+  # Inputs: mapping from API object keys to API object protocol buffers, and a mapping from
+  # keys to collections of symbol names to omit (an empty or null mapping returns the input
+  # unchanged). Makes a shallow copy of the mapping and, for each key listed, replaces the entry
+  # by a copy of the protocol buffer, then removes from its module or class description every
+  # member and member method whose name is listed; if the collection contains the special name
+  # is_instance, the recorded is-instance list is cleared as well. Objects that are neither
+  # module nor class are left alone. Raises a key error if a listed key is absent from the
+  # mapping. Returns the new mapping; the original protocol buffers are not mutated.
   """Filter out golden proto dict symbols that should be omitted."""
   if not omit_golden_symbols_map:
     return golden_proto_dict
@@ -209,14 +294,30 @@ def _FilterGoldenProtoDict(golden_proto_dict, omit_golden_symbols_map):
 
 
 def _GetTFNumpyGoldenPattern(api_version):
+  # [FUNCTION DOC]
+  # HELPER: builds the file glob pattern matching the experimental numpy golden files.
+  # Input: API version number (1 or 2). Returns the golden path pattern for keys starting with
+  # the experimental numpy prefix, joined onto the root directory containing all test resources.
+  # No side effects.
   return os.path.join(resource_loader.get_root_dir_with_all_resources(),
                       _KeyToFilePath('tensorflow.experimental.numpy*',
                                      api_version))
 
 
 class ApiCompatibilityTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case checking that the public TensorFlow API (top level, compat v1, compat v2) matches
+  # the stored golden description files and that no public class subclasses a generated proto
+  # message. State: the update-warning text and the test readme text, loaded in the constructor
+  # and used for log messages. Behavior depends on module flags (update goldens, core-only,
+  # verbose diffs). Run through the standard TensorFlow test runner.
 
   def __init__(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. Forwards all positional and keyword arguments to the base test case, then
+    # reads the whole contents of the API update warning file and the test readme file (located
+    # under the root resource directory) and stores them as the update-warning and readme message
+    # attributes. Raises whatever file reading raises if the data files are missing.
     super(ApiCompatibilityTest, self).__init__(*args, **kwargs)
 
     golden_update_warning_filename = os.path.join(
@@ -236,6 +337,21 @@ class ApiCompatibilityTest(test.TestCase):
                              update_goldens=False,
                              additional_missing_object_message='',
                              api_version=2):
+    # [FUNCTION DOC]
+    # HELPER: core comparison step of the backwards-compatibility check.
+    # KNOWN ISSUE: the verbose parameter is accepted but never used; the verbose per-object
+    # differences are always logged on failure regardless of it.
+    # Compares the golden mapping with the actual mapping (both from object key to API object
+    # protocol buffer). Keys only in the golden set are reported as removed (with the optional
+    # extra message), keys only in the actual set as added, and common keys are compared with the
+    # proto equality assertion; a mismatch records the key as updated. If any difference exists,
+    # the readme text and a count are logged as errors. With update_goldens true, the update
+    # warning is logged, golden files of removed keys are deleted, and files for added or changed
+    # keys are written in text format (side effects on disk). Otherwise every difference is
+    # logged and the test fails. With no differences an info message is logged. Sets the maximum
+    # shown difference length of the test to unlimited. Parameters: expected_dict, actual_dict,
+    # verbose (unused), update_goldens (default false), additional_missing_object_message
+    # (default empty), api_version (default 2).
     """Diff given dicts of protobufs and report differences a readable way.
 
     Args:
@@ -322,6 +438,11 @@ class ApiCompatibilityTest(test.TestCase):
       logging.info('No differences found between API and golden.')
 
   def testNoSubclassOfMessage(self):
+    # [FUNCTION DOC]
+    # Traverses the public top-level tensorflow API with a visitor that raises when a public
+    # class indirectly subclasses a generated proto message. Excludes the contrib module from
+    # descent and skips compat v1 and v2 (checked by separate tests). Takes no inputs; fails by
+    # propagating the visitor's error; returns nothing.
     visitor = public_api.PublicAPIVisitor(_VerifyNoSubclassOfMessageVisitor)
     visitor.do_not_descend_map['tf'].append('contrib')
     # visitor.do_not_descend_map['tf'].append('keras')
@@ -330,6 +451,11 @@ class ApiCompatibilityTest(test.TestCase):
     traverse.traverse(tf, visitor)
 
   def testNoSubclassOfMessageV1(self):
+    # [FUNCTION DOC]
+    # Same proto-subclass check as the top-level test, but applied to the compat v1 namespace.
+    # Returns immediately (test passes trivially) if compat v1 does not exist. Excludes contrib
+    # and, when only_test_core_api is set, the non-core packages from descent; hides the compat
+    # v1 and v2 entries. Returns nothing; fails via the visitor's error.
     if not hasattr(tf.compat, 'v1'):
       return
     visitor = public_api.PublicAPIVisitor(_VerifyNoSubclassOfMessageVisitor)
@@ -340,6 +466,10 @@ class ApiCompatibilityTest(test.TestCase):
     traverse.traverse(tf.compat.v1, visitor)
 
   def testNoSubclassOfMessageV2(self):
+    # [FUNCTION DOC]
+    # Same proto-subclass check applied to the compat v2 namespace. Returns immediately if compat
+    # v2 does not exist. Excludes contrib and, when only_test_core_api is set, the non-core
+    # packages from descent. Returns nothing; fails via the visitor's error.
     if not hasattr(tf.compat, 'v2'):
       return
     visitor = public_api.PublicAPIVisitor(_VerifyNoSubclassOfMessageVisitor)
@@ -355,6 +485,19 @@ class ApiCompatibilityTest(test.TestCase):
                                    api_version,
                                    additional_private_map=None,
                                    omit_golden_symbols_map=None):
+    # [FUNCTION DOC]
+    # HELPER: shared body of the three backwards-compatibility tests.
+    # Inputs: root (the module object to traverse), golden_file_patterns (a glob pattern or list
+    # of patterns for golden files), api_version (1 or 2), additional_private_map (optional
+    # mapping from dotted names to hidden member names, merged into the visitor's private map)
+    # and omit_golden_symbols_map (optional mapping from object keys to symbols to ignore).
+    # Traverses the root with a public-API visitor that converts objects to protocol buffers,
+    # hiding contrib (and enable_v2_behavior for version 2), not descending into keras, the GPU
+    # options experimental member, and many numpy scalar types; with only_test_core_api also
+    # skips non-core and keras-derived packages. Reads and filters the matching golden files into
+    # protocol buffers, applies the omit mapping to both golden and actual sets, and delegates
+    # to the proto dictionary assertion using the module flags for verbosity and updating.
+    # Returns nothing; may rewrite golden files when updating; fails the test on differences.
     # Extract all API stuff.
     visitor = python_object_to_proto_visitor.PythonObjectToProtoVisitor()
 
@@ -395,6 +538,10 @@ class ApiCompatibilityTest(test.TestCase):
         golden_file_list = _FilterV1KerasRelatedGoldenFiles(golden_file_list)
 
     def _ReadFileToProto(filename):
+      # [FUNCTION DOC]
+      # HELPER: parses one golden file. Reads the text file with the given name and merges its
+      # text-format contents into a new API object protocol buffer, which is returned. Raises a
+      # parse error for malformed content or a file error if unreadable.
       """Read a filename, create a protobuf from its contents."""
       ret_val = api_objects_pb2.TFAPIObject()
       text_format.Merge(file_io.read_file_to_string(filename), ret_val)
@@ -418,6 +565,14 @@ class ApiCompatibilityTest(test.TestCase):
         api_version=api_version)
 
   def testAPIBackwardsCompatibility(self):
+    # [FUNCTION DOC]
+    # Checks the default tensorflow API against goldens. Chooses version 2 if the package reports
+    # major API version 2, else version 1; builds golden patterns for all goldens plus the numpy
+    # goldens; when testing core only without TensorBoard installed in version 2, omits the
+    # summary symbols audio, histogram, image, scalar and text; also ignores is-instance data for
+    # the function graph type. Runs the shared check on the tensorflow package, hiding compat v1
+    # and v2, then asserts that version 2 has no contrib attribute (version 1 is exempt).
+    # Takes no inputs; returns nothing.
     api_version = 1
     if hasattr(tf, '_major_api_version') and tf._major_api_version == 2:
       api_version = 2
@@ -449,6 +604,11 @@ class ApiCompatibilityTest(test.TestCase):
     self.assertTrue(api_version == 1 or not hasattr(tf, 'contrib'))
 
   def testAPIBackwardsCompatibilityV1(self):
+    # [FUNCTION DOC]
+    # Checks the compat v1 API against the version 1 goldens. Omits the low-level pywrap symbol
+    # from the top-level object, ignores is-instance data for the record writer type, and omits
+    # the log_if symbol of the logging module because the open-source abseil version differs.
+    # Hides the pywrap symbol and compat v1/v2 during traversal. Takes no inputs; returns nothing.
     api_version = 1
     golden_file_patterns = os.path.join(
         resource_loader.get_root_dir_with_all_resources(),
@@ -470,6 +630,11 @@ class ApiCompatibilityTest(test.TestCase):
         omit_golden_symbols_map=omit_golden_symbols_map)
 
   def testAPIBackwardsCompatibilityV2(self):
+    # [FUNCTION DOC]
+    # Checks the compat v2 API against the version 2 goldens plus the numpy goldens. When testing
+    # core only without TensorBoard, omits the summary symbols audio, histogram, image, scalar and
+    # text; ignores is-instance data for the function graph type; hides compat v1/v2 during
+    # traversal. Takes no inputs; returns nothing.
     api_version = 2
     golden_file_patterns = [
         os.path.join(resource_loader.get_root_dir_with_all_resources(),
@@ -493,6 +658,16 @@ class ApiCompatibilityTest(test.TestCase):
         omit_golden_symbols_map=omit_golden_symbols_map)
 
   def _ignored_is_instance_types(self, extra_types=None):
+    # [FUNCTION DOC]
+    # HELPER: builds the omit mapping that makes the comparison ignore is-instance data for
+    # types whose location differs between internal builds and the open-source wheel.
+    # KNOWN ISSUE: operator precedence makes the conditional apply to the whole sum, so when
+    # extra_types is null or empty the result is an empty list and none of the built-in ignored
+    # types (DType, Graph, Operation, and so on) are ignored; only when extra_types is given is the
+    # full list used. The type list is also given as the list of keys, each mapped to a plain text
+    # value rather than a list.
+    # Input: optional list of extra object keys. Returns a mapping from each key to the text
+    # is_instance. No side effects.
     # In case a new type is defined within a pywrap_<module_name>.so library,
     # it will end up having proper type and location in distributed OSS wheel
     # package eventually, but that conversion happens after this test is ran.
