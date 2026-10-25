@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Implementation of the "control flow v2" while loop: builds a single functional While (or
+# StatelessWhile) operation whose condition and body are separate function graphs, and registers the
+# gradient function for that operation. Exposes the loop builder (used by the public while loop
+# wrapper module), the gradient function, an asynchronous no-op builder and many private helpers for
+# accumulating forward-pass intermediates in tensor lists, capturing tensors, and validating shapes
+# and types. Import-time side effects: registers the gradient for the While and StatelessWhile op
+# types, and defines a namedtuple type used as a cache key. Works with the sibling indexed-slices
+# rewriter module.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -64,6 +73,26 @@ def while_loop(cond,
                name=None,
                return_same_structure=True,
                back_prop=True):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the default for return_same_structure here is true, whereas the legacy v1 function it
+  # mirrors defaults to false.
+  # Builds a single While op for the loop. Inputs: cond and body are callables over the loop variables;
+  # loop_vars is a possibly nested structure of tensors, indexed slices, tensor arrays or variables
+  # (variables are converted to tensors); shape_invariants optionally gives allowed shapes; parallel
+  # iterations (default 10) is forwarded to the op; maximum_iterations is an optional scalar bound;
+  # name is an optional scope (default "while"); return_same_structure (default true) keeps the
+  # structure even for a single variable; back_prop (default true) enables accumulating intermediates
+  # for gradients when that is globally enabled and wraps outputs in stop-gradient when false.
+  # Steps: tensor arrays become their flow tensors, a loop counter and a maximum-iterations variable
+  # are prepended, cond and body are traced into function graphs (with wrapped versions that re-pack
+  # arguments, squeeze a non-scalar predicate, check the output structure matches and increment the
+  # counter), body captures are added as extra loop variables and duplicated in the cond graph, shape
+  # compatibility and input/output counts and types are checked, optional intermediate accumulators
+  # (tensor lists) are added, and the While op is built. In v1 graph mode outputs are wrapped in identity
+  # ops so pruning works. Returns the final loop variables, packed like the input (a single value is
+  # unpacked when return_same_structure is false and there is one output). Raises value errors for
+  # shape-invariant violations and type errors for dtype changes (from the helper checks), and errors
+  # from structure mismatch between body outputs and loop variables.
   """Like tf.while_loop, except emits a single While op."""
   loop_vars = variable_utils.convert_variables_to_tensors(loop_vars)
   # Keep the original loop_vars around to know which args were TensorArrays.
@@ -124,6 +153,12 @@ def while_loop(cond,
     add_control_dependencies = ops.get_default_graph()._add_control_dependencies
 
     def wrapped_cond(loop_counter, maximum_iterations_arg, *args):
+      # [FUNCTION DOC]
+      # HELPER: Nested helper of the loop builder; this is the condition function traced into the cond graph.
+      # Takes the loop counter, the maximum iterations argument and the flattened loop variables. Re-packs
+      # the variables into the original structure (flows become tensor arrays), calls the user condition,
+      # squeezes the predicate if it is not scalar, and returns it. When a maximum number of iterations was
+      # given, returns the logical and of counter below the maximum and the predicate.
       """Extra `cond` wrapper that can handle the extra counter loop_var."""
       # Convert the flow variables in `args` to TensorArrays. `args` should
       # already have the same structure as `orig_loop_vars` but currently there
@@ -153,6 +188,15 @@ def while_loop(cond,
         add_control_dependencies=add_control_dependencies)
 
     def wrapped_body(loop_counter, maximum_iterations_arg, *args):
+      # [FUNCTION DOC]
+      # HELPER: Nested helper of the loop builder; this is the body function traced into the body graph.
+      # Takes the loop counter, the maximum iterations argument and the flattened loop variables. Copies
+      # handle data onto the placeholders, captures the cond graph captures first so ordering matches, calls
+      # the user body on the re-packed variables, wraps a non-nested result in a list, asserts that the
+      # output structure matches the original loop variables (retrying after converting variables to
+      # tensors, and ignoring list versus tuple differences), converts tensor arrays to flows, and returns
+      # the incremented counter, the maximum iterations argument and the outputs. Raises a value error on
+      # structure mismatch.
       """Loop body augmented with counter update.
 
       Args:
@@ -322,6 +366,18 @@ def while_loop(cond,
 @ops.RegisterGradient("StatelessWhile")
 @ops.RegisterGradient("While")
 def _WhileGrad(op: ops.Operation, *grads):  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # Gradient function registered for the While and StatelessWhile ops. Inputs: op, the While operation
+  # (possibly not the real one, since the tape may forget it), and the incoming gradients, one per
+  # output. Recovers the forward cond and body graphs, preprocesses incoming gradients, drops gradients
+  # for skipped capture inputs, builds the body gradient graph (accumulating forward intermediates), and
+  # if that needs extra forward outputs, rewrites the forward op in place (new function attributes,
+  # type list, output shapes, extra inputs and outputs, handle data); this mutation may make active
+  # sessions unrunnable (per an inline note). Then marks the number of original outputs, resolves
+  # captured inputs, rewrites indexed-slices gradients, builds a cond graph that compares the counter
+  # against the forward iteration count, builds the gradient While op and returns the structured
+  # gradients (None for outputs without incoming gradient). Raises an assertion error if the rewritten
+  # op's input and output lengths are inconsistent. Also renames the forward graphs when rewriting.
   """The gradient of a While op produced by while_loop."""
   # Note that op is not always the same as while_op because the gradient tape,
   # for eager mode compatibility, forgets information about the proper op. Since
@@ -414,6 +470,10 @@ def _WhileGrad(op: ops.Operation, *grads):  # pylint: disable=invalid-name
 
   def grad_cond(counter, unused_maximum_iterations_arg, forward_loop_iters,
                 *unused_args):
+    # [FUNCTION DOC]
+    # HELPER: Nested condition function for the gradient loop. Takes the counter, an unused maximum
+    # iterations argument, the forward iteration count and unused remaining arguments; returns whether the
+    # counter is still below the forward iteration count.
     return counter < forward_loop_iters
 
   grad_cond_name = util.unique_grad_fn_name(op.get_attr("cond").name)
@@ -439,6 +499,14 @@ def _WhileGrad(op: ops.Operation, *grads):  # pylint: disable=invalid-name
 
 def _build_while_op(loop_vars, cond_graph, body_graph, output_shapes,
                     parallel_iterations, name, num_original_outputs):
+  # [FUNCTION DOC]
+  # HELPER: Builds the functional While operation for a loop (used for forward and gradient loops).
+  # Inputs: loop_vars (flattened inputs), cond_graph and body_graph (function graphs), output_shapes,
+  # parallel_iterations, name, and the number of original outputs. Chooses the stateful While op if
+  # either graph contains stateful ops, otherwise the stateless variant. Creates the op (via a tape
+  # gradient wrapper), copies handle data, sets lowering and XLA compile-time-constant attributes, the
+  # read-only resource inputs attribute and the original-output-count attribute, links the graphs to the
+  # op, and sets their outer graph to the current default graph. Returns the op output tensors.
   """Builds the functional StatelessWhile/While op."""
   cond_stateful_ops = [
       op for op in cond_graph.get_operations() if op._is_stateful
@@ -452,6 +520,10 @@ def _build_while_op(loop_vars, cond_graph, body_graph, output_shapes,
     op_fn = gen_functional_ops.stateless_while
 
   def _make_op(inputs):
+    # [FUNCTION DOC]
+    # HELPER: Nested helper of the While op builder that actually creates the op from given inputs, sets
+    # attributes and cached graphs on it, and returns its output tensors. Side effects: sets the outer
+    # graph of cond and body graphs and attributes on the new op.
     while_op, tensors = util.get_op_and_outputs(op_fn(
         inputs,
         util.create_new_tf_function(cond_graph),
@@ -478,6 +550,11 @@ def _build_while_op(loop_vars, cond_graph, body_graph, output_shapes,
 
 
 def _get_intermediates(func_graph):
+  # [FUNCTION DOC]
+  # HELPER: Selects forward-body tensors to accumulate for gradient computation. Input: a function
+  # graph. Returns a list of output tensors of its operations, skipping identity and mutex-lock ops,
+  # the loop counter input, resource tensors, tensors that already have an accumulator and tensors that
+  # are captured values (loop invariants). No side effects.
   """Returns all tensors in `func_graph` that should be accumulated."""
   # We currently accumulate output tensors of most ops in the function and rely
   # on the pruning pass to get rid of the unused accumulators at runtime.
@@ -521,6 +598,12 @@ def _get_intermediates(func_graph):
 
 
 def _preprocess_grad(grad, body_graph_output, while_op_input, while_op_output):
+  # [FUNCTION DOC]
+  # HELPER: Computes the initial gradient for one While output. Inputs: the incoming gradient, the
+  # matching body graph output, While op input and While op output. Returns nothing (null) when the body
+  # output is not trainable; zeros for resource or variant outputs whose gradient is missing but
+  # supports a default gradient; a dense tensor when the gradient is indexed slices; otherwise the
+  # gradient unchanged.
   """Returns the initial gradient to be used for a given output tensor.
 
   Args:
@@ -569,6 +652,10 @@ def _preprocess_grad(grad, body_graph_output, while_op_input, while_op_output):
 # TODO(skyewm): make this return constants if op_output's shape is fully
 # defined (this can be done by checking the "shape" attr of resource vars).
 def _zeros_like(op_input, op_output):
+  # [FUNCTION DOC]
+  # HELPER: Creates zeros matching a While output, also supporting resource variable handles. For a
+  # resource output, builds zeros with the variable's shape and the dtype derived from the op input;
+  # otherwise zeros shaped like the output. Inputs: op input and op output tensors. Returns a tensor.
   """Like array_ops.zeros_like() but also accepts resource var handles."""
   if op_output.dtype == dtypes.resource:
     # Note: We use `op_input` instead of `op_output` to get the zeros dtype
@@ -581,6 +668,10 @@ def _zeros_like(op_input, op_output):
 
 
 def _is_trainable(tensor):
+  # [FUNCTION DOC]
+  # HELPER: Decides whether a tensor can have gradients. Returns false if not trainable by the general
+  # rule, or if it is the variant value popped from a tensor list whose element type is untrainable
+  # (in which case the element type decides). Otherwise true. Asserts the popped value is variant.
   """Returns whether the given tensor is trainable."""
   if not backprop_util.IsTrainable(tensor):
     return False
@@ -599,6 +690,11 @@ def _is_trainable(tensor):
 
 
 def _get_graph(while_op, func_attr_name, attr_graph_name):
+  # [FUNCTION DOC]
+  # HELPER: Returns the function graph for a While op's cond or body. Inputs: the op, the function
+  # attribute name and the name of the cached graph attribute. Uses the cached graph if present;
+  # otherwise rebuilds it from the op's output shapes and function name. Side effect: stores a
+  # reference to the op on the graph. Returns the function graph.
   """Returns `FuncGraph` for the given function attribute.
 
   Args:
@@ -623,6 +719,14 @@ def _get_graph(while_op, func_attr_name, attr_graph_name):
 
 def _create_grad_func(ys, xs, grads, cond_graph, body_graph, name, while_op,
                       maximum_iterations):
+  # [FUNCTION DOC]
+  # HELPER: Builds the body gradient function graph. Inputs: ys and xs tensors, incoming gradients,
+  # the forward cond and body graphs, the new graph name, the forward While op and the maximum
+  # iterations. Creates a counter, builds the gradient graph (via the gradient helper) inside a
+  # specialized gradient function graph, then appends outputs for every captured tensor using the
+  # mapping from internal captures to outputs. Returns a pair: the gradient graph and the argument list
+  # (counter, maximum iterations, total iterations, gradients). Raises a value error if a captured
+  # tensor has no recorded output; asserts equal lengths of ys and grads.
   """Builds and returns the gradient FuncGraph of `func_graph` and its args.
 
   The returned grad_func_graph must be called with the returned
@@ -692,6 +796,14 @@ def _create_grad_func(ys, xs, grads, cond_graph, body_graph, name, while_op,
 
 
 def _grad_fn(ys, xs, args, func_graph):
+  # [FUNCTION DOC]
+  # HELPER: Body function of the gradient loop built by the gradient graph builder.
+  # KNOWN ISSUE: the docstring describes argument 1 as total iterations and argument 2 as maximum
+  # iterations, but the code (and the caller) use argument 1 for maximum iterations and argument 2 for
+  # total iterations.
+  # Computes gradients of the forward graph outputs with respect to its inputs using the incoming
+  # gradients (arguments from index 3), requesting zeros for unconnected gradients, and asserts none is
+  # null. Returns the incremented counter, maximum iterations, total iterations and the gradient tensors.
   """Computes the gradient of `func_graph` in the current graph.
 
   This function builds the gradient graph of the corresponding forward-pass
@@ -731,6 +843,11 @@ def _grad_fn(ys, xs, args, func_graph):
 
 
 def _resolve_grad_captures(body_graph, body_grad_graph, while_op):
+  # [FUNCTION DOC]
+  # HELPER: Maps external captures of the body gradient graph to tensors usable in the outer graph.
+  # Captures from the forward body graph are replaced by the matching While op output (and asserted to
+  # be in the outer graph); others are kept. Inputs: forward body graph, body gradient graph, While op.
+  # Returns the list of captured inputs.
   """Returns the tensors to pass as captured inputs to `body_grad_graph`.
 
   `body_grad_graph` may have external references to:
@@ -772,6 +889,12 @@ def _resolve_grad_captures(body_graph, body_grad_graph, while_op):
 
 
 def _get_structured_grad_output(outputs, grads, body_grad_graph):
+  # [FUNCTION DOC]
+  # HELPER: Converts raw gradient loop outputs into the gradient values to return. Inputs: raw outputs,
+  # the incoming gradients and the body gradient graph. For each incoming gradient: null stays null;
+  # indexed-slices outputs are reassembled from three consecutive raw outputs (values, indices, dense
+  # shape); tensors take one raw output. The first three raw outputs (counter, maximum iterations, total
+  # iterations) are skipped. Returns a list that may contain nulls.
   """Returns the values that should be returned from the while grad function.
 
   Args:
@@ -812,6 +935,14 @@ def _get_structured_grad_output(outputs, grads, body_grad_graph):
 
 
 def _get_accumulator(tensor):
+  # [FUNCTION DOC]
+  # HELPER: Finds existing accumulators for the gradient machinery.
+  # KNOWN ISSUE: the docstring calls the graph output output_t in one place but the pattern names it
+  # output_tl; also the nested lookup it uses has a shadowed variable (see that function).
+  # Looks for an existing accumulator (tensor list) for a tensor in a function graph: a push-back
+  # op consuming the tensor and a loop-input list whose output (or identity of it) is a graph output at
+  # the same index as the input. Returns that output tensor or null. Asserts the tensor belongs to a
+  # function graph.
   r"""Returns TensorList if any containing accumulated values of tensor.
 
   We try to find a pattern of the form:
@@ -841,6 +972,12 @@ def _get_accumulator(tensor):
   assert isinstance(tensor.graph, func_graph_module.FuncGraph)
 
   def get_func_graph_output(t):
+    # [FUNCTION DOC]
+    # HELPER: Nested helper of the accumulator lookup.
+    # KNOWN ISSUE: it indexes the first consumer of the tensor without checking that any consumer exists
+    # (fails with an index error if none), and the inner generator reuses the name of the argument.
+    # Returns the given tensor if it is a graph output, or the output of its identity consumer if that is
+    # a graph output, otherwise null.
     """Returns t or Identity(t) whichever exists in graph outputs else None."""
     for output in tensor.graph.outputs:
       if output is t:
@@ -894,6 +1031,17 @@ OptimizedReductionOpsCacheKey = collections.namedtuple(
 
 
 class _WhileBodyGradFuncGraph(util.WhileBodyFuncGraph):
+  # [CLASS DOC]
+  # HELPER: Support class for building while-loop gradients.
+  # Function graph for the body of the gradient While loop. Subclass of the while-body function graph.
+  # It controls capturing of tensors from the forward body graph: resource tensors are captured
+  # from the outer graph (must be loop invariants), loop invariants are captured directly, constants
+  # are copied, and all other tensors get an accumulator (tensor list) pushed in the forward graph and
+  # popped here. Attributes: extra_inputs (initial empty tensor lists for new accumulators; non-empty
+  # means the forward op must be rewritten), internal_capture_to_output (mapping from captured
+  # placeholder ids to tensors to append to outputs), plus private references to the forward graphs,
+  # maximum iterations, forward op and the map of indirect captures. Also moves a few cheap reduction
+  # ops (shape, size, rank, tensor-list shape/length) into the forward graph to save memory.
   """FuncGraph for the gradient function of the body of a While op.
 
   Contains the logic for capturing the tensors from the body of the forward
@@ -939,6 +1087,13 @@ class _WhileBodyGradFuncGraph(util.WhileBodyFuncGraph):
   def __init__(self, name, forward_cond_graph, forward_body_graph,
                maximum_iterations, forward_while_op, body_graph_inputs,
                body_graph_outputs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the parameters for the sets of forward body inputs and outputs are accepted but never
+    # used or stored.
+    # Constructor. Inputs: graph name, forward cond graph, forward body graph, maximum iterations tensor,
+    # forward While op, and the two unused identity sets. Calls the base constructor with the name,
+    # initializes the extra inputs list, the capture-to-output mapping and the indirect captures mapping,
+    # and stores the forward references.
     super(_WhileBodyGradFuncGraph, self).__init__(name)
     self.extra_inputs = []
     self.internal_capture_to_output = {}
@@ -959,6 +1114,11 @@ class _WhileBodyGradFuncGraph(util.WhileBodyFuncGraph):
 
   @property
   def while_op_needs_rewrite(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: despite the name suggesting a boolean, this returns the list of extra inputs itself
+    # (empty means false, non-empty means true).
+    # Property: tells whether the forward While op must be rewritten, i.e. whether accumulators were
+    # created. Returns the extra inputs list.
     return self.extra_inputs
 
   def _create_op_internal(
@@ -971,6 +1131,14 @@ class _WhileBodyGradFuncGraph(util.WhileBodyFuncGraph):
       attrs=None,
       op_def=None,
       compute_device=True):
+    # [FUNCTION DOC]
+    # Overrides operation creation. For a few cheap reduction-like op types (shape, size, rank, tensor
+    # list element shape and length) whose inputs all come from the forward graph and have no accumulator,
+    # and when intermediates are not all output, not in an XLA context and not under higher-order tape
+    # wrapping, creates the op in the forward graph instead (so the small result is stored rather than the
+    # large tensor) via the move helper. Otherwise defers to the base class. Inputs mirror the base
+    # class: op type, inputs, dtypes, input types, name, attributes, op definition and whether to compute
+    # the device. Returns the created op (or its result).
     # For a reduction op, if op is in the gradient body graph and its input is
     # from the forward graph, moving op to the forward graph means we would
     # store the tensor after the reduction as opposed to the tensor before
@@ -1028,6 +1196,12 @@ class _WhileBodyGradFuncGraph(util.WhileBodyFuncGraph):
       attrs=None,
       op_def=None,
       compute_device=True):
+    # [FUNCTION DOC]
+    # HELPER: Creates the given op in the forward graph, with caching. Same inputs as the creation
+    # override. Looks up a cache stored on the forward graph (created on demand) keyed by the op
+    # description; returns the cached result if present. Otherwise creates the op in the forward graph with
+    # a name stripped of its trailing slash so it is made unique, stores it in the cache and returns it.
+    # Side effects: creates the cache attribute and an op in the forward graph.
     # We have a cache of reduction ops that have already been moved to the
     # forward graph, and we will check it first to avoid moving an op twice.
     if not hasattr(self._forward_graph, "_optimized_reduction_ops_cache"):
@@ -1074,6 +1248,11 @@ class _WhileBodyGradFuncGraph(util.WhileBodyFuncGraph):
       attrs=None,
       op_def=None,
       compute_device=True):
+    # [FUNCTION DOC]
+    # HELPER: Builds a hashable cache key for the moved-op cache. Inputs are the same as the op creation
+    # override. Converts input tensors to references, dtypes and input types to tuples, attributes to a
+    # sorted tuple of names and serialized values, and the op definition to serialized bytes. Returns the
+    # named tuple key.
     # We need all elements of CacheKey to be hashable.
     inputs = tuple(map(lambda t: t.ref(), inputs))
 
@@ -1096,6 +1275,16 @@ class _WhileBodyGradFuncGraph(util.WhileBodyFuncGraph):
                                          name, attrs, op_def, compute_device)
 
   def _capture_helper(self, tensor, name):
+    # [FUNCTION DOC]
+    # Overrides tensor capture for the gradient graph as described in the class docs. Inputs: a tensor and
+    # a name. Returns an existing indirect capture if there is one. Tensors from other graphs are captured
+    # by the base class (recording an identity mapping for new captures). For forward-graph tensors:
+    # looks through identity ops, captures loop invariants directly, copies constants, delegates resource
+    # tensors to the resource helper, otherwise finds or creates an accumulator in the forward graph (empty
+    # tensor list built in the forward outer graph without control inputs, pushed to in the forward body,
+    # added to the forward body outputs and captured in the forward cond graph), captures the accumulator
+    # and pops a value from it. Side effects: appends to extra inputs, mutates forward graphs, updates
+    # the indirect capture and capture-to-output mappings. Returns the captured tensor.
     """Implements the capturing described in the class docstring."""
     captured_tensor = self._indirect_captures.get(ops.tensor_id(tensor))
     if captured_tensor is not None:
@@ -1207,6 +1396,12 @@ class _WhileBodyGradFuncGraph(util.WhileBodyFuncGraph):
     return captured_tensor
 
   def _resource_capture_helper(self, tensor):
+    # [FUNCTION DOC]
+    # HELPER: Captures a resource tensor, which is never accumulated. Input: the resource tensor from the
+    # forward body graph. Finds its loop input index, the matching placeholder and the outer graph tensor,
+    # asserts both are resources, requires the output at the same index to refer to the same input (loop
+    # invariant), then captures the outer tensor in this graph, records and returns it. Raises an assertion
+    # error if the resource is not a loop invariant.
     """Returns the captured resource tensor.
 
     Resource-type tensors are not accumulated. If a resource tensor exists in
@@ -1252,6 +1447,10 @@ class _WhileBodyGradFuncGraph(util.WhileBodyFuncGraph):
 
 def _check_shapes_compat(flat_output_tensors, flat_shape_invariants,
                          flat_input_tensors):
+  # [FUNCTION DOC]
+  # HELPER: Validation for the loop builder. For each output tensor, shape invariant and input tensor,
+  # raises a value error if the output shape is not less than or equal to the invariant, telling the
+  # user the variable changed shape across iterations and to use the shape invariants argument.
   for (t, shape, input_t) in zip(flat_output_tensors, flat_shape_invariants,
                                  flat_input_tensors):
     if not control_flow_ops._ShapeLessThanOrEqual(t.shape, shape):
@@ -1263,6 +1462,10 @@ def _check_shapes_compat(flat_output_tensors, flat_shape_invariants,
 
 
 def _check_num_inputs_outputs(cond_graph, body_graph, num_flattened_loop_vars):
+  # [FUNCTION DOC]
+  # HELPER: Sanity check for the loop builder. Asserts that cond graph and body graph each have the
+  # expected number of inputs, the cond graph has one output, and the body graph has the expected number
+  # of outputs. Raises an assertion error with a message otherwise; returns nothing.
   """Checks the number of inputs/outputs of `cond_graph` and `body_graph`."""
   assert len(cond_graph.inputs) == num_flattened_loop_vars, (
       "cond_graph takes %d inputs; Expected: %d" % (len(cond_graph.inputs),
@@ -1278,6 +1481,9 @@ def _check_num_inputs_outputs(cond_graph, body_graph, num_flattened_loop_vars):
 
 
 def _check_inputs_outputs_types_match(body_graph, flattened_loop_vars):
+  # [FUNCTION DOC]
+  # HELPER: Validation for the loop builder. Compares the dtype of each body input with the matching
+  # output; raises a type error naming the loop variable if the type changed after one iteration.
   for inp, out, loop_var in zip(body_graph.inputs, body_graph.outputs,
                                 flattened_loop_vars):
     if inp.dtype != out.dtype:
@@ -1288,10 +1494,18 @@ def _check_inputs_outputs_types_match(body_graph, flattened_loop_vars):
 
 
 def _build_cond_placeholders_name_prefix(cond_graph):
+  # [FUNCTION DOC]
+  # HELPER: Returns a unique name prefix, derived from the cond graph name, used for the placeholders
+  # that duplicate body captures in the cond graph.
   return cond_graph.unique_name(cond_graph.name + "___redundant_placeholder")
 
 
 def _duplicate_body_captures_in_cond(cond_graph, body_graph_captures):
+  # [FUNCTION DOC]
+  # HELPER: Makes the cond graph signature match the body graph. Input: the cond graph and the tensors
+  # captured by the body. Creates one placeholder per body capture (using the low level graph API with a
+  # unique name prefix), appends them to the cond graph captures and inputs. Side effects: mutates the
+  # cond graph. Returns nothing.
   """Creates placeholders for body captures in cond_graph.
 
   This is needed to match signatures of cond and body graphs.
@@ -1335,14 +1549,25 @@ def _duplicate_body_captures_in_cond(cond_graph, body_graph_captures):
 
 
 def _copy_handle_data(src_tensors, tgt_tensors):
+  # [FUNCTION DOC]
+  # HELPER: Copies resource/variant handle data from each source tensor to the paired target tensor
+  # (pairs matched by position). Returns nothing.
   for src_t, tgt_t in zip(src_tensors, tgt_tensors):
     handle_data_util.copy_handle_data(src_t, tgt_t)
 
 
 def _pack_sequence_as(loop_vars_signature, flat_orig_loop_vars, loop_vars):
+  # [FUNCTION DOC]
+  # HELPER: Like the structure packing utility but replaces flow tensors with tensor arrays. Inputs:
+  # the signature structure, the flattened original loop variables, and the structured or flat loop
+  # variables. Each flattened value is replaced by a tensor array with the new flow if the original was a
+  # tensor array. Returns the repacked structure.
   """Like `nest.pack_sequence_as` but also replaces flows with TensorArrays."""
 
   def flow_to_tensor_array(flow, ta):  # pylint: disable=missing-docstring
+    # [FUNCTION DOC]
+    # HELPER: Nested helper: given a flow tensor and the original value, builds a tensor array with the
+    # new flow if the original is a tensor array; otherwise returns the flow unchanged.
     return (tensor_array_ops.build_ta_with_new_flow(ta, flow) if isinstance(  # pylint: disable=g-long-ternary
         ta, tensor_array_ops.TensorArray) else flow)
 
@@ -1356,8 +1581,13 @@ def _pack_sequence_as(loop_vars_signature, flat_orig_loop_vars, loop_vars):
 
 
 def _tensor_array_to_flow(loop_vars):
+  # [FUNCTION DOC]
+  # HELPER: Replaces each tensor array in a structure with its flow tensor, leaving other values
+  # unchanged. Returns the mapped structure.
 
   def f(maybe_ta):
+    # [FUNCTION DOC]
+    # HELPER: Nested mapping function; returns the flow of a tensor array, else the value itself.
     if isinstance(maybe_ta, tensor_array_ops.TensorArray):
       return maybe_ta.flow
     return maybe_ta
@@ -1366,6 +1596,9 @@ def _tensor_array_to_flow(loop_vars):
 
 
 def _build_maximum_iterations_loop_var(maximum_iterations):
+  # [FUNCTION DOC]
+  # HELPER: Converts the optional maximum iterations to an int32 scalar tensor named
+  # maximum_iterations; null becomes minus one, meaning unbounded. Returns the tensor.
   if maximum_iterations is None:
     # Default value for max_num_elements to EmptyTensorList meaning that the
     # list size is unbounded.
@@ -1376,16 +1609,26 @@ def _build_maximum_iterations_loop_var(maximum_iterations):
 
 
 def _build_accumulator_name(tensor):
+  # [FUNCTION DOC]
+  # HELPER: Returns the accumulator name for a tensor: its name plus a suffix, with colons replaced by
+  # underscores because name scopes disallow colons.
   # Tensor name may be of the form "pow/y:0". Name scope does not allow ":".
   return "{}/accumulator".format(tensor.name).replace(":", "_")
 
 
 def _is_loop_invariant(tensor, inputs, outputs):
+  # [FUNCTION DOC]
+  # HELPER: Returns true if the tensor (compared by identity) appears in both the given inputs and
+  # outputs, i.e. it is passed through unchanged.
   return (any(tensor is t for t in inputs) and
           any(tensor is t for t in outputs))
 
 
 def _set_read_only_resource_inputs_attr(op: ops.Operation, branch_graphs):
+  # [FUNCTION DOC]
+  # HELPER: Sets the attribute listing read-only resource inputs on a While op. Computes the
+  # intersection of read-only resource input indices over the branch graphs (starting from all inputs)
+  # and stores the sorted indices on the op. Used for automatic control dependencies. Returns nothing.
   """Sets the list of resource inputs which are read-only.
 
   This is used by AutomaticControlDependencies.
@@ -1407,6 +1650,14 @@ def _set_read_only_resource_inputs_attr(op: ops.Operation, branch_graphs):
 
 
 def async_noop(name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring has no Returns section, but it returns the While operation (not an output
+  # tensor).
+  # Builds an operation that is a no-op executed by an asynchronous kernel, to encourage aggressive
+  # inter-op parallelism by scheduling downstream ops on other threads. Input: optional name (default
+  # "async_noop"). Builds identity cond and body graphs over a single boolean, creates a stateful While
+  # op without a parallel iterations argument, and disables lowering with switch/merge. Returns the
+  # While operation.
   """Returns a no-op that is implemented as an async kernel.
 
   This operation may be useful to implement "aggressive inter-op parallelism"

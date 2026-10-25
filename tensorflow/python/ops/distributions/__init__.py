@@ -1,3 +1,8 @@
+# [PACKAGE DOC]
+# Package for the legacy TensorFlow distributions API. Its only content is a module docstring and
+# a single import that pulls in the distributions submodule, which in turn exposes the
+# distribution classes and helpers. Importing the package triggers that import as a side effect.
+# It defines no functions or classes of its own.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

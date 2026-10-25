@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: Helper module of the control flow v2 while loop gradient code (used by the while_v2 module).
+# Contains the logic that fixes up the gradient body graph when some gradient outputs are indexed
+# slices (sparse row updates, for example from gather gradients). Since the loop machinery needs a
+# fixed set of tensor inputs and outputs, each such output is either converted to a dense tensor or the
+# matching input is rewritten into three indexed-slices components (values, indices, dense shape).
+# Exposes one public entry point and several private helpers; no import-time side effects.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,6 +35,15 @@ from tensorflow.python.util import nest
 
 def rewrite_grad_indexed_slices(grads, body_grad_graph, loop_vars,
                                 forward_inputs):
+  # [FUNCTION DOC]
+  # Entry point used by the while gradient builder. Inputs: grads (incoming gradient tensors, entries may
+  # be null), body_grad_graph (the gradient body function graph), loop_vars (list of inputs of that
+  # graph) and forward_inputs (flat inputs of the forward While op). Pairs the forward inputs that have a
+  # gradient with the gradient graph structured outputs (skipping the first three: loop counter,
+  # maximum iterations and total iterations). For every output that is indexed slices: if the matching
+  # forward input is a resource handle, rewrites the graph input as indexed slices (which changes the
+  # loop variables); otherwise converts the output to a dense tensor. Mutates body_grad_graph in place.
+  # Returns the (possibly new) loop_vars list.
   """Handles special case of IndexedSlices returned from while gradient.
 
   Some gradient functions return IndexedSlices instead of a Tensor (e.g. the
@@ -82,6 +98,9 @@ def rewrite_grad_indexed_slices(grads, body_grad_graph, loop_vars,
 
 
 def _get_tensor_index_in_iterable(iterable, t):
+  # [FUNCTION DOC]
+  # HELPER: Finds an element by identity. Inputs: an iterable and a tensor. Returns the position of the
+  # first element that is the very same object; raises a value error if no element matches.
   """Returns index of first occurrence of `t`, raises ValueError if not found."""
   for i, elem in enumerate(iterable):
     if t is elem:
@@ -90,6 +109,11 @@ def _get_tensor_index_in_iterable(iterable, t):
 
 
 def _rewrite_output_as_tensor(body_grad_graph, grad_output_slices):
+  # [FUNCTION DOC]
+  # HELPER: Fallback rewrite that turns an indexed-slices output of the gradient graph into a dense
+  # tensor. Inputs: the gradient graph and the indexed-slices output. Converts it to a tensor inside the
+  # graph, replaces it in the graph structured outputs, and recomputes the flat outputs. Mutates the
+  # graph; returns nothing. Raises a value error if the slices are not among the structured outputs.
   """Rewrites grad_output_slices to be a Tensor output.
 
   Args:
@@ -108,6 +132,16 @@ def _rewrite_output_as_tensor(body_grad_graph, grad_output_slices):
 
 def _rewrite_input_as_indexed_slices(body_grad_graph, grad_output_slices,
                                      forward_input, loop_vars):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the pass-through assumption is used in this very function; it is
+  # actually relied on by the output rewrite helper that rebuilds the concatenations.
+  # HELPER: Preserving rewrite that turns the input matching an indexed-slices output into indexed
+  # slices. Inputs: the gradient graph, the indexed-slices output, the forward input (a captured
+  # resource, assumed passed through unchanged) and the loop variables. Creates zero-initialized
+  # indexed slices, captures their components inside the graph (allow-listed), removes those captures
+  # from the graph inputs, builds a new output from the new input slices, and then updates graph inputs,
+  # outputs and loop variables. The old gradient computation stays as dead code. Returns the new loop
+  # variables.
   """Rewrites grad_output_slices's corresponding input to be an IndexedSlices.
 
   This rewrite requires that forward_input was captured in the forward loop,
@@ -165,6 +199,13 @@ def _rewrite_input_as_indexed_slices(body_grad_graph, grad_output_slices,
 
 
 def _create_grad_indexed_slices_init(grad_output_slices, forward_input):
+  # [FUNCTION DOC]
+  # HELPER: Builds the initial all-empty indexed slices fed into the gradient loop. Inputs: the
+  # gradient output slices (indexed slices) and the corresponding forward input (tensor); asserts these
+  # types. Values start as zero rows (zero first dimension, trailing dimensions from the output values
+  # shape if fully defined, otherwise from the forward input or variable shape), indices as an empty
+  # constant of the output index type, and the dense shape from the forward input (or variable shape for
+  # resources). Creates ops in the current graph. Returns indexed slices.
   """Creates an IndexedSlices to pass as input to the while grad function.
 
   Args:
@@ -212,6 +253,12 @@ def _create_grad_indexed_slices_init(grad_output_slices, forward_input):
 
 
 def _rewrite_grad_indexed_slices_output(old_output_slices, new_input_slices):
+  # [FUNCTION DOC]
+  # HELPER: Rebuilds an indexed-slices gradient output on top of new input slices. Inputs: the old
+  # output slices and new input slices. For values and indices, it takes the identity op feeding the old
+  # output, finds the concatenation behind it (asserting both op types), and creates a new concatenation
+  # whose first argument is the new input and the rest are the old arguments (assuming the original
+  # incoming gradient was first). The dense shape comes from the new input. Returns new indexed slices.
   """Creates a new version of old_output_slices with new_input_slices as input.
 
   This method assumes that old_output_slices.{values,indices} are produced by
@@ -230,6 +277,11 @@ def _rewrite_grad_indexed_slices_output(old_output_slices, new_input_slices):
   """
 
   def rewrite(old_output, new_input):
+    # [FUNCTION DOC]
+    # HELPER: Nested helper that rewrites one component. Takes the old output op (must be an identity of a
+    # concatenation) and the new input tensor, and returns a new concatenation along the first axis of
+    # the new input and the remaining original concat inputs (excluding the axis argument). Asserts the op
+    # types.
     assert old_output.type == "Identity"
     concat_op = old_output.inputs[0].op
     assert concat_op.type == "ConcatV2"
@@ -248,6 +300,12 @@ def _rewrite_grad_indexed_slices_output(old_output_slices, new_input_slices):
 
 def _update_indexed_slices_param(graph, loop_vars, init_slices, input_slices,
                                  output_slices, old_output_slices):
+  # [FUNCTION DOC]
+  # HELPER: Updates the gradient graph metadata for the new indexed slices. Inputs: the graph, loop
+  # variables, initial slices, the new input slices, the new output slices and the old output slices.
+  # Replaces the old output in structured outputs and flat outputs, replaces the single input at the
+  # position of the old output's first component with the three input components, and does the same in
+  # the loop variables with the initial slices. Mutates the graph; returns the new loop variables.
   """Updates graph with new IndexedSlices input/output.
 
   Updates graph's metadata to output the gradient computation defined by
@@ -289,4 +347,7 @@ def _update_indexed_slices_param(graph, loop_vars, init_slices, input_slices,
 
 
 def _flatten(arg):
+  # [FUNCTION DOC]
+  # HELPER: Flattens a possibly composite structure (such as indexed slices) into a flat list of
+  # tensors. Returns that list.
   return nest.flatten(arg, expand_composites=True)

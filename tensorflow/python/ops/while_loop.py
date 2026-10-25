@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Public entry points for the while loop control-flow operation: the TF2 variant and the legacy v1
+# variant. They validate arguments, then dispatch to the control flow v2 implementation (while_v2)
+# or to the legacy graph/eager implementation. Exports the symbols under the public API names at
+# import time through the export decorator.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -51,6 +56,14 @@ def while_loop_v2(cond,
                   swap_memory=False,
                   maximum_iterations=None,
                   name=None):
+  # [FUNCTION DOC]
+  # Public TF2 API for the while loop. Thin wrapper that forwards all arguments to the v1 function
+  # with return_same_structure forced to true, so the result keeps the structure of loop_vars.
+  # Inputs: cond, body, loop_vars, shape_invariants, parallel_iterations (default 10), back_prop
+  # (default true, deprecated when false), swap_memory (default false), maximum_iterations (optional
+  # scalar cap), name (optional). Returns the final loop variables in the same structure as loop_vars.
+  # Errors are those of the delegated function. Side effects: emits a deprecation warning once if
+  # back_prop is false.
   """Repeat `body` while the condition `cond` is true.
 
   Note: This op is automatically used in a `tf.function` to convert Python for-
@@ -263,6 +276,26 @@ def while_loop(cond,
                name=None,
                maximum_iterations=None,
                return_same_structure=False):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: a non-positive parallel_iterations raises a type error, although it is a value problem
+  # (a value error would be the natural choice).
+  # Legacy (v1 API) while loop: repeatedly applies body to loop_vars while cond returns true.
+  # Inputs: cond and body are callables taking as many arguments as loop_vars; loop_vars is a possibly
+  # nested tuple/list/namedtuple of tensors; shape_invariants optionally gives shapes the loop variables
+  # keep across iterations; parallel_iterations (default 10, must be at least 1) bounds concurrent
+  # iterations; back_prop (default true) allows gradients; swap_memory (default false) allows GPU-to-CPU
+  # swapping; name is an op scope; maximum_iterations is an optional scalar cap on iteration count;
+  # return_same_structure (default false) keeps a one-element loop_vars result as a one-element
+  # structure instead of unpacking it.
+  # Behavior: validates arguments, converts variables in loop_vars to tensors, and delegates to the v2
+  # implementation when control flow v2 is enabled and not executing eagerly (always inside functions).
+  # Otherwise, with a maximum_iterations bound, wraps cond/body with an iteration counter. In eager mode
+  # it runs a plain Python loop, checks the structure stays unchanged each step and converts the final
+  # values to tensors. In graph mode it builds a while context, registers it in the graph collection
+  # when it is not nested, and builds the loop. Returns the final loop values (the loop variables
+  # without the counter when maximum_iterations is used).
+  # Raises a type error if cond or body is not callable or parallel_iterations is below 1; a value error
+  # if loop_vars is empty or maximum_iterations is not a scalar; structure-mismatch errors in eager mode.
   """Repeat `body` while the condition `cond` is true.
 
   `cond` is a callable returning a boolean scalar tensor. `body` is a callable
@@ -492,6 +525,10 @@ def while_loop(cond,
         nest.assert_same_structure(loop_var_structure, list(loop_vars))
 
       def convert(x):
+        # [FUNCTION DOC]
+        # HELPER: Nested helper of the eager execution path of the v1 while loop.
+        # Converts a final loop value to a tensor; tensor-array objects are returned unchanged,
+        # everything else goes through tensor conversion. Returns the converted value.
         if isinstance(x, tensor_array_ops.TensorArray):
           return x
         return ops.convert_to_tensor(x)
