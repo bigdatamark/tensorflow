@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Implements the map_fn functional operation: apply a function to each slice of tensors taken
+# along the first axis and stack the results, using a while loop with tensor arrays. Supports
+# nested structures, ragged and sparse (batchable composite) tensors. Exposes the version 1
+# function (public name map_fn only in the v1 API) and the version 2 function (public map_fn in
+# v2), plus private helpers that convert between flat, batchable and structured representations.
+# Import-time side effects: registers the API exports, and builds the v2 documentation text from
+# the v1 one by rewording the back_prop argument, asserting that the rewrite succeeded.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -49,6 +57,23 @@ def map_fn(fn,
            infer_shape=True,
            name=None,
            fn_output_signature=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: when fn is not callable the error message reads the name attribute of fn, which
+  # a non-callable object usually lacks, so an attribute error may be raised instead of the
+  # intended type error. The docstring's "ValueType" in the inner loop body is a typo too.
+  # Version 1 map_fn: unstacks the input tensors along axis 0, calls fn on each slice inside a
+  # while loop (with autograph conversion of fn) and stacks the results. Inputs: fn, callable;
+  # elems, tensor or nested structure of tensors (ragged and sparse allowed, at least one,
+  # all with equal outer size); dtype, deprecated alias for fn_output_signature; parallel_iterations,
+  # optional loop parallelism (default 10 in graph mode, 1 in eager mode, where larger values
+  # only log a one-time warning and are reset to 1); back_prop, swap_memory, infer_shape, passed
+  # to the loop and tensor arrays; name, optional scope name; fn_output_signature, optional
+  # type specs describing fn's output (defaults to dtype, then to the input's own signature).
+  # Returns the result structure of stacked tensors. Raises a type error if fn is not callable
+  # or the output structure mismatches, and a value error for empty elems, scalar elements, or
+  # an output that is incompatible with its signature. Side effects: in graph mode it
+  # temporarily sets the variable scope caching device and restores it afterwards (not
+  # restored if an exception occurs).
   """Transforms `elems` by applying `fn` to each element unstacked on axis 0.
 
   See also `tf.scan`.
@@ -464,6 +489,14 @@ def map_fn(fn,
               infer_shape=infer_shape, element_shape=spec.shape))
 
     def compute(i, tas):
+      # [FUNCTION DOC]
+      # HELPER: loop body used by the while loop inside map_fn.
+      # Reads slice i from each input tensor array, rebuilds the structured element, calls the
+      # autograph-converted fn on it, checks the result has the expected structure, flattens it
+      # into batchable tensors and writes them to the output tensor arrays. Inputs: i, loop
+      # counter; tas, list of output tensor arrays. Returns the incremented counter and the
+      # updated arrays. Raises a type error on structure mismatch or a value error when the
+      # result is incompatible with its signature.
       """The loop body of map_fn.
 
       Args:
@@ -520,12 +553,21 @@ def map_fn(fn,
 
 
 def _dtype_to_spec(d):
+  # [FUNCTION DOC]
+  # HELPER: normalizes entries of the output signature inside map_fn.
+  # Returns d unchanged if it already is a type specification; otherwise wraps the given dtype
+  # in a tensor specification of unknown shape. No side effects.
   if not isinstance(d, type_spec.TypeSpec):
     d = tensor_spec.TensorSpec(None, d)
   return d
 
 
 def _most_general_type_spec(elem):
+  # [FUNCTION DOC]
+  # HELPER: derives the default output signature in map_fn from the inputs.
+  # Returns the least restrictive type spec for elem: for composite tensors the spec with fully
+  # unknown shape (falling back to the plain spec if unsupported); for plain tensors a spec
+  # keeping only the dtype with unknown shape. No side effects.
   """Returns the most general TypeSpec for elem."""
   if isinstance(elem, composite_tensor.CompositeTensor):
     try:
@@ -540,6 +582,10 @@ def _most_general_type_spec(elem):
 
 
 def _result_flat_signature_to_batchable_tensor_spec(result_flat_signature):
+  # [FUNCTION DOC]
+  # HELPER: builds the element specs for map_fn's output tensor arrays.
+  # Takes the flat list of output type specs and returns the concatenated list of the flat
+  # tensor specs of each. Raises a type error if any spec is not batchable.
   """Converts result_flat_signature -> result_batchable_tensor_specs."""
   tensor_specs = []
   for spec in result_flat_signature:
@@ -550,6 +596,11 @@ def _result_flat_signature_to_batchable_tensor_spec(result_flat_signature):
 
 
 def _elems_flat_to_batchable(elems_flat):
+  # [FUNCTION DOC]
+  # HELPER: prepares map_fn inputs for unstacking.
+  # Converts each flattened input (possibly ragged or sparse) into its list of batched dense
+  # tensors and returns the concatenation of all lists. Raises a type error if an input's spec
+  # is not batchable.
   """Converts elems_flat -> elems_batchable."""
   elems_batchable = []
   for elems_tensor in elems_flat:
@@ -563,6 +614,11 @@ def _elems_flat_to_batchable(elems_flat):
 
 
 def _elems_value_batchable_to_flat(elems_value_batchable, elems_flat_signature):
+  # [FUNCTION DOC]
+  # HELPER: rebuilds the per-iteration input values inside map_fn's loop body.
+  # Splits the flat list of unstacked tensors according to each unbatched input spec and
+  # reconstructs one (possibly composite) value per input, returned as a list. The final
+  # assertion fails if the tensors were not all consumed.
   """Converts elems_value_batchable -> elems_value_flat."""
   elems_value_flat = []
   i = 0
@@ -577,6 +633,11 @@ def _elems_value_batchable_to_flat(elems_value_batchable, elems_flat_signature):
 
 
 def _result_value_flat_to_batchable(result_value_flat, result_flat_signature):
+  # [FUNCTION DOC]
+  # HELPER: flattens fn's per-iteration results for map_fn's output tensor arrays.
+  # Plain tensor results are kept as is; other results are checked against their spec and
+  # converted to tensor lists. Returns the concatenated list of tensors. Raises a value error
+  # describing expected versus actual type if a result is incompatible with its spec.
   """Converts result_value_flat -> result_value_batchable."""
   result_value_batchable = []
   for (r_value, r_spec) in zip(result_value_flat, result_flat_signature):
@@ -596,6 +657,11 @@ def _result_value_flat_to_batchable(result_value_flat, result_flat_signature):
 
 def _result_batchable_to_flat(result_batchable, result_flat_signature,
                               batch_size):
+  # [FUNCTION DOC]
+  # HELPER: final step of map_fn rebuilding its result.
+  # Groups the stacked output tensors by the number of tensors each output spec needs, batches
+  # each spec by batch_size and reconstructs the (possibly composite) value. Returns the flat
+  # list of results. The final assertion fails if tensors are left over.
   """Converts result_batchable -> result_flat."""
   result_flat = []
   i = 0
@@ -630,6 +696,12 @@ def map_fn_v2(fn,
               infer_shape=True,
               name=None,
               fn_output_signature=None):
+  # [FUNCTION DOC]
+  # Version 2 map_fn: same behavior as the version 1 function, with the public map_fn name in
+  # v2. Inputs are the same as version 1; if fn_output_signature is not given it falls back to
+  # the deprecated dtype. Delegates to the version 1 function and returns its result. Using
+  # back_prop false emits a one-time deprecation warning. The full documentation is attached
+  # after definition from the version 1 text.
   """Transform `elems` by applying `fn` to each element unstacked on axis 0."""
   if fn_output_signature is None:
     fn_output_signature = dtype

@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Test module checking that asynchronous checkpoint save and restore works for the lookup table
+# types MutableHashTable and DenseHashTable. It defines one parameterized test class, run once
+# with regular and once with anonymous (experimental) table resources, in both graph and eager
+# modes. It lives apart from the main lookup ops tests because it needs the eager test base class.
+# Has no import-time side effects beyond defining a module constant and the test class.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -49,8 +55,21 @@ SKIP_ANONYMOUS_IN_TF1_REASON = (
 @parameterized.named_parameters(
     (f"_{is_anonymous}", is_anonymous) for is_anonymous in [False, True])
 class LookupOpsAsyncCheckpointTest(test.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case (one variant for non-anonymous tables, one for anonymous tables)
+  # covering async checkpoint save and restore of hash table objects. Holds no shared fixtures;
+  # each test builds its own tables and uses a temporary directory for checkpoint files.
   @test_util.run_in_graph_and_eager_modes
   def testAsyncObjectSaveRestore(self, is_anonymous):
+    # [FUNCTION DOC]
+    # Scenario: a DenseHashTable with 32 initial buckets is filled with three keys, saved with
+    # asynchronous checkpointing enabled, and the checkpoint is synced. A new table with 64
+    # buckets and different content (two entries) is then created and restored from the
+    # checkpoint. Input is the is_anonymous flag selecting anonymous table resources; returns
+    # nothing. Skips itself for anonymous tables in graph mode. Asserts that sizes are 0 then 3
+    # before saving, that the restored table has size 3 and 32 exported buckets (the saved
+    # capacity wins), and that lookups of five keys give the saved values or the default -1.
+    # Side effects: creates a temporary directory and writes checkpoint files there.
 
     if is_anonymous and not context.executing_eagerly():
       self.skipTest(SKIP_ANONYMOUS_IN_TF1_REASON)
@@ -117,6 +136,16 @@ class LookupOpsAsyncCheckpointTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testMutableHashTable(self, is_anonymous):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the name is generic and the commented-out line computing a save prefix is dead;
+    # the checkpoint is saved directly to the save_dir path instead of a unique temp directory.
+    # Scenario: a MutableHashTable (string keys, integer values) plus two float variables are
+    # filled, saved with asynchronous checkpointing and synced. Fresh variables (value -1) and a
+    # new table with two different entries are then restored from the checkpoint. Input is the
+    # is_anonymous flag; returns nothing. Skips for anonymous tables in graph mode. Asserts
+    # variables are 10 and 20 after init and after restore, table size is 0, 3, then 2 before
+    # restore and 3 after, and lookups of five keys return saved values or default -1.
+    # Side effects: writes checkpoint files under the test temp directory.
     if is_anonymous and not context.executing_eagerly():
       self.skipTest(SKIP_ANONYMOUS_IN_TF1_REASON)
     save_dir = os.path.join(self.get_temp_dir(), "save_restore")
