@@ -1,3 +1,19 @@
+# [MODULE DOC]
+# KNOWN ISSUE: the module level name FeatureConfig is bound to the TableConfig class, not to the
+# feature configuration class of the v2 utilities; annotations using it therefore describe
+# table configurations although the objects passed around are feature configurations.
+# Mid level TPU embedding API (TPUEmbeddingV2) that runs embedding lookups and sparse updates on
+# the TPU SparseCore accelerator. It exposes: the SparseCoreEmbeddingConfig settings object, a
+# control flow context that tags operations for pipelining, a saveable and a sharded variable
+# class for checkpointing embedding tables split across TPU devices, a table stacking helper that
+# groups compatible tables into stacked tables using the native layout stacker, the
+# TPUEmbeddingV2 class (enqueue/dequeue/lookup/apply gradients/statistics) and helpers to create
+# sharded variables. Host side preprocessing converts inputs into COO then sorted then CSR
+# formatted tensors per stacked table (PartitionedCsrFormatTensor holds the result), and device
+# side XLA ops perform the matrix multiplication lookups and optimizer updates.
+# Import time side effects: exports public classes into the tf.tpu.experimental.embedding
+# namespace via the export decorator and defines a few module constants and aliases. No flags
+# are defined and no hardware is touched until an object is created.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -81,6 +97,14 @@ QuantizationConfig = tpu_embedding_v2_utils.QuantizationConfig
 @tf_export("tpu.experimental.embedding.SparseCoreEmbeddingConfig")
 @dataclasses.dataclass(frozen=True)
 class SparseCoreEmbeddingConfig:
+  # [CLASS DOC]
+  # Immutable (frozen) settings record for SparseCore embeddings, exported publicly. Fields:
+  # disable_table_stacking (do not merge tables, default false), max_ids_per_chip_per_sample
+  # (static buffer bound, default 64), max_ids_per_table and max_unique_ids_per_table (optional
+  # mappings from stacked table name to buffer sizes, default none), allow_id_dropping (drop ids
+  # beyond the buffer instead of failing, default false), initialize_tables_on_host (default
+  # true) and enable_fast_table_initialization (initialize shards directly with the first
+  # table's initializer, default false). Created by users and passed to TPUEmbeddingV2.
   """Config for sparsecore embedding."""
 
   disable_table_stacking: bool = False
@@ -93,9 +117,23 @@ class SparseCoreEmbeddingConfig:
 
 
 class EmbeddingPipeliningContext(control_flow_ops.ControlFlowContext):
+  # [CLASS DOC]
+  # Control flow context that stamps every operation added while it is entered with a string
+  # attribute naming the pipelining mode (forward or backward), so later compiler passes can
+  # overlap embedding work with TensorCore work. When pipelining is disabled by the caller, or
+  # summaries are being recorded, or the global pipelining state is off, the mode is suffixed so
+  # the passes run the work sequentially. Instances are created per forward or backward region
+  # and used through explicit enter and exit calls. Operations are also forwarded to any outer
+  # context.
   """Sets the _embedding_pipelining attribute on all ops created in the scope."""
 
   def __init__(self, mode: str, enable: bool):
+    # [FUNCTION DOC]
+    # Builds the context. Inputs: mode, the pipelining mode string (forward or backward); enable,
+    # whether ops should be tagged at all. Stores the mode as a string attribute value. If
+    # enabling is requested but summaries are being recorded (a non-constant predicate is treated
+    # as not recording) or the embedding pipelining state is disabled, it logs the reason and
+    # changes the mode to its sequential variant. Returns nothing; no exceptions of its own.
     super().__init__()
     self._name = "EmbeddingPipelinigContext"
     self._mode = attr_value_pb2.AttrValue(s=compat.as_bytes(mode))
@@ -126,11 +164,19 @@ class EmbeddingPipeliningContext(control_flow_ops.ControlFlowContext):
   def to_control_flow_context_def(
       self, context_def: Any, export_scope: Any = None
   ):
+    # [FUNCTION DOC]
+    # HELPER: required override of the control flow context interface.
+    # Pure delegation to the parent implementation to serialize the context into the given
+    # context definition message (context_def) using the optional export_scope. Returns nothing.
     # pylint: disable=useless-super-delegation
     # The method is required by `ControlFlowContext`.
     super().to_control_flow_context_def(context_def, export_scope)
 
   def AddOp(self, op: ops.Operation):
+    # [FUNCTION DOC]
+    # Hook called for each operation created inside the context. If the context is enabled it
+    # sets the pipelining attribute (holding the mode string) on the operation, mutating it; it
+    # then passes the operation on to the outer context when one exists. Returns nothing.
     # pylint: disable=protected-access
     if self._enable:
       op._set_attr(_PIPELINE_ATTRIBUTE, self._mode)
@@ -139,6 +185,12 @@ class EmbeddingPipeliningContext(control_flow_ops.ControlFlowContext):
 
 
 class TPUEmbeddingShardedSaveable(saveable_object.SaveableObject):
+  # [CLASS DOC]
+  # Checkpoint saveable describing one shard of a sharded embedding variable. It records the
+  # shard's slice of the full (unsharded) variable through slice information so that shards
+  # written by different devices combine into one logical tensor, and restores by assigning the
+  # restored tensor onto the shard's own device. Created by the sharded variable's saveable
+  # factory, one per shard.
   """Defines how to save and restore a shard of TPUEmbedding sharded variable."""
 
   def __init__(
@@ -149,6 +201,14 @@ class TPUEmbeddingShardedSaveable(saveable_object.SaveableObject):
       shard_dim: int,
       name: str,
   ):
+    # [FUNCTION DOC]
+    # Builds the saveable for one shard. Inputs: variable, the shard's local variable; shard_id,
+    # index of this shard; num_shards, total shard count; shard_dim, dimension along which the
+    # variable is split; name, the checkpoint name of the full variable. Computes the offset of
+    # this shard (assuming all shards are the same size) and the full shape (local size times
+    # shard count along the shard dimension), builds a slice description and one save spec
+    # reading the variable's value, then initializes the base class. Returns nothing. Keeps
+    # references to the variable and shard id.
     """Init TPUEmbeddingShardedSaveable."""
     self._shard_id = shard_id
     self._variable = variable
@@ -179,6 +239,11 @@ class TPUEmbeddingShardedSaveable(saveable_object.SaveableObject):
       restored_tensors: List[tensor.Tensor],
       restored_shapes: List[tensor_shape.TensorShape],
   ) -> Any:
+    # [FUNCTION DOC]
+    # Restores the shard. Inputs: restored_tensors, list whose first element is the tensor read
+    # from the checkpoint for this shard; restored_shapes, ignored. Assigns the first tensor to
+    # the shard variable on the variable's device and returns the resulting assign operation or
+    # value. Side effect: mutates the variable.
     del restored_shapes
     restored_tensor = restored_tensors[0]
 
@@ -188,11 +253,20 @@ class TPUEmbeddingShardedSaveable(saveable_object.SaveableObject):
 
 
 def _fielddict():
+  # [FUNCTION DOC]
+  # HELPER: shorthand used to declare mapping-valued fields of the TableStacking record.
+  # Returns a dataclass field description whose default is a fresh empty mapping per instance.
   return dataclasses.field(default_factory=dict)
 
 
 @dataclasses.dataclass
 class TableStacking:
+  # [CLASS DOC]
+  # HELPER: plain record produced by the table stacking step and consumed by TPUEmbeddingV2.
+  # Holds mappings keyed by stacked table name (member tables, quantization configs) and by
+  # table name (table object, padding rows and columns, sample count, native layout, and a triple
+  # of stacked table name, row offset and shard rotation) plus a mapping from feature path to the
+  # feature's sample offset inside its stacked table. All fields default to empty mappings.
   """Information about how we stack tables."""
 
   # Indexed by stacked table name:
@@ -218,18 +292,33 @@ class TableStacking:
 class TPUEmbeddingShardedVariable(
     tpu_values.TPUVariableMixin, values.DistributedVariable
 ):
+  # [CLASS DOC]
+  # Distributed variable representing an embedding table split evenly along its first dimension
+  # across the TPU devices, one local variable per device. Reports the global (full) shape,
+  # is not mirrored, only allows reads inside a TPU context, supports per device assign and read
+  # through a packed variable, and provides checkpoint saveables per shard. Registered with an
+  # empty legacy saveable name. Instances are created by the sharded variable creator.
   """A ShardedVariable class for Embedding tables on TPU."""
 
   def _is_mirrored(self) -> bool:
+    # [FUNCTION DOC]
+    # Reports that the variable is not mirrored: always returns false, since each device holds a
+    # different shard.
     return False
 
   # Only support sharding on the first dimension.
   @property
   def shard_dim(self) -> int:
+    # [FUNCTION DOC]
+    # Property giving the dimension along which the table is sharded; always zero (the first
+    # dimension).
     return 0
 
   @property
   def shape(self) -> tensor_shape.TensorShape:
+    # [FUNCTION DOC]
+    # Property returning the global shape: the first local shard's shape with the sharded
+    # dimension multiplied by the number of shards. Assumes all shards have equal shape.
     """Returns the shape of the embedding variable for the current context."""
     local_shape = self._values[0].shape
     global_shape = local_shape.as_list()
@@ -239,6 +328,11 @@ class TPUEmbeddingShardedVariable(
     return tensor_shape.TensorShape(global_shape)
 
   def _write_object_proto(self, proto, options):
+    # [FUNCTION DOC]
+    # Writes the saved-model object description. Inputs: proto, the object message to fill;
+    # options, save options. Delegates to the parent, then overwrites the recorded variable
+    # shape with the local (per shard) shape of the first shard for backward compatibility with
+    # users reading the shape from the saved values. Returns nothing; mutates proto.
     super()._write_object_proto(proto, options)
     # TODO(b/305882915): Reset the saved model shape to the local shape
     # for backward compatibility of users that directly access the full
@@ -246,6 +340,11 @@ class TPUEmbeddingShardedVariable(
     proto.variable.shape.CopyFrom(self._values[0].shape.as_proto())
 
   def _gather_saveables_for_checkpoint(self) -> Dict[str, Callable[..., Any]]:
+    # [FUNCTION DOC]
+    # Trackable override that tells the checkpoint system how to save this variable. Takes no
+    # inputs and returns a mapping with a single entry (the standard variable value key) whose
+    # value is a factory producing one sharded saveable per shard. Nothing is created until the
+    # factory is called.
     """Overrides Trackable method.
 
     Returns:
@@ -253,6 +352,11 @@ class TPUEmbeddingShardedVariable(
     """
 
     def _saveable_factory(name=self._common_name):
+      # [FUNCTION DOC]
+      # HELPER: factory handed to the checkpoint machinery by the enclosing method.
+      # Input: name, checkpoint name for the full variable (defaults to the variable's common
+      # name). Returns a list with one TPUEmbeddingShardedSaveable per shard, each aware of its
+      # shard index, the shard count and the shard dimension.
       saveables = []
       num_shards = len(self.values)
       for shard_id in range(num_shards):
@@ -270,6 +374,11 @@ class TPUEmbeddingShardedVariable(
     return {base.VARIABLE_VALUE_KEY: _saveable_factory}
 
   def _dense_var_to_tensor(self, dtype=None, name=None, as_ref=False):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the dtype, name and as_ref arguments are accepted but ignored.
+    # Tensor conversion hook. Outside a TPU context it returns the value of the first shard only
+    # (not the full table); inside a TPU context it returns the result of reading the variable
+    # operation. No exceptions of its own.
     """Converts a variable to a tensor."""
     # pylint: disable=protected-access
     if tpu_util.enclosing_tpu_context() is None:
@@ -278,6 +387,11 @@ class TPUEmbeddingShardedVariable(
       return self._read_variable_op()
 
   def read_value(self) -> Any:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the error message concatenates two string pieces without a space, so it reads
+    # "supportedfor TPUEmbeddingShardedVariable".
+    # Reads the variable. Inside a TPU context returns the value from the read-variable
+    # operation. Outside one (cross replica mode) raises a not-implemented error.
     if tpu_util.enclosing_tpu_context() is None:
       raise NotImplementedError(
           "Reading in cross replica mode is not yet supported"
@@ -293,6 +407,15 @@ class TPUEmbeddingShardedVariable(
       name: Optional[Any] = None,
       read_value: bool = True,
   ) -> Any:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: in the host (non TPU context) case the per-device assignment loop runs and
+    # then execution still falls through to the raw assign call below, so the value is assigned
+    # a second time through the generic path; use_locking and name are only forwarded there.
+    # Assigns a new value. Inputs: value, the full value to assign (a packed variable assign is
+    # used); use_locking, flag forwarded to the raw assign; name, optional operation name;
+    # read_value, whether to return the updated value. In a host context first assigns the value
+    # on each worker device via assign_on_device. Returns the result of the raw assign function.
+    # Side effect: mutates the variable's shards.
     if tpu_util.enclosing_tpu_context() is None:
       # Running in a host context
       for device in self.distribute_strategy.extended.worker_devices:
@@ -309,6 +432,10 @@ class TPUEmbeddingShardedVariable(
     )
 
   def assign_on_device(self, device, value):
+    # [FUNCTION DOC]
+    # Assigns value to the packed variable's resource on the given device name. Raises a
+    # not-implemented error when there is no packed variable. Returns nothing; mutates the
+    # variable on that device.
     if self._packed_var is None:
       raise NotImplementedError("Required packed variable support")
     with ops.device(device):
@@ -317,6 +444,10 @@ class TPUEmbeddingShardedVariable(
       )
 
   def read_from_device(self, device):
+    # [FUNCTION DOC]
+    # Reads the variable's resource value on the given device name using the packed variable
+    # and the variable's dtype. Raises a not-implemented error when there is no packed variable.
+    # Returns the tensor read on that device.
     if self._packed_var is None:
       raise NotImplementedError("Required packed variable support")
     with ops.device(device):
@@ -340,6 +471,12 @@ PartitionedCsrFormatTensor = collections.namedtuple(
 
 
 def _clone_feature_config(feature_config):
+  # [FUNCTION DOC]
+  # HELPER: protects the user's configuration from modifications made by TPUEmbeddingV2.
+  # Input: feature_config, a nested structure of feature configs. Makes a shallow copy of each
+  # feature and of each distinct table, preserving sharing so features that referenced the same
+  # table reference the same copied table. Returns a structure with the same nesting holding the
+  # copies. The original objects are not modified.
   old_to_new_table = {}
   new_features = []
 
@@ -360,6 +497,22 @@ def _stack_tables_with_same_table_dim_and_optimizer(
     num_sc_per_partition: int,
     sparse_core_embedding_config: Optional[SparseCoreEmbeddingConfig] = None,
 ) -> TableStacking:
+  # [FUNCTION DOC]
+  # HELPER: table stacking step for TPUEmbeddingV2 and its statistics computation.
+  # KNOWN ISSUE: everything after the first accumulation (layout computation, stacking, bookkeeping
+  # and the return statement) is indented inside the loop over flat_features, so it runs during
+  # the first feature iteration and returns immediately; only the first feature is counted in the
+  # per table sample and feature counts, and with no features the function returns nothing.
+  # Inputs: table_config, sequence of table configs; flat_features, sequence of pairs of feature
+  # path and feature config; num_partitions, number of partitions (replicas); num_sc_per_partition,
+  # SparseCores per partition; sparse_core_embedding_config, optional settings (table stacking
+  # can be disabled). Groups tables lacking a layout by a key derived from optimizer and
+  # quantization config, asks the native stacker for layouts, stores layouts on tables, then
+  # fills a TableStacking record: stacks per stacked table, layouts, row offsets and rotations,
+  # padding rows and columns, per stacked table sample counts and per feature sample offsets.
+  # Side effects: sets layout, vocabulary size and dimension of the (already copied) tables to
+  # the padded values and logs. Raises an assertion failure if a layout is already set unexpectedly
+  # or inconsistent. Returns the TableStacking record.
   """Stack tables with the same table dim and optimizer."""
   logging.info("Number of tables before stacking is %d", len(table_config))
   disable_table_stacking = False
@@ -496,6 +649,16 @@ def _stack_tables_with_same_table_dim_and_optimizer(
 # TODO(b/233952762): Add tests of this version of the mid-level API.
 @tf_export("tpu.experimental.embedding.TPUEmbeddingV2")
 class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
+  # [CLASS DOC]
+  # Mid level API object that performs embedding lookups and optimizer updates on TPU
+  # SparseCore. Created under a TPU strategy from a nested feature configuration, optional
+  # optimizer, pipelining flag and SparseCoreEmbeddingConfig. It clones the configuration,
+  # stacks tables, tracks per stacked table buffer sizes (default 256 ids and unique ids) and
+  # lazily builds sharded variables (parameters plus optimizer slots). Usage: call enqueue on host
+  # inputs to get CSR formatted tensors, dequeue (or embedding_lookup, or calling the object) to
+  # get activations plus the data needed by apply_gradients, which applies supported optimizers
+  # (SGD, Adagrad, Adagrad momentum, Adam, FTRL). Also offers a class method to compute
+  # buffer-size statistics. Exported publicly.
   """The TPUEmbedding mid level API running on TPU with sparse core accelerator."""
 
   DEFAULT_MAX_IDS_PER_TABLE = 256
@@ -508,6 +671,20 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
       pipeline_execution_with_tensor_core: bool = False,
       sparse_core_embedding_config: Optional[SparseCoreEmbeddingConfig] = None,
   ):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says ValueError is raised for an unsupported optimizer, but this
+    # constructor itself only raises RuntimeError (not under a TPU strategy) and
+    # NotImplementedError (weight decay settings on a table optimizer); any ValueError would come
+    # from the base class.
+    # Builds the object. Inputs: feature_config, nested structure of feature configs (cloned
+    # first so user objects are not changed); optimizer, optional default optimizer; pipeline_
+    # execution_with_tensor_core, whether embedding work overlaps with TensorCore work (default
+    # false); sparse_core_embedding_config, optional settings (defaults are used with a warning
+    # when omitted). Reads the current strategy and requires a TPU strategy, reads SparseCores per
+    # chip (falls back to 4 with a warning when reported as zero), computes the number of
+    # SparseCore shards, flattens features with joined string paths, stacks tables, copies the
+    # stacking results into attributes, sets id budget attributes (a fixed 64 minibatches per
+    # SparseCore) and fills per stacked table buffer sizes. Variables are not created yet.
     """Creates the TPUEmbeddingV2 mid level API object.
 
     Args:
@@ -625,6 +802,15 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
       total_vocab_size: int,
       sc_idx: int,
   ) -> base.ShardInfo:
+    # [FUNCTION DOC]
+    # HELPER: used by the legacy per-table initialization path.
+    # Computes the shard information (shape and offset) of one SparseCore's slice of one table
+    # inside a device partition of the stacked table. Inputs: table, the member table config;
+    # partition_shape and partition_offset, shape and offset of the device partition of the
+    # stacked table; total_vocab_size, summed vocabulary of the stack; sc_idx, SparseCore index.
+    # Scales the partition rows proportionally to this table's vocabulary, divides by the
+    # SparseCores per chip, and offsets by the SparseCore index. Returns a ShardInfo with rows and
+    # table dimension plus a zero column offset.
     # Scale the partition to get sizes for the current table,
     # then select this sc shard.
     sc_shard_size = (
@@ -646,6 +832,14 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
       table_name: str,
       shard_info: base.ShardInfo
   ) -> tuple[int, int]:
+    # [FUNCTION DOC]
+    # HELPER: used by the legacy initialization path for initializers that are not shard aware.
+    # KNOWN ISSUE: the name and annotation suggest an index and an offset, but the second value
+    # is the total number of SparseCores across all devices; the caller uses it as a stride.
+    # Inputs: table_name, name of the member table; shard_info, shape and offset of the shard.
+    # Derives the shard number from the offset, rotates it by the table's stacking shard rotation
+    # modulo the number of SparseCore shards, and counts SparseCores as devices times SparseCores
+    # per chip. Returns the pair (rotated shard index, total SparseCore count).
     tpu_devices = self._strategy.extended._tpu_devices  # pylint:disable=protected-access
     num_replicas, num_cores_per_replica = tpu_devices.shape
     num_devices = num_replicas * num_cores_per_replica
@@ -659,6 +853,11 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
     return shard_index, num_sc
 
   def _update_sparse_core_buffer_size_after_table_stacking(self):
+    # [FUNCTION DOC]
+    # HELPER: constructor step that fills the per stacked table buffer size mappings.
+    # For every stacked table, takes the maximum ids and maximum unique ids per SparseCore from
+    # the SparseCore embedding config when present, otherwise uses the class default of 256 and
+    # logs a warning. Mutates the two internal mappings; returns nothing.
     """Update the sparse core buffer size after table stacking."""
     for table_name in self._stacked_table_to_tables:
       if (
@@ -704,6 +903,9 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
   def embedding_tables(
       self,
   ) -> Dict[str, tf_variables.Variable]:
+    # [FUNCTION DOC]
+    # Property returning the sharded parameter variables (not optimizer slots) keyed by stacked
+    # table name. Builds the variables first if they do not exist yet (side effect).
     """Returns a dict of embedding tables, keyed by stacked table name."""
     self._maybe_build()
     # Only return the tables and not the slot variables.
@@ -716,6 +918,13 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
   def embedding_table_shards(
       self,
   ) -> Dict[tpu_embedding_v2_utils.TableConfig, List[tf_variables.Variable]]:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the annotation and docstring say the result is keyed by table config, and the
+    # values are described as variables, but the keys are stacked table names and each value is
+    # a list of pairs of device name and the tensor read from that device.
+    # Property that builds the variables if needed, then for every stacked table reads its shard
+    # on every TPU device in the strategy's device order. Returns a mapping from stacked table
+    # name to a list of (device, shard tensor) pairs.
     """Returns a dict of embedding tables, keyed by `TableConfig`."""
     self._maybe_build()
 
@@ -737,6 +946,9 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
   def embedding_layouts(
       self,
   ) -> Dict[str, sparse_core_layout_pb2.SparseCoreTableLayout]:
+    # [FUNCTION DOC]
+    # Property returning the mapping from table name to the native SparseCore layout message that
+    # describes how that table is stored inside its stacked variable. Does not build variables.
     """Returns how the tables are laid out in the variables.
 
     The SparseCoreTableLayout describes how a table is stored in its internal
@@ -750,6 +962,12 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
   ) -> Dict[
       tpu_embedding_v2_utils.TableConfig, Dict[str, tf_variables.Variable]
   ]:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring and annotation say the outer key is a table config, but the
+    # mapping is keyed by stacked table name (then by slot name, with the parameter variable under
+    # the name "parameters").
+    # Property that builds the variables if needed and returns the nested mapping of stacked
+    # table name to slot name to variable.
     """Returns a dict of variables, keyed by `TableConfig`, then by slot name."""
     self._maybe_build()
     return self._variables
@@ -759,9 +977,19 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
       next_creator: Callable[..., tf_variables.Variable],
       **kwargs,
   ) -> Callable[..., Any]:
+    # [FUNCTION DOC]
+    # HELPER: variable creator hook installed via a variable creator scope during table creation.
+    # Inputs: next_creator, the next creator in the chain; keyword arguments for the variable.
+    # Builds a sharded variable creator for the strategy and immediately invokes it, so the
+    # returned object is the created sharded variable (not a callable, despite the annotation).
     return make_sharded_variable_creator(self._strategy)(next_creator, **kwargs)
 
   def _wrap_initializer(self, initializer):
+    # [FUNCTION DOC]
+    # HELPER: adapts initializers for per-shard initialization.
+    # Input: initializer, a callable creating values from a shape and dtype, optionally accepting
+    # shard info. Returns the initializer unchanged if it already accepts shard info, otherwise a
+    # wrapper that ignores the passed shape and calls the initializer with the shard's own shape.
     """Wraps the initializer to ensure that it is sharding aware."""
     arg_spec = tf_inspect.getfullargspec(initializer)
     sharding_aware = (
@@ -771,6 +999,10 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
       return initializer
 
     def wrapper(shape, dtype, shard_info: base.ShardInfo):
+      # [FUNCTION DOC]
+      # HELPER: shard-aware adapter built by the enclosing method.
+      # Discards the full shape, and calls the wrapped initializer with the shard's shape (from
+      # shard_info) and the given dtype. Returns the initialized shard tensor.
       del shape
       return initializer(shape=shard_info.shape, dtype=dtype)
 
@@ -782,6 +1014,13 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
       device_idx: int,
       num_devices: int,
   ) -> base.ShardInfo:
+    # [FUNCTION DOC]
+    # HELPER: computes where a member table's per device shard sits.
+    # Inputs: table, member table config (already padded); device_idx, index of the device;
+    # num_devices, device count. Per device rows equal the vocabulary divided by device count;
+    # the row offset is the device's start row minus the table's shard rotation expressed in rows
+    # per SparseCore, taken modulo the vocabulary. Returns a ShardInfo of shape (rows per device,
+    # table dimension) and offset (row offset, 0).
     """Returns the shard info for the given table."""
     device_shard_len = table.vocabulary_size // num_devices
     sc_shard_len = device_shard_len // self._num_sc_per_chip
@@ -801,6 +1040,17 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
       device_idx: int,
       num_devices: int,
   ) -> dict[str, tensor.Tensor]:
+    # [FUNCTION DOC]
+    # HELPER: part of batched table initialization.
+    # KNOWN ISSUE: the mapping of replicated (combiner) slot shards is reassigned for every table
+    # that uses a custom combiner rather than updated, so with several such tables only the
+    # last one's replicated slots are kept.
+    # Inputs: stacked_tables, member tables of one stack; device_idx, device index; num_devices,
+    # device count. For each member table gathers the parameter initializer and optimizer slot
+    # initializers, produces the device's shard of each (using a shard-aware wrapper), reshapes it
+    # to the per SparseCore layout, and concatenates across tables per slot, then flattens to
+    # rows by table dimension. Custom combiners add replicated one-dimensional slot values.
+    # Returns a mapping from slot name (including the parameter name) to the device's tensor.
     """Initializes the stacked tables and slots shards for a single device."""
     table_dim = stacked_tables[0].dim
     variable_dtype = stacked_tables[0].dtype
@@ -867,6 +1117,15 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
       stacked_tables: List[TableConfig],
       stacked_table_name: str,
   ) -> dict[str, tensor.Tensor]:
+    # [FUNCTION DOC]
+    # HELPER: part of batched table initialization.
+    # KNOWN ISSUE: the annotation says one tensor per slot, but each value is a list of per
+    # device tensors.
+    # Inputs: stacked_tables, member tables of one stack; stacked_table_name, name used in error
+    # text. Validates that every member's vocabulary divides evenly by the number of
+    # SparseCores and that all members share one dimension, raising a value error otherwise.
+    # Then for each TPU device, under that device, initializes its shards. Returns a mapping from
+    # slot name to a list of per device tensors in device order.
     """Initializes the stacked tables and slots shards for all devices."""
     table_dim = stacked_tables[0].dim
 
@@ -901,6 +1160,11 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
   def _batch_initialize_tables_fn(
       self,
   ) -> Dict[str, Dict[str, List[tensor.Tensor]]]:
+    # [FUNCTION DOC]
+    # HELPER: traced function (decorated as a graph function) used by batched initialization.
+    # Initializes all stacked tables and their slots for all devices in one traced computation.
+    # Returns a mapping from stacked table name to a mapping from slot name to a list of per
+    # device tensors.
     tensors = {}
     for stacked_table_name, tables in self._s.stacked_table_to_tables.items():
       tensors[stacked_table_name] = self._initialize_stacked_table_all_devices(
@@ -911,6 +1175,10 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
   def _batch_initialize_tables(
       self,
   ) -> Dict[str, Dict[str, List[tensor.Tensor]]]:
+    # [FUNCTION DOC]
+    # HELPER: runs the batched initialization function on the host of the first TPU device.
+    # Logs, enters a device scope for that host, runs the traced initialization and returns its
+    # result: mapping of stacked table name to slot name to per device tensors.
     logging.info("Batch initializing embedding tables.")
     tpu_devices = self._strategy.extended._tpu_devices  # pylint:disable=protected-access
     with ops.device(device_util.get_host_for_device(tpu_devices[0][0])):
@@ -922,6 +1190,16 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
       stacked_table_name: str,
       initialized_tensors: dict[str, dict[str, List[tensor.Tensor]]],
   ) -> Dict[str, tf_variables.Variable]:
+    # [FUNCTION DOC]
+    # HELPER: creates the variables of one stacked table.
+    # KNOWN ISSUE: the variable dtype is hard-coded to float32 regardless of the tables' dtype.
+    # Inputs: stacked_tables, member tables; stacked_table_name, name of the stack;
+    # initialized_tensors, mapping shared across stacks that is lazily filled by one batched
+    # initialization run (mutated). Creates the sharded parameter variable (shape: summed
+    # vocabulary by table dimension) and, when the first table has an optimizer, its slot
+    # variables, all non-trainable, through a custom getter so checkpoint restore can happen before
+    # creation. Initializers pick the batched path when shard info is given and enabled, otherwise
+    # a legacy path. Returns a mapping from slot name (including "parameters") to variable.
     """Create all variables including table variables and slot variables."""
     total_vocab_size = sum([table.vocabulary_size for table in stacked_tables])
     table_dim = stacked_tables[0].dim
@@ -930,6 +1208,14 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
     optimizer = stacked_tables[0].optimizer
 
     def table_initialize_fn_non_batch(shape, dtype, shard_info=None):
+      # [FUNCTION DOC]
+      # HELPER: legacy per-table initializer of the stacked parameter variable.
+      # Inputs: shape, full variable shape; dtype, element type; shard_info, optional shard
+      # shape and offset. With fast initialization enabled, just calls the first table's
+      # initializer with the shard's row count. Otherwise, for each SparseCore and each member
+      # table, builds that table's slice (shard aware or sliced from a full initialization using
+      # rotation), or computes it from proportional sizes if no shard info, and concatenates all
+      # slices along the first axis. Returns the resulting tensor.
       # If enable fast table initialization, we will initialize the table
       # directly on the device and use the initializer from the first table.
       if self._sparse_core_embedding_config.enable_fast_table_initialization:
@@ -990,6 +1276,13 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
       return array_ops.concat(concat_tensors, axis=0)
 
     def batch_initialize_fn(name, shard_info, replicated=False):
+      # [FUNCTION DOC]
+      # HELPER: serves shard values from the batched initialization results.
+      # Inputs: name, slot name; shard_info, shard shape and offset; replicated, whether this is
+      # a replicated combiner slot (device index in the first offset element) rather than a
+      # row-sharded variable. Runs the batched table initialization on first use (filling the
+      # shared mapping), picks the shard, asserts its shape equals the requested shape, and
+      # returns that tensor.
       if not initialized_tensors:
         initialized_tensors.update(self._batch_initialize_tables())
       if not replicated:
@@ -1006,6 +1299,10 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
       return res
 
     def table_initialize_fn(shape, dtype, shard_info=None):
+      # [FUNCTION DOC]
+      # HELPER: initializer for the parameter variable. Uses the legacy non-batch path when no
+      # shard info is given or shard-info initialization is disabled; otherwise returns the
+      # batched shard for the parameter slot. Inputs: shape, dtype, optional shard_info.
       if not shard_info or not self._initializers_shard_info_by_default:
         # This is the legacy loading path.
         return table_initialize_fn_non_batch(shape, dtype, shard_info)
@@ -1014,12 +1311,20 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
     def slot_initialize_fn(
         name, shape, dtype, initializer, shard_info=None, replicated=False
     ):
+      # [FUNCTION DOC]
+      # HELPER: initializer for optimizer slot variables. Inputs: name, slot name; shape, dtype;
+      # initializer, the slot's own initializer; shard_info, optional shard info; replicated,
+      # whether the slot is replicated. Uses the plain initializer in the legacy case (no shard
+      # info or disabled), otherwise returns the batched shard for that slot.
       if not shard_info or not self._initializers_shard_info_by_default:
         # This is the legacy loading path.
         return initializer(shape, dtype)
       return batch_initialize_fn(name, shard_info, replicated)
 
     def getter(name, shape, dtype, initializer, trainable):
+      # [FUNCTION DOC]
+      # HELPER: custom getter handed to variable creation. Binds the initializer to the shape and
+      # dtype and returns a new variable with the given name, shape, dtype and trainable flag.
       initial_value = functools.partial(initializer, shape=shape, dtype=dtype)
       # _add_variable_with_custom_getter clears the shape sometimes, so we
       # take the global shape from outside the getter.
@@ -1032,6 +1337,9 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
       )
 
     def variable_creator(name, initializer, shape, dtype):
+      # [FUNCTION DOC]
+      # HELPER: creates one non-trainable tracked variable through the custom getter so that a
+      # pending checkpoint restore can supply the value. Returns the variable.
       # Use add_variable_with_custom_getter here so that we take advantage of
       # the checkpoint loading to allow restore before the variables get
       # created which avoids double initialization.
@@ -1053,6 +1361,9 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
       )
 
     def slot_creator(name, initializer, shape, dtype):
+      # [FUNCTION DOC]
+      # HELPER: creates a slot variable named after the stacked table plus the slot name,
+      # delegating to the variable creator. Returns the variable.
       return variable_creator(
           stacked_table_name + "/" + name, initializer, shape, dtype
       )
@@ -1079,6 +1390,10 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
   def _create_variables_and_slots(
       self,
   ) -> Dict[str, Dict[str, tf_variables.Variable]]:
+    # [FUNCTION DOC]
+    # HELPER: called by build. Creates the variables of every stacked table, sharing one lazily
+    # filled mapping so batched initialization runs once. Returns a mapping from stacked table
+    # name to a mapping of slot name to variable.
     """Create variables for TPU embeddings.
 
     Returns:
@@ -1098,6 +1413,11 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
     return variables
 
   def _track_restore_info_for_cpu(self) -> None:
+    # [FUNCTION DOC]
+    # HELPER: called by build. Collects all table layouts into one layouts message, serializes
+    # it into a string constant on the CPU and tracks it as a checkpoint dependency under the
+    # sparse core layouts key, so a CPU restore can interpret the saved stacked tables. Logs the
+    # table count. Returns nothing.
     layouts = sparse_core_layout_pb2.SparseCoreTableLayouts()
     layouts.tables.extend(self.embedding_layouts.values())
     logging.info(
@@ -1114,12 +1434,19 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
       )
 
   def _checkpoint_adapter(self, path):
+    # [FUNCTION DOC]
+    # Checkpoint hook. Input: path, location of the checkpoint being restored. Returns a V3
+    # checkpoint adapter created from that checkpoint, which may reshard saved values on restore.
     # The TPUEmbedding may need to reshard checkpoint values during restore.
     return tpu_embedding_v3_checkpoint_adapter.TpuEmbeddingV3CheckpointAdapter.create_from_checkpoint(
         path
     )
 
   def _maybe_build(self):
+    # [FUNCTION DOC]
+    # HELPER: lazy build trigger. If not built, runs build inside an init scope so the work is
+    # eager and not part of any traced function, ensuring one-time initialization. Returns
+    # nothing.
     if not self._built:
       # This can be called while tracing a function, so we wrap the
       # initialization code with init_scope so it runs eagerly, this means that
@@ -1130,6 +1457,10 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
         self.build()
 
   def build(self):
+    # [FUNCTION DOC]
+    # Creates the embedding table and slot variables once. Does nothing if already built;
+    # otherwise creates variables, tracks the layouts dependency, marks the object built and logs.
+    # Returns nothing.
     """Create variables and slots variables for TPU embeddings."""
     if self._built:
       return
@@ -1143,6 +1474,18 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
       gradients: Any,
       preserved_outputs: Dict[str, PartitionedCsrFormatTensor],
   ):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring claims a ValueError for non-tensor gradients, mismatched shapes
+    # and sequence size problems, and a TypeError for type mismatches; in this method those come
+    # indirectly from the structure check and gradient stacking, and an unsupported optimizer
+    # also raises a ValueError. The exit of the pipelining context is not protected against errors.
+    # Applies gradients. Inputs: gradients, nested structure matching the feature config (None
+    # entries become zero gradients with a warning); preserved_outputs, mapping from stacked table
+    # name to the CSR tensors returned by the lookup. Raises a runtime error if the object is not
+    # built. Stacks gradients per table, then inside a backward pipelining context, for each
+    # stacked table runs the XLA gradient op matching the table's optimizer (SGD, Adagrad, Adagrad
+    # momentum, Adam or FTRL) and assigns the new table and slot values; learning rates may be
+    # callables. Any other optimizer raises a value error. Side effects: mutates variables.
     """Applies the gradient update to the embedding tables.
 
     If a gradient of `None` is passed in any position of the nested structure,
@@ -1185,6 +1528,10 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
     context.Enter()
 
     def _wrap_param(param, dtype=dtypes.float32):
+      # [FUNCTION DOC]
+      # HELPER: turns an optimizer hyperparameter into a tensor. Input: param, a number, tensor
+      # or zero-argument callable (called first and cast); dtype, default float32. Returns the
+      # value converted to a tensor of that dtype.
       if callable(param):
         param = math_ops.cast(param(), dtype=dtype)
       return ops.convert_to_tensor(param, dtype=dtype)
@@ -1347,12 +1694,25 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
   def __call__(
       self, features: Any, weights: Optional[Any] = None
   ) -> Tuple[Any, Dict[str, PartitionedCsrFormatTensor]]:
+    # [FUNCTION DOC]
+    # Makes the object callable. Inputs: features, nested structure of inputs; weights, optional
+    # matching weights. Forwards to the embedding lookup method and returns its result: the pair
+    # of activations and preserved CSR outputs.
     """Call the mid level api to do embedding lookup."""
     return self.embedding_lookup(features, weights)
 
   # TODO(pineapplejuice233): Duplicated helper function from tpu_embedding_v2.py. Remove
   # this once this file is open souced.
   def _raise_error_for_incorrect_control_flow_context(self):
+    # [FUNCTION DOC]
+    # HELPER: guard used by enqueue.
+    # KNOWN ISSUE: the docstring says it raises when not inside the TPU replicate context, but it
+    # only raises when a TPU replicate context exists in an outer graph that differs from the
+    # current default graph; being outside any TPU context just returns false.
+    # Walks the current graph and its outer graphs and their control flow contexts looking for a
+    # TPU replicate context. Raises a runtime error if one is found in a different graph from the
+    # current one (enqueue inside control flow or a nested function). Returns whether a TPU
+    # replicate context was found.
     """Raises an error if we are not in the TPUReplicateContext."""
     # Do not allow any XLA control flow (i.e. control flow in between a
     # TPUStrategy's run call and the call to this function), as we can't
@@ -1390,6 +1750,16 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
       optimizer: Optional[tpu_embedding_v2_utils._Optimizer] = None,  # pylint:disable=protected-access
       sparse_core_embedding_config: Optional[SparseCoreEmbeddingConfig] = None,
   ) -> Tuple[Any, Any]:
+    # [FUNCTION DOC]
+    # Class method that measures the buffer sizes needed for a sample of input features.
+    # Inputs: features, nested structure of inputs; feature_config, nested feature configs
+    # (cloned); num_tpu_chips, number of chips (replicas); num_sc_per_chip, SparseCores per chip
+    # (default 4); optimizer, optional default optimizer given to tables lacking one;
+    # sparse_core_embedding_config, optional settings for stacking. Stacks tables, converts the
+    # inputs to COO lists (weights are all absent), and per stacked table and SparseCore calls the
+    # statistics op, keeping the elementwise maximum across SparseCores. Returns a pair of
+    # mappings from stacked table name to the maximum ids and the maximum unique ids (as tensors).
+    # Side effects: none on the instance; operations are added to the current graph.
     """Computes the max_ids/unique ids settings from the input features."""
     copy_feature_config = _clone_feature_config(feature_config)
     table_config_list = list(
@@ -1483,6 +1853,15 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
       weights: Optional[Any] = None,
       device: Optional[str] = None,
   ) -> Any:
+    # [FUNCTION DOC]
+    # Host side preprocessing of inputs. Inputs: features, nested structure of tensors, sparse or
+    # ragged tensors matching the feature config; weights, optional matching structure; device,
+    # optional TPU device name. Flattens inputs and weights. Inside a TPU replicate context it
+    # runs the preprocessing via outside compilation; with no device given it traces once under
+    # the host of the first TPU device (used for function tracing); with a device it requires a TPU
+    # device (raising a value error otherwise) and runs under that device's host. Also raises
+    # through the control flow check, and for structure mismatches. Returns a mapping from stacked
+    # table name to a triple of CSR formatted tensor, row pointer size and id size.
     """Preprocessing the features on host."""
     nest.assert_same_structure(self._feature_config, features)
 
@@ -1556,6 +1935,14 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
       self,
       partitioned_tensors: Dict[str, Any],
   ) -> Any:
+    # [FUNCTION DOC]
+    # HELPER: used by dequeue (through outside compilation).
+    # Input: partitioned_tensors, mapping from stacked table name to a triple of CSR tensor, row
+    # pointer unpadded size and id unpadded size. For each table copies the four arrays to the
+    # device trimmed to their unpadded dynamic sizes, then passes them through an annotation op
+    # that acts as a placeholder for pipelining. Returns a mapping from table name to a new
+    # PartitionedCsrFormatTensor with the copied arrays and the original sample count and
+    # minibatch count.
     """Copy tensors to device."""
     partitioned_device_tensors = {}
     for table_name in partitioned_tensors:
@@ -1608,6 +1995,14 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
           Dict[str, PartitionedCsrFormatTensor], int, int
       ],
   ) -> Tuple[Any, Dict[str, PartitionedCsrFormatTensor]]:
+    # [FUNCTION DOC]
+    # Device side lookup, expected to run inside a TPU context. Input: partitioned_tensors, the
+    # result of enqueue. Under a forward pipelining context, copies tensors to the device through
+    # outside compilation, then per stacked table runs the sparse dense matmul op with the table
+    # variable, buffer sizes and quantization settings (zeros when none). Raises a value error if
+    # an entry is not a PartitionedCsrFormatTensor. Finally unstacks per table activations into
+    # per feature activations. Returns a pair: activations in the feature config structure, and
+    # the device copied tensors mapping to be passed to apply_gradients.
     """Perform embedding lookup."""
     # We expect this dequeue function will always run inside tpu context.
     context = EmbeddingPipeliningContext(
@@ -1675,6 +2070,13 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
   def embedding_lookup(
       self, features: Any, weights: Optional[Any] = None
   ) -> Tuple[Any, Dict[str, PartitionedCsrFormatTensor]]:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring lists a ValueError for unsupported input types and TypeError for
+    # structure mismatch; the structure check actually happens inside enqueue, and the
+    # docstring's description of returning two named values is a pair returned as a tuple.
+    # Full lookup. Inputs: features and optional weights (nested structures matching the feature
+    # config). Builds the object if needed, runs enqueue under a forward pipelining context, and
+    # then dequeue. Returns the pair of activations and preserved outputs for gradient updates.
     """Perform embedding lookup on the input feature.
 
     Args:
@@ -1732,6 +2134,13 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
       flat_inputs: Any,
       flat_weights: Optional[Any] = None,
   ) -> Any:
+    # [FUNCTION DOC]
+    # HELPER: host preprocessing pipeline used by enqueue.
+    # Inputs: replica count, id and minibatch limits, SparseCore counts, the stacking mappings
+    # (stacked table to tables, table to offsets, sample counts, feature offsets), the flat
+    # features, inputs and optional weights. Converts inputs to COO lists, sorts them, then
+    # converts to CSR wrapped COO tensors. Returns a mapping from stacked table name to
+    # (CSR format tensor, row pointers unpadded size, ids unpadded size).
     """Function to preprocess features."""
     # Preprocess the inputs into list of COO tensor.
     table_to_list_of_coos = (
@@ -1786,6 +2195,16 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
       num_sc_shards: int,
       stacked_table_sample_count: int,
   ) -> Any:
+    # [FUNCTION DOC]
+    # HELPER: class method used while preprocessing one feature.
+    # KNOWN ISSUE: the unused_vocab_size argument is never used.
+    # Inputs: input_feature (dense, sparse or ragged tensor), optional weight of the same kind,
+    # the feature config, row, column offsets and column shift in the stacked table, SparseCore
+    # counts and the stacked table sample count. Dense inputs are flattened; sparse use their
+    # indices; ragged use their row splits. Missing weights become ones; a weight of the wrong
+    # type raises a value error, as does an unknown input type. Calls the native conversion op
+    # with the table combiner. Returns row id lists, column id lists, gains lists (one per
+    # SparseCore) and the feature's sample count.
     """Convert any of the expected input types to a COO format."""
     sample_count = functools.reduce(operator.mul, feature_config.output_shape)
     if isinstance(input_feature, tensor.Tensor):
@@ -1886,6 +2305,13 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
       stacked_table_to_sample_count: Dict[str, int],
       num_sc_shards: int,
   ) -> Dict[str, Any]:
+    # [FUNCTION DOC]
+    # HELPER: class method used by enqueue preprocessing and by compute_sparse_core_stats.
+    # Inputs: flat inputs, weights and features, plus stacking mappings, SparseCores per chip,
+    # stacked table sample counts and total SparseCore shards. Converts every feature into COO
+    # lists and groups them by stacked table. Returns a mapping from stacked table name to a
+    # five-part tuple: per SparseCore lists of row ids, column ids and gains, a list of per
+    # SparseCore sample counts and a list of column offsets.
     """Convert the raw inputs into list of coo tensors."""
     table_to_list_of_coos = {  # pylint: disable=g-complex-comprehension
         table_name: (
@@ -1937,6 +2363,14 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
       stacked_table_to_tables: Dict[str, Any],
       num_sc_per_chip: int,
   ) -> Tuple[Dict[str, Any], List[tensor.Tensor]]:
+    # [FUNCTION DOC]
+    # HELPER: second stage of host preprocessing.
+    # KNOWN ISSUE: the annotation says a tuple of a mapping and a tensor list, but only the
+    # mapping is returned.
+    # Inputs: replica count, the COO lists mapping, stacked table mapping, SparseCores per chip.
+    # Per stacked table and SparseCore, calls the sorting op using the table's buffer size limits.
+    # Returns a mapping from stacked table name to four lists (sorted row ids, column ids, gains
+    # and id counts), one entry per SparseCore.
     """Sort the coo tensors by replica."""
     table_to_sorted_coo_tensor = {
         table_name: ([], [], [], []) for table_name in stacked_table_to_tables
@@ -1996,6 +2430,13 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
       table_to_sample_count: Dict[str, int],
       num_sc_per_chip: int,
   ) -> Any:
+    # [FUNCTION DOC]
+    # HELPER: third stage of host preprocessing.
+    # Inputs: replica count, maximum ids per chip per sample, maximum minibatches per SparseCore,
+    # the sorted COO mapping, stacked tables, per table sample counts and SparseCores per chip.
+    # For each stacked table calls the op that builds the CSR wrapped COO tensors (no splits,
+    # id dropping per the config). Returns a mapping from stacked table name to a triple: a
+    # PartitionedCsrFormatTensor, the unpadded row pointer size and the unpadded id size.
     """Get csr wrapped coo tensor from the sorted coo tensor."""
     table_to_csr_format_tensor = {}
     for table_name in stacked_table_to_tables:
@@ -2053,6 +2494,12 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
     return table_to_csr_format_tensor
 
   def _unstack_activations(self, activations: Dict[str, tensor.Tensor]):
+    # [FUNCTION DOC]
+    # HELPER: used by dequeue.
+    # Input: activations, mapping from stacked table name to the stacked activation tensor
+    # (mutated: each is reshaped per SparseCore). Slices per feature activations in feature
+    # order, drops padded columns, reshapes to each feature's requested output shape and packs
+    # them in the feature config structure. Returns that nested structure.
     """Untack the incoming per table activations into per feature."""
 
     # Activations are stacked in a particular order. That order is the order
@@ -2093,6 +2540,13 @@ class TPUEmbeddingV2(tpu_embedding_base.TPUEmbeddingBase):
     return nest.pack_sequence_as(self._feature_config, flattened_activations)
 
   def _stack_gradients(self, gradients):
+    # [FUNCTION DOC]
+    # HELPER: used by apply_gradients.
+    # Input: gradients, nested structure of gradient tensors matching the features. A None
+    # entry is replaced by a zero gradient with a warning; any other non-tensor raises a value
+    # error naming the path. Reshapes each, pads dropped columns back with zeros, splits per
+    # SparseCore and concatenates per stacked table in feature order. Returns a mapping from
+    # stacked table name to a stacked gradient tensor.
     """Stack the incoming gradients to per table gradients."""
 
     # Gradients are stacked in a particular order. That order is the order
@@ -2163,6 +2617,13 @@ def extract_variable_info(
 ) -> Tuple[
     str, Tuple[int, ...], dtypes.DType, Callable[[], Any], Optional[int]
 ]:
+  # [FUNCTION DOC]
+  # HELPER: used by the sharded variable creator.
+  # Reads the variable name, shape, dtype, initializer function and restore identifier from the
+  # keyword arguments of a variable creation. Handles an initial value that is a partial with
+  # shape given by keyword or first positional argument (dtype from the partial, else from the
+  # arguments, and the function underneath), or a plain callable with shape and dtype arguments.
+  # Raises a value error if no shape is available or the initial value is not callable.
   """Extracts the variable creation attributes from the kwargs.
 
   Args:
@@ -2175,6 +2636,8 @@ def extract_variable_info(
   """
 
   def get_restore_uid(initial_value: Callable[..., Any]) -> int | None:
+    # [FUNCTION DOC]
+    # HELPER: returns the restore identifier attribute of an initializer, or nothing if absent.
     return getattr(initial_value, "restore_uid", None)
 
   if isinstance(kwargs["initial_value"], functools.partial) and (
@@ -2218,6 +2681,11 @@ def extract_variable_info(
 
 
 def is_checkpoint_initial_value(initial_value: Any) -> bool:
+  # [FUNCTION DOC]
+  # HELPER: used by the sharded variable creator.
+  # Input: initial_value, an initial value object. Returns true if it is a checkpoint initial
+  # value, a checkpoint initial value callable, or a partial wrapping such a callable; false
+  # otherwise.
   """Whether the initial value is from checkpoint."""
   return (
       isinstance(initial_value, base.CheckpointInitialValue)
@@ -2234,6 +2702,11 @@ def is_checkpoint_initial_value(initial_value: Any) -> bool:
 def make_sharded_variable_creator(
     strategy: distribute_lib.Strategy,
 ) -> Callable[..., Any]:
+  # [FUNCTION DOC]
+  # Input: strategy, a TPU strategy. Reads its TPU device grid and returns a variable creator
+  # function that splits each created variable evenly along its first dimension across all
+  # devices and wraps the shards into a TPUEmbeddingShardedVariable. No side effects until the
+  # returned creator is called.
   """Create a variable creator which shards across all the tpu device.
 
   Args:
@@ -2245,6 +2718,15 @@ def make_sharded_variable_creator(
   tpu_devices = strategy.extended._tpu_devices  # pylint:disable=protected-access
 
   def _create_sharded_variable(next_creator, *args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: the variable creator returned by the enclosing function.
+    # Inputs: next_creator, the creator to call per shard; positional and keyword variable
+    # arguments (the keyword arguments are mutated for each shard). Raises a value error if the
+    # initial value comes from a checkpoint but does not accept shard info, or if the first
+    # dimension is not divisible by the device count. Creates one variable per device in a device
+    # scope with shard-specific name, shape and a shard-aware (or reshaped) initial value, then
+    # wraps them with no aggregation. If a restore identifier exists, marks the result as
+    # restorable with that update id. Returns the sharded variable.
     """Create a TPUEmbeddingShardedVariable."""
     # Avoid the default mirror variable creator.
     kwargs["skip_mirrored_creator"] = True
