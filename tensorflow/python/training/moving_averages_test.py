@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Functional tests for the moving averages module: assign_moving_average (with and without
+# zero-debias, naming of shadow variables, reuse), weighted_moving_average (float32 and
+# bfloat16), and ExponentialMovingAverage (decay with/without num_updates, static and
+# variable decay, zero-debias, control dependencies, eager use, average and restore names,
+# variable scopes, device assignment, imported graphs, and copying of XLA sharding).
+# Contains two test classes plus a small module-level helper; running the module as a script
+# starts the test runner. No import-time side effects.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,9 +40,18 @@ from tensorflow.python.training import saver as saver_lib
 
 
 class MovingAveragesTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for assign_moving_average and weighted_moving_average. Covers numeric results in
+  # graph and eager modes, shadow variable naming across repeated calls and variable reuse, and
+  # weighted averages for float32 and bfloat16 placeholders. No shared fixtures.
 
   @test_util.run_in_graph_and_eager_modes
   def testAssignMovingAverageWithoutZeroDebias(self):
+    # [FUNCTION DOC]
+    # Scenario: a two-element variable starting at 10 and 11, a constant value of 1 and 2, and
+    # decay 0.25, with zero-debias turned off. Runs in both graph and eager modes (in graph mode
+    # initializes variables and runs the returned op). Expects the variable to equal
+    # old * decay + value * (1 - decay) elementwise afterwards, and the initial values before.
     var = variables.Variable([10.0, 11.0])
     val = constant_op.constant([1.0, 2.0], dtypes.float32)
     decay = 0.25
@@ -57,6 +74,11 @@ class MovingAveragesTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testAssignMovingAverage(self):
+    # [FUNCTION DOC]
+    # Scenario: a zero-initialized two-element variable, value 1 and 2, decay 0.25, default
+    # zero-debias on, in graph and eager modes. Expects the variable to equal
+    # value * (1 - decay) / (1 - decay), that is exactly the value, after the first update,
+    # showing the debias removes the zero-initialization bias.
     var = variables.Variable([0.0, 0.0])
     val = constant_op.constant([1.0, 2.0], dtypes.float32)
     decay = 0.25
@@ -77,6 +99,11 @@ class MovingAveragesTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testAssignMovingAverageNewNamingMultipleCalls(self):
+    # [FUNCTION DOC]
+    # Graph-mode only. Inside nested variable scopes, creates a variable and calls
+    # assign_moving_average twice on it. Expects the scope to contain exactly the original
+    # variable plus two pairs of shadow variables (biased and local step), the second pair
+    # carrying a numeric suffix, with the doubled scope prefix in their names.
     with variable_scope.variable_scope("scope1") as vs1:
       with variable_scope.variable_scope("scope2"):
         var = variables.Variable(1.0, name="Var")
@@ -92,6 +119,11 @@ class MovingAveragesTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testAssignMovingAverageNewNamingMultipleCallsWithReuse(self):
+    # [FUNCTION DOC]
+    # Graph-mode only. Calls assign_moving_average twice on a scoped variable, then re-enters the
+    # scope with reuse enabled, fetches the variable again and calls it twice more. Asserts
+    # nothing explicitly; passes if no error (such as a duplicate-variable error) is raised,
+    # showing shadow variables are reused under a reusing scope.
     with variable_scope.variable_scope("scope1") as vs1:
       var = variable_scope.get_variable("Var", shape=[])
       moving_averages.assign_moving_average(var, 0.0, 0.99)
@@ -103,6 +135,11 @@ class MovingAveragesTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testWeightedMovingAverage(self):
+    # [FUNCTION DOC]
+    # Graph-mode only. Builds a weighted moving average (decay 0.5) over float32 scalar
+    # placeholders, evaluates it with two successive feeds (value 3 weight 4, then value 11
+    # weight 22) and compares against numerator/denominator computed by hand from the decayed
+    # sums of value*weight and weight.
     with self.cached_session() as sess:
       decay = 0.5
       weight = array_ops.placeholder(dtypes.float32, [])
@@ -129,6 +166,9 @@ class MovingAveragesTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testWeightedMovingAverageBfloat16(self):
+    # [FUNCTION DOC]
+    # Same scenario as the float32 weighted moving average test, but with bfloat16 placeholders.
+    # The expected ratio is converted to bfloat16 before comparing with the evaluated result.
     with self.cached_session() as sess:
       decay = 0.5
       weight = array_ops.placeholder(dtypes.bfloat16, [])
@@ -156,16 +196,38 @@ class MovingAveragesTest(test.TestCase):
 
 
 def _Repeat(value, dim):
+  # [FUNCTION DOC]
+  # HELPER: builds expected values for the exponential moving average tests.
+  # Returns the value itself when dim is one, otherwise a list holding the value dim times.
   if dim == 1:
     return value
   return [value] * dim
 
 
 class ExponentialMovingAverageTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for the ExponentialMovingAverage class: numeric updates for scalar and vector
+  # variables with and without num_updates, zero-debias and variable decay; control
+  # dependencies; eager behavior; naming of averages and restore maps (also with scopes and
+  # subsets); device placement; imported graphs; and XLA sharding propagation. Shared helpers
+  # are the decay checker and the name-checking helpers.
 
   def _CheckDecay(self, ema, actual_decay, dim, dynamic_decay_value=None):
+    # [FUNCTION DOC]
+    # HELPER: shared checker for the average-variable tests.
+    # Inputs: ema (the object under test), actual_decay (decay value expected to be effectively
+    # applied), dim (1 for scalar variables, otherwise vector length), dynamic_decay_value
+    # (optional; if given, assigned to the object's decay variable before use and again after
+    # reinitialization). Creates two variables (10 and 30) and a plain tensor (their sum), applies
+    # the object to all three, and asserts: moving-average collection holds just the two
+    # variables, averages are not trainable, shadow names follow the naming convention, initial
+    # averages equal the variables (zeros for the tensor), and after one and two updates averages
+    # match the hand-computed decayed values (divided by the debias scale when zero-debias is on).
 
     def _Scale(dk, steps):
+      # [FUNCTION DOC]
+      # HELPER: expected debias divisor. Returns one minus decay to the power of steps when the
+      # object has zero-debias enabled, otherwise one.
       if ema._zero_debias:
         return 1 - dk**steps
       else:
@@ -236,56 +298,83 @@ class ExponentialMovingAverageTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testAverageVariablesNoNumUpdates_Scalar(self):
+    # [FUNCTION DOC]
+    # Graph-mode only. Scalar variables, decay 0.25, no num_updates, no debias; runs the shared
+    # decay checker expecting an effective decay of 0.25.
     ema = moving_averages.ExponentialMovingAverage(0.25)
     self._CheckDecay(ema, actual_decay=0.25, dim=1)
 
   @test_util.deprecated_graph_mode_only
   def testAverageVariablesNoNumUpdates_Scalar_DynamicDecay(self):
+    # [FUNCTION DOC]
+    # Graph-mode only. Scalar case where the decay is a variable (initially 0.75) later set to
+    # 0.25 by the checker; expects an effective decay of 0.25, with no num_updates or debias.
     decay_var = variables.Variable(0.75)
     ema = moving_averages.ExponentialMovingAverage(decay_var)
     self._CheckDecay(ema, actual_decay=0.25, dim=1, dynamic_decay_value=0.25)
 
   @test_util.deprecated_graph_mode_only
   def testAverageVariablesNoNumUpdates_Scalar_Debias(self):
+    # [FUNCTION DOC]
+    # Graph-mode only. Scalar case with decay 0.25 and zero-debias enabled, no num_updates;
+    # the checker expects debiased averages for the plain tensor input.
     ema = moving_averages.ExponentialMovingAverage(0.25, zero_debias=True)
     self._CheckDecay(ema, actual_decay=0.25, dim=1)
 
   @test_util.deprecated_graph_mode_only
   def testAverageVariablesNoNumUpdates_Scalar_Debias_DynamicDecay(self):
+    # [FUNCTION DOC]
+    # Graph-mode only. Scalar case combining a variable decay (0.75, then set to 0.25) with
+    # zero-debias; expects an effective decay of 0.25 and debiased results.
     decay_var = variables.Variable(0.75)
     ema = moving_averages.ExponentialMovingAverage(decay_var, zero_debias=True)
     self._CheckDecay(ema, actual_decay=0.25, dim=1, dynamic_decay_value=0.25)
 
   @test_util.deprecated_graph_mode_only
   def testAverageVariablesNoNumUpdates_Vector(self):
+    # [FUNCTION DOC]
+    # Graph-mode only. Same as the scalar static-decay test but with five-element vectors.
     ema = moving_averages.ExponentialMovingAverage(0.25)
     self._CheckDecay(ema, actual_decay=0.25, dim=5)
 
   @test_util.deprecated_graph_mode_only
   def testAverageVariablesNoNumUpdates_Vector_DynamicDecay(self):
+    # [FUNCTION DOC]
+    # Graph-mode only. Vector (length five) case with a variable decay set to 0.25 by the
+    # checker, no num_updates, no debias.
     decay_var = variables.Variable(0.75)
     ema = moving_averages.ExponentialMovingAverage(decay_var)
     self._CheckDecay(ema, actual_decay=0.25, dim=5, dynamic_decay_value=0.25)
 
   @test_util.deprecated_graph_mode_only
   def testAverageVariablesNoNumUpdates_Vector_Debias(self):
+    # [FUNCTION DOC]
+    # Graph-mode only. Vector case with decay 0.25 and zero-debias enabled, no num_updates.
     ema = moving_averages.ExponentialMovingAverage(0.25, zero_debias=True)
     self._CheckDecay(ema, actual_decay=0.25, dim=5)
 
   @test_util.deprecated_graph_mode_only
   def testAverageVariablesNoNumUpdates_Vector_Debias_DynamicDecay(self):
+    # [FUNCTION DOC]
+    # Graph-mode only. Vector case with a variable decay (set to 0.25) and zero-debias enabled.
     decay_var = variables.Variable(0.75)
     ema = moving_averages.ExponentialMovingAverage(decay_var, zero_debias=True)
     self._CheckDecay(ema, actual_decay=0.25, dim=5, dynamic_decay_value=0.25)
 
   @test_util.deprecated_graph_mode_only
   def testAverageVariablesNumUpdates_Scalar(self):
+    # [FUNCTION DOC]
+    # Graph-mode only. Scalar case with decay 0.25 and num_updates of 1, so the decay is capped
+    # to (1+1)/(10+1), about 0.1818; the checker expects that effective decay.
     # With num_updates 1, the decay applied is 0.181818.
     ema = moving_averages.ExponentialMovingAverage(0.25, num_updates=1)
     self._CheckDecay(ema, actual_decay=0.181818, dim=1)
 
   @test_util.deprecated_graph_mode_only
   def testAverageVariablesNumUpdates_Scalar_DynamicDecay(self):
+    # [FUNCTION DOC]
+    # Graph-mode only. Scalar case with a variable decay (set to 0.25) and num_updates of 1;
+    # expects the capped effective decay of about 0.1818.
     decay_var = variables.Variable(0.75)
     # With num_updates 1, the decay applied is 0.181818.
     ema = moving_averages.ExponentialMovingAverage(decay_var, num_updates=1)
@@ -294,6 +383,9 @@ class ExponentialMovingAverageTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testAverageVariablesNumUpdates_Scalar_Debias(self):
+    # [FUNCTION DOC]
+    # Graph-mode only. Scalar case with decay 0.25, num_updates 1 and zero-debias; expects the
+    # capped effective decay of about 0.1818 and debiased tensor averages.
     # With num_updates 1, the decay applied is 0.181818.
     ema = moving_averages.ExponentialMovingAverage(
         0.25, num_updates=1, zero_debias=True)
@@ -301,6 +393,9 @@ class ExponentialMovingAverageTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testAverageVariablesNumUpdates_Scalar_Debias_DynamicDecay(self):
+    # [FUNCTION DOC]
+    # Graph-mode only. Scalar case with variable decay, num_updates 1 and zero-debias; expects
+    # the capped effective decay of about 0.1818.
     decay_var = variables.Variable(0.75)
     # With num_updates 1, the decay applied is 0.181818.
     ema = moving_averages.ExponentialMovingAverage(
@@ -310,12 +405,18 @@ class ExponentialMovingAverageTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testAverageVariablesNumUpdates_Vector(self):
+    # [FUNCTION DOC]
+    # Graph-mode only. Vector case with decay 0.25 and num_updates 1; expects the capped decay
+    # of about 0.1818.
     # With num_updates 1, the decay applied is 0.181818.
     ema = moving_averages.ExponentialMovingAverage(0.25, num_updates=1)
     self._CheckDecay(ema, actual_decay=0.181818, dim=5)
 
   @test_util.deprecated_graph_mode_only
   def testAverageVariablesNumUpdates_Vector_DynamicDecay(self):
+    # [FUNCTION DOC]
+    # Graph-mode only. Vector case with variable decay and num_updates 1; expects the capped
+    # decay of about 0.1818.
     decay_var = variables.Variable(0.75)
     # With num_updates 1, the decay applied is 0.181818.
     ema = moving_averages.ExponentialMovingAverage(decay_var, num_updates=1)
@@ -324,6 +425,9 @@ class ExponentialMovingAverageTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testAverageVariablesNumUpdates_Vector_Debias(self):
+    # [FUNCTION DOC]
+    # Graph-mode only. Vector case with decay 0.25, num_updates 1 and zero-debias; expects the
+    # capped decay of about 0.1818.
     # With num_updates 1, the decay applied is 0.181818.
     ema = moving_averages.ExponentialMovingAverage(
         0.25, num_updates=1, zero_debias=True)
@@ -331,6 +435,9 @@ class ExponentialMovingAverageTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testAverageVariablesNumUpdates_Vector_Debias_DynamicDecay(self):
+    # [FUNCTION DOC]
+    # Graph-mode only. Vector case with variable decay, num_updates 1 and zero-debias; expects
+    # the capped decay of about 0.1818.
     decay_var = variables.Variable(0.75)
     # With num_updates 1, the decay applied is 0.181818.
     ema = moving_averages.ExponentialMovingAverage(
@@ -340,6 +447,14 @@ class ExponentialMovingAverageTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testAverageVariablesWithControlDeps(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the assertion that the shadow variable's value op has no control inputs is
+    # duplicated on two consecutive lines (harmless redundancy).
+    # Graph-mode only. Applies an average to one variable inside a control dependency on an
+    # increment of another variable. Expects the shadow variable's initializer and value op to
+    # have no control inputs, so it can be initialized before the other variable; then, after
+    # assigning 20 to the tracked variable and running the update op, the other variable has been
+    # incremented to 1 and the average equals 17.5 (decay 0.25 from 10 toward 20).
     v0 = variables.Variable(0, name="v0")
     add_to_v0 = v0.assign_add(1)
     v1 = variables.Variable([10.0], name="v1")
@@ -363,6 +478,12 @@ class ExponentialMovingAverageTest(test.TestCase):
     self.assertEqual([17.5], self.evaluate(v1_avg))
 
   def testBasicEager(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: despite the name it has no eager-only decorator; it branches on whether
+    # eager execution is active, so it runs in whatever mode the test environment uses.
+    # Applies an average (decay 0.25, name "foo") to two variables (1 and 2), assigns 2 and 4,
+    # applies again, and asserts the object's name, the average names (variable name plus foo)
+    # and averages of 1.75 and 3.5.
     v0 = variables.Variable(1.0, name="v0")
     v1 = variables.Variable(2.0, name="v1")
 
@@ -385,6 +506,13 @@ class ExponentialMovingAverageTest(test.TestCase):
     self.assertAllEqual(self.evaluate(ema.average(v1)), 3.5)
 
   def averageVariablesNamesHelper(self, zero_debias):
+    # [FUNCTION DOC]
+    # HELPER: shared body for the average-name tests (not itself a test method).
+    # Input: zero_debias boolean passed to the object. Creates variables v0, v1, a non-trainable
+    # v2 and a tensor sum, checks average names before apply, applies to v0, v1 and the tensor,
+    # and asserts the restore map keys are the three average names plus v2's name (plus the
+    # biased and local-step shadow names of the tensor when debias is on). Also asserts each
+    # shadow variable's op name equals the name predicted by the average-name method.
     v0 = variables.Variable(10.0, name="v0")
     v1 = variables.Variable(30.0, name="v1")
     # Add a non-trainable variable.
@@ -423,14 +551,27 @@ class ExponentialMovingAverageTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testAverageVariablesNames(self):
+    # [FUNCTION DOC]
+    # Graph-mode only. Runs the shared average-name helper with zero-debias enabled.
     self.averageVariablesNamesHelper(zero_debias=True)
 
   @test_util.deprecated_graph_mode_only
   def testAverageVariablesNamesNoDebias(self):
+    # [FUNCTION DOC]
+    # Graph-mode only. Runs the shared average-name helper with zero-debias disabled.
     self.averageVariablesNamesHelper(zero_debias=False)
 
   @test_util.deprecated_graph_mode_only
   def averageVariablesNamesRespectScopeHelper(self, zero_debias):
+    # [FUNCTION DOC]
+    # HELPER: shared body for the scope-aware average-name tests.
+    # KNOWN ISSUE: it carries the graph-mode-only test decorator although it is a helper (not
+    # collected as a test) that takes an argument; the decorator is only effective when called.
+    # Input: zero_debias boolean. Creates variables inside one scope and the average object
+    # inside another scope, then asserts average names include the object's scope prefix, the
+    # restore map contains the three average names plus the non-trainable variable's name (plus
+    # prefixed biased and local-step names for the tensor when debias is on), and that shadow op
+    # names equal the predicted average names.
     # See discussion on #2740.
     with variable_scope.variable_scope("scope1"):
       v0 = variables.Variable(10.0, name="v0")
@@ -473,14 +614,23 @@ class ExponentialMovingAverageTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testAverageVariablesNamesRespectScope(self):
+    # [FUNCTION DOC]
+    # Graph-mode only. Runs the scope-aware average-name helper with zero-debias enabled.
     self.averageVariablesNamesRespectScopeHelper(zero_debias=True)
 
   @test_util.deprecated_graph_mode_only
   def testAverageVariablesNamesRespectScopeNoDebias(self):
+    # [FUNCTION DOC]
+    # Graph-mode only. Runs the scope-aware average-name helper with zero-debias disabled.
     self.averageVariablesNamesRespectScopeHelper(zero_debias=False)
 
   @test_util.deprecated_graph_mode_only
   def testSubsetAverageVariablesNames(self):
+    # [FUNCTION DOC]
+    # Graph-mode only. Asks for the restore map with an explicit subset (v0 and the tensor) of
+    # variables to restore from averages, before applying. Expects keys to be the average names
+    # of v0 and the tensor plus the plain names of v1 and the non-trainable v2. After applying to
+    # all three, asserts shadow op names match the predicted average names.
     v0 = variables.Variable(10.0, name="v0")
     v1 = variables.Variable(30.0, name="v1")
     # Add a non-trainable variable.
@@ -508,6 +658,11 @@ class ExponentialMovingAverageTest(test.TestCase):
     self.assertEqual(ema.average(tensor2).op.name, ema.average_name(tensor2))
 
   def testSubsetAverageVariablesNamesEager(self):
+    # [FUNCTION DOC]
+    # No mode decorator, so it runs in the default mode. Asks for the restore map with all three
+    # variables listed (including a non-trainable one) and expects the three average names. Then
+    # applies to two variables and asserts their shadow variable names (minus the output suffix)
+    # equal the predicted average names.
     v0 = variables.Variable(10.0, name="v0")
     v1 = variables.Variable(30.0, name="v1")
     # Add a non-trainable variable.
@@ -527,6 +682,11 @@ class ExponentialMovingAverageTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testAverageVariablesDeviceAssignment(self):
+    # [FUNCTION DOC]
+    # Graph-mode only. Places two variables (one an old-style reference variable) on different
+    # job devices and applies the average under a third default device. Expects each variable's
+    # shadow to sit on the variable's device, the old-style one to keep a colocation constraint
+    # with it, and the shadow of the plain tensor to use the default device.
     with ops.device("/job:dev_v0"):
       v0 = variables.Variable(10.0, name="v0")
     with ops.device("/job:dev_v1"):
@@ -548,6 +708,10 @@ class ExponentialMovingAverageTest(test.TestCase):
     self.assertDeviceEqual("/job:default", ema.average(tensor2).device)
 
   def _ExportAndImportGraph(self, graph):
+    # [FUNCTION DOC]
+    # HELPER: round-trips a graph through meta-graph export and import.
+    # Input: a graph. Exports it with all collection keys, imports the result into a fresh graph
+    # (made the default only during the import) and returns the new graph.
     """Export and import graph into a new graph."""
     meta_graph = saver_lib.export_meta_graph(
         graph=graph, collection_list=graph.get_all_collection_keys())
@@ -558,6 +722,11 @@ class ExponentialMovingAverageTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testImportedGraphVariablesToRestore(self):
+    # [FUNCTION DOC]
+    # Graph-mode only. Builds a graph with one variable, copies it through export/import, and in
+    # the copy asks the average object for its restore map. Expects exactly one entry, keyed
+    # with the variable's average name, proving duplicate Python wrappers of the same imported
+    # variable are not both added.
     g = ops.Graph()
     with g.as_default():
       variables.Variable(10.0, name="v")
@@ -576,6 +745,10 @@ class ExponentialMovingAverageTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testCopyXlaSharding(self):
+    # [FUNCTION DOC]
+    # Graph-mode only. Creates a two-element variable with no sharding, applies a mesh split
+    # sharding to it, initializes variables and applies the average. Expects the shadow variable
+    # to carry the same XLA sharding as the source variable.
     ema = moving_averages.ExponentialMovingAverage(0.25, name="foo_avg")
     v = variables.Variable(_Repeat(10.0, 2), name="v")
     self.assertIsNone(xla_sharding.get_tensor_sharding(v))

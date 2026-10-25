@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# Maintains moving averages (exponential decay) of variables, mainly for training/evaluation
+# workflows where averaged weights give better results than the last trained values.
+# Exposes: assign_moving_average (exported as an internal training symbol), which updates a
+# variable toward a new value with optional zero-debiasing and is distribution-strategy aware;
+# weighted_moving_average, which keeps two internal moving averages and returns their ratio;
+# and the ExponentialMovingAverage class (exported as the public training class) which creates
+# shadow variables for a list of variables and updates them on each apply call.
+# Private helpers (_update, _zero_debias) route updates through the distribution strategy and
+# compute the debiased update amount. Relies on slot_creator for shadow variables and on
+# variable scopes for naming. No import-time side effects other than API export registration.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,6 +44,21 @@ from tensorflow.tools.docs import doc_controls
 
 @tf_export("__internal__.train.assign_moving_average", v1=[])
 def assign_moving_average(variable, value, decay, zero_debias=True, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring example calls a top-level assign-moving-average symbol that is
+  # not exported under that name (it is exported only as an internal training symbol).
+  # Moves the given variable toward the given value by an exponential moving average step.
+  # Inputs: variable (a variable), value (tensor of the same shape), decay (float or scalar
+  # tensor, the average decay; internally converted to one minus decay and cast to the
+  # variable's base dtype), zero_debias (boolean, default true; use debiased update that assumes
+  # zero initialization), name (optional op name scope, default "AssignMovingAvg").
+  # Behavior: opens a name scope. If called in a replica context, it merges across replicas,
+  # reducing the value by mean to the variable, then applies the update in cross-replica
+  # context; otherwise it updates directly using the cross-replica strategy. The update is
+  # either the zero-debiased update or a plain subtract-assign of (variable - value) * decay.
+  # Returns the update result (tensor/op that when evaluated performs the update).
+  # Side effects: may create shadow variables (biased value and local step) when debiasing.
+  # Raises nothing itself; errors from conversion or strategy calls propagate.
   """Compute the moving average of a variable.
 
   The moving average of 'variable' updated with 'value' is:
@@ -90,9 +116,19 @@ def assign_moving_average(variable, value, decay, zero_debias=True, name=None):
       decay = math_ops.cast(decay, variable.dtype.base_dtype)
 
     def update_fn(v, value):
+      # [FUNCTION DOC]
+      # HELPER: nested update callback for assign_moving_average.
+      # Subtracts (v - value) * decay from variable v in place, using the enclosing name scope
+      # as the op name, and returns the assign-subtract result. Uses the converted decay captured
+      # from the enclosing function.
       return state_ops.assign_sub(v, (v - value) * decay, name=scope)
 
     def update(strategy, v, value):
+      # [FUNCTION DOC]
+      # HELPER: nested dispatcher for assign_moving_average.
+      # Given a strategy, variable and (already reduced) value, returns the zero-debiased update
+      # if zero_debias was requested, otherwise applies the plain update callback through the
+      # strategy-aware update helper. Returns the resulting update.
       if zero_debias:
         return _zero_debias(strategy, v, value, decay)
       else:
@@ -103,6 +139,10 @@ def assign_moving_average(variable, value, decay, zero_debias=True, name=None):
       # In a replica context, we update variable using the mean of value across
       # replicas.
       def merge_fn(strategy, v, value):
+        # [FUNCTION DOC]
+        # HELPER: nested merge callback for assign_moving_average in a replica context.
+        # Reduces the per-replica value to the variable's location using the mean reduction,
+        # then performs the update in cross-replica context and returns its result.
         value = strategy.extended.reduce_to(ds_reduce_util.ReduceOp.MEAN, value,
                                             v)
         return update(strategy, v, value)
@@ -119,7 +159,20 @@ def weighted_moving_average(value,
                             truediv=True,
                             collections=None,
                             name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it returns an Operation, but it actually returns the
+  # tensor produced by dividing the two moving averages (the weighted average value).
+  # Computes a weighted moving average: the moving average of value times weight divided by
+  # the moving average of weight. Inputs: value (numeric tensor), decay (float or scalar
+  # tensor), weight (tensor broadcastable against value), truediv (boolean, default true:
+  # floating point division, otherwise dtype-implied division), collections (list of graph
+  # collection keys for the internal variables, default the global variables collection),
+  # name (optional scope name, default "WeightedMovingAvg").
+  # Side effects: creates two non-trainable zero-initialized variables inside a variable scope
+  # (value-times-weight and weight) and updates them without debiasing. Returns the division
+  # result tensor. Errors from variable creation or shape mismatch propagate.
   """Compute the weighted moving average of `value`.
+
 
   Conceptually, the weighted moving average is:
     `moving_average(value * weight) / moving_average(weight)`,
@@ -178,6 +231,14 @@ def weighted_moving_average(value,
 
 
 def _update(strategy, var, update_fn, args):
+  # [FUNCTION DOC]
+  # HELPER: strategy-aware update dispatcher for the moving average functions.
+  # Inputs: strategy (distribution strategy), var (variable to update), update_fn (callback
+  # taking the variable followed by the extra arguments), args (tuple of extra arguments).
+  # Must be called in cross-replica context, otherwise an assertion error is raised. If already
+  # inside an update context (an update replica id exists) it calls the callback directly on the
+  # variable; otherwise it asks the strategy to run the update on the variable. Returns the
+  # callback/strategy update result.
   """Applies updates depending on the context."""
   assert distribute_lib.in_cross_replica_context(), (
       "_update can only be called in cross-replica context")
@@ -192,6 +253,17 @@ def _update(strategy, var, update_fn, args):
 
 
 def _zero_debias(strategy, unbiased_var, value, decay):
+  # [FUNCTION DOC]
+  # HELPER: zero-debiasing step used by assign_moving_average.
+  # Inputs: strategy (distribution strategy), unbiased_var (the variable holding the debiased
+  # average), value (most recent value tensor), decay (tensor holding one minus the EMA decay).
+  # Creates, under a variable scope named after the variable, two non-trainable shadow variables
+  # colocated with it: a biased average (same shape/dtype) and a scalar local step, both zero
+  # initialized (created in the init scope); names get a numeric suffix to stay unique unless
+  # the scope reuses variables. Then, via the strategy update helper, it updates the biased
+  # average, increments the step, computes the bias factor as one minus (one minus decay) raised
+  # to the step, and assigns the biased average divided by that factor to the unbiased variable.
+  # Returns the update result. Side effects: variable creation and assignments.
   """Compute the delta required for a debiased Variable.
 
   All exponential moving averages initialized with Tensors are initialized to 0,
@@ -237,6 +309,11 @@ def _zero_debias(strategy, unbiased_var, value, decay):
       local_step_initializer = init_ops.zeros_initializer()
 
     def _maybe_get_unique(name):
+      # [FUNCTION DOC]
+      # HELPER: picks a non-colliding shadow variable name for _zero_debias.
+      # Returns the name unchanged if the current variable scope reuses variables or no variable
+      # with that scoped name exists; otherwise appends an increasing numeric suffix until the
+      # name is unused among the scope's global variables.
       """Get name for a unique variable, if not `reuse=True`."""
       if variable_scope.get_variable_scope().reuse:
         return name
@@ -267,6 +344,12 @@ def _zero_debias(strategy, unbiased_var, value, decay):
           trainable=False)
 
   def update_fn(v, value, biased_var, local_step):
+    # [FUNCTION DOC]
+    # HELPER: nested update callback for _zero_debias.
+    # Subtracts (biased - value) * decay from the biased variable, increments the local step by
+    # one, computes the bias factor from the new step, and assigns the debiased result (biased
+    # update divided by factor) to variable v under the current name scope. Returns the assign
+    # result.
     update_biased = state_ops.assign_sub(biased_var,
                                          (biased_var - value) * decay)
     update_local_step = local_step.assign_add(1)
@@ -282,6 +365,14 @@ def _zero_debias(strategy, unbiased_var, value, decay):
 
 @tf_export("train.ExponentialMovingAverage")
 class ExponentialMovingAverage:
+  # [CLASS DOC]
+  # Maintains exponential moving averages of a set of variables in non-trainable shadow
+  # variables. State: decay (float, tensor or variable), optional num_updates (used to lower
+  # the decay early in training), zero_debias flag, a name used as prefix for ops and shadow
+  # variables, and a mapping from variable references to their shadow variables. Created with
+  # a decay; apply creates shadow variables on first call and updates them on later calls;
+  # average returns a shadow variable; average_name and variables_to_restore support legacy
+  # TF1 saver workflows. Instances are not trackable by checkpoints. Exported as a public API.
   """Maintains moving averages of variables by employing an exponential decay.
 
   When training a model, it is often beneficial to maintain moving averages of
@@ -454,6 +545,12 @@ class ExponentialMovingAverage:
                num_updates=None,
                zero_debias=False,
                name="ExponentialMovingAverage"):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: decay (scalar float, tensor or variable), num_updates (optional step
+    # count that, if given, caps the decay at (1+n)/(10+n)), zero_debias (boolean, default
+    # false; debias averages initialized from non-variable tensors), name (string prefix for
+    # ops and shadow variables, default "ExponentialMovingAverage"). Only stores these values and
+    # an empty mapping of shadow variables; creates nothing and raises nothing.
     """Creates a new ExponentialMovingAverage object.
 
     The `apply()` method has to be called to create shadow variables.
@@ -487,10 +584,22 @@ class ExponentialMovingAverage:
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the name string given at construction.
     """The name of this ExponentialMovingAverage object."""
     return self._name
 
   def apply(self, var_list=None):
+    # [FUNCTION DOC]
+    # Creates shadow variables for any variable not yet tracked, then updates all averages.
+    # Input: var_list, a list of variables (tensors only in legacy graph mode); defaults to the
+    # trainable variables. Raises a type error for non-variable tensors under eager execution
+    # and for unsupported dtypes. New shadow variables are created in the init scope on the same
+    # device as the source variable (initialized from its value if initialized, else its initial
+    # value); tensors get zero slots (optionally zero-debiased). Variables are added to the
+    # moving-average variables collection; shadow mapping is updated. Decay is converted to
+    # float32 and, if num_updates was given, capped by (1+n)/(10+n). Returns a grouped update
+    # op for all variables under a name scope.
     """Maintains moving averages of variables.
 
     `var_list` must be a list of `Variable` objects.  This method
@@ -592,6 +701,9 @@ class ExponentialMovingAverage:
       return control_flow_ops.group(*updates, name=scope)
 
   def average(self, var):
+    # [FUNCTION DOC]
+    # Looks up the shadow variable for the given variable (by reference). Returns it, or the
+    # null value if apply has not been called for that variable. No side effects.
     """Returns the `Variable` holding the average of `var`.
 
     Args:
@@ -605,6 +717,11 @@ class ExponentialMovingAverage:
 
   @doc_controls.do_not_generate_docs
   def average_name(self, var):
+    # [FUNCTION DOC]
+    # Returns the name (without the output suffix) of the shadow variable for the given
+    # variable, for use with legacy savers. If a shadow exists, its actual name is used;
+    # otherwise a unique name is computed from the variable name and this object's name in the
+    # default graph without marking it used. Hidden from generated docs. No side effects.
     """[Meant for TF1] Returns name of `Variable` holding the average for `var`.
 
     (Designed to work with legacy `tf.compat.v1.train.Saver`, it is sensitive to
@@ -636,6 +753,14 @@ class ExponentialMovingAverage:
 
   @doc_controls.do_not_generate_docs
   def variables_to_restore(self, moving_avg_variables=None):
+    # [FUNCTION DOC]
+    # Builds a mapping from checkpoint names to variables for a legacy saver. Input:
+    # moving_avg_variables, optional list of variables that should be restored from their
+    # moving-average names; defaults to trainable variables plus the moving-average collection
+    # (note: the default path extends the list returned by the trainable-variables call).
+    # Duplicates are removed; each such variable maps from its average name. All other global
+    # variables map from their own op names unless that name is already taken. Returns the
+    # mapping. Hidden from generated docs; no other side effects.
     """[Designed for TF 1.x] Returns a map of names to `Variables` to restore.
 
     (Designed to work with legacy `tf.compat.v1.train.Saver`, sensitive to
