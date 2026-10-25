@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# Companion configuration classes for the TPU embedding mid level API (TF2). It defines the
+# optimizer parameter classes (SGD, Adagrad, AdagradMomentum, FTRL, Adam and the user-defined
+# CustomOptimizer), the CustomCombiner, QuantizationConfig, TableConfig, FeatureConfig and the
+# RowIdInitializer, which are exported under the public TPU experimental embedding namespace.
+# Each optimizer knows its slot variable names and initializers, which TPU load/retrieve
+# operation to use, and how to fill the optimization parameters protocol buffer. TableConfig
+# knows how to fill a table descriptor of the TPU embedding configuration. It also provides
+# helpers to log a large configuration in pieces and to list the hosts of a TPU strategy in a
+# deterministic sorted order. Import time side effects: only the public-name export
+# registrations; no flags or global state are created.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -48,12 +59,24 @@ ClipValueType = Union[Tuple[float, float], float]
 
 
 class _WithSlotVariables(metaclass=abc.ABCMeta):
+  # [CLASS DOC]
+  # HELPER: abstract base shared by the optimizers and the custom combiner of this module.
+  # Abstract base for objects that may need auxiliary ("slot") variables next to an embedding
+  # table. It stores an optional user callback that creates slot variables, declares the
+  # abstract slot name and slot initializer lists, and implements the generic slot creation
+  # plus attribute based equality and hashing. Subclasses supply the slot names/initializers.
   """Base class that allows slot variables to be created."""
 
   def __init__(
       self,
       slot_variable_creation_fn: Optional[SlotVarCreationFnType] = None,
   ):
+    # [FUNCTION DOC]
+    # Stores the optional slot variable creation callback. Input: slot_variable_creation_fn,
+    # either nothing (use built-in creation) or a callable taking a table, a list of slot
+    # names and a list of initializers and returning a mapping of slot name to variable.
+    # Returns nothing. Raises a value error if the argument is neither nothing nor callable.
+    # Side effect: sets the instance attribute holding the callback.
     if slot_variable_creation_fn is not None and not callable(
         slot_variable_creation_fn
     ):
@@ -65,6 +88,10 @@ class _WithSlotVariables(metaclass=abc.ABCMeta):
 
   @abc.abstractmethod
   def _slot_names(self) -> List[Text]:
+    # [FUNCTION DOC]
+    # HELPER: abstract hook used by slot variable creation.
+    # Abstract: subclasses return the list of slot variable names (excluding the main
+    # parameters variable). The base implementation raises a not-implemented error.
     """Returns the name of all the slot variables.
 
     This does not include the 'parameters' variable and these names must match
@@ -75,6 +102,10 @@ class _WithSlotVariables(metaclass=abc.ABCMeta):
 
   @abc.abstractmethod
   def _slot_initializers(self) -> List[init_ops_v2.Initializer]:
+    # [FUNCTION DOC]
+    # HELPER: abstract hook used by slot variable creation.
+    # Abstract: subclasses return a list of initializers parallel to the slot names. The base
+    # implementation raises a not-implemented error.
     """Returns initializers for slot variables.
 
     This returns a parallel list to self._slot_names().
@@ -91,6 +122,15 @@ class _WithSlotVariables(metaclass=abc.ABCMeta):
           Callable[[str, init_ops_v2.Initializer], init_ops_v2.Initializer]
       ] = None,
   ) -> Dict[Text, tf_variables.Variable]:
+    # [FUNCTION DOC]
+    # HELPER: internal glue used when the embedding layer builds slot variables for a table.
+    # Inputs: table, the table (or table variable) to create slots for; variable_creator, a
+    # callable taking a slot name and an initializer and returning a new variable;
+    # initializer_wrapper, optional callable taking a slot name and initializer and returning
+    # a replacement initializer. Output: mapping from slot name to variable. If a custom slot
+    # creation callback was supplied at construction, it is called with the table, names and
+    # (wrapped) initializers and its result is returned; otherwise each slot is created with
+    # the variable creator. Side effects: whatever the creator callbacks do (variable creation).
     """Creates slot variables for table.
 
     Args:
@@ -120,6 +160,12 @@ class _WithSlotVariables(metaclass=abc.ABCMeta):
       return slots
 
   def __eq__(self, other: Any) -> Union[Any, bool]:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: compares attributes pairwise by position in the attribute mapping, so it
+    # relies on identical insertion order and does not check that both have the same number of
+    # attributes (zip stops at the shorter one).
+    # Equality: true when other is an instance of this object's class and all attribute
+    # (name, value) pairs match in order; false for any other type. No side effects.
     if isinstance(other, self.__class__):
       return all([
           attr1 == attr2
@@ -129,10 +175,20 @@ class _WithSlotVariables(metaclass=abc.ABCMeta):
       return False
 
   def __hash__(self) -> int:
+    # [FUNCTION DOC]
+    # Returns an integer hash built from all instance attribute (name, value) pairs, so it is
+    # consistent with equality. Raises a type error if any attribute value is unhashable.
     return hash(tuple(self.__dict__.items()))
 
 
 class _Optimizer(_WithSlotVariables):
+  # [CLASS DOC]
+  # HELPER: common base for all TPU embedding optimizer parameter classes.
+  # Holds the parameters shared by every optimizer: learning rate (constant or callable),
+  # gradient accumulation flag, weight clipping limits, gradient clipping limits, weight decay
+  # settings and the low dimensional packing flag. Provides filling of the common part of the
+  # optimization parameters protocol buffer and declares abstract load/retrieve hooks that
+  # return the matching TPU operations.
   """Base class for all optimizers, with common parameters."""
 
   def __init__(
@@ -147,6 +203,16 @@ class _Optimizer(_WithSlotVariables):
       slot_variable_creation_fn: Optional[SlotVarCreationFnType] = None,
       low_dimensional_packing_status: bool = False,
   ):
+    # [FUNCTION DOC]
+    # HELPER: shared constructor body for the concrete optimizers.
+    # Stores the common settings. Inputs: learning_rate (float or no-argument callable for a
+    # dynamic rate); use_gradient_accumulation flag; clip_weight_min/max (optional weight
+    # limits); weight_decay_factor (optional); multiply_weight_decay_factor_by_learning_rate
+    # flag; clipvalue (optional single positive number meaning symmetric limits, or a pair of
+    # minimum and maximum where either may be nothing); slot_variable_creation_fn (optional);
+    # low_dimensional_packing_status flag. Gradient clip limits are derived from clipvalue
+    # (both nothing when unset). Raises a value error if clipvalue is given while gradient
+    # accumulation is disabled. Returns nothing; sets instance attributes.
     super().__init__(slot_variable_creation_fn=slot_variable_creation_fn)
     self.learning_rate = learning_rate
     self.use_gradient_accumulation = use_gradient_accumulation
@@ -174,6 +240,12 @@ class _Optimizer(_WithSlotVariables):
   def _set_optimization_parameters(
       self, parameters: optimization_parameters_pb2.OptimizationParameters
   ):
+    # [FUNCTION DOC]
+    # HELPER: fills the common part of the optimization parameters message for a table.
+    # Input: parameters, the optimization parameters protocol buffer, which is mutated: sets
+    # gradient accumulation enabled/disabled, weight clipping limits and gradient clipping
+    # limits when not nothing, the weight decay factor (and the multiply-by-learning-rate flag)
+    # when the factor is non-zero, and the low dimensional packing status. Returns nothing.
     """Sets the optimizer fields in the OptimizationParameters."""
     if self.use_gradient_accumulation:
       parameters.gradient_accumulation_status = (
@@ -207,17 +279,30 @@ class _Optimizer(_WithSlotVariables):
 
   @abc.abstractmethod
   def _load(self) -> Callable[..., ops.Operation]:
+    # [FUNCTION DOC]
+    # HELPER: abstract hook; subclasses return the TPU operation used to load table
+    # parameters for this optimizer. The base implementation raises a not-implemented error.
     """Returns the load function for the optimizer."""
     raise NotImplementedError
 
   @abc.abstractmethod
   def _retrieve(self) -> Callable[..., core.Tensor]:
+    # [FUNCTION DOC]
+    # HELPER: abstract hook; subclasses return the TPU operation used to retrieve table
+    # parameters for this optimizer. The base implementation raises a not-implemented error.
     """Returns the retrieve function for the optimizer."""
     raise NotImplementedError
 
 
 @tf_export("tpu.experimental.embedding.CustomOptimizer")
 class CustomOptimizer(_Optimizer):
+  # [CLASS DOC]
+  # Optimizer whose update rule is a user supplied per-row computation (a traced function),
+  # intended only for the V2 TPU embedding class on newer TPUs. It stores the computation,
+  # learning rate, hyperparameters, slot names, slot initializers and optional slot dimensions
+  # (1 or 2 each). Gradient accumulation, clipping and weight decay are fixed to off. It does not
+  # support the load and retrieve operations. Created by users and passed as a global or
+  # per-table optimizer; exported publicly.
   """Optimization parameters for custom optimizer for TPU embeddings.
 
   This optimizer gives the user the ability to define a custom optimizer
@@ -323,6 +408,17 @@ class CustomOptimizer(_Optimizer):
       hyperparameters: Optional[List[Union[float, Callable[[], float]]]] = None,
       slot_dims: Optional[List[int]] = None,
   ) -> Any:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the constructor is annotated as returning an arbitrary value, but like any
+    # constructor it returns nothing; also it passes nothing for the multiply-weight-decay flag
+    # to the base class, which declares it as a boolean.
+    # Inputs: custom_computation, the traced function performing the per-row update (gradient,
+    # table row, slot variables, learning rate, hyperparameters); learning_rate (float or
+    # callable, default 0.01); slot_names (optional list of strings); slot_initializers
+    # (optional list, must match slot_names in length); hyperparameters (optional list of
+    # numbers or callables); slot_dims (optional list of 1 or 2 per slot, same length as
+    # slot_names when given). Raises a value error when lengths mismatch or a slot dimension
+    # is not 1 or 2. Stores everything as immutable tuples.
     super().__init__(  # pytype: disable=wrong-arg-types
         learning_rate,
         use_gradient_accumulation=False,
@@ -363,18 +459,26 @@ class CustomOptimizer(_Optimizer):
     self._custom_computation = custom_computation
 
   def _slot_names(self) -> List[Text]:
+    # [FUNCTION DOC]
+    # Returns a new list of the user supplied slot names (possibly empty).
     return list(self._slot_names_attr)
 
   def _slot_initializers(self) -> List[init_ops_v2.Initializer]:
+    # [FUNCTION DOC]
+    # Returns a new list of the user supplied slot initializers, parallel to the slot names.
     return list(self._slot_initializers_attr)
 
   def _load(self) -> Callable[..., ops.Operation]:
+    # [FUNCTION DOC]
+    # Always raises a not-implemented error: this optimizer is only usable with the V2 class.
     raise NotImplementedError(
         "Custom optimizer does not support load op since it is only used for"
         " TPUEmbeddingV2."
     )
 
   def _retrieve(self) -> Callable[..., core.Tensor]:
+    # [FUNCTION DOC]
+    # Always raises a not-implemented error: this optimizer is only usable with the V2 class.
     raise NotImplementedError(
         "Custom optimizer does not support retrieve op since it is only used"
         " for TPUEmbeddingV2."
@@ -382,14 +486,24 @@ class CustomOptimizer(_Optimizer):
 
   @property
   def hyperparameters(self) -> Tuple[Union[float, Callable[[], float]], ...]:
+    # [FUNCTION DOC]
+    # Read-only property: the tuple of hyperparameters (numbers or callables) given at
+    # construction, empty if none.
     return self._hyperparameters
 
   @property
   def custom_computation(self) -> core.ConcreteFunction:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: annotated as a concrete function, but the stored object is whatever
+    # polymorphic function the caller passed to the constructor (no conversion happens).
+    # Read-only property: returns the user supplied update computation.
     return self._custom_computation
 
   @property
   def slot_dims(self) -> Tuple[int, ...]:
+    # [FUNCTION DOC]
+    # Read-only property: tuple of per-slot dimensionalities (each 1 or 2); empty when none were
+    # given. Consumed by the embedding layer when creating slot variables.
     """Optional per-slot dimensions metadata for variable creation.
 
     Each entry corresponds to the same-index item in `slot_names`. This is
@@ -400,6 +514,10 @@ class CustomOptimizer(_Optimizer):
 
 @tf_export("tpu.experimental.embedding.SGD")
 class SGD(_Optimizer):
+  # [CLASS DOC]
+  # Stochastic gradient descent optimizer parameters for TPU embedding tables. Has no slot
+  # variables; selects the SGD section of the optimization parameters message and the SGD
+  # load/retrieve TPU operations. Used as a global or per-table optimizer; exported publicly.
   """Optimization parameters for stochastic gradient descent for TPU embeddings.
 
   Pass this to `tf.tpu.experimental.embedding.TPUEmbedding` via the `optimizer`
@@ -456,6 +574,14 @@ class SGD(_Optimizer):
       clipvalue: Optional[ClipValueType] = None,
       low_dimensional_packing_status: bool = False,
   ):
+    # [FUNCTION DOC]
+    # Creates SGD parameters. Inputs: learning_rate (float or no-argument callable, default
+    # 0.01); use_gradient_accumulation (default true); optional weight clip minimum/maximum;
+    # optional weight decay factor and its multiply-by-learning-rate flag; optional clipvalue
+    # (single value or minimum/maximum pair; requires gradient accumulation); and the low
+    # dimensional packing flag. Delegates to the common optimizer constructor (no slot creation
+    # callback). Returns nothing; raises a value error if clipvalue is used without
+    # gradient accumulation.
     """Optimization parameters for stochastic gradient descent.
 
     Args:
@@ -497,25 +623,41 @@ class SGD(_Optimizer):
     )
 
   def _slot_names(self) -> List[Text]:
+    # [FUNCTION DOC]
+    # Returns an empty list: SGD needs no slot variables.
     return []
 
   def _slot_initializers(self) -> List[init_ops_v2.Initializer]:
+    # [FUNCTION DOC]
+    # Returns an empty list: SGD needs no slot variables.
     return []
 
   def _set_optimization_parameters(
       self, parameters: optimization_parameters_pb2.OptimizationParameters):
+    # [FUNCTION DOC]
+    # Fills the common optimization fields and marks the stochastic gradient descent section
+    # as present on the given parameters message (mutated in place). Returns nothing.
     super()._set_optimization_parameters(parameters)
     parameters.stochastic_gradient_descent.SetInParent()
 
   def _load(self) -> Callable[..., ops.Operation]:
+    # [FUNCTION DOC]
+    # Returns the TPU operation that loads SGD embedding table parameters.
     return tpu_ops.load_tpu_embedding_stochastic_gradient_descent_parameters
 
   def _retrieve(self) -> Callable[..., core.Tensor]:
+    # [FUNCTION DOC]
+    # Returns the TPU operation that retrieves SGD embedding table parameters.
     return tpu_ops.retrieve_tpu_embedding_stochastic_gradient_descent_parameters
 
 
 @tf_export("tpu.experimental.embedding.Adagrad")
 class Adagrad(_Optimizer):
+  # [CLASS DOC]
+  # Adagrad optimizer parameters for TPU embedding tables. Keeps one slot variable
+  # (accumulators) initialized to a positive constant. Selects the Adagrad section of the
+  # optimization parameters message and the Adagrad load/retrieve TPU operations. Used as a
+  # global or per-table optimizer; exported publicly.
   """Optimization parameters for Adagrad with TPU embeddings.
 
   Pass this to `tf.tpu.experimental.embedding.TPUEmbedding` via the `optimizer`
@@ -574,6 +716,14 @@ class Adagrad(_Optimizer):
       clipvalue: Optional[ClipValueType] = None,
       low_dimensional_packing_status: bool = False,
   ):
+    # [FUNCTION DOC]
+    # Creates Adagrad parameters. Inputs: learning_rate (float or no-argument callable,
+    # default 0.001); initial_accumulator_value (must be positive, default 0.1);
+    # gradient accumulation flag (default true); optional weight clip limits; optional weight
+    # decay factor and multiply-by-learning-rate flag; optional slot creation callback;
+    # optional clipvalue; low dimensional packing flag. Delegates common settings to the base
+    # constructor. Raises a value error if the initial accumulator value is not positive (or
+    # if clipvalue is used without gradient accumulation). Returns nothing.
     """Optimization parameters for Adagrad.
 
     Args:
@@ -622,9 +772,14 @@ class Adagrad(_Optimizer):
     self.initial_accumulator_value = initial_accumulator_value
 
   def _slot_names(self) -> List[Text]:
+    # [FUNCTION DOC]
+    # Returns the list with the single slot name "accumulators".
     return ["accumulators"]
 
   def _slot_initializers(self) -> List[init_ops_v2.Initializer]:
+    # [FUNCTION DOC]
+    # Returns a one element list: a constant initializer (partition aware) set to the initial
+    # accumulator value.
     return [
         init_ops_v2.Constant(
             self.initial_accumulator_value, support_partition=True
@@ -633,18 +788,30 @@ class Adagrad(_Optimizer):
 
   def _set_optimization_parameters(
       self, parameters: optimization_parameters_pb2.OptimizationParameters):
+    # [FUNCTION DOC]
+    # Fills the common optimization fields and marks the Adagrad section as present on the
+    # given parameters message (mutated in place). Returns nothing.
     super()._set_optimization_parameters(parameters)
     parameters.adagrad.SetInParent()
 
   def _load(self) -> Callable[..., ops.Operation]:
+    # [FUNCTION DOC]
+    # Returns the TPU operation that loads Adagrad embedding table parameters.
     return tpu_ops.load_tpu_embedding_adagrad_parameters
 
   def _retrieve(self) -> Callable[..., core.Tensor]:
+    # [FUNCTION DOC]
+    # Returns the TPU operation that retrieves Adagrad embedding table parameters.
     return tpu_ops.retrieve_tpu_embedding_adagrad_parameters
 
 
 @tf_export("tpu.experimental.embedding.AdagradMomentum")
 class AdagradMomentum(_Optimizer):
+  # [CLASS DOC]
+  # Adagrad with momentum optimizer parameters for TPU embedding tables. Keeps two slot
+  # variables (accumulators and momenta), both zero initialized. Stores momentum, Nesterov
+  # flag, accumulator exponent, beta2 and epsilon, and writes them to the Adagrad-momentum
+  # section of the optimization parameters message. Exported publicly.
   """Optimization parameters for Adagrad + Momentum with TPU embeddings.
 
   Pass this to `tf.tpu.experimental.embedding.TPUEmbedding` via the `optimizer`
@@ -707,6 +874,15 @@ class AdagradMomentum(_Optimizer):
       clipvalue: Optional[ClipValueType] = None,
       low_dimensional_packing_status: bool = False,
   ):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring describes epsilon as the initial accumulator, but it is
+    # written to the epsilon field of the parameters message and only validated to be positive.
+    # Creates Adagrad+momentum parameters. Inputs: learning_rate (default 0.001); momentum
+    # (default 0); use_nesterov flag; exponent (default 2, must be positive); beta2 (default 1);
+    # epsilon (default 1e-10, must be positive); plus the common optimizer settings (gradient
+    # accumulation, weight clipping, weight decay, slot creation callback, clipvalue, low
+    # dimensional packing). Raises a value error for non-positive epsilon or exponent.
+    # Returns nothing.
     """Optimization parameters for Adagrad + Momentum.
 
     Args:
@@ -764,9 +940,13 @@ class AdagradMomentum(_Optimizer):
     self.epsilon = epsilon
 
   def _slot_names(self) -> List[Text]:
+    # [FUNCTION DOC]
+    # Returns the slot names "accumulators" and "momenta".
     return ["accumulators", "momenta"]
 
   def _slot_initializers(self) -> List[init_ops_v2.Initializer]:
+    # [FUNCTION DOC]
+    # Returns two default (zero valued) partition aware constant initializers, one per slot.
     return [
         init_ops_v2.Constant(support_partition=True),
         init_ops_v2.Constant(support_partition=True),
@@ -775,6 +955,10 @@ class AdagradMomentum(_Optimizer):
   def _set_optimization_parameters(
       self, parameters: optimization_parameters_pb2.OptimizationParameters
   ):
+    # [FUNCTION DOC]
+    # Fills the common optimization fields, then marks the Adagrad-momentum section present and
+    # writes momentum, Nesterov flag, exponent, beta2 and epsilon into the given parameters
+    # message (mutated in place). Returns nothing.
     super()._set_optimization_parameters(parameters)
     parameters.adagrad_momentum.SetInParent()
     parameters.adagrad_momentum.momentum = self.momentum
@@ -784,14 +968,23 @@ class AdagradMomentum(_Optimizer):
     parameters.adagrad_momentum.epsilon = self.epsilon
 
   def _load(self) -> Callable[..., ops.Operation]:
+    # [FUNCTION DOC]
+    # Returns the TPU operation that loads Adagrad-momentum embedding table parameters.
     return tpu_ops.load_tpu_embedding_adagrad_momentum_parameters
 
   def _retrieve(self) -> Callable[..., core.Tensor]:
+    # [FUNCTION DOC]
+    # Returns the TPU operation that retrieves Adagrad-momentum embedding table parameters.
     return tpu_ops.retrieve_tpu_embedding_adagrad_momentum_parameters
 
 
 @tf_export("tpu.experimental.embedding.FTRL")
 class FTRL(_Optimizer):
+  # [CLASS DOC]
+  # Follow-the-regularized-leader optimizer parameters for TPU embedding tables. Keeps two
+  # slot variables (accumulators, initialized to a positive constant, and linears, zero
+  # initialized). Stores learning rate power, L1/L2 strengths, beta and two behavior flags, and
+  # writes them to the FTRL section of the optimization parameters message. Exported publicly.
   """Optimization parameters for FTRL with TPU embeddings.
 
   See Algorithm 1 of this
@@ -859,6 +1052,17 @@ class FTRL(_Optimizer):
       allow_zero_accumulator: bool = False,
       low_dimensional_packing_status: bool = False,
   ):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it configures Adagrad (copy-paste; it configures FTRL),
+    # and says zero initial accumulator values are allowed, but the code raises an error for
+    # any value that is not strictly positive. Range checks promised for learning_rate_power
+    # and the L1/L2 strengths are not enforced.
+    # Creates FTRL parameters. Inputs: learning_rate (default 0.001); learning_rate_power
+    # (default -0.5); l1 and l2 regularization strengths (default 0); beta (default 0);
+    # initial_accumulator_value (default 0.1); plus the common optimizer settings (gradient
+    # accumulation, weight clipping, weight decay, slot creation callback, clipvalue);
+    # multiply_linear_by_learning_rate and allow_zero_accumulator flags; low dimensional
+    # packing flag. Raises a value error for a non-positive initial accumulator. Returns nothing.
     """Optimization parameters for Adagrad.
 
     Args:
@@ -935,9 +1139,14 @@ class FTRL(_Optimizer):
     self.allow_zero_accumulator = allow_zero_accumulator
 
   def _slot_names(self) -> List[Text]:
+    # [FUNCTION DOC]
+    # Returns the slot names "accumulators" and "linears".
     return ["accumulators", "linears"]
 
   def _slot_initializers(self) -> List[init_ops_v2.Initializer]:
+    # [FUNCTION DOC]
+    # Returns two partition aware constant initializers: the accumulators start at the initial
+    # accumulator value, the linears at zero.
     return [
         init_ops_v2.Constant(
             self.initial_accumulator_value, support_partition=True
@@ -948,6 +1157,10 @@ class FTRL(_Optimizer):
   def _set_optimization_parameters(
       self, parameters: optimization_parameters_pb2.OptimizationParameters
   ):
+    # [FUNCTION DOC]
+    # Fills the common optimization fields, then writes L1, L2, learning rate power, beta, the
+    # multiply-linear-by-learning-rate flag and the allow-zero-accumulator flag into the FTRL
+    # section of the given parameters message (mutated in place). Returns nothing.
     super()._set_optimization_parameters(parameters)
     ftrl = parameters.ftrl
     ftrl.l1 = self.l1_regularization_strength
@@ -958,14 +1171,23 @@ class FTRL(_Optimizer):
     ftrl.allow_zero_accumulator = self.allow_zero_accumulator
 
   def _load(self) -> Callable[..., ops.Operation]:
+    # [FUNCTION DOC]
+    # Returns the TPU operation that loads FTRL embedding table parameters.
     return tpu_ops.load_tpu_embedding_ftrl_parameters
 
   def _retrieve(self) -> Callable[..., core.Tensor]:
+    # [FUNCTION DOC]
+    # Returns the TPU operation that retrieves FTRL embedding table parameters.
     return tpu_ops.retrieve_tpu_embedding_ftrl_parameters
 
 
 @tf_export("tpu.experimental.embedding.Adam")
 class Adam(_Optimizer):
+  # [CLASS DOC]
+  # Adam optimizer parameters for TPU embedding tables (lazy Adam by default). Keeps two slot
+  # variables (momenta and velocities), both zero initialized. Stores beta_1, beta_2, epsilon,
+  # the lazy flag and the sum-inside-square-root flag, and writes them to the Adam section of
+  # the optimization parameters message. Exported publicly.
   """Optimization parameters for Adam with TPU embeddings.
 
   Pass this to `tf.tpu.experimental.embedding.TPUEmbedding` via the `optimizer`
@@ -1032,6 +1254,16 @@ class Adam(_Optimizer):
       clipvalue: Optional[ClipValueType] = None,
       low_dimensional_packing_status: bool = False,
   ):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the error text for an out-of-range beta_2 reports the value of beta_1, and
+    # the error text for non-lazy Adam without accumulation tells the user to set gradient
+    # accumulation to False although it must be enabled.
+    # Creates Adam parameters. Inputs: learning_rate (default 0.001); beta_1 and beta_2 (each
+    # must be in zero inclusive to one exclusive; defaults 0.9 and 0.999); epsilon (positive,
+    # default 1e-7); lazy_adam flag (default true); sum_inside_sqrt flag (default true); plus
+    # the common optimizer settings. Raises a value error for out-of-range beta values,
+    # non-positive epsilon, or when lazy Adam is off while gradient accumulation is off.
+    # Returns nothing.
     """Optimization parameters for Adam.
 
     See 'tensorflow/core/protobuf/tpu/optimization_parameters.proto' for a
@@ -1107,9 +1339,13 @@ class Adam(_Optimizer):
     self.sum_inside_sqrt = sum_inside_sqrt
 
   def _slot_names(self) -> List[Text]:
+    # [FUNCTION DOC]
+    # Returns the slot names "momenta" and "velocities".
     return ["momenta", "velocities"]
 
   def _slot_initializers(self) -> List[init_ops_v2.Initializer]:
+    # [FUNCTION DOC]
+    # Returns two default (zero valued) partition aware constant initializers, one per slot.
     return [
         init_ops_v2.Constant(support_partition=True),
         init_ops_v2.Constant(support_partition=True),
@@ -1118,6 +1354,10 @@ class Adam(_Optimizer):
   def _set_optimization_parameters(
       self, parameters: optimization_parameters_pb2.OptimizationParameters
   ):
+    # [FUNCTION DOC]
+    # Fills the common optimization fields, then writes beta1, beta2, epsilon, the non-lazy
+    # flag (the opposite of lazy_adam) and the sum-inside-square-root flag into the Adam
+    # section of the given parameters message (mutated in place). Returns nothing.
     super(Adam, self)._set_optimization_parameters(parameters)
     parameters.adam.beta1 = self.beta_1
     parameters.adam.beta2 = self.beta_2
@@ -1126,14 +1366,24 @@ class Adam(_Optimizer):
     parameters.adam.use_sum_inside_sqrt = self.sum_inside_sqrt
 
   def _load(self) -> Callable[..., ops.Operation]:
+    # [FUNCTION DOC]
+    # Returns the TPU operation that loads Adam embedding table parameters.
     return tpu_ops.load_tpu_embedding_adam_parameters
 
   def _retrieve(self) -> Callable[..., core.Tensor]:
+    # [FUNCTION DOC]
+    # Returns the TPU operation that retrieves Adam embedding table parameters.
     return tpu_ops.retrieve_tpu_embedding_adam_parameters
 
 
 @tf_export("tpu.experimental.embedding.CustomCombiner")
 class CustomCombiner(_WithSlotVariables):
+  # [CLASS DOC]
+  # User defined combiner for embedding lookups on SparseCore (V2 class only). Wraps a traced
+  # per-sample combiner function with its maximum valency, optional number of trainable combiner
+  # weights, an initializer for those weights and their learning rate. Exposes a generated
+  # name starting with a fixed prefix, and one slot variable (for the weights) only when the
+  # number of weights is positive. Used as the combiner of a table configuration.
   """Custom combiner for TPU embeddings.
 
   This class gives the user the ability to define a custom combiner for running
@@ -1220,6 +1470,15 @@ class CustomCombiner(_WithSlotVariables):
       initializer: Optional[init_ops_v2.Initializer] = None,
       combiner_weights_learning_rate: Union[float, Callable[[], float]] = 0.01,
   ) -> Any:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: annotated as returning an arbitrary value although a constructor returns
+    # nothing; the generated name uses the hash of the computation, so it is not stable across
+    # processes and two combiners over the same computation get the same name.
+    # Inputs: combiner_computation (traced function taking valency, vectors and, when weights
+    # exist, the weights); max_valency (integer maximum number of ids per sample);
+    # num_weights (integer, default 0); initializer (required when num_weights is positive);
+    # combiner_weights_learning_rate (float or callable, default 0.01). Raises a value error
+    # if weights are requested without an initializer. Sets the combiner name and attributes.
     super().__init__()
     self.combiner = "custom_combiner_" + str(hash(combiner_computation))
     self.combiner_computation = combiner_computation
@@ -1238,21 +1497,33 @@ class CustomCombiner(_WithSlotVariables):
     )
 
   def _slot_names(self) -> List[Text]:
+    # [FUNCTION DOC]
+    # Returns a list with the single combiner variables slot name when the number of weights is
+    # positive, otherwise an empty list.
     if self.num_weights > 0:
       return list(self._slot_names_attr)
     return []
 
   def _slot_initializers(self) -> List[init_ops_v2.Initializer]:
+    # [FUNCTION DOC]
+    # Returns a list with the weight initializer when the number of weights is positive,
+    # otherwise an empty list.
     if self.num_weights > 0:
       return list(self._slot_initializers_attr)
     return []
 
   def __str__(self) -> str:
+    # [FUNCTION DOC]
+    # Returns the generated combiner name string (prefix plus the computation hash).
     return self.combiner
 
 
 @tf_export("tpu.experimental.embedding.QuantizationConfig")
 class QuantizationConfig:
+  # [CLASS DOC]
+  # Settings for simulated quantization of embedding lookup results: number of buckets and the
+  # lower and upper clipping bounds. Attached to a table configuration and written into the
+  # optimization parameters message. Does not change the stored table type.
   """Settings for simulated quantization of the tpu embedding table.
 
   When simulated quantization is enabled, the results of the embedding lookup
@@ -1279,6 +1550,11 @@ class QuantizationConfig:
   """
 
   def __init__(self, num_buckets: int, lower: float, upper: float):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring lists a return value, but a constructor returns nothing; the
+    # lower bound is not checked to be below the upper bound.
+    # Inputs: num_buckets (integer, at least 2), lower and upper (floats, clipping range).
+    # Raises a value error if num_buckets is below 2. Stores the three values.
     """Simulated quantizaiton configuration.
 
     Args:
@@ -1302,12 +1578,18 @@ class QuantizationConfig:
 
   def _set_optimization_parameters(
       self, parameters: optimization_parameters_pb2.OptimizationParameters):
+    # [FUNCTION DOC]
+    # HELPER: used by the table configuration when building a table descriptor.
+    # Mutates the given parameters message: enables simulated quantization and sets the number
+    # of buckets and the lower and upper clipping limits. Returns nothing.
     parameters.simulated_quantization.enabled = True
     parameters.simulated_quantization.num_buckets = self.num_buckets
     parameters.simulated_quantization.clipping_limits.lower.value = self.lower
     parameters.simulated_quantization.clipping_limits.upper.value = self.upper
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns a text form listing number of buckets, lower and upper bounds.
     return ("QuantizationConfig(num_buckets={num_buckets!r}, lower={lower!r}, "
             "upper={upper!r})".format(
                 num_buckets=self.num_buckets,
@@ -1317,6 +1599,11 @@ class QuantizationConfig:
 
 @tf_export("tpu.experimental.embedding.TableConfig")
 class TableConfig:
+  # [CLASS DOC]
+  # Configuration of one embedding table: vocabulary size, embedding dimension, initializer,
+  # optional table specific optimizer, combiner (string or custom combiner), name, optional
+  # quantization config, optional precomputed layout and data type. Shared by several feature
+  # configurations to share a table. Can write itself into a TPU embedding table descriptor.
   """Configuration data for one embedding table.
 
   This class holds the configuration data for a single embedding table. It is
@@ -1366,6 +1653,16 @@ class TableConfig:
       layout: Optional[Any] = None,
       dtype: dtypes.DType = dtypes.float32,
   ):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring lists a return value (a constructor returns nothing) and
+    # claims the name is required on SparseCore, but a missing name only logs a warning.
+    # Inputs: vocabulary_size and dim (positive integers); initializer (optional callable,
+    # defaults to a truncated normal with zero mean and standard deviation of one over the
+    # square root of dim); optimizer (optional); combiner (one of the strings mean, sum, sqrtn,
+    # or a custom combiner; default mean); name (optional); quantization_config (optional);
+    # layout (optional); dtype (float32 or int32, default float32). Raises a value error for an
+    # invalid size, dimension, non-callable initializer, unsupported combiner or dtype.
+    # Side effect: logs a warning when no name is given.
     """Embedding table configuration.
 
     Args:
@@ -1460,6 +1757,9 @@ class TableConfig:
     self.dtype = dtype
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns a text form listing size, dimension, initializer, optimizer, combiner, name and
+    # quantization config. The default truncated normal initializer is shown as nothing.
     # If using the default initializer, just print "None" for clarity.
     initializer = self.initializer
 
@@ -1489,6 +1789,12 @@ class TableConfig:
       .TPUEmbeddingConfiguration.TableDescriptor,
       num_hosts: int,
       learning_rate_index: Dict[Callable[[], Any], int]):
+    # [FUNCTION DOC]
+    # HELPER: used by the embedding layer when building the TPU embedding configuration.
+    # Mutates table_descriptor: sets the name, the vocabulary size padded up to num_hosts, the
+    # dimension, and (if an optimizer is set) the learning rate (dynamic tag looked up in
+    # learning_rate_index for callables, else constant), low dimensional packing, and the
+    # optimizer's own parameters; then quantization parameters if configured. Returns nothing.
     """Set the table descriptor from the table data."""
     table_descriptor.name = self.name
 
@@ -1521,14 +1827,22 @@ class TableConfig:
 
 @tf_export("tpu.experimental.embedding.RowIdInitializer")
 class RowIdInitializer:
+  # [CLASS DOC]
+  # Initializer that fills each table row with its row index plus an offset (every column of a
+  # row holds the same value). Used to create tables whose contents identify the vocabulary id.
   """An initializer that initializes the table with vocabulary ids."""
 
   def __init__(self, offset: int = 0):
+    # [FUNCTION DOC]
+    # Stores the integer offset (default 0) added to each row index.
     self.offset = offset
 
   def __call__(
       self, shape: Union[Sequence[int], TensorShape], dtype: dtypes.DType
   ) -> core.Tensor:
+    # [FUNCTION DOC]
+    # Inputs: shape (table shape, first entry is the number of rows) and dtype. Returns a
+    # tensor of that shape and dtype where row i holds the value offset plus i in all columns.
     return math_ops.range(
         start=self.offset, limit=self.offset + shape[0], delta=1, dtype=dtype
     )[:, None] * array_ops.ones(shape, dtype=dtype)
@@ -1536,6 +1850,11 @@ class RowIdInitializer:
 
 @tf_export("tpu.experimental.embedding.FeatureConfig")
 class FeatureConfig:
+  # [CLASS DOC]
+  # Configuration of one embedding feature: the table configuration it is looked up in, an
+  # optional maximum sequence length, a weights/indices validation flag, an optional output
+  # shape (stored as a tensor shape) and an optional name. Used as the values of the feature
+  # configuration structure passed to the TPU embedding layer.
   """Configuration data for one embedding feature.
 
   This class holds the configuration data for a single embedding feature. The
@@ -1590,6 +1909,13 @@ class FeatureConfig:
                validate_weights_and_indices: bool = True,
                output_shape: Optional[Union[List[int], TensorShape]] = None,
                name: Optional[Text] = None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring lists a return value, but a constructor returns nothing.
+    # Inputs: table (a table configuration); max_sequence_length (non-negative integer, default
+    # 0 meaning not a sequence); validate_weights_and_indices (boolean, default true);
+    # output_shape (optional list or tensor shape); name (optional). Raises a value error if
+    # table has the wrong type, max_sequence_length is not a non-negative integer, or the
+    # validation flag is not a boolean. Stores the values.
     """Feature configuration.
 
     Args:
@@ -1641,6 +1967,9 @@ class FeatureConfig:
     self.validate_weights_and_indices = validate_weights_and_indices
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns a text form listing table, maximum sequence length, validation flag, output shape
+    # and name.
     return ("FeatureConfig(table={table!r}, "
             "max_sequence_length={max_sequence_length!r}, "
             "validate_weights_and_indices={validate_weights_and_indices!r}, "
@@ -1654,6 +1983,10 @@ class FeatureConfig:
 
 def log_tpu_embedding_configuration(
     config: tpu_embedding_configuration_pb2.TPUEmbeddingConfiguration) -> None:
+  # [FUNCTION DOC]
+  # Logs a configuration message line by line at informational level, between a start and a
+  # done message, so that long configurations are not truncated by the logger. Input: config,
+  # the TPU embedding configuration protocol buffer. Returns nothing; side effect is logging.
   """Logs a TPUEmbeddingConfiguration proto across multiple statements.
 
   Args:
@@ -1668,6 +2001,11 @@ def log_tpu_embedding_configuration(
 
 
 def _sort_device_spec_strings(device_strings: Iterable[str]) -> List[str]:
+  # [FUNCTION DOC]
+  # HELPER: gives a deterministic device order for host listing.
+  # Input: device_strings, an iterable of device specification strings. Output: list of
+  # normalized device strings sorted by replica, then task, then device index (numeric, not
+  # alphabetical). Raises whatever the spec parser raises for malformed strings.
   sorted_specs = sorted(
       (device_spec.DeviceSpecV2.from_string(spec) for spec in device_strings),
       key=lambda s: (s.replica, s.task, s.device_index),
@@ -1676,6 +2014,10 @@ def _sort_device_spec_strings(device_strings: Iterable[str]) -> List[str]:
 
 
 def get_list_of_hosts(strategy: tpu_strategy.TPUStrategy) -> List[Text]:
+  # [FUNCTION DOC]
+  # Input: strategy, a TPU strategy. Output: list of unique host (CPU) device strings, in the
+  # order of the sorted worker devices. Raises an assertion error if the number of hosts found
+  # differs from the strategy's reported host count.
   """Returns a sorted list of CPU devices for the remote jobs.
 
   Args:
