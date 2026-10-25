@@ -80,7 +80,6 @@ class MultiDeviceIteratorCommonTest(test_base.DatasetTestBase,
     # the expected element (value 1). Also drops a function reference and collects garbage as
     # a workaround for a sanitizer error. Parameter cls is the iterator class.
     ping = data_flow_ops.FIFOQueue(capacity=2, dtypes=dtypes.int64)
-    ping = data_flow_ops.FIFOQueue(capacity=2, dtypes=dtypes.int64)
     pong = data_flow_ops.FIFOQueue(capacity=2, dtypes=dtypes.int64)
 
     @def_function.function

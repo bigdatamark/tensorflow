@@ -199,17 +199,6 @@ class AsyncCheckpointHelper:
     Raises:
       AttributeError: when checkpointer_impl is None.
     """
-    """Initialize AsyncCheckpoint.
-
-    Args:
-      checkpointer_impl: The Checkpoint class to power the AsyncCheckpoint.
-      root: The root object to checkpoint. `root` may be a trackable object or
-        `WeakRef` of a trackable object.
-      **kwargs: The keyword arguments representing the checkpointed variables.
-
-    Raises:
-      AttributeError: when checkpointer_impl is None.
-    """
     # TODO(chienchunh): Make sure the processing for the root object is
     #   consistent when integrating with the public API, e.g., adding all kwarg
     #   items as the child of the root object.
