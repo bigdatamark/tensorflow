@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Defines AutoTrackable, a Trackable base class that automatically records dependency edges when
+# trackable values are assigned as attributes (wrapping lists, dicts and tuples in trackable data
+# structures), and also reports tf.function attributes as children for SavedModel export. Exposed
+# publicly through the internal tracking namespace. Has no import-time side effects other than
+# the export registration.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,6 +34,13 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export("__internal__.tracking.AutoTrackable", v1=[])
 class AutoTrackable(base.Trackable):
+  # [CLASS DOC]
+  # Trackable subclass with implicit dependency tracking. Assigning an attribute passes the value
+  # through the sticky attribute assignment helper, which creates a named dependency when the
+  # value is trackable (or wraps containers); deleting an attribute removes the dependency. For
+  # SavedModel export its children also include function attributes (tf.function objects and
+  # concrete functions), which are traced to force side effects. State lives in the Trackable
+  # base class dependency lists and name maps. Intended to be subclassed or instantiated directly.
   """Manages dependencies on other objects.
 
   `Trackable` objects may have dependencies: other `Trackable` objects
@@ -56,6 +69,14 @@ class AutoTrackable(base.Trackable):
   """
 
   def __setattr__(self, name, value):
+    # [FUNCTION DOC]
+    # Attribute assignment hook. Inputs: name and value. If the attribute already exists and is
+    # the identical object, returns immediately (no re-tracking). Otherwise, unless the instance
+    # flag for setattr tracking has been switched off (it defaults to on), the value is passed
+    # through the sticky attribute assignment helper, which may register a dependency on it and
+    # may return a wrapped value (for example a trackable list or mapping). Finally stores the
+    # (possibly wrapped) value with the standard attribute mechanism. Returns nothing. Errors from
+    # the helper, such as a name already declared as a dependency, propagate.
     """Support self.foo = trackable syntax."""
     try:
       if getattr(self, name) is value:
@@ -70,14 +91,34 @@ class AutoTrackable(base.Trackable):
     super(AutoTrackable, self).__setattr__(name, value)
 
   def __delattr__(self, name):
+    # [FUNCTION DOC]
+    # Attribute deletion hook. Input: name. First removes any tracked dependency with that name,
+    # then deletes the attribute normally (raising an attribute error if it does not exist,
+    # after the dependency removal has already been attempted). Returns nothing.
     self._delete_tracking(name)
     super(AutoTrackable, self).__delattr__(name)
 
   def _no_dependency(self, value):
+    # [FUNCTION DOC]
+    # HELPER: lets callers mark a value so assigning it does not create a dependency. Input:
+    # value, any object. Returns it wrapped in the no-dependency wrapper from the data structures
+    # module. No side effects.
     """Override to allow TrackableBase to disable dependency tracking."""
     return data_structures.NoDependency(value)
 
   def _trackable_children(self, save_type=base.SaveType.CHECKPOINT, **kwargs):
+    # [FUNCTION DOC]
+    # Returns a mapping from child names to child objects. Inputs: save_type (checkpoint by
+    # default, or SavedModel) and extra keyword arguments forwarded to the base implementation.
+    # For anything but SavedModel it simply delegates to the base class. For SavedModel it scans
+    # every attribute name of the object (temporarily raising the logging threshold to fatal and
+    # ignoring warnings, and treating any attribute whose access raises as nothing), collects
+    # tf.function and concrete function attributes, and traces all tf.function objects to
+    # enumerate their concrete functions (forcing variable creation and other side effects).
+    # It then builds the result from the tracked checkpoint dependencies, skipping function-typed
+    # dependencies, and merges in the collected functions. Raises a value error if a tracked
+    # dependency and a function attribute share a name but are different objects. Restores the
+    # logging verbosity even on errors.
     """Returns all children of a trackable, including functions."""
     if save_type != base.SaveType.SAVEDMODEL:
       return super(AutoTrackable, self)._trackable_children(
@@ -138,6 +179,12 @@ class AutoTrackable(base.Trackable):
     return children
 
   def _delete_tracking(self, name):
+    # [FUNCTION DOC]
+    # HELPER: used by attribute deletion to drop a dependency. Input: name of the dependency.
+    # Makes sure the trackable bookkeeping is initialized, and if the name is a registered
+    # unconditional dependency, removes it from the name map and removes the first matching entry
+    # from the ordered unconditional checkpoint dependency list. Does nothing for unknown names.
+    # Returns nothing.
     """Removes the tracking of name."""
     self._maybe_initialize_trackable()
     if name in self._unconditional_dependency_names:
@@ -149,4 +196,8 @@ class AutoTrackable(base.Trackable):
           break
 
   def _add_trackable_child(self, name, value):
+    # [FUNCTION DOC]
+    # HELPER: hook used by checkpoint and SavedModel loading to attach a restored child. Inputs:
+    # name and value. Assigns the value as an attribute through the tracking attribute assignment,
+    # so a dependency is created. Returns nothing.
     self.__setattr__(name, value)

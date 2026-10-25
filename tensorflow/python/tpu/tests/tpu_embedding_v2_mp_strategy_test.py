@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# TPU test module for the mid level TPU embedding API (version 2) under a model-parallel TPU
+# strategy (one replica spread over two cores with SPMD XLA partitioning). Defines one test class
+# that overrides strategy creation, provides an enqueue helper and trains a tiny one-table model
+# with a decaying learning rate, comparing the learned table against analytically computed
+# values. Runs under the TF test runner with V2 behavior when executed as a script. No public API.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -39,14 +45,29 @@ from tensorflow.python.tpu.tests import tpu_embedding_base_test
 class TPUEmbeddingTPUStrategyV2Test(
     tpu_embedding_base_test.TPUEmbeddingBaseTest
 ):
+  # [CLASS DOC]
+  # Test case for the TPU embedding mid level API on a model-parallel TPU strategy: a single
+  # replica using two cores per replica. Holds the replica and core counts as attributes, creates
+  # the strategy itself (storing it and the flat list of embedding devices on the instance) and
+  # reuses the other fixtures of the shared base test class.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Test fixture setup: runs the base class setup, then records one replica and two cores per
+    # replica as instance attributes used by the strategy creation and the expected values.
     super().setUp()
 
     self._num_replicas = 1
     self._num_cores_per_replica = 2
 
   def _get_strategy(self) -> tpu_strategy.TPUStrategy:
+    # [FUNCTION DOC]
+    # HELPER: overrides the base class strategy factory so the tests use a model-parallel TPU.
+    # Initializes the TPU system (via the base helper), builds a device assignment with a
+    # computation shape of 1 by 1 by 1 by 2 and one replica, and creates a TPU strategy (v2)
+    # using the resolver with that assignment and SPMD XLA partitioning. Side effects: stores
+    # the strategy and a flattened list of the TPU devices of all replicas on the instance.
+    # Returns the strategy.
     topology = self._init_tpu_system()
 
     d_assign = device_lib.device_assignment(
@@ -68,6 +89,12 @@ class TPUEmbeddingTPUStrategyV2Test(
     return self.strategy
 
   def enqueue(self, inp, mid_level_api, use_device, training):
+    # [FUNCTION DOC]
+    # HELPER: enqueues input batches into the embedding for the model-parallel tests.
+    # Inputs: inp is a list of per-device feature batches; mid_level_api is the embedding
+    # object; use_device is a flag choosing per-device enqueue; training is the training flag
+    # forwarded to enqueue. When use_device is true each batch is enqueued onto its matching
+    # embedding device; otherwise only the first batch is enqueued. Returns nothing.
     if use_device:
       for emb, device in zip(inp, self.embedding_devices):
         mid_level_api.enqueue(emb, device=device, training=training)
@@ -76,6 +103,15 @@ class TPUEmbeddingTPUStrategyV2Test(
 
   @parameterized.parameters(False, True)
   def test_spmd_training(self, use_device):
+    # [FUNCTION DOC]
+    # Parameterized test over use_device (false, true). Builds a one-table embedding (two rows,
+    # width four, zero initial values, sum combiner) with an SGD optimizer whose learning rate
+    # decays linearly from 1.0 to 0.5 over ten steps driven by a step counter variable. Inputs
+    # are either one distributed dataset or one dataset per embedding device. A compiled
+    # function enqueues, dequeues, takes gradients of the summed activations and applies them.
+    # Runs ten steps, incrementing the counter each time, unpacks the activations per step and
+    # asserts they match golden values: the negative running sums of the learning rates, repeated
+    # across the table width and the cores per replica.
     num_steps = 10
     num_steps_float = float(num_steps)
     starting_lr = 1.0
@@ -88,6 +124,10 @@ class TPUEmbeddingTPUStrategyV2Test(
       step_counter = tf_variables.Variable(0.0, dtypes.float32)
 
       def lr_function():
+        # [FUNCTION DOC]
+        # Learning rate schedule callback: returns the larger of the ending rate and a linear
+        # interpolation from the starting rate toward the ending rate based on the current value
+        # of the step counter divided by the number of steps. Takes no arguments.
         return gen_math_ops.maximum(
             ending_lr,
             starting_lr
@@ -112,6 +152,10 @@ class TPUEmbeddingTPUStrategyV2Test(
       )
 
     def input_fn(ctx):
+      # [FUNCTION DOC]
+      # Dataset factory for the distribution strategy: ignores the input context and returns an
+      # endlessly repeating dataset whose single element is a mapping with one feature holding
+      # the ids zero and one as a two by one integer tensor.
       del ctx
       feature = {
           'feature': constant_op.constant(
@@ -121,6 +165,11 @@ class TPUEmbeddingTPUStrategyV2Test(
       return dataset_ops.DatasetV2.from_tensors(feature).repeat()
 
     def create_datasets():
+      # [FUNCTION DOC]
+      # Builds the input datasets for the enclosing test. If per-device input is requested, makes
+      # one endlessly repeating dataset per embedding device, each holding a feature id equal to
+      # the device index modulo the cores per replica. Otherwise distributes the input function
+      # dataset through the strategy without fetching to device. Returns a list of datasets.
       """Creates either a per-replica dataset, or multiple per-devices ones.
 
       This function explicitly creates per-device datasets because the strategy
@@ -155,7 +204,16 @@ class TPUEmbeddingTPUStrategyV2Test(
 
     @def_function.function(jit_compile=True)
     def test_fn():
+      # [FUNCTION DOC]
+      # Compiled (XLA jit) training step: takes the next element of every iterator, enqueues them
+      # as training input through the enqueue helper, and runs the per-replica step on the
+      # strategy, returning its activations.
       def step():
+        # [FUNCTION DOC]
+        # Per-replica step: dequeues activations, records them on a gradient tape, takes the
+        # summed feature activations divided by the replica count as loss, computes gradients with
+        # respect to the activations, applies them to the embedding tables and returns the
+        # activations.
         with backprop.GradientTape() as tape:
           activations = mid_level_api.dequeue()
           tape.watch(activations)

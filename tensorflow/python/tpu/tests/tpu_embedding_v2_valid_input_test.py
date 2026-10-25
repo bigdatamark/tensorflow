@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# TPU test module for the mid level TPU embedding API (version 2) with valid inputs: passing
+# nothing as gradients, mixing sparse and ragged inputs, per-device enqueue, weighted inputs,
+# deterministic configuration generation and features with missing samples. Defines one test
+# class on top of the shared embedding base test; runs under the TF test runner with V2 behavior
+# when executed as a script. No public API.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,8 +39,19 @@ from tensorflow.python.util import nest
 
 
 class TPUEmbeddingTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
+  # [CLASS DOC]
+  # Test case of positive scenarios for the TPU embedding mid level API with valid sparse,
+  # ragged and weighted inputs. Strategy, dataset builders, tables and replica helpers come from
+  # the shared base test class.
 
   def test_pass_none_to_apply_gradients(self):
+    # [FUNCTION DOC]
+    # Test (skipped in the open source build): builds an SGD mid level API for three features and
+    # a sparse dataset. One compiled function enqueues, dequeues and applies gradients that are
+    # nothing for the first two features and ones for the third; another only enqueues and
+    # dequeues without training. Compares the second lookup to the first minus the expected SGD
+    # update (learning rate 0.1, scaled by the replica count, with a third of it for the mean
+    # combined row), asserting that the nothing gradients caused no change.
     self.skip_if_oss()
     strategy, mid_level_api, _ = self._create_strategy_and_mid_level('sgd')
     mid_level_api.build([
@@ -52,8 +69,15 @@ class TPUEmbeddingTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
 
     @def_function.function
     def embedding_and_set_gradients(data):
+      # [FUNCTION DOC]
+      # Compiled body: enqueues data (training mode default) and runs the per-replica function
+      # on the strategy, returning the activations produced before the gradient update.
       mid_level_api.enqueue(data)
       def tpu_fn():
+        # [FUNCTION DOC]
+        # Per-replica function: dequeues activations, applies gradients that are nothing for the
+        # first two features and a tensor of ones shaped like the third activation, and returns
+        # the dequeued activations.
         results = mid_level_api.dequeue()
         mid_level_api.apply_gradients((None, None,
                                        array_ops.ones_like(results[2])))
@@ -62,8 +86,13 @@ class TPUEmbeddingTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
 
     @def_function.function
     def embedding_only(data):
+      # [FUNCTION DOC]
+      # Compiled body: enqueues data in non-training mode and runs the per-replica dequeue on the
+      # strategy, returning the activations.
       mid_level_api.enqueue(data, training=False)
       def tpu_fn():
+        # [FUNCTION DOC]
+        # Per-replica function: returns the dequeued activations of the mid level API.
         return mid_level_api.dequeue()
       return strategy.run(tpu_fn)
 
@@ -90,6 +119,10 @@ class TPUEmbeddingTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
     self.assertAllClose(golden, second)
 
   def test_enqueue_sparse_and_ragged(self):
+    # [FUNCTION DOC]
+    # Test (skipped in the open source build): distributes a sparse and a ragged dataset and, in
+    # a compiled function, enqueues a mixed structure (sparse for features zero and two, ragged
+    # for feature one) for inference, then dequeues. Passes if no error is raised.
     self.skip_if_oss()
     strategy, mid_level_api, _ = self._create_strategy_and_mid_level('sgd')
 
@@ -108,7 +141,12 @@ class TPUEmbeddingTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
 
     @def_function.function
     def test_fn():
+      # [FUNCTION DOC]
+      # Compiled body: takes one sparse and one ragged batch, enqueues a mix of both and runs the
+      # per-replica dequeue, returning the result.
       def step():
+        # [FUNCTION DOC]
+        # Per-replica step: returns the dequeued activations of the mid level API.
         return mid_level_api.dequeue()
 
       sparse_features = next(sparse_iter)
@@ -120,6 +158,12 @@ class TPUEmbeddingTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
     test_fn()
 
   def test_enqueue_per_device(self):
+    # [FUNCTION DOC]
+    # Test (skipped in the open source build): in a compiled function, first enqueues a sparse
+    # batch globally and dequeues activations; then enqueues the per-core local slices of the
+    # same batch to each core's own device through a distributed-values function and dequeues
+    # again. Asserts the replica zero activations of both paths are close, then runs the
+    # compiled function a second time to check it can be re-executed.
     self.skip_if_oss()
     strategy, mid_level_api, _ = self._create_strategy_and_mid_level('sgd')
 
@@ -132,7 +176,15 @@ class TPUEmbeddingTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
 
     @def_function.function
     def test_fn():
+      # [FUNCTION DOC]
+      # Compiled body: enqueues the sparse batch globally and runs the activation getter; then
+      # builds distributed values by enqueueing each core's local slice to its device and runs the
+      # getter again. Returns the global activations, the per-device activations and the two dense
+      # pass-through values.
       def get_activations(dense_value):
+        # [FUNCTION DOC]
+        # Per-replica function: returns a pair of the dequeued activations and the dense value
+        # passed in (used to force the enqueue function to execute).
         return mid_level_api.dequeue(), dense_value
 
       sparse_features = next(sparse_iter)
@@ -140,6 +192,10 @@ class TPUEmbeddingTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
       activations, dense_value1 = strategy.run(get_activations, args=(0.0,))
 
       def enqueue_fn(ctx):
+        # [FUNCTION DOC]
+        # Value function run per replica with the input context: finds the replica's core index
+        # and device, slices out that core's local sparse features, enqueues them (non-training)
+        # to that device, and returns the constant zero as a placeholder dense value.
         core_id = ctx.replica_id_in_sync_group
         device = strategy.extended.worker_devices[core_id]
         sparse_features_local = nest.map_structure(
@@ -167,6 +223,12 @@ class TPUEmbeddingTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
 
   @parameterized.parameters(True, False)
   def test_enqueue_with_weights(self, ragged):
+    # [FUNCTION DOC]
+    # Parameterized test over ragged (true: ragged dataset, false: sparse dataset, which also
+    # triggers an explicit build with fixed shapes). Uses a weight of 0.5. Gets activations with
+    # no weights and with weights (the second feature's weight replaced by nothing) via a compiled
+    # function. Asserts the weighted result equals the unweighted one scaled by 0.5, 1.0 and 1.0
+    # for the three features (the third table uses a mean combiner, so equal weights cancel).
     strategy, mid_level_api, _ = self._create_strategy_and_mid_level('sgd')
     weight = 0.5
     if ragged:
@@ -189,7 +251,12 @@ class TPUEmbeddingTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
 
     @def_function.function
     def enqueue_and_get(features, weights):
+      # [FUNCTION DOC]
+      # Compiled body: enqueues the features with the given optional weights in non-training mode
+      # and runs the per-replica dequeue, returning the activations.
       def get_activations():
+        # [FUNCTION DOC]
+        # Per-replica function: returns the dequeued activations of the mid level API.
         return mid_level_api.dequeue()
       mid_level_api.enqueue(features, weights=weights, training=False)
       return strategy.run(get_activations)
@@ -217,6 +284,10 @@ class TPUEmbeddingTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
     self.assertAllClose(golden, weights0)
 
   def test_same_config_different_instantiations(self):
+    # [FUNCTION DOC]
+    # Test (skipped in the open source build): draws random dimensions and vocabulary sizes for
+    # thirty tables, builds the embedding configuration protocol buffer twice from the same data
+    # and asserts both are equal, i.e. config generation is deterministic.
     self.skip_if_oss()
     num_tables = 30
     table_dim = np.random.randint(1, 128, size=[num_tables])
@@ -226,6 +297,10 @@ class TPUEmbeddingTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
     strategy = self._get_strategy()
 
     def tpu_embedding_config():
+      # [FUNCTION DOC]
+      # Creates one feature config per table entry (zero initializer), a mid level embedding under
+      # the strategy scope with an Adagrad optimizer, sets output shapes to a vector of 128 per
+      # feature, and returns the generated configuration protocol buffer. Takes no inputs.
       feature_configs = []
       for dim, vocab, name in table_data:
         feature_configs.append(tpu_embedding_v2_utils.FeatureConfig(
@@ -245,6 +320,11 @@ class TPUEmbeddingTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
 
   @parameterized.parameters([True, False])
   def test_missing_feature(self, is_sparse):
+    # [FUNCTION DOC]
+    # Parameterized test over is_sparse. Creates a single watched feature embedding, builds
+    # sparse or ragged input in which the last sample is missing, turns it into a repeating
+    # batched distributed dataset, and enqueues and dequeues one batch in a compiled function.
+    # Passes if no error is raised; no values are compared.
     strategy = self._get_strategy()
     with strategy.scope():
       optimizer = tpu_embedding_v2_utils.SGD(learning_rate=0.1)
@@ -274,8 +354,13 @@ class TPUEmbeddingTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
 
     @def_function.function
     def test_fn():
+      # [FUNCTION DOC]
+      # Compiled body: enqueues the next batch in non-training mode and runs the per-replica
+      # dequeue, returning the activations.
 
       def get_activations():
+        # [FUNCTION DOC]
+        # Per-replica function: returns the dequeued activations of the mid level API.
         return mid_level_api.dequeue()
 
       mid_level_api.enqueue(next(dataset_iter), training=False)

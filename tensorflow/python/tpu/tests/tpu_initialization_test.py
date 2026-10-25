@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Minimal TPU test module checking that a TPU system can be initialized. Defines a single test
+# class combining the parameterized test case and the TF test case; runs under the TF test
+# runner with V2 behavior when executed as a script. No public API.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,8 +26,15 @@ from tensorflow.python.platform import test
 
 
 class TPUInitializationTest(parameterized.TestCase, test.TestCase):
+  # [CLASS DOC]
+  # Test case for TPU system initialization through the cluster resolver. Has no shared
+  # fixtures; mixes in parameterized test support.
 
   def test_tpu_initialization(self):
+    # [FUNCTION DOC]
+    # Test: creates a TPU cluster resolver with an empty address (auto-detect) and initializes the
+    # TPU system with it. Has no explicit assertions; passes if initialization raises nothing.
+    # Side effect: initializes the TPU system of the host.
     resolver = tpu_cluster_resolver.TPUClusterResolver('')
     tpu_cluster_resolver.initialize_tpu_system(resolver)
 

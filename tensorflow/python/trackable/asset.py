@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Defines the Asset trackable, a wrapper around a file path that a SavedModel copies into its
+# assets directory so the model stays hermetic. It is exported publicly as the SavedModel Asset
+# class. Import-time side effect: registers a tensor conversion function so an Asset can be used
+# anywhere a string tensor is accepted (it converts to its path tensor).
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +34,12 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export("saved_model.Asset")
 class Asset(base.Trackable):
+  # [CLASS DOC]
+  # Trackable object representing a file to include in a SavedModel. Holds the file path as a
+  # scalar string tensor in a single attribute (the asset path). When a trackable graph containing
+  # an Asset is exported, the file is copied into the SavedModel assets directory; on load, an
+  # Asset is rebuilt pointing at the copied file. Created directly by users from a path (string
+  # or path-like object) or by the SavedModel loader. Inherits from the Trackable base class.
   """Represents a file asset to hermetically include in a SavedModel.
 
   A SavedModel can include arbitrary files, called assets, that are needed
@@ -67,6 +78,12 @@ class Asset(base.Trackable):
   """
 
   def __init__(self, path):
+    # [FUNCTION DOC]
+    # Constructor. Input: path, either a string, a path-like object (converted to a string) or a
+    # string tensor naming the asset file. Converts the path to a scalar string tensor named
+    # asset path, created under an init scope on the CPU device so it is not captured by function
+    # graphs and does not end up in serialized function bodies. Stores the tensor on the instance.
+    # Returns nothing; it does not check that the file exists.
     """Record the full path to the asset."""
     if isinstance(path, os.PathLike):
       path = os.fspath(path)
@@ -79,12 +96,24 @@ class Asset(base.Trackable):
 
   @property
   def asset_path(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the stored scalar string tensor holding the asset path. No
+    # inputs, no side effects, no exceptions.
     """Fetch the current asset path."""
     return self._path
 
   @classmethod
   def _deserialize_from_proto(cls, object_proto, export_dir, asset_file_def,
                               **unused_kwargs):
+    # [FUNCTION DOC]
+    # HELPER: used by the SavedModel loader to rebuild an Asset from its serialized form.
+    # Class method. Inputs: object_proto (the serialized trackable object description holding an
+    # asset entry with an index into the asset file definitions), export_dir (the SavedModel
+    # directory), asset_file_def (list of asset file definitions with filenames); extra keyword
+    # arguments are ignored. Joins the assets directory of export_dir with the filename at the
+    # referenced index and creates an instance of the class from it. In graph (non-eager) mode it
+    # also adds the asset path tensor to the graph's asset file path collection (side effect).
+    # Returns the new asset.
     proto = object_proto.asset
     filename = file_io.join(
         path_helpers.get_assets_dir(export_dir),
@@ -95,9 +124,20 @@ class Asset(base.Trackable):
     return asset
 
   def _add_trackable_child(self, name, value):
+    # [FUNCTION DOC]
+    # HELPER: hook called by the checkpoint/SavedModel loading machinery to attach a restored child.
+    # Inputs: name (attribute name) and value (the child trackable). Simply sets the attribute on
+    # this object. Returns nothing.
     setattr(self, name, value)
 
   def _export_to_saved_model_graph(self, tensor_map, **unused_kwargs):
+    # [FUNCTION DOC]
+    # HELPER: hook used during SavedModel export. Input: tensor_map, a mutable mapping from
+    # original tensors to their replacements in the exported graph (extra keyword arguments are
+    # ignored). Creates a string placeholder with the shape of the asset path and a resource
+    # variable initialized from it, then records in tensor_map that the asset path tensor maps to
+    # that variable (mutating the mapping and creating graph objects). Returns a list containing
+    # the asset path tensor.
     # TODO(b/205008097): Instead of mapping 1-1 between trackable asset
     # and asset in the graph def consider deduping the assets that
     # point to the same file.
