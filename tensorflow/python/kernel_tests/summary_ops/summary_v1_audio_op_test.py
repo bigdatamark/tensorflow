@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Tests for the legacy (v1) audio summary op: serialized summary metadata for random audio
+# with different channel counts. No import-time side effects.
+
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,13 +27,23 @@ from tensorflow.python.summary import summary
 
 
 class SummaryV1AudioOpTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests the legacy audio summary op: builds summaries from random multi-channel audio and checks
+  # the serialized summary message (tags, content type, rate, channels, frames).
 
   def _AsSummary(self, s):
+    # [FUNCTION DOC]
+    # HELPER: parses a serialized summary string (bytes) and returns the summary message.
     summ = summary_pb2.Summary()
     summ.ParseFromString(s)
     return summ
 
   def _CheckProto(self, audio_summ, sample_rate, num_channels, length_frames):
+    # [FUNCTION DOC]
+    # HELPER: checks the non-audio parts of a summary message.
+    # Clears the encoded audio data from each value, then asserts the message equals the expected text
+    # for the first three outputs: tags snd/audio/0..2, wav content type, the given sample rate,
+    # channel count and frame count. Fails the test on any mismatch.
     """Verify that the non-audio parts of the audio_summ proto match shape."""
     # Only the first 3 sounds are returned.
     for v in audio_summ.value:
@@ -43,6 +57,10 @@ class SummaryV1AudioOpTest(test.TestCase):
     self.assertProtoEquals(expected, audio_summ)
 
   def testAudioSummary(self):
+    # [FUNCTION DOC]
+    # For 1, 2, 5 and 8 channels, summarizes random audio (batch of 4, 7 frames, values in minus one
+    # to one) with at most three outputs and rate 8000 in a fresh graph. Asserts the summary is a
+    # scalar and that the parsed message matches the expected metadata.
     np.random.seed(7)
     for channels in (1, 2, 5, 8):
       with self.session(graph=ops.Graph()) as sess:

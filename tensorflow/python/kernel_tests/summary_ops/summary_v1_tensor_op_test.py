@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Tests for the legacy (v1) tensor summary op: tags under name scopes, value round trips for
+# scalars, strings, arrays, booleans, and display name / description metadata handling.
+
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,17 +30,27 @@ from tensorflow.python.summary import summary as summary_lib
 
 
 class SummaryV1TensorOpTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests the legacy tensor summary op: tags, scalar, string, array and boolean values, and
+  # metadata (display name and description).
 
   def _SummarySingleValue(self, s):
+    # [FUNCTION DOC]
+    # HELPER: parses a serialized summary, asserts it has exactly one value and returns that value.
     summ = summary_pb2.Summary()
     summ.ParseFromString(s)
     self.assertEqual(len(summ.value), 1)
     return summ.value[0]
 
   def _AssertNumpyEq(self, actual, expected):
+    # [FUNCTION DOC]
+    # HELPER: asserts two array-likes are exactly equal element-wise and same shape.
     self.assertTrue(np.array_equal(actual, expected))
 
   def testTags(self):
+    # [FUNCTION DOC]
+    # Creates tensor summaries at top level and inside nested name scopes, including one using the
+    # default name. Asserts the tags carry the name scope prefixes.
     with self.cached_session() as sess:
       c = constant_op.constant(1)
       s1 = summary_lib.tensor_summary("s1", c)
@@ -60,6 +74,8 @@ class SummaryV1TensorOpTest(test.TestCase):
     self.assertEqual(v4.tag, "foo/zod/TensorSummary")
 
   def testScalarSummary(self):
+    # [FUNCTION DOC]
+    # Summarizes a float constant and asserts the decoded tensor equals ten.
     with self.cached_session() as sess:
       const = constant_op.constant(10.0)
       summ = summary_lib.tensor_summary("foo", const)
@@ -70,6 +86,8 @@ class SummaryV1TensorOpTest(test.TestCase):
     self._AssertNumpyEq(n, 10)
 
   def testStringSummary(self):
+    # [FUNCTION DOC]
+    # Summarizes a byte-string constant and asserts the decoded tensor equals the string.
     s = b"foobar"
     with self.cached_session() as sess:
       const = constant_op.constant(s)
@@ -81,6 +99,8 @@ class SummaryV1TensorOpTest(test.TestCase):
     self._AssertNumpyEq(n, s)
 
   def testManyScalarSummary(self):
+    # [FUNCTION DOC]
+    # Summarizes a five-by-five-by-five tensor of ones and asserts it decodes to the same array.
     with self.cached_session() as sess:
       const = array_ops.ones([5, 5, 5])
       summ = summary_lib.tensor_summary("foo", const)
@@ -90,6 +110,8 @@ class SummaryV1TensorOpTest(test.TestCase):
     self._AssertNumpyEq(n, np.ones([5, 5, 5]))
 
   def testManyStringSummary(self):
+    # [FUNCTION DOC]
+    # Summarizes a two-by-two matrix of byte strings and asserts it decodes unchanged.
     strings = [[b"foo bar", b"baz"], [b"zoink", b"zod"]]
     with self.cached_session() as sess:
       const = constant_op.constant(strings)
@@ -100,6 +122,8 @@ class SummaryV1TensorOpTest(test.TestCase):
     self._AssertNumpyEq(n, strings)
 
   def testManyBools(self):
+    # [FUNCTION DOC]
+    # Summarizes a list of six booleans and asserts it decodes unchanged.
     bools = [True, True, True, False, False, False]
     with self.cached_session() as sess:
       const = constant_op.constant(bools)
@@ -111,9 +135,15 @@ class SummaryV1TensorOpTest(test.TestCase):
     self._AssertNumpyEq(n, bools)
 
   def testSummaryDescriptionAndDisplayName(self):
+    # [FUNCTION DOC]
+    # Checks metadata: defaults are empty; display name and description can come from arguments or
+    # from a metadata message; when both are supplied the explicit arguments override the message.
     with self.cached_session() as sess:
 
       def get_description(summary_op):
+        # [FUNCTION DOC]
+        # HELPER: evaluates the given summary op, parses the result and returns the metadata of its first
+        # value.
         summ_str = self.evaluate(summary_op)
         summ = summary_pb2.Summary()
         summ.ParseFromString(summ_str)

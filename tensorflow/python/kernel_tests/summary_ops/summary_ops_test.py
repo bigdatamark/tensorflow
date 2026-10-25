@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Tests for the v2 summary ops in summary_ops_v2: writing scalars and raw summary protos, default
+# step handling, conditional recording, file writer lifecycle (init, flush, close, naming, sharing),
+# saved-model round trips of writers, the no-op writer, and run metadata, trace and graph summaries.
+# Includes small helpers that read events back from a log directory. No import-time side effects.
+
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -47,8 +53,16 @@ from tensorflow.python.saved_model import tag_constants
 
 
 class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for the core v2 summary API: the write and raw-protobuf write functions, default step
+  # handling, conditional recording, summary scopes, and the registry of v2 summary ops. Each test
+  # uses a temporary directory as event log directory and reads events back from it.
 
   def testWrite(self):
+    # [FUNCTION DOC]
+    # Eagerly writes a scalar value with an explicit step through a file writer set as default,
+    # asserts the write reports success, then reads back two events (file version plus summary) and
+    # checks step, tag and value.
     logdir = self.get_temp_dir()
     with context.eager_mode():
       with summary_ops.create_file_writer_v2(logdir).as_default():
@@ -62,11 +76,18 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
     self.assertEqual(42, to_numpy(value))
 
   def testWrite_fromFunction(self):
+    # [FUNCTION DOC]
+    # Same as the basic write test, but the write happens inside a compiled function that enters the
+    # writer's default context. Asserts the returned flag is true and the logged step, tag and value.
     logdir = self.get_temp_dir()
     with context.eager_mode():
       writer = summary_ops.create_file_writer_v2(logdir)
       @def_function.function
       def f():
+        # [FUNCTION DOC]
+        # HELPER: traced function body for the enclosing test.
+        # Enters the default context of the enclosing writer and returns the result of writing a scalar
+        # with tag and step 12.
         with writer.as_default():
           return summary_ops.write('tag', 42, step=12)
       output = f()
@@ -79,6 +100,10 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
     self.assertEqual(42, to_numpy(value))
 
   def testWrite_metadata(self):
+    # [FUNCTION DOC]
+    # Writes three summaries with plugin metadata given as a message object, serialized bytes and a
+    # string tensor. Asserts four events were logged and that each summary event carries metadata
+    # equal to the original message.
     logdir = self.get_temp_dir()
     metadata = summary_pb2.SummaryMetadata()
     metadata.plugin_data.plugin_name = 'foo'
@@ -95,13 +120,22 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
     self.assertEqual(metadata, events[3].summary.value[0].metadata)
 
   def testWrite_name(self):
+    # [FUNCTION DOC]
+    # Inside a compiled function, writes with an explicit op name and asserts the returned op's name
+    # starts with that name. The assertion runs at trace time. Calls the function once.
     @def_function.function
     def f():
+      # [FUNCTION DOC]
+      # HELPER: traced function body for the enclosing test.
+      # Performs a named write with no default writer and asserts the resulting op name begins with the
+      # given name; returns nothing.
       output = summary_ops.write('tag', 42, step=12, name='anonymous')
       self.assertTrue(output.name.startswith('anonymous'))
     f()
 
   def testWrite_ndarray(self):
+    # [FUNCTION DOC]
+    # Writes a 2x2 nested list as the value and asserts the logged tensor equals the same array.
     logdir = self.get_temp_dir()
     with context.eager_mode():
       with summary_ops.create_file_writer_v2(logdir).as_default():
@@ -111,6 +145,8 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
     self.assertAllEqual([[1, 2], [3, 4]], to_numpy(value))
 
   def testWrite_tensor(self):
+    # [FUNCTION DOC]
+    # Writes an eager tensor value and asserts the stored tensor equals the tensor's numpy value.
     logdir = self.get_temp_dir()
     with context.eager_mode():
       t = constant_op.constant([[1, 2], [3, 4]])
@@ -122,11 +158,18 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
     self.assertAllEqual(expected, to_numpy(value))
 
   def testWrite_tensor_fromFunction(self):
+    # [FUNCTION DOC]
+    # Passes a tensor into a compiled function that writes it under the writer's default context;
+    # asserts the logged tensor equals the tensor's numpy value.
     logdir = self.get_temp_dir()
     with context.eager_mode():
       writer = summary_ops.create_file_writer_v2(logdir)
       @def_function.function
       def f(t):
+        # [FUNCTION DOC]
+        # HELPER: traced function body for the enclosing test.
+        # Takes a tensor argument t, enters the writer's default context and writes it with step 12.
+        # Returns nothing.
         with writer.as_default():
           summary_ops.write('tag', t, step=12)
       t = constant_op.constant([[1, 2], [3, 4]])
@@ -137,6 +180,8 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
     self.assertAllEqual(expected, to_numpy(value))
 
   def testWrite_stringTensor(self):
+    # [FUNCTION DOC]
+    # Writes a list of two byte strings and asserts the logged tensor contains the same strings.
     logdir = self.get_temp_dir()
     with context.eager_mode():
       with summary_ops.create_file_writer_v2(logdir).as_default():
@@ -147,6 +192,9 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
 
   @test_util.run_gpu_only
   def testWrite_gpuDeviceContext(self):
+    # [FUNCTION DOC]
+    # GPU-only test. Writes a float value and an int64 step created under a GPU device scope and
+    # forces execution. Asserts two events, the step, the value and empty metadata.
     logdir = self.get_temp_dir()
     with context.eager_mode():
       with summary_ops.create_file_writer_v2(logdir).as_default():
@@ -163,15 +211,24 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
 
   @test_util.also_run_as_tf_function
   def testWrite_noDefaultWriter(self):
+    # [FUNCTION DOC]
+    # Runs both eagerly and as a compiled function. With no default writer, a write must return a
+    # false result. Uses an array-equality assertion because it also works inside a compiled function.
     # Use assertAllEqual instead of assertFalse since it works in a defun.
     self.assertAllEqual(False, summary_ops.write('tag', 42, step=0))
 
   @test_util.also_run_as_tf_function
   def testWrite_noStep_okayIfAlsoNoDefaultWriter(self):
+    # [FUNCTION DOC]
+    # Runs eagerly and compiled. With no default writer and no step set, a write must not complain
+    # about the missing step and must return false.
     # Use assertAllEqual instead of assertFalse since it works in a defun.
     self.assertAllEqual(False, summary_ops.write('tag', 42))
 
   def testWrite_noStep(self):
+    # [FUNCTION DOC]
+    # With a default writer and no step set or given, a write must raise a value error whose message
+    # mentions that no step is set.
     logdir = self.get_temp_dir()
     with context.eager_mode():
       with summary_ops.create_file_writer_v2(logdir).as_default():
@@ -179,6 +236,9 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
           summary_ops.write('tag', 42)
 
   def testWrite_noStep_okayIfNotRecordingSummaries(self):
+    # [FUNCTION DOC]
+    # With a default writer but recording disabled, a write without a step must not raise and must
+    # return false.
     logdir = self.get_temp_dir()
     with context.eager_mode():
       with summary_ops.create_file_writer_v2(logdir).as_default():
@@ -186,6 +246,10 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
           self.assertFalse(summary_ops.write('tag', 42))
 
   def testWrite_usingDefaultStep(self):
+    # [FUNCTION DOC]
+    # Sets the global default step to constants and then to a variable, writing after each change.
+    # Asserts events carry steps 1, 2, 10 and 11 (variable incremented). Side effect: always resets
+    # the global default step to nothing in a finally block.
     logdir = self.get_temp_dir()
     try:
       with context.eager_mode():
@@ -210,12 +274,20 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
       summary_ops.set_step(None)
 
   def testWrite_usingDefaultStepConstant_fromFunction(self):
+    # [FUNCTION DOC]
+    # A compiled function writes without an explicit step while the global step is set to 1 and then
+    # 2. Asserts both events carry step 1 because a constant step is captured at first trace. Resets
+    # the global step at the end.
     logdir = self.get_temp_dir()
     try:
       with context.eager_mode():
         writer = summary_ops.create_file_writer_v2(logdir)
         @def_function.function
         def f():
+          # [FUNCTION DOC]
+          # HELPER: traced function body for the enclosing test.
+          # Enters the writer's default context and writes a scalar without giving a step, relying on the
+          # global default step.
           with writer.as_default():
             summary_ops.write('tag', 1.0)
         summary_ops.set_step(1)
@@ -233,12 +305,19 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
       summary_ops.set_step(None)
 
   def testWrite_usingDefaultStepVariable_fromFunction(self):
+    # [FUNCTION DOC]
+    # Like the constant-step test but the default step is a variable, which is read at every call.
+    # Asserts logged steps 0, 1 and 10 after assigning to the variable between calls. Resets the
+    # global step at the end.
     logdir = self.get_temp_dir()
     try:
       with context.eager_mode():
         writer = summary_ops.create_file_writer_v2(logdir)
         @def_function.function
         def f():
+          # [FUNCTION DOC]
+          # HELPER: traced function body for the enclosing test.
+          # Enters the writer's default context and writes a scalar without an explicit step.
           with writer.as_default():
             summary_ops.write('tag', 1.0)
         mystep = variables.Variable(0, dtype=dtypes.int64)
@@ -258,6 +337,10 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
       summary_ops.set_step(None)
 
   def testWrite_usingDefaultStepConstant_fromLegacyGraph(self):
+    # [FUNCTION DOC]
+    # In legacy graph mode, builds a write op while the global step is 1, changes the step to 2, runs
+    # the op twice in a session and flushes. Asserts both events carry step 1 because the value was
+    # captured at graph construction. Resets the global step at the end.
     logdir = self.get_temp_dir()
     try:
       with context.graph_mode():
@@ -282,6 +365,9 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
       summary_ops.set_step(None)
 
   def testWrite_usingDefaultStepVariable_fromLegacyGraph(self):
+    # [FUNCTION DOC]
+    # In legacy graph mode with a variable as global step, runs a write op between increment and
+    # assignment ops in a session. Asserts steps 0, 1 and 10 were logged. Resets the global step.
     logdir = self.get_temp_dir()
     try:
       with context.graph_mode():
@@ -311,6 +397,10 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
       summary_ops.set_step(None)
 
   def testWrite_usingDefaultStep_fromAsDefault(self):
+    # [FUNCTION DOC]
+    # Nests several default-writer contexts, some giving their own step, and sets a step inside one.
+    # Asserts the logged steps follow the innermost scoped step, restoring on exit: 1, 1, 2, 1, 3.
+    # Resets the global step at the end.
     logdir = self.get_temp_dir()
     try:
       with context.eager_mode():
@@ -331,6 +421,9 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
       summary_ops.set_step(None)
 
   def testWrite_usingDefaultStepVariable_fromAsDefault(self):
+    # [FUNCTION DOC]
+    # Same nesting scenario as the previous test but the outer step is a variable that is assigned
+    # during the test. Asserts logged steps 1, 2, 3, 2, 4. Resets the global step at the end.
     logdir = self.get_temp_dir()
     try:
       with context.eager_mode():
@@ -353,6 +446,9 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
       summary_ops.set_step(None)
 
   def testWrite_usingDefaultStep_fromSetAsDefault(self):
+    # [FUNCTION DOC]
+    # Sets the writer as default permanently with a step variable, then with a constant step. Asserts
+    # the logged steps are 1, 2, 3. Resets the global step at the end.
     logdir = self.get_temp_dir()
     try:
       with context.eager_mode():
@@ -372,6 +468,9 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
       summary_ops.set_step(None)
 
   def testWrite_usingDefaultStepVariable_fromSetAsDefault(self):
+    # [FUNCTION DOC]
+    # Sets the writer as default with steps 1, 2, then with no step argument. Asserts the logged steps
+    # are 1, 2, 2 (the previous step is kept). Resets the global step at the end.
     logdir = self.get_temp_dir()
     try:
       with context.eager_mode():
@@ -390,6 +489,9 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
       summary_ops.set_step(None)
 
   def testWrite_recordIf_constant(self):
+    # [FUNCTION DOC]
+    # Checks constant recording conditions: default records, enabled records, disabled does not
+    # (returns false). Asserts three events and that the disabled write is absent.
     logdir = self.get_temp_dir()
     with context.eager_mode():
       with summary_ops.create_file_writer_v2(logdir).as_default():
@@ -404,11 +506,18 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
     self.assertEqual('set_on', events[2].summary.value[0].tag)
 
   def testWrite_recordIf_constant_fromFunction(self):
+    # [FUNCTION DOC]
+    # Same as the constant recording test but inside a compiled function, with array-equality
+    # assertions that work during tracing. Asserts only the default and enabled writes were logged.
     logdir = self.get_temp_dir()
     with context.eager_mode():
       writer = summary_ops.create_file_writer_v2(logdir)
       @def_function.function
       def f():
+        # [FUNCTION DOC]
+        # HELPER: traced function body for the enclosing test.
+        # Writes three summaries under the default, enabled and disabled recording conditions and checks
+        # the returned flags.
         with writer.as_default():
           # Use assertAllEqual instead of assertTrue since it works in a defun.
           self.assertAllEqual(summary_ops.write('default', 1, step=0), True)
@@ -423,10 +532,17 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
     self.assertEqual('set_on', events[2].summary.value[0].tag)
 
   def testWrite_recordIf_callable(self):
+    # [FUNCTION DOC]
+    # Uses a Python callable as recording condition that increments a step variable and returns true
+    # for even values. Asserts alternate writes return true and false and that steps 0, 2, 4 are
+    # logged.
     logdir = self.get_temp_dir()
     with context.eager_mode():
       step = variables.Variable(-1, dtype=dtypes.int64)
       def record_fn():
+        # [FUNCTION DOC]
+        # HELPER: recording-condition callback for the enclosing test.
+        # Increments the step variable by one and returns whether its new value is even.
         step.assign_add(1)
         return int(step % 2) == 0
       with summary_ops.create_file_writer_v2(logdir).as_default():
@@ -443,16 +559,28 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
     self.assertEqual(4, events[3].step)
 
   def testWrite_recordIf_callable_fromFunction(self):
+    # [FUNCTION DOC]
+    # Uses a compiled function as the recording condition and another compiled function that performs
+    # three writes. Asserts the returned flags alternate across two calls and that steps 0, 2, 4 were
+    # logged.
     logdir = self.get_temp_dir()
     with context.eager_mode():
       writer = summary_ops.create_file_writer_v2(logdir)
       step = variables.Variable(-1, dtype=dtypes.int64)
       @def_function.function
       def record_fn():
+        # [FUNCTION DOC]
+        # HELPER: recording-condition callback for the enclosing test.
+        # Compiled function that increments the step variable and returns a boolean tensor telling
+        # whether the new value is even.
         step.assign_add(1)
         return math_ops.equal(step % 2, 0)
       @def_function.function
       def f():
+        # [FUNCTION DOC]
+        # HELPER: traced function body for the enclosing test.
+        # Under the writer and the callable recording condition, performs three writes and returns their
+        # result flags as a list.
         with writer.as_default():
           with summary_ops.record_if(record_fn):
             return [
@@ -468,12 +596,18 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
     self.assertEqual(4, events[3].step)
 
   def testWrite_recordIf_tensorInput_fromFunction(self):
+    # [FUNCTION DOC]
+    # A compiled function with a fixed scalar int64 signature uses a tensor condition (step is even)
+    # for recording. Asserts alternate calls return true and false and steps 0, 2, 4 are logged.
     logdir = self.get_temp_dir()
     with context.eager_mode():
       writer = summary_ops.create_file_writer_v2(logdir)
       @def_function.function(input_signature=[
           tensor_spec.TensorSpec(shape=[], dtype=dtypes.int64)])
       def f(step):
+        # [FUNCTION DOC]
+        # HELPER: traced function body for the enclosing test.
+        # Takes the step as an argument, records only when it is even and returns the write flag.
         with writer.as_default():
           with summary_ops.record_if(math_ops.equal(step % 2, 0)):
             return summary_ops.write('tag', 1, step=step)
@@ -489,6 +623,9 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
     self.assertEqual(4, events[3].step)
 
   def testWriteRawPb(self):
+    # [FUNCTION DOC]
+    # Writes a serialized summary protobuf through the raw-protobuf write function at step 12 and
+    # asserts success, two events and that the logged summary equals the original message.
     logdir = self.get_temp_dir()
     pb = summary_pb2.Summary()
     pb.value.add().simple_value = 42.0
@@ -502,6 +639,8 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
     self.assertProtoEquals(pb, events[1].summary)
 
   def testWriteRawPb_fromFunction(self):
+    # [FUNCTION DOC]
+    # Same as the raw protobuf test but from within a compiled function.
     logdir = self.get_temp_dir()
     pb = summary_pb2.Summary()
     pb.value.add().simple_value = 42.0
@@ -509,6 +648,9 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
       writer = summary_ops.create_file_writer_v2(logdir)
       @def_function.function
       def f():
+        # [FUNCTION DOC]
+        # HELPER: traced function body for the enclosing test.
+        # Enters the writer's default context and returns the result of a raw protobuf write at step 12.
         with writer.as_default():
           return summary_ops.write_raw_pb(pb.SerializeToString(), step=12)
       output = f()
@@ -519,6 +661,9 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
     self.assertProtoEquals(pb, events[1].summary)
 
   def testWriteRawPb_multipleValues(self):
+    # [FUNCTION DOC]
+    # Writes a list of three serialized summaries in one call. Asserts a single event whose summary
+    # contains all six values merged in order.
     logdir = self.get_temp_dir()
     pb1 = summary_pb2.Summary()
     pb1.value.add().simple_value = 1.0
@@ -543,6 +688,9 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
     self.assertProtoEquals(expected_pb, events[1].summary)
 
   def testWriteRawPb_invalidValue(self):
+    # [FUNCTION DOC]
+    # Writing a string that is not a valid serialized summary must raise a data-loss error with a
+    # message about a bad summary proto string.
     logdir = self.get_temp_dir()
     with context.eager_mode():
       with summary_ops.create_file_writer_v2(logdir).as_default():
@@ -553,6 +701,9 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
 
   @test_util.also_run_as_tf_function
   def testGetSetStep(self):
+    # [FUNCTION DOC]
+    # Runs eagerly and compiled. Asserts the default step starts out empty, then reads back an int
+    # and a tensor step after setting them. Resets the global step to nothing at the end.
     try:
       self.assertIsNone(summary_ops.get_step())
       summary_ops.set_step(1)
@@ -565,6 +716,10 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
       summary_ops.set_step(None)
 
   def testGetSetStep_variable(self):
+    # [FUNCTION DOC]
+    # Sets a variable as the default step and asserts reads track assignments, that the global state
+    # keeps the variable alive after the local name is deleted, and that incrementing through the
+    # getter works. Resets the global step at the end.
     with context.eager_mode():
       try:
         mystep = variables.Variable(0)
@@ -582,14 +737,23 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
         summary_ops.set_step(None)
 
   def testGetSetStep_variable_fromFunction(self):
+    # [FUNCTION DOC]
+    # Sets and increments the default step variable from compiled functions and asserts values are
+    # 0, 1, 2 and 3, including after the local reference is deleted. Resets the global step.
     with context.eager_mode():
       try:
         @def_function.function
         def set_step(step):
+          # [FUNCTION DOC]
+          # HELPER: compiled function used by the enclosing test.
+          # Sets the default step to the given argument and returns the current default step.
           summary_ops.set_step(step)
           return summary_ops.get_step()
         @def_function.function
         def get_and_increment():
+          # [FUNCTION DOC]
+          # HELPER: compiled function used by the enclosing test.
+          # Increments the default step variable by one and returns the step.
           summary_ops.get_step().assign_add(1)
           return summary_ops.get_step()
         mystep = variables.Variable(0)
@@ -606,6 +770,9 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
 
   @test_util.also_run_as_tf_function
   def testSummaryScope(self):
+    # [FUNCTION DOC]
+    # Runs eagerly and compiled. Asserts the scope helper yields a tag and scope string for plain
+    # names, nested names, names with slashes, and that a null outer name scope resets nesting.
     with summary_ops.summary_scope('foo') as (tag, scope):
       self.assertEqual('foo', tag)
       self.assertEqual('foo/', scope)
@@ -622,6 +789,9 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
 
   @test_util.also_run_as_tf_function
   def testSummaryScope_defaultName(self):
+    # [FUNCTION DOC]
+    # Runs eagerly and compiled. With no name, the scope uses the default name or the given backup
+    # name; asserts both the tag and scope string.
     with summary_ops.summary_scope(None) as (tag, scope):
       self.assertEqual('summary', tag)
       self.assertEqual('summary/', scope)
@@ -631,6 +801,9 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
 
   @test_util.also_run_as_tf_function
   def testSummaryScope_handlesCharactersIllegalForScope(self):
+    # [FUNCTION DOC]
+    # Runs eagerly and compiled. Illegal scope characters are dropped from the scope name but kept in
+    # the tag; if nothing legal remains the backup name is used for the scope. Asserts both.
     with summary_ops.summary_scope('f?o?o') as (tag, scope):
       self.assertEqual('f?o?o', tag)
       self.assertEqual('foo/', scope)
@@ -641,6 +814,9 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
 
   @test_util.also_run_as_tf_function
   def testSummaryScope_nameNotUniquifiedForTag(self):
+    # [FUNCTION DOC]
+    # Runs eagerly and compiled. Creates ops with colliding names first and asserts the tag from the
+    # summary scope is not made unique, including for names containing slashes.
     constant_op.constant(0, name='foo')
     with summary_ops.summary_scope('foo') as (tag, _):
       self.assertEqual('foo', tag)
@@ -652,8 +828,16 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
       self.assertEqual('with/slash', tag)
 
   def testAllV2SummaryOps(self):
+    # [FUNCTION DOC]
+    # In graph mode, defines a set of v2 and legacy summary ops with no writer, with recording on and
+    # with recording off. Asserts the global registry returns exactly the ops created while a default
+    # writer was present, regardless of recording state.
     logdir = self.get_temp_dir()
     def define_ops():
+      # [FUNCTION DOC]
+      # HELPER: builds one op of each summary kind for the enclosing test.
+      # Creates write, raw protobuf, generic, scalar, histogram, image and audio summary ops and
+      # returns them as a list.
       result = []
       # TF 2.0 summary ops
       result.append(summary_ops.write('write', 1, step=0))
@@ -680,6 +864,9 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
       self.assertCountEqual(expected_ops, summary_ops.all_v2_summary_ops())
 
   def testShouldRecordSummaries_defaultState(self):
+    # [FUNCTION DOC]
+    # Asserts the should-record query is false without a default writer (even with recording
+    # enabled), and true only while a writer is the default.
     logdir = self.get_temp_dir()
     with context.eager_mode():
       self.assertAllEqual(False, summary_ops.should_record_summaries())
@@ -694,6 +881,8 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
         self.assertAllEqual(False, summary_ops.should_record_summaries())
 
   def testShouldRecordSummaries_constants(self):
+    # [FUNCTION DOC]
+    # Asserts the should-record query follows nested constant recording conditions.
     logdir = self.get_temp_dir()
     with context.eager_mode():
       with summary_ops.create_file_writer_v2(logdir).as_default():
@@ -705,6 +894,8 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
             self.assertAllEqual(True, summary_ops.should_record_summaries())
 
   def testShouldRecordSummaries_variable(self):
+    # [FUNCTION DOC]
+    # Asserts the query follows a boolean variable condition as it is assigned.
     logdir = self.get_temp_dir()
     with context.eager_mode():
       with summary_ops.create_file_writer_v2(logdir).as_default():
@@ -715,6 +906,8 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
           self.assertAllEqual(True, summary_ops.should_record_summaries())
 
   def testShouldRecordSummaries_callable(self):
+    # [FUNCTION DOC]
+    # Asserts the query re-evaluates a callable condition every time.
     logdir = self.get_temp_dir()
     with context.eager_mode():
       with summary_ops.create_file_writer_v2(logdir).as_default():
@@ -726,12 +919,19 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
           self.assertAllEqual(True, summary_ops.should_record_summaries())
 
   def testShouldRecordSummaries_fromFunction(self):
+    # [FUNCTION DOC]
+    # Inside a compiled function with a boolean argument, collects the query result without a writer,
+    # with a writer, with recording off and with a tensor condition. Asserts the results for true and
+    # false argument values.
     logdir = self.get_temp_dir()
     with context.eager_mode():
       writer = summary_ops.create_file_writer_v2(logdir)
       @def_function.function(input_signature=[
           tensor_spec.TensorSpec(shape=[], dtype=dtypes.bool)])
       def f(cond):
+        # [FUNCTION DOC]
+        # HELPER: traced function body for the enclosing test.
+        # Takes a boolean condition and returns a list of four query results under different contexts.
         results = []
         results.append(summary_ops.should_record_summaries())
         with writer.as_default():
@@ -745,6 +945,8 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
       self.assertAllEqual([False, True, False, False], f(False))
 
   def testHasDefaultWriter_checkWriter(self):
+    # [FUNCTION DOC]
+    # Uses subtests: has-default-writer is true inside a writer's context and false outside.
     logdir = self.get_temp_dir()
     with context.eager_mode():
       with self.subTest(name='has_writer'):
@@ -755,8 +957,14 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
 
 
 class SummaryWriterTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for the file writer objects: creation, flushing, closing, queueing, file name collision
+  # avoidance, sharing and memory behavior.
 
   def testCreate_withInitAndClose(self):
+    # [FUNCTION DOC]
+    # Creates a writer with a large queue. Asserts the file starts with one version event, that a
+    # second init has no effect, that a write stays buffered and that closing flushes it.
     logdir = self.get_temp_dir()
     with context.eager_mode():
       writer = summary_ops.create_file_writer_v2(
@@ -774,9 +982,15 @@ class SummaryWriterTest(test_util.TensorFlowTestCase):
         self.assertEqual(2, get_total())
 
   def testCreate_fromFunction(self):
+    # [FUNCTION DOC]
+    # Creates a writer inside a compiled function and keeps it in a function attribute so it stays
+    # alive. Asserts exactly one event file is created.
     logdir = self.get_temp_dir()
     @def_function.function
     def f():
+      # [FUNCTION DOC]
+      # HELPER: traced function body for the enclosing test.
+      # Creates a file writer once and stores it on the function object to keep it alive.
       # Returned SummaryWriter must be stored in a non-local variable so it
       # lives throughout the function execution.
       if not hasattr(f, 'writer'):
@@ -787,6 +1001,9 @@ class SummaryWriterTest(test_util.TensorFlowTestCase):
     self.assertEqual(1, len(event_files))
 
   def testCreate_graphTensorArgument_raisesError(self):
+    # [FUNCTION DOC]
+    # Passing a graph tensor as log directory to the writer constructor in eager mode must raise a
+    # value error about an invalid graph tensor argument, and no file must be created.
     logdir = self.get_temp_dir()
     with context.graph_mode():
       logdir_tensor = constant_op.constant(logdir)
@@ -797,9 +1014,15 @@ class SummaryWriterTest(test_util.TensorFlowTestCase):
     self.assertEmpty(gfile.Glob(os.path.join(logdir, '*')))
 
   def testCreate_fromFunction_graphTensorArgument_raisesError(self):
+    # [FUNCTION DOC]
+    # Same as the previous test but the constructor is called in a compiled function with a constant
+    # tensor directory; expects the value error and no file.
     logdir = self.get_temp_dir()
     @def_function.function
     def f():
+      # [FUNCTION DOC]
+      # HELPER: traced function body for the enclosing test.
+      # Creates a writer using a constant tensor as log directory, which is invalid.
       summary_ops.create_file_writer_v2(constant_op.constant(logdir))
     with context.eager_mode():
       with self.assertRaisesRegex(
@@ -808,9 +1031,15 @@ class SummaryWriterTest(test_util.TensorFlowTestCase):
     self.assertEmpty(gfile.Glob(os.path.join(logdir, '*')))
 
   def testCreate_fromFunction_unpersistedResource_raisesError(self):
+    # [FUNCTION DOC]
+    # A compiled function creates a writer and only enters its default context without keeping it.
+    # Expects a not-found error about a missing resource, but still one event file created.
     logdir = self.get_temp_dir()
     @def_function.function
     def f():
+      # [FUNCTION DOC]
+      # HELPER: traced function body for the enclosing test.
+      # Creates a writer and enters its default context without storing it.
       with summary_ops.create_file_writer_v2(logdir).as_default():
         pass  # Calling .as_default() is enough to indicate use.
     with context.eager_mode():
@@ -822,6 +1051,10 @@ class SummaryWriterTest(test_util.TensorFlowTestCase):
     self.assertEqual(1, len(gfile.Glob(os.path.join(logdir, '*'))))
 
   def testCreate_immediateSetAsDefault_retainsReference(self):
+    # [FUNCTION DOC]
+    # Creates a writer and immediately sets it as default without keeping a local reference, then
+    # flushes. Passes if flush works, showing the global state keeps it alive. Clears the global
+    # writer in a finally block.
     logdir = self.get_temp_dir()
     try:
       with context.eager_mode():
@@ -832,12 +1065,16 @@ class SummaryWriterTest(test_util.TensorFlowTestCase):
       summary_ops._summary_state.writer = None  # pylint: disable=protected-access
 
   def testCreate_immediateAsDefault_retainsReference(self):
+    # [FUNCTION DOC]
+    # Enters the default context of a temporary writer and flushes inside; passes if no error occurs.
     logdir = self.get_temp_dir()
     with context.eager_mode():
       with summary_ops.create_file_writer_v2(logdir).as_default():
         summary_ops.flush()
 
   def testCreate_avoidsFilenameCollision(self):
+    # [FUNCTION DOC]
+    # Creates ten writers on one directory eagerly and asserts ten distinct files exist.
     logdir = self.get_temp_dir()
     with context.eager_mode():
       for _ in range(10):
@@ -846,6 +1083,9 @@ class SummaryWriterTest(test_util.TensorFlowTestCase):
     self.assertLen(event_files, 10)
 
   def testCreate_graphMode_avoidsFilenameCollision(self):
+    # [FUNCTION DOC]
+    # In graph mode, repeatedly initializes and closes one writer ten times in a session and asserts
+    # ten distinct event files exist.
     logdir = self.get_temp_dir()
     with context.graph_mode(), ops.Graph().as_default():
       writer = summary_ops.create_file_writer_v2(logdir)
@@ -857,6 +1097,9 @@ class SummaryWriterTest(test_util.TensorFlowTestCase):
     self.assertLen(event_files, 10)
 
   def testNoSharing(self):
+    # [FUNCTION DOC]
+    # Two writers on the same directory must not share state. Interleaves writes and asserts each
+    # file holds its own version event and its own steps (1 and 2), with nothing more.
     # Two writers with the same logdir should not share state.
     logdir = self.get_temp_dir()
     with context.eager_mode():
@@ -893,15 +1136,24 @@ class SummaryWriterTest(test_util.TensorFlowTestCase):
     self.assertRaises(StopIteration, lambda: next(events))
 
   def testNoSharing_fromFunction(self):
+    # [FUNCTION DOC]
+    # Same non-sharing scenario with writers created lazily inside two compiled functions; asserts
+    # each file contains only its own events.
     logdir = self.get_temp_dir()
     @def_function.function
     def f1():
+      # [FUNCTION DOC]
+      # HELPER: traced function body for the enclosing test.
+      # Lazily creates a writer stored on itself and writes a scalar with step 1.
       if not hasattr(f1, 'writer'):
         f1.writer = summary_ops.create_file_writer_v2(logdir)
       with f1.writer.as_default():
         summary_ops.write('tag', 1, step=1)
     @def_function.function
     def f2():
+      # [FUNCTION DOC]
+      # HELPER: traced function body for the enclosing test.
+      # Lazily creates a writer stored on itself and writes a scalar with step 2.
       if not hasattr(f2, 'writer'):
         f2.writer = summary_ops.create_file_writer_v2(logdir)
       with f2.writer.as_default():
@@ -934,6 +1186,8 @@ class SummaryWriterTest(test_util.TensorFlowTestCase):
     self.assertRaises(StopIteration, lambda: next(events))
 
   def testMaxQueue(self):
+    # [FUNCTION DOC]
+    # With a queue of one, the second write forces a flush. Asserts the event counts 1, 1, then 3.
     logdir = self.get_temp_dir()
     with context.eager_mode():
       with summary_ops.create_file_writer_v2(
@@ -948,6 +1202,9 @@ class SummaryWriterTest(test_util.TensorFlowTestCase):
         self.assertEqual(3, get_total())
 
   def testWriterFlush(self):
+    # [FUNCTION DOC]
+    # Asserts that explicit flushing and leaving the default context flush buffered events, with the
+    # count of events read from disk changing from 1 to 2, 2, then 3.
     logdir = self.get_temp_dir()
     get_total = lambda: len(events_from_logdir(logdir))
     with context.eager_mode():
@@ -965,6 +1222,9 @@ class SummaryWriterTest(test_util.TensorFlowTestCase):
       self.assertEqual(3, get_total())
 
   def testFlushFunction(self):
+    # [FUNCTION DOC]
+    # Tests the module-level flush function: without arguments it flushes the default writer, and
+    # with an explicit writer argument it flushes that writer. Asserts event counts 1, 3, 3, 4.
     logdir = self.get_temp_dir()
     with context.eager_mode():
       writer = summary_ops.create_file_writer_v2(
@@ -986,23 +1246,35 @@ class SummaryWriterTest(test_util.TensorFlowTestCase):
 
   # Regression test for b/228097117.
   def testFlushFunction_disallowsInvalidWriterInput(self):
+    # [FUNCTION DOC]
+    # Regression test: flushing with an invalid writer argument (an empty tuple) must raise a value
+    # error saying the argument to flush is invalid.
     with context.eager_mode():
       with self.assertRaisesRegex(ValueError, 'Invalid argument to flush'):
         summary_ops.flush(writer=())
 
   @test_util.assert_no_new_tensors
   def testNoMemoryLeak_graphMode(self):
+    # [FUNCTION DOC]
+    # Creates a writer in graph mode and relies on the leak-check decorator to fail if new tensors
+    # remain.
     logdir = self.get_temp_dir()
     with context.graph_mode(), ops.Graph().as_default():
       summary_ops.create_file_writer_v2(logdir)
 
   @test_util.assert_no_new_pyobjects_executing_eagerly()
   def testNoMemoryLeak_eagerMode(self):
+    # [FUNCTION DOC]
+    # Creates a writer and writes once in eager mode; the decorator fails if new Python objects
+    # remain afterwards.
     logdir = self.get_temp_dir()
     with summary_ops.create_file_writer_v2(logdir).as_default():
       summary_ops.write('tag', 1, step=0)
 
   def testClose_preventsLaterUse(self):
+    # [FUNCTION DOC]
+    # After closing, a second close and a flush are silent no-ops, but init, entering the default
+    # context and setting as default must each raise a runtime error mentioning it is already closed.
     logdir = self.get_temp_dir()
     with context.eager_mode():
       writer = summary_ops.create_file_writer_v2(logdir)
@@ -1018,6 +1290,9 @@ class SummaryWriterTest(test_util.TensorFlowTestCase):
         writer.set_as_default()
 
   def testClose_closesOpenFile(self):
+    # [FUNCTION DOC]
+    # Skipped if psutil is missing. Asserts the writer's event file appears in the process's open
+    # files and disappears after closing the writer.
     try:
       import psutil  # pylint: disable=g-import-not-at-top
     except ImportError:
@@ -1035,6 +1310,9 @@ class SummaryWriterTest(test_util.TensorFlowTestCase):
       self.assertNotIn(eventfile, get_open_filenames())
 
   def testDereference_closesOpenFile(self):
+    # [FUNCTION DOC]
+    # Skipped if psutil is missing. Asserts that deleting the last reference to a writer closes its
+    # open event file.
     try:
       import psutil  # pylint: disable=g-import-not-at-top
     except ImportError:
@@ -1053,12 +1331,24 @@ class SummaryWriterTest(test_util.TensorFlowTestCase):
 
 
 class SummaryWriterSavedModelTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests that a file writer stored on a module survives saving and loading a saved model, in eager
+  # and graph mode, with the expected number of event files and events.
 
   def testWriter_savedAsModuleProperty_loadInEagerMode(self):
+    # [FUNCTION DOC]
+    # Defines a module with a trackable writer and a training function with a scalar signature, saves
+    # it, resets the global eager context and loads it twice. Asserts three event files exist (one
+    # from the original, one per load) with steps 1,2 and 3,4.
     with context.eager_mode():
       class Model(module.Module):
+        # [CLASS DOC]
+        # Module holding a trackable file writer and a train function that logs a summary at a given step.
+        # Defined locally in the test.
 
         def __init__(self, model_dir):
+          # [FUNCTION DOC]
+          # Creates a trackable file writer in the given model directory and stores it as an attribute.
           self._writer = summary_ops.create_file_writer_v2(
               model_dir, experimental_trackable=True)
 
@@ -1066,6 +1356,9 @@ class SummaryWriterSavedModelTest(test_util.TensorFlowTestCase):
             tensor_spec.TensorSpec(shape=[], dtype=dtypes.int64)
         ])
         def train(self, step):
+          # [FUNCTION DOC]
+          # Compiled function with a scalar int64 signature: writes a string summary at the given step and
+          # returns a constant zero.
           with self._writer.as_default():
             summary_ops.write('tag', 'foo', step=step)
           return constant_op.constant(0)
@@ -1091,6 +1384,9 @@ class SummaryWriterSavedModelTest(test_util.TensorFlowTestCase):
       post_restore2_files = set(files_to_events)
       self.assertLen(files_to_events, 3)
       def unwrap_singleton(iterable):
+        # [FUNCTION DOC]
+        # HELPER: test utility for the enclosing test.
+        # Asserts the iterable has exactly one element and returns it.
         self.assertLen(iterable, 1)
         return next(iter(iterable))
       restore_file = unwrap_singleton(post_restore_files - pre_save_files)
@@ -1105,11 +1401,20 @@ class SummaryWriterSavedModelTest(test_util.TensorFlowTestCase):
       self.assertEqual(4, restore2_events[2].step)
 
   def testWriter_savedAsModuleProperty_loadInGraphMode(self):
+    # [FUNCTION DOC]
+    # Saves the same module in eager mode, then loads it in legacy graph sessions. Within one session
+    # all loads share a single writer resource; a new session creates a second file. Asserts three
+    # files in total with 5 and 3 events.
     with context.eager_mode():
 
       class Model(module.Module):
+        # [CLASS DOC]
+        # Module holding a trackable file writer and a train function that logs a summary at a given step.
+        # Defined locally in the test.
 
         def __init__(self, model_dir):
+          # [FUNCTION DOC]
+          # Creates a trackable file writer in the given model directory and stores it as an attribute.
           self._writer = summary_ops.create_file_writer_v2(
               model_dir, experimental_trackable=True)
 
@@ -1117,6 +1422,9 @@ class SummaryWriterSavedModelTest(test_util.TensorFlowTestCase):
             tensor_spec.TensorSpec(shape=[], dtype=dtypes.int64)
         ])
         def train(self, step):
+          # [FUNCTION DOC]
+          # Compiled function with a scalar int64 signature: writes a string summary at the given step and
+          # returns a constant zero.
           with self._writer.as_default():
             summary_ops.write('tag', 'foo', step=step)
           return constant_op.constant(0)
@@ -1132,6 +1440,10 @@ class SummaryWriterSavedModelTest(test_util.TensorFlowTestCase):
     context._reset_context()  # pylint: disable=protected-access
 
     def load_and_run_model(sess, input_values):
+      # [FUNCTION DOC]
+      # HELPER: runs the saved model in the old style for the enclosing test.
+      # Loads the saved model into the session, finds the single input and output tensors of the train
+      # signature, and runs the output once per value in input_values. Asserts one input and one output.
       """Load and run the SavedModel signature in the TF 1.x style."""
       model = saved_model_loader.load(sess, [tag_constants.SERVING], export_dir)
       signature = model.signature_def['train']
@@ -1160,6 +1472,9 @@ class SummaryWriterSavedModelTest(test_util.TensorFlowTestCase):
 
     self.assertLen(files_to_events, 3)
     def unwrap_singleton(iterable):
+      # [FUNCTION DOC]
+      # HELPER: test utility for the enclosing test.
+      # Asserts the iterable has exactly one element and returns it.
       self.assertLen(iterable, 1)
       return next(iter(iterable))
     restore_file = unwrap_singleton(post_restore_files - pre_save_files)
@@ -1177,8 +1492,15 @@ class SummaryWriterSavedModelTest(test_util.TensorFlowTestCase):
 
 
 class NoopWriterTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for the no-op writer, which accepts all writer calls and writes nothing.
 
   def testNoopWriter_doesNothing(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the temporary directory is never given to the no-op writer, so the final assertion
+    # that the directory has no files is vacuous.
+    # Calls init, default context, write, flush and close on the no-op writer. Asserts the write
+    # returned false because no active writer was found.
     logdir = self.get_temp_dir()
     with context.eager_mode():
       writer = summary_ops.create_noop_writer()
@@ -1192,6 +1514,9 @@ class NoopWriterTest(test_util.TensorFlowTestCase):
     self.assertLen(files, 0)
 
   def testNoopWriter_asNestedContext_isTransparent(self):
+    # [FUNCTION DOC]
+    # Nests the no-op writer inside a real writer's default context. Asserts all three writes inside
+    # and around it succeed, so the no-op context is transparent.
     logdir = self.get_temp_dir()
     with context.eager_mode():
       writer = summary_ops.create_file_writer_v2(logdir)
@@ -1207,6 +1532,9 @@ class NoopWriterTest(test_util.TensorFlowTestCase):
     self.assertAllEqual([result1, result2, result3], [True, True, True])
 
   def testNoopWriter_setAsDefault(self):
+    # [FUNCTION DOC]
+    # Sets a no-op writer as default and asserts a write returns false. Resets the global writer to
+    # nothing in a finally block.
     try:
       with context.eager_mode():
         writer = summary_ops.create_noop_writer()
@@ -1219,12 +1547,21 @@ class NoopWriterTest(test_util.TensorFlowTestCase):
 
 
 class SummaryOpsTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for the run metadata, trace and graph summary functions. Provides helpers that write via a
+  # temporary file writer and read back the first summary event.
 
   def tearDown(self):
+    # [FUNCTION DOC]
+    # Turns tracing off, then calls the base tear down.
     summary_ops.trace_off()
     super().tearDown()
 
   def exec_summary_op(self, summary_op_fn):
+    # [FUNCTION DOC]
+    # HELPER: runs the given summary function with a temporary writer in eager mode.
+    # Creates a writer, calls the no-argument callback in its default context, closes it, and returns
+    # the second event (the first after the version event) from the log directory.
     assert context.executing_eagerly()
     logdir = self.get_temp_dir()
     writer = summary_ops.create_file_writer_v2(logdir)
@@ -1235,6 +1572,10 @@ class SummaryOpsTest(test_util.TensorFlowTestCase):
     return events[1]
 
   def run_metadata(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: writes run metadata through a temporary writer.
+    # Forwards its positional and keyword arguments to the run metadata summary function and returns
+    # the first summary event read from the log directory. Requires eager mode.
     assert context.executing_eagerly()
     logdir = self.get_temp_dir()
     writer = summary_ops.create_file_writer_v2(logdir)
@@ -1245,6 +1586,10 @@ class SummaryOpsTest(test_util.TensorFlowTestCase):
     return events[1]
 
   def run_metadata_graphs(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: writes run metadata graphs through a temporary writer.
+    # Forwards its arguments to the graphs-only run metadata function and returns the first summary
+    # event. Requires eager mode.
     assert context.executing_eagerly()
     logdir = self.get_temp_dir()
     writer = summary_ops.create_file_writer_v2(logdir)
@@ -1255,6 +1600,10 @@ class SummaryOpsTest(test_util.TensorFlowTestCase):
     return events[1]
 
   def create_run_metadata(self):
+    # [FUNCTION DOC]
+    # HELPER: builds a sample run metadata message.
+    # Returns a run metadata message with one device step-stats entry for a node named hello and one
+    # function graph containing a node named foo.
     step_stats = step_stats_pb2.StepStats(dev_stats=[
         step_stats_pb2.DeviceStepStats(
             device='cpu:0',
@@ -1269,6 +1618,10 @@ class SummaryOpsTest(test_util.TensorFlowTestCase):
         step_stats=step_stats)
 
   def run_trace(self, f, step=1):
+    # [FUNCTION DOC]
+    # HELPER: traces a function and exports it.
+    # Parameters: f is a zero-argument callable, step defaults to 1. Starts tracing with graphs and
+    # no profiler, runs f under a writer, exports the trace and returns the first summary event.
     assert context.executing_eagerly()
     logdir = self.get_temp_dir()
     writer = summary_ops.create_file_writer_v2(logdir)
@@ -1282,6 +1635,8 @@ class SummaryOpsTest(test_util.TensorFlowTestCase):
 
   @test_util.run_v2_only
   def testRunMetadata_usesNameAsTag(self):
+    # [FUNCTION DOC]
+    # Asserts the logged summary tag is the name prefixed by the enclosing name scope.
     meta = config_pb2.RunMetadata()
 
     with ops.name_scope('foo', skip_on_eager=False):
@@ -1292,6 +1647,8 @@ class SummaryOpsTest(test_util.TensorFlowTestCase):
 
   @test_util.run_v2_only
   def testRunMetadata_summaryMetadata(self):
+    # [FUNCTION DOC]
+    # Asserts the summary's metadata names the run-metadata plugin with content 1.
     expected_summary_metadata = """
       plugin_data {
         plugin_name: "graph_run_metadata"
@@ -1305,6 +1662,8 @@ class SummaryOpsTest(test_util.TensorFlowTestCase):
 
   @test_util.run_v2_only
   def testRunMetadata_wholeRunMetadata(self):
+    # [FUNCTION DOC]
+    # Asserts the logged tensor deserializes to the full run metadata (step stats and function graphs).
     expected_run_metadata = """
       step_stats {
         dev_stats {
@@ -1332,6 +1691,9 @@ class SummaryOpsTest(test_util.TensorFlowTestCase):
 
   @test_util.run_v2_only
   def testRunMetadata_usesDefaultStep(self):
+    # [FUNCTION DOC]
+    # With the global default step 42, logs run metadata without a step and asserts the event step is
+    # 42. Resets the global step.
     meta = config_pb2.RunMetadata()
     try:
       summary_ops.set_step(42)
@@ -1343,6 +1705,8 @@ class SummaryOpsTest(test_util.TensorFlowTestCase):
 
   @test_util.run_v2_only
   def testRunMetadataGraph_usesNameAsTag(self):
+    # [FUNCTION DOC]
+    # Same as the name-as-tag test for the graphs-only function.
     meta = config_pb2.RunMetadata()
 
     with ops.name_scope('foo', skip_on_eager=False):
@@ -1353,6 +1717,8 @@ class SummaryOpsTest(test_util.TensorFlowTestCase):
 
   @test_util.run_v2_only
   def testRunMetadataGraph_summaryMetadata(self):
+    # [FUNCTION DOC]
+    # Asserts the metadata plugin name is the run-metadata graph plugin with content 1.
     expected_summary_metadata = """
       plugin_data {
         plugin_name: "graph_run_metadata_graph"
@@ -1366,6 +1732,8 @@ class SummaryOpsTest(test_util.TensorFlowTestCase):
 
   @test_util.run_v2_only
   def testRunMetadataGraph_runMetadataFragment(self):
+    # [FUNCTION DOC]
+    # Asserts the logged run metadata contains only the function graphs, not the step stats.
     expected_run_metadata = """
       function_graphs {
         pre_optimization_graph {
@@ -1386,6 +1754,9 @@ class SummaryOpsTest(test_util.TensorFlowTestCase):
 
   @test_util.run_v2_only
   def testRunMetadataGraph_usesDefaultStep(self):
+    # [FUNCTION DOC]
+    # Uses the global default step 42 for graphs-only run metadata; asserts the event step is 42 and
+    # resets the global step.
     meta = config_pb2.RunMetadata()
     try:
       summary_ops.set_step(42)
@@ -1397,9 +1768,15 @@ class SummaryOpsTest(test_util.TensorFlowTestCase):
 
   @test_util.run_v2_only
   def testTrace(self):
+    # [FUNCTION DOC]
+    # Traces a small compiled function, exports it and asserts the logged run metadata has a function
+    # graphs field.
 
     @def_function.function
     def f():
+      # [FUNCTION DOC]
+      # HELPER: traced function body for the enclosing test.
+      # Computes two constants raised to a power and returns the result.
       x = constant_op.constant(2)
       y = constant_op.constant(3)
       return x**y
@@ -1415,9 +1792,15 @@ class SummaryOpsTest(test_util.TensorFlowTestCase):
 
   @test_util.run_v2_only
   def testTrace_cannotEnableTraceInFunction(self):
+    # [FUNCTION DOC]
+    # Enabling trace inside a compiled function must log a warning mentioning that it cannot be done
+    # inside a function. Asserts on a mocked logger.
 
     @def_function.function
     def f():
+      # [FUNCTION DOC]
+      # HELPER: traced function body for the enclosing test.
+      # Tries to turn tracing on, then returns a computed value.
       summary_ops.trace_on(graph=True, profiler=False)
       x = constant_op.constant(2)
       y = constant_op.constant(3)
@@ -1430,6 +1813,8 @@ class SummaryOpsTest(test_util.TensorFlowTestCase):
 
   @test_util.run_v2_only
   def testTrace_cannotEnableTraceInGraphMode(self):
+    # [FUNCTION DOC]
+    # Enabling trace in graph mode must warn that it needs eager mode.
     with test.mock.patch.object(logging, 'warn') as mock_log:
       with context.graph_mode():
         summary_ops.trace_on(graph=True, profiler=False)
@@ -1438,15 +1823,23 @@ class SummaryOpsTest(test_util.TensorFlowTestCase):
 
   @test_util.run_v2_only
   def testTrace_cannotExportTraceWithoutTrace(self):
+    # [FUNCTION DOC]
+    # Exporting without having enabled trace must raise a value error.
     with self.assertRaisesRegex(ValueError, 'Must enable trace before export.'):
       summary_ops.trace_export(name='foo', step=1)
 
   @test_util.run_v2_only
   def testTrace_cannotExportTraceInFunction(self):
+    # [FUNCTION DOC]
+    # After enabling trace, exporting inside a compiled function must log a warning that it cannot be
+    # done inside a function.
     summary_ops.trace_on(graph=True, profiler=False)
 
     @def_function.function
     def f():
+      # [FUNCTION DOC]
+      # HELPER: traced function body for the enclosing test.
+      # Tries to export the trace and returns a computed value.
       x = constant_op.constant(2)
       y = constant_op.constant(3)
       summary_ops.trace_export(name='foo', step=1)
@@ -1459,6 +1852,8 @@ class SummaryOpsTest(test_util.TensorFlowTestCase):
 
   @test_util.run_v2_only
   def testTrace_cannotExportTraceInGraphMode(self):
+    # [FUNCTION DOC]
+    # Exporting in graph mode must log a warning about needing eager execution.
     with test.mock.patch.object(logging, 'warn') as mock_log:
       with context.graph_mode():
         summary_ops.trace_export(name='foo', step=1)
@@ -1468,9 +1863,15 @@ class SummaryOpsTest(test_util.TensorFlowTestCase):
 
   @test_util.run_v2_only
   def testTrace_usesDefaultStep(self):
+    # [FUNCTION DOC]
+    # With default step 42 and a null step argument, the exported trace event has step 42. Resets the
+    # global step.
 
     @def_function.function
     def f():
+      # [FUNCTION DOC]
+      # HELPER: traced function body for the enclosing test.
+      # Computes two constants raised to a power and returns the result.
       x = constant_op.constant(2)
       y = constant_op.constant(3)
       return x**y
@@ -1485,9 +1886,17 @@ class SummaryOpsTest(test_util.TensorFlowTestCase):
 
   @test_util.run_v2_only
   def testTrace_withProfiler(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the test has no assertions; it only checks that tracing with the profiler enabled
+    # and exporting does not raise.
+    # Enables tracing with graph and profiler output in a temporary directory, runs a function under a
+    # writer and exports the trace.
 
     @def_function.function
     def f():
+      # [FUNCTION DOC]
+      # HELPER: traced function body for the enclosing test.
+      # Computes two constants raised to a power and returns the result.
       x = constant_op.constant(2)
       y = constant_op.constant(3)
       return x**y
@@ -1506,14 +1915,23 @@ class SummaryOpsTest(test_util.TensorFlowTestCase):
 
   @test_util.run_v2_only
   def testGraph_graph(self):
+    # [FUNCTION DOC]
+    # Exports a function's graph through the graph summary function and asserts the event holds a
+    # graph definition.
 
     @def_function.function
     def f():
+      # [FUNCTION DOC]
+      # HELPER: traced function body for the enclosing test.
+      # Computes two constants raised to a power and returns the result.
       x = constant_op.constant(2)
       y = constant_op.constant(3)
       return x**y
 
     def summary_op_fn():
+      # [FUNCTION DOC]
+      # HELPER: callback for the enclosing test.
+      # Writes the graph summary for the concrete function's graph.
       summary_ops.graph(f.get_concrete_function().graph)
 
     event = self.exec_summary_op(summary_op_fn)
@@ -1521,14 +1939,22 @@ class SummaryOpsTest(test_util.TensorFlowTestCase):
 
   @test_util.run_v2_only
   def testGraph_graphDef(self):
+    # [FUNCTION DOC]
+    # Same as the graph test but passing a graph definition message.
 
     @def_function.function
     def f():
+      # [FUNCTION DOC]
+      # HELPER: traced function body for the enclosing test.
+      # Computes two constants raised to a power and returns the result.
       x = constant_op.constant(2)
       y = constant_op.constant(3)
       return x**y
 
     def summary_op_fn():
+      # [FUNCTION DOC]
+      # HELPER: callback for the enclosing test.
+      # Writes the graph summary using the graph definition of the concrete function.
       summary_ops.graph(f.get_concrete_function().graph.as_graph_def())
 
     event = self.exec_summary_op(summary_op_fn)
@@ -1536,7 +1962,13 @@ class SummaryOpsTest(test_util.TensorFlowTestCase):
 
   @test_util.run_v2_only
   def testGraph_invalidData(self):
+    # [FUNCTION DOC]
+    # Passing a string to the graph summary function must raise a value error saying it is neither a
+    # graph nor a graph definition.
     def summary_op_fn():
+      # [FUNCTION DOC]
+      # HELPER: callback for the enclosing test.
+      # Calls the graph summary function with an invalid string argument.
       summary_ops.graph('hello')
 
     with self.assertRaisesRegex(
@@ -1547,18 +1979,30 @@ class SummaryOpsTest(test_util.TensorFlowTestCase):
 
   @test_util.run_v2_only
   def testGraph_fromGraphMode(self):
+    # [FUNCTION DOC]
+    # Calling the graph summary function from a compiled function must raise a value error saying it
+    # cannot be invoked inside a graph context.
 
     @def_function.function
     def f():
+      # [FUNCTION DOC]
+      # HELPER: traced function body for the enclosing test.
+      # Computes two constants raised to a power and returns the result.
       x = constant_op.constant(2)
       y = constant_op.constant(3)
       return x**y
 
     @def_function.function
     def g(graph):
+      # [FUNCTION DOC]
+      # HELPER: compiled function used by the enclosing test.
+      # Takes a graph argument and calls the graph summary function with it.
       summary_ops.graph(graph)
 
     def summary_op_fn():
+      # [FUNCTION DOC]
+      # HELPER: callback for the enclosing test.
+      # Serializes the graph definition of f (with shapes) into a string tensor and passes it to g.
       graph_def = f.get_concrete_function().graph.as_graph_def(add_shapes=True)
       func_graph = constant_op.constant(graph_def.SerializeToString())
       g(func_graph)
@@ -1571,6 +2015,10 @@ class SummaryOpsTest(test_util.TensorFlowTestCase):
 
 
 def events_from_file(filepath):
+  # [FUNCTION DOC]
+  # HELPER: shared test utility.
+  # Reads every record from the event file at the given path, parses each as an event message, and
+  # returns the list of events.
   """Returns all events in a single event file.
 
   Args:
@@ -1589,6 +2037,10 @@ def events_from_file(filepath):
 
 
 def events_from_logdir(logdir):
+  # [FUNCTION DOC]
+  # HELPER: shared test utility.
+  # Asserts the directory exists and contains exactly one file, then returns all events in it.
+  # Raises an assertion error otherwise.
   """Returns all events in the single eventfile in logdir.
 
   Args:
@@ -1607,6 +2059,12 @@ def events_from_logdir(logdir):
 
 
 def events_from_multifile_logdir(logdir):
+  # [FUNCTION DOC]
+  # HELPER: shared test utility.
+  # KNOWN ISSUE: the docstring's Raises section claims an assertion error when the directory does not
+  # hold exactly one file, but the code only asserts that the directory exists and accepts any number.
+  # Returns a mapping from file name to event list for all files whose names contain the event-file
+  # marker in the directory.
   """Returns map of filename to events for all `tfevents` files in the logdir.
 
   Args:
@@ -1624,6 +2082,9 @@ def events_from_multifile_logdir(logdir):
 
 
 def to_numpy(summary_value):
+  # [FUNCTION DOC]
+  # HELPER: shared test utility.
+  # Converts the tensor of a summary value message into a numpy array and returns it.
   return tensor_util.MakeNdarray(summary_value.tensor)
 
 

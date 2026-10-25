@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Tests for the exact serialized output of legacy scalar summary, merge and merge-all ops.
+# Tensor, audio and image summary ops have their own test modules. No import-time side effects.
+
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,13 +33,20 @@ from tensorflow.python.summary import summary
 
 
 class SummaryV1OpsTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests the exact serialized output of the legacy scalar summary, merge and merge-all ops.
 
   def _AsSummary(self, s):
+    # [FUNCTION DOC]
+    # HELPER: parses a serialized summary string (bytes) and returns the summary message.
     summ = summary_pb2.Summary()
     summ.ParseFromString(s)
     return summ
 
   def testScalarSummary(self):
+    # [FUNCTION DOC]
+    # Makes a scalar summary for two tags from a two-element constant with an explicit name; asserts
+    # the result is scalar and has two values with tags and simple values 10 and 20.
     with self.cached_session() as sess:
       const = constant_op.constant([10.0, 20.0])
       summ = logging_ops.scalar_summary(["c1", "c2"], const, name="mysumm")
@@ -47,6 +58,8 @@ class SummaryV1OpsTest(test.TestCase):
       """, self._AsSummary(value))
 
   def testScalarSummaryDefaultName(self):
+    # [FUNCTION DOC]
+    # Same as the scalar summary test but without a name argument; asserts the same output.
     with self.cached_session() as sess:
       const = constant_op.constant([10.0, 20.0])
       summ = logging_ops.scalar_summary(["c1", "c2"], const)
@@ -59,6 +72,9 @@ class SummaryV1OpsTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testMergeSummary(self):
+    # [FUNCTION DOC]
+    # Graph-mode test. Merges a histogram summary and a scalar summary of constant ten and asserts the
+    # merged message holds the full expected histogram (one value, bucket limits) plus the scalar.
     with self.cached_session() as sess:
       const = constant_op.constant(10.0)
       summ1 = summary.histogram("h", const)
@@ -87,6 +103,10 @@ class SummaryV1OpsTest(test.TestCase):
     """, self._AsSummary(value))
 
   def testMergeAllSummaries(self):
+    # [FUNCTION DOC]
+    # In a new graph, creates a histogram, a scalar in a custom collection and a scalar in the default
+    # collection. Asserts merge-all gathers exactly the default-collection summaries into a merge op,
+    # that the custom key gathers only the custom one, and an unknown key yields nothing.
     with ops.Graph().as_default():
       const = constant_op.constant(10.0)
       summ1 = summary.histogram("h", const)

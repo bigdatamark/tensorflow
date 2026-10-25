@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Tests of array ops (reverse, sequence mask, batch gather, slice assign) whose behavior only
+# holds in v1 graph mode: unknown-shape inference and uninitialized variable errors.
+
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,10 +28,15 @@ from tensorflow.python.platform import test as test_lib
 
 
 class ReverseV2Test(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Shape-inference test for reverse with unknown dimensions, valid only in v1 graph behavior.
 
   # Pure shape inference test only V1
   @test_util.run_deprecated_v1
   def testUnknownDims(self):
+    # [FUNCTION DOC]
+    # Builds reverse ops with placeholders of unknown shape and axis. Asserts the output rank is
+    # unknown when data rank is unknown, and is two when the data has two unknown dimensions.
     reverse_v2 = array_ops.reverse_v2
     data_t = array_ops.placeholder(dtypes.float32)
     axis_known_t = array_ops.placeholder(dtypes.int32, shape=[3])
@@ -46,20 +55,29 @@ class ReverseV2Test(test_util.TensorFlowTestCase):
 
 
 class SequenceMaskTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Shape-inference test for sequence mask with unknown input, valid only in v1.
 
   # Pure shape inference test only V1
   @test_util.run_deprecated_v1
   def testUnknownShape(self):
+    # [FUNCTION DOC]
+    # Calls sequence mask on a placeholder of unknown shape and asserts the result shape is unknown.
     lengths = array_ops.placeholder(dtype=dtypes.int32)
     res = array_ops.sequence_mask(lengths)
     self.assertEqual(res.shape, None)  # pylint: disable=g-generic-assert
 
 
 class BatchGatherNdTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Shape-inference test for gather with batch dimensions and unknown indices, v1 only.
 
   # Pure shape inference test only V1
   @test_util.run_deprecated_v1
   def testUnknownIndices(self):
+    # [FUNCTION DOC]
+    # Gathers from a constant using a placeholder indices tensor of unknown rank with one batch
+    # dimension. Asserts the output rank and first dimension are unknown.
     """Tests whether indices with unknown rank works correctly."""
     params = constant_op.constant(((0, 1, 2),))
     indices = array_ops.placeholder(dtypes.int32)
@@ -70,9 +88,14 @@ class BatchGatherNdTest(test_util.TensorFlowTestCase):
 
 
 class SliceAssignTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests slice assignment on variables in v1 where variables need explicit initialization.
 
   @test_util.run_v1_only("Variables need initialization only in V1")
   def testUninitialized(self):
+    # [FUNCTION DOC]
+    # Assigning to a slice of an uninitialized v1 variable and evaluating must raise a
+    # failed-precondition error naming the uninitialized variable.
     with self.assertRaisesRegex(
         errors.FailedPreconditionError,
         "Attempting to use uninitialized value Variable"):

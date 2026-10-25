@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Tests for the legacy (v1) image summary op with float and uint8 images of several channel
+# depths, including NaN handling and decoding of the encoded PNG. No import-time side effects.
+
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,13 +31,22 @@ from tensorflow.python.summary import summary
 
 
 class SummaryV1ImageOpTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests the legacy image summary op on float and unsigned 8-bit images with 1, 3 and 4 channels,
+  # checking decoded pixels and serialized summary metadata.
 
   def _AsSummary(self, s):
+    # [FUNCTION DOC]
+    # HELPER: parses a serialized summary string (bytes) and returns the summary message.
     summ = summary_pb2.Summary()
     summ.ParseFromString(s)
     return summ
 
   def _CheckProto(self, image_summ, shape):
+    # [FUNCTION DOC]
+    # HELPER: checks the non-image parts of a summary message.
+    # Clears the encoded image data from each value, then asserts the message equals the expected text
+    # for the first three images: tags img/image/0..2 with height, width and colorspace from shape.
     """Verify that the non-image parts of the image_summ proto match shape."""
     # Only the first 3 images are returned.
     for v in image_summ.value:
@@ -47,6 +60,11 @@ class SummaryV1ImageOpTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testImageSummary(self):
+    # [FUNCTION DOC]
+    # Graph-mode (deprecated v1) test. For depths 1, 3, 4 and both positive-only and signed random
+    # float images with one NaN pixel, summarizes the batch, decodes the first PNG and asserts the NaN
+    # pixel became the bad color and the rest matches the rescaled values within tolerance. Also
+    # checks the summary is scalar and the proto metadata.
     for depth in (1, 3, 4):
       for positive in False, True:
         with self.session(graph=ops.Graph()) as sess:
@@ -83,6 +101,9 @@ class SummaryV1ImageOpTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testImageSummaryUint8(self):
+    # [FUNCTION DOC]
+    # Graph-mode test. For depths 1, 3, 4 summarizes a random uint8 image batch and asserts the dtype,
+    # scalar summary, exact pixel equality of the decoded first image and the proto metadata.
     np.random.seed(7)
     for depth in (1, 3, 4):
       with self.session(graph=ops.Graph()) as sess:
