@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# HELPER: Small utility module for the platform package; the external build has no analytics backend.
+# Provides a single usage-tracking hook (track_usage) that is a no-op in the open-source library,
+# so internal callers can report tool usage without conditional code. No import-time side effects.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,6 +19,10 @@
 """Analytics helpers library."""
 
 def track_usage(tool_id, tags):
+  # [FUNCTION DOC]
+  # HELPER: Placeholder usage-tracking hook so callers need no external-build special cases.
+  # Takes a string tool identifier and a list of string tags; both are deliberately discarded.
+  # Returns nothing, raises nothing and has no side effects in this external library.
   """No usage tracking for external library.
 
   Args:

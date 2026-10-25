@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Tests for StructuredTensor (tensorflow.python.ops.structured.structured_tensor) and its dynamic
+# shape helper. Defines two private extension types with registered shape overrides (one valid,
+# one deliberately invalid) and one large parameterized test class run in graph and eager modes.
+# Importing the structured array ops module registers dispatchers as a side effect. Run as a
+# script it starts the test runner.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -45,6 +51,10 @@ from tensorflow.python.util import dispatch
 
 
 class _PrivateSpecialType(extension_type.ExtensionType):
+  # [CLASS DOC]
+  # HELPER: Private extension type used only by the dispatch tests in this file.
+  # Holds a single ragged tensor field. A shape override registered below makes array shape
+  # queries on it return the shape of that ragged field, so it can be nested in a structured tensor.
   ragged: ragged_tensor.RaggedTensor
 
 
@@ -53,12 +63,20 @@ def shape_v2_special(
     input: _PrivateSpecialType,  # pylint: disable=redefined-builtin
     out_type: dtypes.DType = None,
     name: Optional[str] = None) -> DynamicRaggedShape:
+  # [FUNCTION DOC]
+  # HELPER: Dispatch override of the shape function for the private special type (registered by the
+  # decorator above). Takes the extension value, an optional output integer type and an ignored
+  # name. Returns the dynamic ragged shape of the wrapped ragged field. No other side effects.
   """Returns a DynamicRaggedShape containing the shape of the input."""
   del name
   return array_ops.shape_v2(input.ragged, out_type)
 
 
 class _PrivateBrokenType(extension_type.ExtensionType):
+  # [CLASS DOC]
+  # HELPER: Private extension type used only by the dispatch tests in this file.
+  # Holds a single ragged tensor field. Its registered shape override deliberately returns an
+  # invalid value (a mapping) so that structured tensor construction must reject it.
   ragged: ragged_tensor.RaggedTensor
 
 
@@ -67,6 +85,12 @@ def shape_v2_broken(
     input: _PrivateBrokenType,  # pylint: disable=redefined-builtin
     out_type: dtypes.DType = None,
     name: Optional[str] = None) -> DynamicRaggedShape:
+  # [FUNCTION DOC]
+  # HELPER: Dispatch override of the shape function for the private broken type (registered by the
+  # decorator above). KNOWN ISSUE: the return annotation and docstring promise a dynamic ragged
+  # shape, but it ignores all inputs and returns a mapping of two strings, which is not a valid
+  # shape; this is intentional so tests can verify the resulting error.
+  # Takes the extension value, an optional output type and a name, all unused.
   """Returns a DynamicRaggedShape containing the shape of the input."""
   del name
   del input
@@ -81,8 +105,18 @@ def shape_v2_broken(
 @test_util.run_all_in_graph_and_eager_modes
 class StructuredTensorTest(test_util.TensorFlowTestCase,
                            parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for StructuredTensor construction, conversion, partitioning, merging, promotion and
+  # update operations. The class decorator runs every test in both graph and eager modes, and tests
+  # are mostly parameterized. Overrides assertAllEqual so structured tensors compare field by field.
 
   def assertAllEqual(self, a, b, msg=None):
+    # [FUNCTION DOC]
+    # Override of the base equality assertion that understands structured tensors. If neither a nor
+    # b is a structured tensor, defers to the base assertion. Otherwise a non-structured side is
+    # converted from a Python value to a structured tensor, then the two are compared field by
+    # field; shapes are compared only when both were already structured tensors. msg is an optional
+    # failure message. Returns nothing; raises an assertion failure on mismatch.
     if not (isinstance(a, structured_tensor.StructuredTensor) or
             isinstance(b, structured_tensor.StructuredTensor)):
       return super(StructuredTensorTest, self).assertAllEqual(a, b, msg)
@@ -96,6 +130,11 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
       self._assertStructuredEqual(a, b, msg, True)
 
   def _assertStructuredEqual(self, a, b, msg, check_shape):
+    # [FUNCTION DOC]
+    # HELPER: Recursive comparison used by assertAllEqual. Takes two structured tensors, a message,
+    # and a flag saying whether to compare shapes (by their printed form). Asserts the field name
+    # sets match and that each pair of field values has the identical type; nested structured
+    # tensors recurse and other values are compared with assertAllEqual. Returns nothing.
     if check_shape:
       self.assertEqual(repr(a.shape), repr(b.shape))
     self.assertEqual(set(a.field_names()), set(b.field_names()))
@@ -315,6 +354,11 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
       },
   ])  # pyformat: disable
   def testFromFieldsAndRank(self, fields, rank, expected_shape):
+    # [FUNCTION DOC]
+    # Parameterized test over mappings of field names to values and a rank (scalar, ragged and
+    # nested structured fields, some deferred as callables because they create tensors). Builds a
+    # structured tensor from fields and rank and asserts the static shape equals expected_shape
+    # (inferred from the field values when the rank exceeds zero).
     if callable(fields):
       fields = fields()  # deferred construction: fields may include tensors.
 
@@ -346,6 +390,9 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
       },
   ])
   def testFromFieldsAndRankError(self, fields, rank, msg):
+    # [FUNCTION DOC]
+    # Parameterized error test: creating a structured tensor from fields and rank must raise a
+    # value error whose message matches msg, for no fields, a non-integer rank or a negative rank.
     if callable(fields):
       fields = fields()  # deferred construction: fields may include tensors.
     with self.assertRaisesRegex(ValueError, msg):
@@ -590,6 +637,14 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
                      expected_shape=None,
                      nrows=None,
                      row_partitions=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: expected_shape is reassigned inside the validate loop, so it only defaults on the
+    # first iteration; harmless because the value is the same.
+    # Parameterized test of the from-fields constructor. Inputs: shape, fields (mapping, possibly
+    # deferred as a callable), optional expected_shape (defaults to shape), nrows and row_partitions
+    # (each possibly deferred). For validation both on and off, builds the structured tensor and
+    # asserts the static shape, rank, field names and that each field value is a tensor, ragged or
+    # structured tensor equal to the input value.
     if callable(fields):
       fields = fields()  # deferred construction: fields may include tensors.
     if callable(nrows):
@@ -706,6 +761,12 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
                            err=ValueError,
                            msg=None,
                            test_in_eager=True):
+    # [FUNCTION DOC]
+    # Parameterized error test for the from-fields constructor. Inputs: fields, shape, optional
+    # nrows, row_partitions, validate (default off), expected error type err (default value error),
+    # message regex msg and test_in_eager (default true; when false the test returns immediately in
+    # eager mode). Asserts that construction, or evaluation of every field and the row count,
+    # raises the expected error with a matching message.
     if not test_in_eager and context.executing_eagerly():
       return
     if callable(fields):
@@ -726,6 +787,10 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
       self.evaluate(struct.nrows())
 
   def testMergeNrowsErrors(self):
+    # [FUNCTION DOC]
+    # Calls the private row-count merging helper with a dynamic count of 5, a static count of 5 and
+    # a value of 3 rows, and asserts it raises a value error saying the fields have incompatible
+    # row counts.
     nrows = constant_op.constant(5)
     static_nrows = tensor_shape.Dimension(5)
     value = constant_op.constant([1, 2, 3])
@@ -734,6 +799,10 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
           nrows, static_nrows, value, dtypes.int32, validate=False)
 
   def testNestedStructConstruction(self):
+    # [FUNCTION DOC]
+    # Builds scalar and rank-1 structured tensors that contain a ragged tensor field and another
+    # structured tensor field. Asserts shapes, ranks and field names, and that the fields read back
+    # are equal to the originals.
     rt = ragged_factory_ops.constant([[1, 2], [3]])
     struct1 = StructuredTensor.from_fields(shape=[], fields={"x": [1, 2]})
     struct2 = StructuredTensor.from_fields(shape=[2], fields={"x": [1, 2]})
@@ -761,6 +830,11 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
     self.assertAllEqual(struct4.field_value("s"), struct2)
 
   def testPartitionOuterDims(self):
+    # [FUNCTION DOC]
+    # Builds a rank-1 structured tensor of four records and partitions its outer dimension using row
+    # splits, then row lengths, and asserts the nested lists of records. Then partitions with a
+    # uniform row length and asserts the result equals an expected structured tensor whose first
+    # field is a regular tensor and second field stays ragged.
     a = dict(x=1, y=[1, 2])
     b = dict(x=2, y=[3, 4])
     c = dict(x=3, y=[5, 6])
@@ -798,6 +872,9 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
                 })))
 
   def testPartitionOuterDimension3(self):
+    # [FUNCTION DOC]
+    # Partitions the outer dimension of a structured tensor with a ragged field twice using row
+    # splits and asserts the final rank is 3.
     rt = ragged_tensor.RaggedTensor.from_value_rowids(
         array_ops.constant([[1, 2], [3, 4], [5, 6]]), [0, 0, 1])
     struct = structured_tensor.StructuredTensor.from_fields({"r": rt}, [2])
@@ -808,6 +885,10 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
     self.assertEqual(3, struct_3.rank)
 
   def testWithPrivateSpecialType(self):
+    # [FUNCTION DOC]
+    # Wraps a ragged tensor in the private special type, creates a rank-1 structured tensor with it
+    # as a field, and asserts the rank is 1 and the first dimension of the stored ragged shape
+    # matches the shape reported for the wrapped value.
     rt = ragged_tensor.RaggedTensor.from_value_rowids(
         array_ops.constant([[1, 2], [3, 4], [5, 6]]), [0, 0, 1])
     pst = _PrivateSpecialType(rt)
@@ -818,6 +899,10 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
     self.assertAllEqual(pst_shape[0], st_shape[0])
 
   def testWithPrivateBrokenType(self):
+    # [FUNCTION DOC]
+    # Uses the private broken type, whose shape override returns an invalid value, as a field, and
+    # asserts creation from fields and rank raises a value error mentioning an error in the shape of
+    # the field.
     rt = ragged_tensor.RaggedTensor.from_value_rowids(
         array_ops.constant([[1, 2], [3, 4], [5, 6]]), [0, 0, 1])
     pbt = _PrivateBrokenType(rt)
@@ -826,6 +911,9 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
       structured_tensor.StructuredTensor.from_fields_and_rank({"r": pbt}, 1)
 
   def testPartitionOuterDimsErrors(self):
+    # [FUNCTION DOC]
+    # Asserts partitioning the outer dimension fails for a scalar structured tensor (value error
+    # requiring rank at least 1) and when given a non-partition argument (type error).
     st = StructuredTensor.from_fields({})
     partition = row_partition.RowPartition.from_row_splits([0])
     with self.assertRaisesRegex(ValueError,
@@ -969,6 +1057,11 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
       },
   ])  # pyformat: disable
   def testPyvalConversion(self, pyval, expected, type_spec=None):
+    # [FUNCTION DOC]
+    # Parameterized test of converting Python dictionaries and nested lists to structured tensors.
+    # expected is a deferred callable building the expected value, type_spec is optional. Asserts
+    # the converted value equals the expected one and, in eager mode for structured results, that
+    # converting back to Python values reproduces the input.
     expected = expected()  # Deferred init because it creates tensors.
     actual = structured_tensor.StructuredTensor.from_pyval(pyval, type_spec)
     self.assertAllEqual(actual, expected)
@@ -977,6 +1070,9 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
         self.assertEqual(actual.to_pyval(), pyval)
 
   def testStructuredTensorSpecFactory(self):
+    # [FUNCTION DOC]
+    # Creates a structured tensor type spec from three field specs and rank 0 using the private
+    # factory, and asserts the spec reports rank 0.
     spec = StructuredTensor.Spec._from_fields_and_rank(
         fields={
             "a": tensor.TensorSpec([], dtypes.int32),
@@ -1030,6 +1126,11 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
           expected=[[[], []]]),
   ])  # pyformat: disable
   def testToPyval(self, st, expected):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: in graph mode the body does nothing, so the test only verifies behavior in eager
+    # mode.
+    # Parameterized test: in eager mode, builds the structured tensor (deferred callable) and asserts
+    # converting it to Python values gives the expected nested lists of dictionaries.
     if context.executing_eagerly():  # to_pyval only available in eager.
       st = st()  # Deferred init because it creates tensors.
       self.assertEqual(st.to_pyval(), expected)
@@ -1107,10 +1208,17 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
 
   ])  # pyformat: disable
   def testFromPyvalError(self, pyval, err=ValueError, type_spec=None, msg=None):
+    # [FUNCTION DOC]
+    # Parameterized error test: converting an invalid Python value (with optional type spec) must
+    # raise the expected error type (default value error) with a message matching msg.
     with self.assertRaisesRegex(err, msg):
       structured_tensor.StructuredTensor.from_pyval(pyval, type_spec)
 
   def testToPyvalRequiresEagerMode(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: asserts nothing when running eagerly; only the graph-mode run checks anything.
+    # Asserts that converting a structured tensor to Python values in graph mode raises a value
+    # error saying it is only supported in eager mode.
     st = structured_tensor.StructuredTensor.from_pyval({"a": 5})
     if not context.executing_eagerly():
       with self.assertRaisesRegex(ValueError, "only supported in eager mode."):
@@ -1135,6 +1243,11 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
       ),
   ])
   def testRowPartitionsFromUniformShape(self, shape):
+    # [FUNCTION DOC]
+    # Parameterized over shapes of rank 0, 1, 2 and 5. For each rank below the shape length, calls
+    # the private helper that builds row partitions for a uniform shape and asserts there are
+    # max(0, rank - 1) partitions, the first has the first dimension as its row count, and each
+    # partition has the next dimension as uniform row length.
     for rank in range(len(shape)):
       partitions = structured_tensor._row_partitions_for_uniform_shape(
           ops.convert_to_tensor(shape), rank)
@@ -1203,6 +1316,11 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
   ])
   def testRowPartitionsForRaggedTensor(self, rt, rt_ragged_rank, rank,
                                        expected_row_lengths):
+    # [FUNCTION DOC]
+    # Parameterized test of the private helper that derives row partitions from a ragged tensor.
+    # Builds a ragged tensor from nested lists with the given ragged rank, requests partitions for
+    # the given target rank (int64 splits), asserts the count is rank - 1 and equals the number of
+    # expected entries, and that each partition row lengths equal the expected row lengths.
     rt = ragged_factory_ops.constant(rt, rt_ragged_rank)
     partitions = structured_tensor._row_partitions_for_ragged_tensor(
         rt, rank, dtypes.int64)
@@ -1276,11 +1394,17 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
                     [[{"x": 5}], [{"x": 6}, {"x": 7}]]]),
   ])  # pyformat: disable
   def testMergeDims(self, st, outer_axis, inner_axis, expected):
+    # [FUNCTION DOC]
+    # Parameterized test: converts a Python value to a structured tensor, merges the dimensions
+    # from outer_axis to inner_axis, and asserts the result equals expected.
     st = StructuredTensor.from_pyval(st)
     result = st.merge_dims(outer_axis, inner_axis)
     self.assertAllEqual(result, expected)
 
   def testMergeDimsDetail_3D_0_1(self):
+    # [FUNCTION DOC]
+    # Merges dimensions 0 and 1 of a ragged rank-3 structured tensor and asserts the result shape is
+    # compatible with three rows by an unknown inner size.
     st = StructuredTensor.from_pyval([[[{
         "x": 1
     }, {
@@ -1295,6 +1419,9 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
     self.assertTrue(expected_shape.is_compatible_with(result.shape))
 
   def testMergeDims_0_1(self):
+    # [FUNCTION DOC]
+    # Builds a structured tensor partitioned twice (two row partitions), merges dimensions 0 and 1,
+    # and asserts the number of row partitions drops from two to one.
     rt = ragged_tensor.RaggedTensor.from_value_rowids(
         array_ops.constant([[1, 2], [3, 4], [5, 6]]), [0, 0, 1])
     struct = StructuredTensor.from_fields({"r": rt}, [2])
@@ -1307,6 +1434,9 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
     self.assertLen(merged.row_partitions, 1)
 
   def testMergeDimsError(self):
+    # [FUNCTION DOC]
+    # Asserts merging with outer axis 2 and inner axis 1 raises a value error saying outer must be
+    # less than or equal to inner.
     st = StructuredTensor.from_pyval([[[{"a": 5}]]])
     with self.assertRaisesRegex(
         ValueError, r"Expected outer_axis \(2\) to be less than "
@@ -1314,6 +1444,9 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
       st.merge_dims(2, 1)
 
   def testTupleFieldValue(self):
+    # [FUNCTION DOC]
+    # Asserts field lookup with a tuple path reads top-level and nested fields, and that a path
+    # through a non-structured field raises a key error saying the path was not found.
     st = StructuredTensor.from_pyval({"a": 5, "b": {"c": [1, 2, 3]}})
     self.assertAllEqual(st.field_value(("a",)), 5)
     self.assertAllEqual(st.field_value(("b", "c")), [1, 2, 3])
@@ -1439,12 +1572,18 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
                     {"a": [{"aa": [{"b": {"c": 12}}],
                             "new_field": [{"c": 12}]}]}])])  # pyformat: disable
   def testPromote(self, st, source_path, new_field_name, expected):
+    # [FUNCTION DOC]
+    # Parameterized test of promotion: converts st and expected from Python values, promotes the
+    # field at source_path to a new field of its parent named new_field_name, and asserts equality.
     st2 = StructuredTensor.from_pyval(st)
     expected2 = StructuredTensor.from_pyval(expected)
     result = st2.promote(source_path, new_field_name)
     self.assertAllEqual(result, expected2)
 
   def testPromoteDense(self):
+    # [FUNCTION DOC]
+    # Promotes a dense nested field (rank 3 child inside a rank-1 parent) and asserts the original
+    # ranks are unchanged and the new field holds the child values merged to rank 2.
     st = StructuredTensor.from_fields(
         {
             "a":
@@ -1460,6 +1599,9 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
         result.field_value("new_field"), [[1, 11, 2, 12], [3, 13, 4, 14]])
 
   def testMergeDimsGeneric(self):
+    # [FUNCTION DOC]
+    # Calls the private generic dimension-merge helper on a dense 2x2x2 tensor with outer axis 1 and
+    # inner axis 3 (equal to the rank) and asserts it yields a 2x4 tensor.
     """This is an example of a dense tensor being merged, when outer=rank.
 
     Note that outer=rank is equivalent to outer=rank - 1. And yet, from the
@@ -1478,6 +1620,9 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
     self.assertAllEqual(t2, [[1, 11, 2, 12], [3, 13, 4, 14]])
 
   def testMergeDimsGenericNoop(self):
+    # [FUNCTION DOC]
+    # Calls the private generic merge helper with equal outer and inner axes and asserts the dense
+    # tensor is returned unchanged.
     """This is an example of a dense tensor being merged, when outer=inner.
 
     Sometimes, when promoting, the parent and grandparent ranks are equal.
@@ -1489,6 +1634,9 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
     self.assertAllEqual(t2, [[[1, 11], [2, 12]], [[3, 13], [4, 14]]])
 
   def testRepr(self):
+    # [FUNCTION DOC]
+    # Asserts the printed form of a nested structured tensor equals an expected multi-line string;
+    # the expected text differs between eager mode (tensor values shown) and graph mode (tensor names).
     st = StructuredTensor.from_pyval({"a": 5, "b": {"c": [1, 2, 3]}})
     if context.executing_eagerly():
       expected = textwrap.dedent("""
@@ -1513,6 +1661,9 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
     self.assertEqual(repr(st), expected)
 
   def testPartitionOuterDimension2DDenseField(self):
+    # [FUNCTION DOC]
+    # Partitions a rank-1 structured tensor holding a dense 2x2 field with a uniform row length of
+    # 2 and asserts the field becomes a dense tensor of shape 1x2x2 with the original values.
     struct = structured_tensor.StructuredTensor.from_fields(
         fields={"r": array_ops.constant([[1, 2], [3, 4]])}, shape=[2])
 
@@ -1576,6 +1727,10 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
       ),
   ])  # pyformat: disable
   def testWithUpdatesValues(self, pyval, updates):
+    # [FUNCTION DOC]
+    # Parameterized test of the update operation without validation: applies a mapping of updates
+    # to a structured tensor made from pyval, then asserts each updated field reads back equal to
+    # the supplied value (with a descriptive failure message).
     st = StructuredTensor.from_pyval(pyval)
     updated_st = st.with_updates(updates, validate=False)
     for key, value in updates.items():
@@ -1585,6 +1740,9 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
           "Update failed: key={}, value={}, got={}".format(key, value, got))
 
   def testWithUpdatesFunctions(self):
+    # [FUNCTION DOC]
+    # Applies updates given as functions (add 1 to a top-level field, add 7 to a deeply nested one)
+    # with validation on, and asserts the updated values and that an untouched field is unchanged.
     pyval = {"a": 12, "b": {"c": 23, "d": {"e": 11}}}
     st = StructuredTensor.from_pyval(pyval)
     st_updated = st.with_updates(
@@ -1599,17 +1757,25 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
     self.assertAllEqual(st_updated.field_value(("b", "c")), 23)
 
   def test_from_pyval_list_of_empty(self):
+    # [FUNCTION DOC]
+    # Regression test (see the referenced bug): a list with one empty dictionary converts to a
+    # structured tensor of shape [1].
     """See b/183245576."""
     st = structured_tensor.StructuredTensor.from_pyval([{}])
     self.assertAllEqual([1], st.shape.as_list())
 
   def test_from_pyval_list_of_empty_three(self):
+    # [FUNCTION DOC]
+    # Regression test: a list of three empty dictionaries gives shape [3] and no field names.
     """See b/183245576."""
     st = structured_tensor.StructuredTensor.from_pyval([{}, {}, {}])
     self.assertAllEqual([3], st.shape.as_list())
     self.assertEmpty(st.field_names())
 
   def test_from_pyval_deep_list_of_empty(self):
+    # [FUNCTION DOC]
+    # Regression test: a nested list of dictionaries with an empty nested dictionary field converts
+    # to a rank-2 tensor with outer size 2 and the empty nested structured field has no names.
     """See b/183245576."""
     st = structured_tensor.StructuredTensor.from_pyval([[{
         "a": {},
@@ -1626,6 +1792,11 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
     self.assertEmpty(st.field_value("a").field_names())
 
   def testWithUpdatesChecks(self):
+    # [FUNCTION DOC]
+    # Asserts update validation errors, all value errors: creating a sub-field under a missing or
+    # non-structured parent, applying a function to a missing field, empty field names or paths,
+    # updating a parent and its child together, and an update that would change the shape of a
+    # field of a ragged structured tensor.
     pyval = {"a": 12, "b": {"c": 23, "d": {"e": 11}}}
     st = StructuredTensor.from_pyval(pyval)
 
@@ -1681,6 +1852,11 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
       st_with_shape.with_updates({("c", "a"): 3})
 
   def testWithUpdatesDelete(self):
+    # [FUNCTION DOC]
+    # Tests deleting fields by updating with a null value. Asserts the field disappears, deleting a
+    # missing field raises a value error (nested path with validation, top-level without), and the
+    # row count and row partitions are preserved for ragged structures. For rank-1 and scalar tensors
+    # that become empty, rank is preserved, scalars have no row partitions and a null row count.
     pyval = {"a": 12, "b": {"c": 23, "d": {"e": 11}}}
     st = StructuredTensor.from_pyval(pyval)
     updated_st = st.with_updates({("b", "c"): None}, validate=True)
@@ -1723,6 +1899,9 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
     self.assertIsNone(updated_st.nrows())
 
   def test_from_pyval_deep_row_partitions(self):
+    # [FUNCTION DOC]
+    # Regression test (see the referenced bug): a deeply nested field read by path has the number of
+    # row partitions equal to its rank minus one.
     """See b/179195750."""
     st = structured_tensor.StructuredTensor.from_pyval([{
         "foo": [{
@@ -1735,6 +1914,10 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
     self.assertLen(st2.row_partitions, st2.rank - 1)
 
   def test_from_fields_deep_row_partitions(self):
+    # [FUNCTION DOC]
+    # Regression test: builds a structured tensor from a field that is itself a ragged structured
+    # tensor (no validation) and asserts both the original and the nested field have rank minus one
+    # row partitions.
     """Test a field with its own row_partition. See b/179195750."""
     st = structured_tensor.StructuredTensor.from_pyval([[[{"baz": [b"FW"]}]]])
     self.assertLen(st.row_partitions, st.rank - 1)
@@ -1744,6 +1927,9 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
     self.assertLen(st3.row_partitions, st3.rank - 1)
 
   def test_structured_tensor_spec_shape_property(self):
+    # [FUNCTION DOC]
+    # Creates structured tensor specs from dynamic ragged shape specs with static inner shapes of
+    # [1, 2] and [None], and asserts the spec shape property gives those shapes.
     spec = StructuredTensor.Spec._from_shape(
         DynamicRaggedShape.Spec(
             row_partitions=[], static_inner_shape=[1, 2], dtype=dtypes.int64))
@@ -1754,6 +1940,9 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
     self.assertEqual(spec.shape.as_list(), [None])
 
   def test_dynamic_ragged_shape_init_vector(self):
+    # [FUNCTION DOC]
+    # Calls the private dynamic-ragged-shape initializer with two dense fields, a row count of 4, a
+    # rank-1 shape and no row partitions, and asserts the resulting shape converts to shape (4,).
     x = constant_op.constant([1, 2, 3, 4])
     y = constant_op.constant([[1, 2], [3, 4], [5, 6], [7, 8]])
     fields = {"x": x, "y": y}
@@ -1766,6 +1955,8 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
         repr(rs._to_tensor_shape()), repr(tensor_shape.TensorShape((4,))))
 
   def test_dynamic_ragged_shape_init_scalar(self):
+    # [FUNCTION DOC]
+    # Same initializer with a scalar shape and no row count; asserts the resulting shape is scalar.
     x = constant_op.constant([1, 2, 3, 4])
     y = constant_op.constant([[1, 2], [3, 4], [5, 6], [7, 8]])
     fields = {"x": x, "y": y}
@@ -1779,6 +1970,9 @@ class StructuredTensorTest(test_util.TensorFlowTestCase,
         repr(rs._to_tensor_shape()), repr(tensor_shape.TensorShape(())))
 
   def test_dynamic_ragged_shape_init_ragged(self):
+    # [FUNCTION DOC]
+    # Same initializer with one ragged field, a row count of 2, shape of 2 by unknown and the
+    # ragged value row partitions; asserts the resulting shape converts to 2 by unknown.
     x = ragged_factory_ops.constant_value([[1, 2, 3], [4]])
     fields = {"x": x}
     nrows = constant_op.constant(2, dtype=dtypes.int64)
