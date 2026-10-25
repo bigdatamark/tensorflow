@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Command line script that removes nodes not needed to compute given outputs from a GraphDef
+# file. It parses flags (input and output graph paths, binary-format switches, comma separated
+# input and output node names, placeholder dtype enum, default float32) when run as a program,
+# then calls strip_unused_lib.strip_unused_from_files. Nothing happens on import except
+# defining a global flags holder (null until arguments are parsed) and the entry function.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -49,6 +55,13 @@ FLAGS = None
 
 
 def main(unused_args):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the integer result of strip_unused_from_files (negative on bad input) is
+  # discarded, so the process exit status does not signal those failures.
+  # Application entry point run by the app runner. The argument is the leftover argument list and
+  # is ignored. Passes the parsed global flags (input graph, input binary, output graph, output
+  # binary, input and output node names, placeholder type) to the library function, which reads
+  # and writes the graph files. Returns nothing. Requires the flags global to have been set.
   strip_unused_lib.strip_unused_from_files(FLAGS.input_graph,
                                            FLAGS.input_binary,
                                            FLAGS.output_graph,

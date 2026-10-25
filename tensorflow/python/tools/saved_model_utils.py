@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: Shared loading utilities used by the SavedModel command line tools and tests.
+# Small utility module for reading a SavedModel protocol buffer from a directory and querying it.
+# Exposes read_saved_model (loads saved_model.pb or saved_model.pbtxt into a SavedModel proto),
+# get_saved_model_tag_sets (lists the tag-sets of all meta graphs) and get_meta_graph_def
+# (returns the meta graph matching a comma separated tag-set). No import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +31,14 @@ from tensorflow.python.util import compat
 
 
 def read_saved_model(saved_model_dir):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the final else branch (raising a "does not exist" error with both file names) is
+  # unreachable, because the earlier existence check already raised if neither file exists.
+  # Loads a SavedModel proto from a directory. Takes saved_model_dir, the directory (text or
+  # bytes) holding the model. Prefers the binary saved_model.pb file when present, otherwise
+  # falls back to the text saved_model.pbtxt file. Returns the parsed SavedModel proto.
+  # Raises IOError if neither file exists or if the chosen file cannot be parsed (the parse
+  # error message is included). Reads files only; no other side effects.
   """Reads the saved_model.pb or saved_model.pbtxt file containing `SavedModel`.
 
   Args:
@@ -75,6 +89,10 @@ def read_saved_model(saved_model_dir):
 
 
 def get_saved_model_tag_sets(saved_model_dir):
+  # [FUNCTION DOC]
+  # Lists the tag-sets of every meta graph in a SavedModel. Takes saved_model_dir, the model
+  # directory. Reads the model and returns a list with one entry per meta graph, in file order;
+  # each entry is a list of tag strings. Propagates the IOError from reading the model.
   """Retrieves all the tag-sets available in the SavedModel.
 
   Args:
@@ -92,6 +110,12 @@ def get_saved_model_tag_sets(saved_model_dir):
 
 
 def get_meta_graph_def(saved_model_dir, tag_set):
+  # [FUNCTION DOC]
+  # Finds the meta graph whose tags exactly equal the requested tag-set. Takes saved_model_dir,
+  # the model directory, and tag_set, a comma separated string of tags (empty entries are
+  # dropped, so an empty string means the empty tag set). Matching compares sets, so order does
+  # not matter and all tags must be given. Returns the first matching meta graph proto.
+  # Raises RuntimeError listing the available tag-sets if none matches; IOError from reading.
   """Gets MetaGraphDef from SavedModel.
 
   Returns the MetaGraphDef for the given tag-set and SavedModel directory.

@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: Tiny script used to time how long importing TensorFlow takes (for example by running
+# it under an interpreter import-time profiling option).
+# The module only imports the main tensorflow package, unused on purpose, and defines nothing
+# else. The import itself is the whole side effect.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

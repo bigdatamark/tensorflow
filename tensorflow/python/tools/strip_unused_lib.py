@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: Library behind the strip_unused command line script (also used directly by tests).
+# Provides strip_unused, which rewrites a GraphDef so the chosen input nodes become placeholders
+# and everything not needed for the chosen outputs is pruned, and strip_unused_from_files, which
+# does the same between graph files in binary or text format. No import-time side effects.
 # pylint: disable=g-bad-file-header
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
@@ -28,6 +33,15 @@ from tensorflow.python.platform import gfile
 
 def strip_unused(input_graph_def, input_node_names, output_node_names,
                  placeholder_type_enum):
+  # [FUNCTION DOC]
+  # Prunes a graph. Inputs: input_graph_def, the graph proto; input_node_names, list of operation
+  # names to become inputs; output_node_names, list of output operation names; and
+  # placeholder_type_enum, one dtype enum applied to all inputs or a list with one per input
+  # name (matched by position in input_node_names). Each input node is replaced by a placeholder
+  # node of that dtype that keeps any recorded output shapes and shape attributes; other nodes
+  # are deep-copied; then only nodes needed by the outputs are kept. Does not modify the input
+  # graph. Returns the new GraphDef. Raises a value error if a name contains a colon (looks like
+  # a tensor), and a key error if some input name is missing from the graph.
   """Removes unused nodes from a GraphDef.
 
   Args:
@@ -89,6 +103,16 @@ def strip_unused(input_graph_def, input_node_names, output_node_names,
 def strip_unused_from_files(input_graph, input_binary, output_graph,
                             output_binary, input_node_names, output_node_names,
                             placeholder_type_enum):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: errors are reported by printing and returning -1, and success returns nothing,
+  # so the return value is inconsistent and callers must check it.
+  # File based wrapper around strip_unused. Inputs: input_graph path, input_binary flag (binary
+  # or text proto), output_graph path, output_binary flag, input_node_names and
+  # output_node_names as comma separated strings, and placeholder_type_enum (single enum or
+  # list). Prints a message and returns -1 if the input file is missing or no output node names
+  # are given. Otherwise reads the graph, prunes it, writes the result in the chosen format,
+  # prints the number of nodes in the final graph, and returns nothing. Exceptions from
+  # strip_unused (value error, key error) propagate. Side effects: reads and writes files.
   """Removes unused nodes from a graph file."""
 
   if not gfile.Exists(input_graph):

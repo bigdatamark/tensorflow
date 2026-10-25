@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# HELPER: Library behind the print_selective_registration_header executable wrapper.
+# Computes the C++ header (ops_to_register.h) used with the SELECTIVE_REGISTRATION build option.
+# It collects the set of (op name, kernel class) pairs needed by one or more model files (raw or
+# text GraphDef protos, or JSON ops-list files), adds default ops, and renders header text that
+# defines macros deciding which ops, kernels and the symbolic gradient get registered.
+# Exposes get_ops_from_nodedef, get_ops_and_kernels, get_header_from_ops_and_kernels and
+# get_header. Module-level constants: an allowlist of ops that need no kernel, and the Flex
+# prefix constants. Kernel lookup uses the native kernel registry extension. No other import-time
+# side effects.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -42,6 +52,11 @@ FLEX_PREFIX_LENGTH = len(FLEX_PREFIX)
 
 
 def _get_ops_from_ops_list(input_file):
+  # [FUNCTION DOC]
+  # HELPER: Input reader for get_ops_and_kernels when the format is an ops list.
+  # Reads a JSON file of (op, kernel) pairs at input_file and returns a set of tuples, with an
+  # empty kernel name turned into a null value. Raises a generic Exception if the file content is
+  # empty; invalid JSON raises the JSON decoding error. The file handle is never explicitly closed.
   """Gets the ops and kernels needed from the ops list file."""
   ops = set()
   ops_list_str = gfile.GFile(input_file, 'r').read()
@@ -55,6 +70,10 @@ def _get_ops_from_ops_list(input_file):
 
 
 def _get_ops_from_graphdef(graph_def):
+  # [FUNCTION DOC]
+  # HELPER: Graph traversal for get_ops_and_kernels.
+  # Takes a GraphDef proto and returns the set of (op, kernel) pairs for all top-level nodes and
+  # for the nodes of every function in its function library. Nodes with no kernel are skipped.
   """Gets the ops and kernels needed from the tensorflow model."""
   ops = set()
   ops.update(_get_ops_from_nodedefs(graph_def.node))
@@ -65,6 +84,14 @@ def _get_ops_from_graphdef(graph_def):
 
 
 def get_ops_from_nodedef(node_def):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it returns None only when no kernel is found and the op is
+  # not allowlisted; the kernel half of the returned pair is also None for allowlisted ops.
+  # Resolves the op and kernel class for one NodeDef. Side effect: if the node has no device set,
+  # it is mutated to the first CPU device before lookup. Asks the native kernel registry for the
+  # kernel class of the serialized node. Returns a pair of op name and kernel class name (null
+  # kernel for allowlisted ops without kernel), or nothing and logs a warning if no kernel exists
+  # and the op is not allowlisted.
   """Gets the op and kernel needed from the given NodeDef.
 
   Args:
@@ -87,6 +114,11 @@ def get_ops_from_nodedef(node_def):
 
 
 def _get_ops_from_nodedefs(node_defs):
+  # [FUNCTION DOC]
+  # HELPER: Per-node loop used by the graph traversal helper.
+  # Takes an iterable of NodeDefs and returns the set of (op, kernel) pairs found, skipping nodes
+  # for which no kernel is found (and the op is not allowlisted). May mutate node devices and log
+  # warnings via get_ops_from_nodedef.
   """Gets the ops and kernels needed from the list of NodeDef.
 
   If a NodeDef's op is not in the allowlist of ops without kernel and there is
@@ -108,6 +140,14 @@ def _get_ops_from_nodedefs(node_defs):
 
 
 def get_ops_and_kernels(proto_fileformat, proto_files, default_ops_str):
+  # [FUNCTION DOC]
+  # Collects the combined set of needed ops and kernels from several model files. Inputs:
+  # proto_fileformat, one of ops_list (JSON list of pairs), rawproto (binary GraphDef) or
+  # textproto (text GraphDef); proto_files, a list of paths; default_ops_str, a comma separated
+  # list of op:kernel pairs always added (empty, null or the word all adds nothing).
+  # Returns a sorted list of unique (op, kernel) pairs. Any other format value trips an assertion
+  # error when a file is not an ops list; a default entry not of the form op:kernel raises a
+  # value error. Logs each loaded file; reads files without closing handles explicitly.
   """Gets the ops and kernels needed from the model files."""
   ops = set()
 
@@ -140,6 +180,14 @@ def get_ops_and_kernels(proto_fileformat, proto_files, default_ops_str):
 
 def get_header_from_ops_and_kernels(ops_and_kernels,
                                     include_all_ops_and_kernels):
+  # [FUNCTION DOC]
+  # Renders the C++ header text for selective registration. Inputs: ops_and_kernels, an iterable
+  # of (op, kernel class) pairs, and include_all_ops_and_kernels, a flag; when true the pairs are
+  # ignored and macros that accept every op, kernel and gradient are emitted. Otherwise the header
+  # embeds helper constexpr functions, the list of needed kernel classes (null kernels skipped),
+  # a function accepting only the listed ops, and a gradient macro that is true only if the
+  # symbolic gradient op is present. The first line records the running script name taken from
+  # the process arguments. Returns the header as one newline-joined string; no files are written.
   """Returns a header for use with tensorflow SELECTIVE_REGISTRATION.
 
   Args:
@@ -155,6 +203,9 @@ def get_header_from_ops_and_kernels(ops_and_kernels,
   result_list = []
 
   def append(s):
+    # [FUNCTION DOC]
+    # HELPER: Nested line collector for building the header text.
+    # Appends the given string to the enclosing result list; returns nothing.
     result_list.append(s)
 
   _, script_name = os.path.split(sys.argv[0])
@@ -226,6 +277,14 @@ def get_header_from_ops_and_kernels(ops_and_kernels,
 def get_header(graphs,
                proto_fileformat='rawproto',
                default_ops='NoOp:NoOp,_Recv:RecvOp,_Send:SendOp'):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring promises a header string, but when no ops or kernels are found it
+  # prints an error message and returns the integer 1 instead.
+  # Top-level entry point: builds the selective registration header for a list of model files.
+  # Inputs: graphs, list of file paths; proto_fileformat, textproto, rawproto (default) or
+  # ops_list; default_ops, comma separated op:kernel pairs always included, or the word all to
+  # include everything. Returns the header text (see the header builder) and prints to standard
+  # output on failure. Exceptions from file reading and parsing propagate.
   """Computes a header for use with tensorflow SELECTIVE_REGISTRATION.
 
   Args:

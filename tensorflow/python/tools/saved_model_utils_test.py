@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit tests for saved_model_utils: reading SavedModels from disk, listing tag-sets and looking
+# up a meta graph by tag-set. Tests build small SavedModels with the graph-mode builder in the
+# test temporary directory. The module-level teardown removes that directory.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,18 +31,34 @@ from tensorflow.python.tools import saved_model_utils
 
 
 def tearDownModule():
+  # [FUNCTION DOC]
+  # HELPER: Test cleanup for this module.
+  # Runs once after all tests in the module and recursively deletes the shared temporary
+  # directory used by the tests. Takes nothing, returns nothing.
   file_io.delete_recursively(test.get_temp_dir())
 
 
 class SavedModelUtilTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the saved_model_utils functions. Has one shared helper that creates and
+  # checks a variable; each test writes its own SavedModel under the temporary directory.
 
   def _init_and_validate_variable(self, sess, variable_name, variable_value):
+    # [FUNCTION DOC]
+    # HELPER: Variable setup shared by the tests in this class.
+    # Creates a variable with the given name and initial value in the current graph, runs the
+    # global variable initializer in the given session, and asserts that evaluating the variable
+    # equals the initial value. Returns nothing.
     v = variables.Variable(variable_value, name=variable_name)
     sess.run(variables.global_variables_initializer())
     self.assertEqual(variable_value, v.eval())
 
   @test_util.deprecated_graph_mode_only
   def testReadSavedModelValid(self):
+    # [FUNCTION DOC]
+    # Saves a model with one variable and the training tag, then reads it back with
+    # read_saved_model. Asserts exactly one meta graph exists with exactly one tag equal to the
+    # training tag constant. Graph mode only.
     saved_model_dir = os.path.join(test.get_temp_dir(), "valid_saved_model")
     builder = saved_model_builder.SavedModelBuilder(saved_model_dir)
     with self.session(graph=ops.Graph()) as sess:
@@ -54,12 +74,19 @@ class SavedModelUtilTest(test.TestCase):
                      tag_constants.TRAINING)
 
   def testReadSavedModelInvalid(self):
+    # [FUNCTION DOC]
+    # Reads from a directory that holds no SavedModel and asserts an IOError whose message says
+    # the SavedModel file does not exist at that directory.
     saved_model_dir = os.path.join(test.get_temp_dir(), "invalid_saved_model")
     with self.assertRaisesRegex(
         IOError, "SavedModel file does not exist at: %s" % saved_model_dir):
       saved_model_utils.read_saved_model(saved_model_dir)
 
   def testGetSavedModelTagSets(self):
+    # [FUNCTION DOC]
+    # Builds a SavedModel with five meta graphs (train; serve; serve and gpu; serve and tpu;
+    # custom foo and bar), each from a fresh session and graph, and saves it. Asserts that
+    # get_saved_model_tag_sets returns the five tag lists in insertion order.
     saved_model_dir = os.path.join(test.get_temp_dir(), "test_tags")
     builder = saved_model_builder.SavedModelBuilder(saved_model_dir)
     # Force test to run in graph mode since SavedModelBuilder.save requires a
@@ -109,6 +136,9 @@ class SavedModelUtilTest(test.TestCase):
     self.assertEqual(expected_tags, actual_tags)
 
   def testGetMetaGraphInvalidTagSet(self):
+    # [FUNCTION DOC]
+    # Saves a model with tags a and b. Checks that looking up the tag-set "a,b" succeeds, then
+    # asserts that looking up "c,d" raises a RuntimeError mentioning the associated tag-set.
     saved_model_dir = os.path.join(test.get_temp_dir(), "test_invalid_tags")
     builder = saved_model_builder.SavedModelBuilder(saved_model_dir)
     # Force test to run in graph mode since SavedModelBuilder.save requires a
