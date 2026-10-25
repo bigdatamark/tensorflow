@@ -1,3 +1,17 @@
+# [MODULE DOC]
+# Implements TensorFlow's resource-based variables, the default variable implementation in TF2.
+# A variable's state lives in a runtime "resource" referred to by a scalar handle tensor of dtype
+# resource; this module wraps that handle in Python objects. It provides: helpers that create
+# variable handles and attach shape/dtype "handle data" to them; BaseResourceVariable (read, assign,
+# scatter, sparse-read, checkpoint, proto and tracing support); ResourceVariable (creation from an
+# initial value or a VariableDef proto); UninitializedVariable (a variable whose value is restored
+# later, e.g. from a SavedModel); the _UnreadVariable returned by assignments; VariableSpec (a
+# trace type for tf.function); gradient helpers for reading variables; and conversion/registration
+# glue. It also re-exports every generated resource-variable op via a wildcard import.
+# Import-time side effects: registers read-only resource ops with the automatic control
+# dependency machinery, registers gradient functions for the read and gather ops, marks several
+# ops as not differentiable, registers a tensor conversion function for resource variables, and
+# registers a structure codec for VariableSpec.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -77,6 +91,12 @@ get_resource_handle_data = handle_data_util.get_resource_handle_data
 
 
 def get_eager_safe_handle_data(handle):
+  # [FUNCTION DOC]
+  # HELPER: shared by the variable-handle creation and read helpers in this module.
+  # Returns the shape-and-type handle data attached to a resource (or variant) tensor. For an
+  # eager tensor the stored handle data attribute is returned directly; for a graph tensor the
+  # data is looked up through the handle-data utility. Input: handle, which must be a tensor
+  # (an assertion fails otherwise). Returns the handle data record, possibly unset. No side effects.
   """Get the data handle from the Tensor `handle`."""
   assert isinstance(handle, tensor_module.Tensor)
 
@@ -87,6 +107,14 @@ def get_eager_safe_handle_data(handle):
 
 
 def _set_handle_shapes_and_types(tensor, handle_data, graph_mode):
+  # [FUNCTION DOC]
+  # HELPER: used when creating variable handles to publish shape inference information.
+  # Stores the handle data on the tensor. In graph mode it additionally unpacks each shape/dtype
+  # pair into per-entry shapes (lists of sizes, or nothing when rank is unknown), ranks (minus one
+  # for unknown rank) and dtypes, and pushes them into the underlying C graph as the output handle
+  # shapes and types of the tensor so C++ shape inference sees them. Inputs: tensor (graph or eager
+  # tensor), handle_data (shape inference handle data record), graph_mode (boolean). Returns
+  # nothing. Side effects: mutates the tensor and, in graph mode, the C graph.
   """Sets the shape inference result HandleData on tensor.
 
   Args:
@@ -116,6 +144,14 @@ def _set_handle_shapes_and_types(tensor, handle_data, graph_mode):
 
 
 def _combine_handle_data(handle, initial_value):
+  # [FUNCTION DOC]
+  # HELPER: used by the graph-mode path of variable handle creation.
+  # Returns the handle data of the variable handle. When the initial value has dtype variant and
+  # carries set handle data, its shape-and-type entries are appended to the handle's own entries
+  # (mutating the handle's data in place); otherwise the handle's data is returned unchanged.
+  # Inputs: handle (tensor of dtype resource, asserted), initial_value (tensor). Raises a runtime
+  # error if variant data must be appended but the handle data is missing, unset, or does not hold
+  # exactly one entry.
   """Concats HandleData from tensors `handle` and `initial_value`.
 
   Args:
@@ -155,6 +191,16 @@ def _variable_handle_from_shape_and_dtype(shape,
                                           name,
                                           graph_mode,
                                           initial_value=None):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation behind eager_safe_variable_handle and other handle builders.
+  # Creates a variable handle by running the variable-handle op and fills in its handle data.
+  # Inputs: shape (anything convertible to a tensor shape), dtype (convertible to a dtype),
+  # shared_name (string or nothing; must be nothing in eager mode), name (op and debug name),
+  # graph_mode (boolean), initial_value (optional tensor; when its dtype is variant its handle data
+  # is appended). The container comes from the default graph. In eager mode a fresh anonymous
+  # shared name is generated. Returns the resource handle tensor with handle data set.
+  # Raises an internal error if an explicit shared_name is given in eager mode, and a runtime error
+  # if variant data cannot be appended because the handle data is not a single entry.
   """Create a variable handle, copying in handle data from `initial_value`."""
   container = ops.get_default_graph()._container  # pylint: disable=protected-access
   if container is None:
@@ -200,6 +246,12 @@ def _variable_handle_from_shape_and_dtype(shape,
 
 def eager_safe_variable_handle(initial_value, shape, shared_name, name,
                                graph_mode):
+  # [FUNCTION DOC]
+  # Creates a variable handle whose handle data supports shape inference, taking the dtype from
+  # the base dtype of initial_value. Inputs: initial_value (tensor), shape (handle data shape,
+  # may be unknown), shared_name (string or nothing), name (string), graph_mode (boolean).
+  # Returns the resource tensor. Delegates to the private shape-and-dtype handle builder; errors
+  # and side effects are those of that builder.
   """Creates a variable handle with information to do shape inference.
 
   The dtype is read from `initial_value` and stored in the returned
@@ -248,6 +300,11 @@ def eager_safe_variable_handle(initial_value, shape, shared_name, name,
 
 @contextlib.contextmanager
 def _handle_graph(handle):
+  # [FUNCTION DOC]
+  # HELPER: context manager used around variable ops so they are built in the handle's graph.
+  # Yields nothing. If eager execution is on, the handle is an eager tensor, or a default graph
+  # exists, it simply yields; otherwise (e.g. building functions with no default graph) it enters
+  # the handle's own graph as default for the duration of the block.
   # Note: might have an eager tensor but not be executing eagerly when building
   # functions.
   if (context.executing_eagerly() or isinstance(handle, ops.EagerTensor) or
@@ -259,6 +316,11 @@ def _handle_graph(handle):
 
 
 class EagerResourceDeleter:
+  # [CLASS DOC]
+  # HELPER: lifetime manager owned by eager resource variables.
+  # Holds a resource handle, the device it lives on, and a reference to the eager context. When
+  # the deleter is garbage collected (which happens when its single owning variable is collected,
+  # even inside reference cycles) it destroys the underlying resource. Uses slots, no other state.
   """An object which cleans up a resource handle.
 
   An alternative to defining a __del__ method on an object. The intended use is
@@ -271,6 +333,10 @@ class EagerResourceDeleter:
   __slots__ = ["_handle", "_handle_device", "_context"]
 
   def __init__(self, handle, handle_device):
+    # [FUNCTION DOC]
+    # Stores the resource handle and its device string, and keeps a strong reference to the eager
+    # context so the context outlives this object (the destructor runs an op). Raises a value
+    # error if handle is not a tensor.
     if not isinstance(handle, tensor_module.Tensor):
       raise ValueError(
           (f"Passed handle={handle} to EagerResourceDeleter. Was expecting "
@@ -283,6 +349,11 @@ class EagerResourceDeleter:
     self._context = context.context()
 
   def __del__(self):
+    # [FUNCTION DOC]
+    # Destructor: destroys the resource behind the handle, ignoring lookup errors, by temporarily
+    # switching to eager mode and the stored device. Packed eager handles own no resource and are
+    # skipped. Type and attribute errors (typical during interpreter shutdown when modules are
+    # unloaded) are silently suppressed. Returns nothing.
     # Resources follow object-identity when executing eagerly, so it is safe to
     # delete the resource we have a handle to.
     try:
@@ -310,6 +381,13 @@ class EagerResourceDeleter:
 
 
 def shape_safe_assign_variable_handle(handle, shape, value, name=None):
+  # [FUNCTION DOC]
+  # HELPER: used by restore paths and variable initialization to assign with a shape check.
+  # Converts value to a tensor (in the handle's graph), asserts its shape is compatible with the
+  # given shape, then runs the assign-variable op on the handle. Inputs: handle (resource tensor),
+  # shape (tensor shape the variable has), value (anything convertible to a tensor), name
+  # (optional op name). Returns the assign operation. Raises a value error if shapes are
+  # incompatible. Side effect: assigns the variable (or adds the op to the graph).
   """Helper that checks shape compatibility and assigns variable."""
   with _handle_graph(handle):
     value_tensor = ops.convert_to_tensor(value)
@@ -319,6 +397,12 @@ def shape_safe_assign_variable_handle(handle, shape, value, name=None):
 
 
 def _maybe_set_handle_data(dtype, handle, tensor):
+  # [FUNCTION DOC]
+  # HELPER: used by variable read and gather paths.
+  # For variant dtype only: copies every entry of the handle's shape-and-type data after the first
+  # onto the given result tensor as its handle data, if such entries exist. Other dtypes: does
+  # nothing. Inputs: dtype, handle (resource tensor), tensor (the read result). Returns nothing;
+  # mutates the tensor.
   if dtype == dtypes.variant:
     # For DT_VARIANT types, the handle's shape_and_type[1:] stores the
     # variant's handle data.  Extract it.
@@ -330,6 +414,10 @@ def _maybe_set_handle_data(dtype, handle, tensor):
 
 
 def variable_accessed(variable):
+  # [FUNCTION DOC]
+  # Notifies the active function graph (if it supports watching variables) and, for trainable
+  # variables, the gradient tape that this variable was used. Input: variable object. Returns
+  # nothing; side effect is registration with the graph and tape.
   """Records that `variable` was accessed for the tape and FuncGraph."""
   if hasattr(ops.get_default_graph(), "watch_variable"):
     ops.get_default_graph().watch_variable(variable)
@@ -338,6 +426,13 @@ def variable_accessed(variable):
 
 
 def default_variable_creator_v2(next_creator=None, **kwargs):
+  # [FUNCTION DOC]
+  # HELPER: the terminal variable creator in the creator-scope chain.
+  # Builds a ResourceVariable from keyword arguments (initial value, trainable, shape validation
+  # flag, caching device, name, variable definition proto, dtype, import scope, constraint,
+  # distribution strategy, synchronization, aggregation, shape, and the variable-lifting flag),
+  # each defaulting to nothing, except validate_shape which defaults to true. next_creator must be
+  # nothing (asserted) because this creator ends the chain. Returns the new variable.
   """Default variable creator."""
   assert next_creator is None
   initial_value = kwargs.get("initial_value", None)
@@ -375,6 +470,14 @@ def default_variable_creator_v2(next_creator=None, **kwargs):
 
 
 class BaseResourceVariable(variables.Variable, core.Tensor):
+  # [CLASS DOC]
+  # Base class of resource variables: a Python object wrapping an existing resource handle tensor.
+  # State: handle, dtype, shape, trainable flag, synchronization and aggregation modes, constraint,
+  # distribution strategy, graph-mode flag, initializer/initial value/cached value ops (graph
+  # mode), unique id, handle name, optional XLA sharding and a "was read" flag. Provides reading,
+  # assigning, scatter updates, sparse reads, protobuf and Trackable (checkpoint/SavedModel)
+  # support, tracing type, and numpy conversion. Subclasses (ResourceVariable, UninitializedVariable,
+  # _UnreadVariable) decide how the handle is created. Behaves as a tensor-like object (core.Tensor).
   """A python variable from an existing handle."""
 
   # TODO(wangpeng): Deprecate `constraint` when callers no long pass it in.
@@ -401,6 +504,14 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
       in_graph_mode=None,
       validate_shape=True,
       **unused_kwargs):
+    # [FUNCTION DOC]
+    # Initializes the wrapper from an already-created handle without calling the parent
+    # constructor. Detects graph versus eager mode (unless in_graph_mode is given), validates and
+    # normalizes synchronization, aggregation and trainable, and records all optional arguments
+    # (handle, shape, dtype, constraint, strategy, ops for graph mode, caching device, slice info,
+    # validate_shape) as private attributes. Unknown keyword arguments are ignored. The handle name
+    # defaults to "Variable:0" else gets ":0" appended. Also stores the graph key and clears the
+    # XLA sharding and "was read" flags. Returns nothing.
     """Creates a variable from a handle.
 
     Args:
@@ -490,9 +601,15 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
     self._variable_read = False
 
   def _get_xla_sharding(self):
+    # [FUNCTION DOC]
+    # Returns the XLA sharding annotation set on this variable, or nothing if none was set.
     return self._xla_sharding
 
   def _set_xla_sharding(self, xla_sharding):
+    # [FUNCTION DOC]
+    # Stores an XLA sharding annotation (sharding proto) used when later read ops are built.
+    # If the variable has already been read in graph mode, logs a warning because the sharding
+    # will not apply to existing reads. Returns nothing.
     """Annotates this `ResourceVariable` with `xla_sharding`.
 
     `xla_sharding` will be used to create an `XlaShardingOp` whenever a
@@ -513,6 +630,10 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
     self._xla_sharding = xla_sharding
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns a text description with name, shape and dtype. In eager mode it also includes the
+    # current value text (read on the variable's device); if the read fails for any reason the
+    # value is shown as unavailable. Graph mode omits the value.
     if context.executing_eagerly() and not self._in_graph_mode:
       # If we cannot read the value for any reason (e.g. variable uninitialized
       # during tf.function tracing), still produce a __repr__. Note that for
@@ -532,6 +653,10 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
           self.name, self.get_shape(), self.dtype.name)
 
   def __tf_tracing_type__(self, signature_context):
+    # [FUNCTION DOC]
+    # Produces the trace type used by tf.function to key traces on this variable. Aliases the
+    # handle's id in the signature context, registers this variable as the placeholder for that
+    # alias, and returns a VariableSpec with the variable's shape, dtype, trainable flag and alias.
     alias_id = signature_context.alias_global_id(self._handle._id)  # pylint:disable=protected-access
     # TODO(xjun): Create variable placeholders directly from VariableSpec
     # without using original values.
@@ -543,6 +668,10 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
 
   @contextlib.contextmanager
   def _assign_dependencies(self):
+    # [FUNCTION DOC]
+    # HELPER: context manager used by assign methods.
+    # Yields nothing. If a cached value op exists, the body runs under a control dependency on it
+    # so writes are ordered after cached reads; otherwise the body runs unchanged.
     """Makes assignments depend on the cached value, if any.
 
     This prevents undefined behavior with reads not ordered wrt writes.
@@ -557,6 +686,9 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
       yield
 
   def __array__(self, dtype=None):
+    # [FUNCTION DOC]
+    # Numpy conversion hook: returns the current value as a numpy array, optionally cast to dtype.
+    # Works only in eager mode (numpy() raises otherwise).
     """Allows direct conversion to a numpy array.
 
     >>> np.array(tf.Variable([1.0]))
@@ -574,15 +706,27 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
     return numpy_compat.np_asarray(self.numpy(), dtype=dtype)
 
   def __nonzero__(self):
+    # [FUNCTION DOC]
+    # Python 2 style truthiness hook; forwards to the boolean conversion method.
     return self.__bool__()
 
   def __bool__(self):
+    # [FUNCTION DOC]
+    # Truthiness: reads the variable and converts its value to a boolean (only sensible for
+    # scalar values in eager mode; otherwise the underlying tensor conversion decides/raises).
     return bool(self.read_value())
 
   def __copy__(self):
+    # [FUNCTION DOC]
+    # Shallow copy returns the same variable object (variables are shared, not duplicated).
     return self
 
   def __deepcopy__(self, memo):
+    # [FUNCTION DOC]
+    # Deep copy for eager mode: builds a new ResourceVariable initialized with the current value
+    # and the same trainable flag, constraint, dtype, shared name, strategy, synchronization and
+    # aggregation, and records it in the memo mapping under this variable's unique id.
+    # Raises a not-implemented error when not executing eagerly. Returns the copy.
     if not context.executing_eagerly():
       raise NotImplementedError(
           "__deepcopy__() is only available when eager execution is enabled.")
@@ -600,38 +744,59 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
 
   @property
   def dtype(self):
+    # [FUNCTION DOC]
+    # Property: the data type of the variable's elements, as recorded at construction.
     """The dtype of this variable."""
     return self._dtype
 
   @property
   def device(self):
+    # [FUNCTION DOC]
+    # Property: the device string of the variable's handle tensor.
     """The device this variable is on."""
     return self.handle.device
 
   @property
   def graph(self):
+    # [FUNCTION DOC]
+    # Property: the graph that owns the handle tensor.
     """The `Graph` of this variable."""
     return self.handle.graph
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Property: the handle name (the variable name with a ":0" suffix, or "Variable:0" by default).
     """The name of the handle for this variable."""
     return self._handle_name
 
   @property
   def shape(self):
+    # [FUNCTION DOC]
+    # Property: the static tensor shape of the variable (possibly partially or fully unknown).
     """The shape of this variable."""
     return self._shape
 
   def set_shape(self, shape):
+    # [FUNCTION DOC]
+    # Refines the static shape by merging the given shape (anything shape-like) into the current
+    # one. Raises a value error if the shapes are incompatible. Returns nothing; mutates the
+    # variable's recorded shape.
     self._shape = self._shape.merge_with(shape)
 
   def _shape_as_list(self):
+    # [FUNCTION DOC]
+    # HELPER: shape accessor for internal callers.
+    # Returns the shape as a list of dimension sizes (entries may be nothing for unknown
+    # dimensions), or nothing if the rank is unknown.
     if self.shape.ndims is None:
       return None
     return [dim.value for dim in self.shape.dims]
 
   def _shape_tuple(self):
+    # [FUNCTION DOC]
+    # HELPER: shape accessor for internal callers.
+    # Returns the shape as an immutable sequence of dimension sizes, or nothing if rank is unknown.
     shape = self._shape_as_list()
     if shape is None:
       return None
@@ -639,6 +804,9 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
 
   @property
   def create(self):
+    # [FUNCTION DOC]
+    # Property: the initializer op of this variable, usable only in graph mode. Raises a runtime
+    # error when eager execution is enabled (in-graph-mode flag false).
     """The op responsible for initializing this variable."""
     if not self._in_graph_mode:
       raise RuntimeError("This operation is not supported "
@@ -647,10 +815,15 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
 
   @property
   def handle(self):
+    # [FUNCTION DOC]
+    # Property: the resource handle tensor through which the variable is accessed.
     """The handle by which this variable can be accessed."""
     return self._handle
 
   def value(self):
+    # [FUNCTION DOC]
+    # Returns the cached value op if one exists, otherwise builds a fresh read of the variable
+    # with no colocation constraint. Side effect: records a variable access (via the read).
     """A cached operation which reads the value of this variable."""
     if self._cached_value is not None:
       return self._cached_value
@@ -658,16 +831,24 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
       return self._read_variable_op()
 
   def _as_graph_element(self):
+    # [FUNCTION DOC]
+    # HELPER: hook used by the graph when this variable is passed where a graph element is needed.
+    # Returns the pre-created graph element (read tensor) given at construction, possibly nothing.
     """Conversion function for Graph.as_graph_element()."""
     return self._graph_element
 
   @property
   def initializer(self):
+    # [FUNCTION DOC]
+    # Property: the op that assigns the initial value (graph mode); nothing in eager mode.
     """The op responsible for initializing this variable."""
     return self._initializer_op
 
   @property
   def initial_value(self):
+    # [FUNCTION DOC]
+    # Property: the tensor used as the initial value (graph mode only). Raises a runtime error
+    # when executing eagerly.
     """Returns the Tensor used as the initial value for the variable."""
     if context.executing_eagerly():
       raise RuntimeError("This property is not supported "
@@ -676,6 +857,8 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
 
   @property
   def constraint(self):
+    # [FUNCTION DOC]
+    # Property: the optional projection function applied after optimizer updates, or nothing.
     """Returns the constraint function associated with this variable.
 
     Returns:
@@ -686,22 +869,34 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
 
   @property
   def op(self) -> ops.Operation:
+    # [FUNCTION DOC]
+    # Property: the operation that produced the handle tensor.
     """The op for this variable."""
     return self.handle.op
 
   @property
   def trainable(self):
+    # [FUNCTION DOC]
+    # Property: whether gradient tapes automatically watch this variable.
     return self._trainable
 
   @property
   def synchronization(self):
+    # [FUNCTION DOC]
+    # Property: the distributed synchronization mode recorded for this variable.
     return self._synchronization
 
   @property
   def aggregation(self):
+    # [FUNCTION DOC]
+    # Property: the distributed aggregation mode recorded for this variable.
     return self._aggregation
 
   def eval(self, session=None):
+    # [FUNCTION DOC]
+    # Graph-mode only: evaluates the variable's graph element in the given session (optional;
+    # default session otherwise) and returns the value as an array. Raises a runtime error when
+    # eager execution is enabled.
     """Evaluates and returns the value of this variable."""
     if context.executing_eagerly():
       raise RuntimeError("This operation is not supported "
@@ -709,6 +904,9 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
     return self._graph_element.eval(session=session)
 
   def numpy(self):
+    # [FUNCTION DOC]
+    # Eager only: reads the variable and returns its value as a numpy array. Raises a
+    # not-implemented error when eager execution is not enabled.
     if context.executing_eagerly():
       return self.read_value().numpy()
     raise NotImplementedError(
@@ -716,6 +914,12 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
 
   @deprecated(None, "Prefer Dataset.range instead.")
   def count_up_to(self, limit):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says this is a shortcut for a free function, but the code calls the
+    # resource count-up-to op directly on the handle; the method is also deprecated.
+    # Builds an op that increments the variable by one and returns its previous value, failing with
+    # an out-of-range error at run time once the limit would be exceeded. Input: limit (integer).
+    # Returns the tensor holding the pre-increment value.
     """Increments this variable until it reaches `limit`.
 
     When that Op is run it tries to increment the variable by `1`. If
@@ -739,6 +943,12 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
         self.handle, limit=limit, T=self.dtype)
 
   def _copy_trackable_to_cpu(self, object_map):
+    # [FUNCTION DOC]
+    # HELPER: Trackable hook used when copying checkpointable state to host memory.
+    # If this variable has no entry in object_map (a mapping from originals to copies), creates an
+    # uninitialized CPU variable (device index zero) with the same trainable flag, shape, dtype and
+    # shared name, and records it. Then assigns the current value into the copy on its device.
+    # Returns nothing; mutates object_map and the copy.
     """For implementing `Trackable`."""
     if self not in object_map:
       # If not populated, initialize the cpu copy first.
@@ -763,6 +973,12 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
 
   def _export_to_saved_model_graph(self, object_map=None, tensor_map=None,
                                    options=None, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: Trackable hook used when exporting to a SavedModel graph.
+    # Creates an uninitialized copy of this variable in the export graph (placed on the variable's
+    # device only if the options' variable policy says to save devices), records the copy in
+    # object_map and its handle in tensor_map (both mappings are required and mutated). Extra
+    # keyword arguments are ignored. Returns a list holding the original handle tensor.
     """For implementing `Trackable`."""
     new_variable = None
     if options.experimental_variable_policy._save_variable_devices():  # pylint:disable=protected-access
@@ -775,9 +991,18 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
     return [self.handle]
 
   def _serialize_to_tensors(self):
+    # [FUNCTION DOC]
+    # Checkpoint hook: returns a mapping from the standard variable-value key to a lazily
+    # evaluated tensor callable carrying this variable's dtype and device. Nothing is read until
+    # the callable is invoked.
     """Implements Trackable._serialize_to_tensors."""
 
     def _read_variable_closure():
+      # [FUNCTION DOC]
+      # HELPER: deferred reader for checkpoint saving.
+      # On the variable's device, returns nothing if executing eagerly and the variable is
+      # uninitialized (meaning "skip"); otherwise reads the value without a copy and returns an
+      # identity of it placed on the host CPU so non-CPU variables can be saved.
       v = self
       with ops.device(v.device):
         if context.executing_eagerly() and not v.is_initialized():
@@ -798,6 +1023,11 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
     }
 
   def _restore_from_tensors(self, restored_tensors):
+    # [FUNCTION DOC]
+    # Checkpoint hook: assigns the restored value into this variable. Input: mapping from keys to
+    # tensors; the entry under the standard variable-value key is used. Assigns on the variable's
+    # device with a shape compatibility check and returns the assign result. Raises a value error
+    # (chained from the original) naming both shapes and the variable name on shape mismatch.
     """Implements Trackable._restore_from_tensors."""
     with ops.device(self.device):
       restored_tensor = array_ops.identity(
@@ -813,6 +1043,14 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
       return assigned_variable
 
   def _read_variable_op(self, no_copy=False):
+    # [FUNCTION DOC]
+    # HELPER: core read implementation behind value, read_value and read_value_no_copy.
+    # Marks the variable accessed and read, then runs the read-variable op on the handle (under
+    # the caching device if set). When no_copy is true (and the forward-compat date has passed) it
+    # first disables copy-on-read. Copies variant handle data onto the result. In graph mode it
+    # records the read op for gradient purposes. If XLA sharding is enabled, annotated and in graph
+    # mode, wraps the result in an XLA sharding op and tags the op with the serialized sharding.
+    # Returns the value tensor. Side effects: tape and graph registration, optional mode change.
     """Reads the value of the variable.
 
     If the variable is in copy-on-read mode and `no_copy` is True, the variable
@@ -828,6 +1066,10 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
     self._variable_read = True
 
     def read_and_set_handle(no_copy):
+      # [FUNCTION DOC]
+      # HELPER: performs the raw read inside the caching-device scope decision.
+      # Optionally disables copy-on-read on the variable, runs the read op, propagates variant
+      # handle data to the result, and returns the result tensor.
       if no_copy and forward_compat.forward_compatible(2022, 5, 3):
         gen_resource_variable_ops.disable_copy_on_read(self.handle)
       result = gen_resource_variable_ops.read_variable_op(
@@ -869,6 +1111,9 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
     return result
 
   def read_value(self):
+    # [FUNCTION DOC]
+    # Builds a read of the variable inside a "Read" name scope and returns an identity of it so the
+    # result can be placed on whatever device the context specifies. Returns the value tensor.
     """Constructs an op which reads the value of this variable.
 
     Should be used when there are multiple reads, or when it is desirable to
@@ -884,6 +1129,9 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
     return array_ops.identity(value)
 
   def read_value_no_copy(self):
+    # [FUNCTION DOC]
+    # Like read_value, but requests a read that does not copy the buffer; this switches a
+    # copy-on-read variable to copy-on-write. Returns an identity of the read value tensor.
     """Constructs an op which reads the value of this variable without copy.
 
     The variable is read without making a copy even when it has been sparsely
@@ -900,6 +1148,13 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
     return array_ops.identity(value)
 
   def sparse_read(self, indices, name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: for variant dtype with set handle data, the identity result is returned from
+    # inside the name scope after copying handle data; for other dtypes the raw gather result is
+    # returned, so the two paths differ in whether an identity wraps the value. Unlike gather_nd,
+    # the access is recorded even for non-trainable variables.
+    # Gathers rows of the variable at the given indices (integer tensor) with the resource gather
+    # op, in a name scope named by name (default "Gather"). Returns the gathered tensor.
     """Reads the value of this variable sparsely, using `gather`."""
     with ops.name_scope("Gather" if name is None else name) as name:
       variable_accessed(self)
@@ -919,6 +1174,10 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
     return value
 
   def gather_nd(self, indices, name=None):
+    # [FUNCTION DOC]
+    # Reads slices of the variable addressed by multi-dimensional indices (integer tensor) using
+    # the resource gather-nd op, in a name scope named by name (default "GatherNd"). Records the
+    # access for trainable variables only. Returns an identity of the gathered tensor.
     """Reads the value of this variable sparsely, using `gather_nd`."""
     with ops.name_scope("GatherNd" if name is None else name) as name:
       if self.trainable:
@@ -929,6 +1188,13 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
     return array_ops.identity(value)
 
   def to_proto(self, export_scope=None):
+    # [FUNCTION DOC]
+    # Graph mode only: serializes the variable into a VariableDef message. Input: export_scope
+    # (optional name scope prefix to strip). If the handle name lies outside the scope, returns
+    # nothing. Otherwise fills variable name, initial value name (if known), initializer name,
+    # snapshot name (cached value or graph element), resource flag, trainable flag,
+    # synchronization and aggregation values and slice info (if any). Raises a runtime error in
+    # eager mode.
     """Converts a `ResourceVariable` to a `VariableDef` protocol buffer.
 
     Args:
@@ -976,6 +1242,9 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
 
   @staticmethod
   def from_proto(variable_def, import_scope=None):
+    # [FUNCTION DOC]
+    # Static method: rebuilds a ResourceVariable from a VariableDef message, with an optional
+    # import scope prefix. Graph mode only; raises a runtime error when executing eagerly.
     if context.executing_eagerly():
       raise RuntimeError("This operation is not supported "
                          "when eager execution is enabled.")
@@ -985,6 +1254,9 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
   __array_priority__ = 100
 
   def is_initialized(self, name=None):
+    # [FUNCTION DOC]
+    # Builds the is-initialized op for the handle and returns a boolean scalar tensor. Input: name,
+    # optional op name.
     """Checks whether a resource variable has been initialized.
 
     Outputs boolean scalar indicating whether the tensor has been initialized.
@@ -998,6 +1270,12 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
     return gen_resource_variable_ops.var_is_initialized_op(self.handle, name)
 
   def assign_sub(self, delta, use_locking=None, name=None, read_value=True):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: use_locking is accepted but ignored, and the read-modify-write is not atomic
+    # (see the TODO inside the body).
+    # Subtracts delta (converted to the variable dtype) via the assign-sub op, ordered after any
+    # cached value. Returns a lazy-read variable of the new value if read_value is true, else the
+    # assignment op. Side effect: mutates the variable.
     """Subtracts a value from this variable.
 
     Args:
@@ -1026,6 +1304,11 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
     return assign_sub_op
 
   def assign_add(self, delta, use_locking=None, name=None, read_value=True):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: use_locking is accepted but ignored; the update is not guaranteed atomic.
+    # Adds delta (converted to the variable dtype) via the assign-add op, ordered after any cached
+    # value. Returns a lazy-read variable of the new value if read_value is true, else the
+    # assignment op. Side effect: mutates the variable.
     """Adds a value to this variable.
 
     Args:
@@ -1051,6 +1334,10 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
     return assign_add_op
 
   def _lazy_read(self, op):
+    # [FUNCTION DOC]
+    # HELPER: wraps the result of an update op for the public assign and scatter methods.
+    # Records an access and returns an _UnreadVariable sharing this variable's handle, dtype,
+    # shape, mode and unique id, whose reads depend on the given op.
     variable_accessed(self)
     return _UnreadVariable(
         handle=self.handle,
@@ -1061,6 +1348,13 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
         unique_id=self._unique_id)
 
   def assign(self, value, use_locking=None, name=None, read_value=True):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: use_locking is ignored. The shape-mismatch message puts a leading space inside
+    # the quoted variable name and lacks a space between its two sentences.
+    # Assigns value (converted to the variable dtype) in the handle's graph. Raises a value error
+    # if its shape is incompatible with the variable shape. Passes a runtime shape-validation flag
+    # when the shape is fully defined (after the forward-compat date). Returns a lazy-read
+    # variable if read_value is true, otherwise the assign op. Side effect: mutates the variable.
     """Assigns a new value to this variable.
 
     Args:
@@ -1102,6 +1396,10 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
     return assign_op
 
   def __reduce__(self):
+    # [FUNCTION DOC]
+    # Pickle hook: returns a recipe that rebuilds a ResourceVariable from the current numpy value
+    # and the trainable flag, shared name, dtype, constraint and strategy (eager mode needed
+    # because it reads the value). Mirrors deep copy. Returns a (callable, empty arguments) pair.
     # The implementation mirrors that of __deepcopy__.
     return functools.partial(
         ResourceVariable,
@@ -1113,6 +1411,12 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
         distribute_strategy=self._distribute_strategy), ()
 
   def scatter_sub(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: use_locking is accepted but ignored.
+    # Subtracts the values of a sparse update (IndexedSlices) from the rows at its indices using
+    # the resource scatter-sub op; values are converted to the variable dtype. Raises a type error
+    # if sparse_delta is not an IndexedSlices. Returns a lazy-read variable of the updated state.
+    # Side effect: mutates the variable.
     """Subtracts `tf.IndexedSlices` from this variable.
 
     Args:
@@ -1137,6 +1441,12 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
             name=name))
 
   def scatter_add(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: use_locking is accepted but ignored.
+    # Adds the values of a sparse update (IndexedSlices) to the rows at its indices using the
+    # resource scatter-add op; values are converted to the variable dtype. Raises a type error if
+    # sparse_delta is not an IndexedSlices. Returns a lazy-read variable of the updated state.
+    # Side effect: mutates the variable.
     """Adds `tf.IndexedSlices` to this variable.
 
     Args:
@@ -1161,6 +1471,11 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
             name=name))
 
   def scatter_max(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: use_locking is accepted but ignored.
+    # Replaces rows at the sparse update's indices with the element-wise maximum of the existing
+    # row and the update values (resource scatter-max op). Raises a type error if sparse_delta is
+    # not an IndexedSlices. Returns a lazy-read variable. Side effect: mutates the variable.
     """Updates this variable with the max of `tf.IndexedSlices` and itself.
 
     Args:
@@ -1186,6 +1501,11 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
             name=name))
 
   def scatter_min(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: use_locking is accepted but ignored.
+    # Replaces rows at the sparse update's indices with the element-wise minimum of the existing
+    # row and the update values (resource scatter-min op). Raises a type error if sparse_delta is
+    # not an IndexedSlices. Returns a lazy-read variable. Side effect: mutates the variable.
     """Updates this variable with the min of `tf.IndexedSlices` and itself.
 
     Args:
@@ -1211,6 +1531,11 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
             name=name))
 
   def scatter_mul(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: use_locking is accepted but ignored.
+    # Multiplies rows at the sparse update's indices by the update values (resource scatter-mul
+    # op). Raises a type error if sparse_delta is not an IndexedSlices. Returns a lazy-read
+    # variable. Side effect: mutates the variable.
     """Multiply this variable by `tf.IndexedSlices`.
 
     Args:
@@ -1235,6 +1560,11 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
             name=name))
 
   def scatter_div(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: use_locking is accepted but ignored.
+    # Divides rows at the sparse update's indices by the update values (resource scatter-div op).
+    # Raises a type error if sparse_delta is not an IndexedSlices. Returns a lazy-read variable.
+    # Side effect: mutates the variable.
     """Divide this variable by `tf.IndexedSlices`.
 
     Args:
@@ -1259,6 +1589,11 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
             name=name))
 
   def scatter_update(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: use_locking is accepted but ignored.
+    # Overwrites rows at the sparse update's indices with the update values (resource
+    # scatter-update op). Raises a type error if sparse_delta is not an IndexedSlices. Returns a
+    # lazy-read variable. Side effect: mutates the variable.
     """Assigns `tf.IndexedSlices` to this variable.
 
     Args:
@@ -1283,6 +1618,10 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
             name=name))
 
   def batch_scatter_update(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # Batch-wise sparse assignment: delegates to the state-ops batch scatter update with this
+    # variable, the update's indices and values, the locking flag and name. Raises a type error if
+    # sparse_delta is not an IndexedSlices. Returns a lazy-read variable. Mutates the variable.
     """Assigns `tf.IndexedSlices` to this variable batch-wise.
 
     Analogous to `batch_gather`. This assumes that this variable and the
@@ -1338,6 +1677,12 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
             name=name))
 
   def scatter_nd_sub(self, indices, updates, name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring's prose and example talk about "adding" scattered elements and the
+    # example uses Python 2 print, although the code subtracts.
+    # Subtracts updates (converted to the variable dtype) from the elements or slices addressed
+    # by indices using the resource scatter-nd-sub op. Returns a lazy-read variable. Mutates the
+    # variable.
     """Applies sparse subtraction to individual values or slices in a Variable.
 
     `ref` is a `Tensor` with rank `P` and `indices` is a `Tensor` of rank `Q`.
@@ -1390,6 +1735,10 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
             name=name))
 
   def scatter_nd_add(self, indices, updates, name=None):
+    # [FUNCTION DOC]
+    # Adds updates (converted to the variable dtype) to the elements or slices addressed by
+    # indices using the resource scatter-nd-add op. Returns a lazy-read variable. Mutates the
+    # variable.
     """Applies sparse addition to individual values or slices in a Variable.
 
     `ref` is a `Tensor` with rank `P` and `indices` is a `Tensor` of rank `Q`.
@@ -1442,6 +1791,10 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
             name=name))
 
   def scatter_nd_update(self, indices, updates, name=None):
+    # [FUNCTION DOC]
+    # Overwrites the elements or slices addressed by indices with updates (converted to the
+    # variable dtype) using the resource scatter-nd-update op. Returns a lazy-read variable.
+    # Mutates the variable.
     """Applies sparse assignment to individual values or slices in a Variable.
 
     `ref` is a `Tensor` with rank `P` and `indices` is a `Tensor` of rank `Q`.
@@ -1494,6 +1847,9 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
             name=name))
 
   def scatter_nd_max(self, indices, updates, name=None):
+    # [FUNCTION DOC]
+    # Replaces the elements or slices addressed by indices with the maximum of the existing value
+    # and updates (resource scatter-nd-max op). Returns a lazy-read variable. Mutates the variable.
     """Updates this variable with the max of `tf.IndexedSlices` and itself.
 
     `ref` is a `Tensor` with rank `P` and `indices` is a `Tensor` of rank `Q`.
@@ -1530,6 +1886,9 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
             name=name))
 
   def scatter_nd_min(self, indices, updates, name=None):
+    # [FUNCTION DOC]
+    # Replaces the elements or slices addressed by indices with the minimum of the existing value
+    # and updates (resource scatter-nd-min op). Returns a lazy-read variable. Mutates the variable.
     """Updates this variable with the min of `tf.IndexedSlices` and itself.
 
     `ref` is a `Tensor` with rank `P` and `indices` is a `Tensor` of rank `Q`.
@@ -1566,6 +1925,11 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
             name=name))
 
   def _write_object_proto(self, proto, options):
+    # [FUNCTION DOC]
+    # HELPER: SavedModel export hook that subclasses may override.
+    # Delegates to the module-level writer that fills the SavedObject message with variable
+    # details (dtype, shape, trainable, synchronization etc.). Inputs: proto (message to update),
+    # options (save options). Returns nothing; mutates proto.
     """Writes additional information of the variable into the SavedObject proto.
 
     Subclasses of ResourceVariables could choose to override this method to
@@ -1585,6 +1949,12 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
   def _strided_slice_assign(self, begin, end, strides, value, name, begin_mask,
                             end_mask, ellipsis_mask, new_axis_mask,
                             shrink_axis_mask):
+    # [FUNCTION DOC]
+    # HELPER: backs sliced assignment on the variable.
+    # Runs the resource strided-slice-assign op on the handle with the given begin, end, strides
+    # and masks (begin, end, ellipsis, new-axis, shrink-axis) and the value converted to the
+    # variable dtype, in the handle's graph and ordered after any cached value. Returns a
+    # lazy-read variable. Side effect: mutates the selected slice of the variable.
     with _handle_graph(self.handle), self._assign_dependencies():
       return self._lazy_read(
           gen_array_ops.resource_strided_slice_assign(
@@ -1601,18 +1971,33 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
               shrink_axis_mask=shrink_axis_mask))
 
   def __complex__(self):
+    # [FUNCTION DOC]
+    # Converts the current value to a complex number via its numpy value (eager mode needed).
     return complex(self.value().numpy())
 
   def __int__(self):
+    # [FUNCTION DOC]
+    # Converts the current value to an integer via its numpy value (eager mode needed).
     return int(self.value().numpy())
 
   def __long__(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: refers to a long-integer builtin that exists only in Python 2, so calling this
+    # under Python 3 raises a name error; it is legacy dead code.
+    # Intended to convert the current value to a long integer via its numpy value.
     return long(self.value().numpy())
 
   def __float__(self):
+    # [FUNCTION DOC]
+    # Converts the current value to a float via its numpy value (eager mode needed).
     return float(self.value().numpy())
 
   def _dense_var_to_tensor(self, dtype=None, name=None, as_ref=False):
+    # [FUNCTION DOC]
+    # HELPER: tensor conversion implementation for this variable.
+    # Ignores name. If dtype is given and incompatible with the variable dtype raises a value
+    # error. With as_ref true returns the first input of a fresh read op (the handle-side tensor);
+    # otherwise returns the variable's value tensor.
     del name
     if dtype is not None and not dtype.is_compatible_with(self.dtype):
       raise ValueError(
@@ -1624,42 +2009,61 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
       return self.value()
 
   def __iadd__(self, unused_other):
+    # [FUNCTION DOC]
+    # In-place add is deliberately unsupported: always raises a runtime error telling the caller
+    # to use the assign-add method or to build a new tensor.
     raise RuntimeError("`variable += value` with `tf.Variable`s is not "
                        "supported. Use `variable.assign_add(value)` to modify "
                        "the variable, or `out = variable + value` if you "
                        "need to get a new output Tensor.")
 
   def __isub__(self, unused_other):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the error message suggests "out = variable * value" for subtraction, which is a
+    # copy-paste slip (it should be a subtraction).
+    # In-place subtract is deliberately unsupported: always raises a runtime error telling the
+    # caller to use the assign-sub method.
     raise RuntimeError("`variable -= value` with `tf.Variable`s is not "
                        "supported. Use `variable.assign_sub(value)` to modify "
                        "the variable, or `out = variable * value` if you "
                        "need to get a new output Tensor.")
 
   def __imul__(self, unused_other):
+    # [FUNCTION DOC]
+    # In-place multiply is deliberately unsupported: always raises a runtime error suggesting an
+    # explicit assignment of the product.
     raise RuntimeError("`var *= value` with `tf.Variable`s is not "
                        "supported. Use `var.assign(var * value)` to modify "
                        "the variable, or `out = var * value` if you "
                        "need to get a new output Tensor.")
 
   def __idiv__(self, unused_other):
+    # [FUNCTION DOC]
+    # In-place division (legacy name) is unsupported: always raises a runtime error.
     raise RuntimeError("`var /= value` with `tf.Variable`s is not "
                        "supported. Use `var.assign(var / value)` to modify "
                        "the variable, or `out = var / value` if you "
                        "need to get a new output Tensor.")
 
   def __itruediv__(self, unused_other):
+    # [FUNCTION DOC]
+    # In-place true division is unsupported: always raises a runtime error.
     raise RuntimeError("`var /= value` with `tf.Variable`s is not "
                        "supported. Use `var.assign(var / value)` to modify "
                        "the variable, or `out = var / value` if you "
                        "need to get a new output Tensor.")
 
   def __irealdiv__(self, unused_other):
+    # [FUNCTION DOC]
+    # In-place real division is unsupported: always raises a runtime error.
     raise RuntimeError("`var /= value` with `tf.Variable`s is not "
                        "supported. Use `var.assign(var / value)` to modify "
                        "the variable, or `out = var / value` if you "
                        "need to get a new output Tensor.")
 
   def __ipow__(self, unused_other):
+    # [FUNCTION DOC]
+    # In-place exponentiation is unsupported: always raises a runtime error.
     raise RuntimeError("`var **= value` with `tf.Variable`s is not "
                        "supported. Use `var.assign(var ** value)` to modify "
                        "the variable, or `out = var ** value` if you "
@@ -1668,10 +2072,17 @@ class BaseResourceVariable(variables.Variable, core.Tensor):
 
 class ResourceVariableGradient(
     composite_tensor_gradient.CompositeTensorGradient):
+  # [CLASS DOC]
+  # Gradient protocol object for ResourceVariable (assigned as the composite gradient attribute of
+  # ResourceVariable). It tells the gradient machinery that a variable's gradient component is the
+  # variable itself and that its gradient is a tensor or nothing. Stateless.
   """CompositeTensorGradient protocol for ResourceVariable."""
 
   # TODO(b/246997907): update this method to return value.handle.
   def get_gradient_components(self, value):
+    # [FUNCTION DOC]
+    # Returns the pieces of value that take part in gradients. For a resource variable this is the
+    # variable itself (not its handle tensor), because gradient code special-cases variables.
     """Returns the components of `value` that should be included in gradients.
 
     For a ResourceVariable, its gradient component is its handle tensor.
@@ -1688,6 +2099,10 @@ class ResourceVariableGradient(
     return value
 
   def replace_gradient_components(self, value, component_grads):
+    # [FUNCTION DOC]
+    # Rebuilds a gradient for value from component_grads (a tensor or nothing). Because a
+    # variable's gradient is just that tensor or nothing, it returns component_grads unchanged and
+    # ignores value.
     """Replaces the gradient components in `value` with `component_grads`.
 
     The gradient of a ResourceVariable is either None or a Tensor. So we don't
@@ -1705,6 +2120,13 @@ class ResourceVariableGradient(
 
 
 class ResourceVariable(BaseResourceVariable, composite_tensor.CompositeTensor):
+  # [CLASS DOC]
+  # The concrete, user-facing resource variable (what tf.Variable creates). Adds creation logic on
+  # top of BaseResourceVariable: from an initial value (or callable producing one), from a
+  # VariableDef protocol buffer (graph mode only), or from an existing handle. Also acts as a
+  # composite tensor with a VariableSpec type spec and uses ResourceVariableGradient for
+  # gradients. In graph mode it also builds initializer, is-initialized and read ops and registers
+  # itself in graph collections.
   """Variable based on resource handles.
 
   See the [Variables How To](https://tensorflow.org/guide/variables)
@@ -1776,6 +2198,15 @@ class ResourceVariable(BaseResourceVariable, composite_tensor.CompositeTensor):
       handle=None,
       experimental_enable_variable_lifting=None,
       ):
+    # [FUNCTION DOC]
+    # Creates the variable, choosing one of three initialization paths. If variable_def (a
+    # VariableDef message) is given: raises a value error when initial_value is also given or when
+    # executing eagerly, otherwise rebuilds from the proto using import_scope. Else if handle is
+    # given: wraps that existing handle using only trainable, shape and dtype. Otherwise builds a
+    # new variable from initial_value (value or no-argument callable) with the remaining options:
+    # trainable, collections, caching_device, name, dtype, constraint, strategy, synchronization,
+    # aggregation, shape, validate_shape and the variable-lifting flag. The collections argument
+    # is only used in graph mode. Returns nothing. Parent constructor is not called here directly.
     """Creates a variable.
 
     Args:
@@ -1892,10 +2323,16 @@ class ResourceVariable(BaseResourceVariable, composite_tensor.CompositeTensor):
   # CompositeTensor method
   @property
   def _type_spec(self):
+    # [FUNCTION DOC]
+    # Composite-tensor property: returns a VariableSpec built from this variable's shape, dtype and
+    # trainable flag.
     return VariableSpec.from_value(self)
 
   # CompositeTensor method
   def _shape_invariant_to_type_spec(self, shape):
+    # [FUNCTION DOC]
+    # Composite-tensor hook used by loops: returns a VariableSpec with the given shape invariant
+    # and this variable's dtype and trainable flag.
     return VariableSpec(shape, self.dtype, self.trainable)
 
   # CompositeTensorGradient protocol
@@ -1917,6 +2354,21 @@ class ResourceVariable(BaseResourceVariable, composite_tensor.CompositeTensor):
       validate_shape=True,
       experimental_enable_variable_lifting=None,
   ):
+    # [FUNCTION DOC]
+    # HELPER: builds a brand-new variable for the constructor.
+    # KNOWN ISSUE: the constraint error message repeats the words "a callable" twice.
+    # Validates synchronization, aggregation and trainable; requires initial_value (a tensor,
+    # value or no-argument callable) and rejects a tensor from inside a function graph, a
+    # collections argument that is not a list, tuple or set, and a non-callable constraint (all
+    # value errors). Adds the trainable collection when trainable. Under an init scope (unless
+    # lifting is disabled) it creates the variable handle (graph mode uses a shared name equal to
+    # the handle name; eager mode uses a unique id and no sharing), tags it with a colocation
+    # attribute, evaluates the initial value, checks it against an explicit shape (value error if
+    # incompatible), and rejects initial values from control-flow contexts in graph mode. In graph
+    # mode it builds is-initialized, assign (initializer), read and optional cached-value ops and
+    # adds the variable to collections; in eager mode it assigns the initial value immediately and
+    # optionally creates a cached read. Finally calls the base initializer with everything. Side
+    # effects: creates ops/resources, graph collections, weak references on handle and cached value.
     """Creates a variable.
 
     Args:
@@ -2182,6 +2634,14 @@ class ResourceVariable(BaseResourceVariable, composite_tensor.CompositeTensor):
                        variable_def,
                        import_scope=None,
                        validate_shape=True):
+    # [FUNCTION DOC]
+    # HELPER: rebuilds a variable from a VariableDef message in graph mode.
+    # Looks up the handle, initializer, optional initial value and snapshot tensors by (scoped)
+    # name in the default graph, derives shape and dtype from the handle op attributes, validates
+    # synchronization/aggregation/trainable, restores slice info if present, and sets the cached
+    # value only when the snapshot is not a plain read op. Inputs: variable_def, import_scope
+    # (optional prefix), validate_shape. Asserts graph mode and message type; raises a value error
+    # if the proto describes a reference (TF1) variable. Returns nothing; sets attributes.
     """Initializes from `VariableDef` proto."""
     # Note that init_from_proto is currently not supported in Eager mode.
     assert not context.executing_eagerly()
@@ -2253,6 +2713,12 @@ class ResourceVariable(BaseResourceVariable, composite_tensor.CompositeTensor):
                         shape=None,
                         dtype=None,
                         handle=None):
+    # [FUNCTION DOC]
+    # HELPER: wraps an existing handle tensor for the constructor.
+    # Ensures the handle has handle data (creating it from shape and dtype when absent, such as for
+    # placeholders), derives the handle name (without the trailing ":0" characters) and unique id
+    # from the handle if available, then calls the base initializer. Inputs: trainable, shape,
+    # dtype, handle. Returns nothing.
     handle_data = get_eager_safe_handle_data(handle)
     if not handle_data.is_set:
       # The handle may not have the handle shape and dtype if it was created
@@ -2272,6 +2738,11 @@ class ResourceVariable(BaseResourceVariable, composite_tensor.CompositeTensor):
 
 
 class UninitializedVariable(BaseResourceVariable):
+  # [CLASS DOC]
+  # A resource variable created from shape and dtype only, with no initializer. Used when the value
+  # will be supplied later (for example restored from a checkpoint or SavedModel) and for copies
+  # that skip initialization. Creates the handle (optionally merging extra handle data), registers
+  # a global-variable collection entry in graph mode, and otherwise behaves like its base class.
   """A variable with no initializer."""
 
   def __init__(  # pylint: disable=super-init-not-called
@@ -2287,6 +2758,16 @@ class UninitializedVariable(BaseResourceVariable):
       extra_handle_data=None,
       distribute_strategy=None,
       **unused_kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: caching_device is accepted but never used.
+    # Creates the handle for a variable of the given shape and dtype with no initial value. Inputs:
+    # trainable, caching_device, name, shape, dtype, constraint, synchronization, aggregation,
+    # extra_handle_data (handle or tensor whose handle data is merged), distribute_strategy; extra
+    # keyword arguments are forwarded to the base initializer. Works in an init scope: in graph
+    # mode the shared name and unique id equal the handle name, adds a read op and registers the
+    # variable in the global-variables collection (not the trainable one); in eager mode uses a
+    # unique id and no sharing. Attaches a weak parent reference, name and id to the handle.
+    # Returns nothing.
     """Creates the variable handle.
 
     Args:
@@ -2375,6 +2856,10 @@ class UninitializedVariable(BaseResourceVariable):
 
 
 def _dense_var_to_tensor(var, dtype=None, name=None, as_ref=False):
+  # [FUNCTION DOC]
+  # HELPER: tensor conversion function registered for resource variables.
+  # Forwards to the variable's own dense conversion method with the given dtype, name and as_ref
+  # flag and returns its result.
   return var._dense_var_to_tensor(dtype=dtype, name=name, as_ref=as_ref)  # pylint: disable=protected-access
 
 
@@ -2385,12 +2870,25 @@ tensor_conversion_registry.register_tensor_conversion_function(
 
 
 class _UnreadVariable(BaseResourceVariable):
+  # [CLASS DOC]
+  # HELPER: private result type of assign and scatter methods.
+  # Represents a deferred read of a variable right after an update: it shares the handle of the
+  # updated variable and remembers the update op (parent op). Reads and further updates run under
+  # a control dependency on that op, so they observe the update. In graph (session) mode a read
+  # tensor is pre-created as graph element. Its name is the parent op's name in graph mode, else a
+  # fixed placeholder name, and its op is the parent op.
   """Represents a future for a read of a variable.
 
   Pretends to be the tensor if anyone looks.
   """
 
   def __init__(self, handle, dtype, shape, in_graph_mode, parent_op, unique_id):
+    # [FUNCTION DOC]
+    # Builds a deferred-read view. Inputs: handle (resource tensor), dtype, shape, in_graph_mode
+    # (accepted but not forwarded; the base class detects mode itself), parent_op (the update op
+    # reads must follow), unique_id. Uses an empty handle name for eager handles. Only outside
+    # eager execution and function building does it create a read op (after the parent op) as the
+    # graph element. Initializes the base class and stores the parent op. Returns nothing.
     if isinstance(handle, ops.EagerTensor):
       handle_name = ""
     else:
@@ -2416,18 +2914,31 @@ class _UnreadVariable(BaseResourceVariable):
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Property: the parent update op's name in graph mode, otherwise the constant text
+    # "UnreadVariable".
     if self._in_graph_mode:
       return self._parent_op.name
     else:
       return "UnreadVariable"
 
   def value(self):
+    # [FUNCTION DOC]
+    # Returns a read of the variable ordered after the parent update op.
     return self._read_variable_op()
 
   def read_value(self):
+    # [FUNCTION DOC]
+    # Same as value: returns a read of the variable ordered after the parent update op.
     return self._read_variable_op()
 
   def _read_variable_op(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: unlike the base class method, takes no no-copy argument, does not record a
+    # variable access and does not create XLA sharding ops or tape records, so read_value_no_copy
+    # would fail with an argument error here.
+    # Under a control dependency on the parent op, runs the read-variable op on the handle, copies
+    # variant handle data to the result and returns it.
     with ops.control_dependencies([self._parent_op]):
       result = gen_resource_variable_ops.read_variable_op(
           self._handle, self._dtype)
@@ -2435,94 +2946,140 @@ class _UnreadVariable(BaseResourceVariable):
       return result
 
   def assign_sub(self, delta, use_locking=None, name=None, read_value=True):
+    # [FUNCTION DOC]
+    # Subtracts delta like the base class, but under a control dependency on the parent op so it
+    # runs after the earlier update. Same arguments and return as the base method.
     with ops.control_dependencies([self._parent_op]):
       return super(_UnreadVariable, self).assign_sub(delta, use_locking, name,
                                                      read_value)
 
   def assign_add(self, delta, use_locking=None, name=None, read_value=True):
+    # [FUNCTION DOC]
+    # Adds delta like the base class, but under a control dependency on the parent op so it runs
+    # after the earlier update. Same arguments and return as the base method.
     with ops.control_dependencies([self._parent_op]):
       return super(_UnreadVariable, self).assign_add(delta, use_locking, name,
                                                      read_value)
 
   def assign(self, value, use_locking=None, name=None, read_value=True):
+    # [FUNCTION DOC]
+    # Assigns value like the base class, but under a control dependency on the parent op so it
+    # runs after the earlier update. Same arguments and return as the base method.
     with ops.control_dependencies([self._parent_op]):
       return super(_UnreadVariable, self).assign(value, use_locking, name,
                                                  read_value)
 
   def scatter_sub(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # Sparse subtraction as in the base class, ordered after the parent update op.
     with ops.control_dependencies([self._parent_op]):
       return super(_UnreadVariable, self).scatter_sub(sparse_delta, use_locking,
                                                       name)
 
   def scatter_add(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # Sparse addition as in the base class, ordered after the parent update op.
     with ops.control_dependencies([self._parent_op]):
       return super(_UnreadVariable, self).scatter_add(sparse_delta, use_locking,
                                                       name)
 
   def scatter_max(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # Sparse maximum as in the base class, ordered after the parent update op.
     with ops.control_dependencies([self._parent_op]):
       return super(_UnreadVariable, self).scatter_max(sparse_delta, use_locking,
                                                       name)
 
   def scatter_min(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # Sparse minimum as in the base class, ordered after the parent update op.
     with ops.control_dependencies([self._parent_op]):
       return super(_UnreadVariable, self).scatter_min(sparse_delta, use_locking,
                                                       name)
 
   def scatter_mul(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # Sparse multiplication as in the base class, ordered after the parent update op.
     with ops.control_dependencies([self._parent_op]):
       return super(_UnreadVariable, self).scatter_mul(sparse_delta, use_locking,
                                                       name)
 
   def scatter_div(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # Sparse division as in the base class, ordered after the parent update op.
     with ops.control_dependencies([self._parent_op]):
       return super(_UnreadVariable, self).scatter_div(sparse_delta, use_locking,
                                                       name)
 
   def scatter_update(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # Sparse overwrite as in the base class, ordered after the parent update op.
     with ops.control_dependencies([self._parent_op]):
       return super(_UnreadVariable,
                    self).scatter_update(sparse_delta, use_locking, name)
 
   def batch_scatter_update(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # Batch-wise sparse overwrite as in the base class, ordered after the parent update op.
     with ops.control_dependencies([self._parent_op]):
       return super(_UnreadVariable,
                    self).batch_scatter_update(sparse_delta, use_locking, name)
 
   def scatter_nd_sub(self, indices, updates, name=None):
+    # [FUNCTION DOC]
+    # N-dimensional indexed subtraction as in the base class, ordered after the parent update op.
     with ops.control_dependencies([self._parent_op]):
       return super(_UnreadVariable, self).scatter_nd_sub(indices, updates, name)
 
   def scatter_nd_add(self, indices, updates, name=None):
+    # [FUNCTION DOC]
+    # N-dimensional indexed addition as in the base class, ordered after the parent update op.
     with ops.control_dependencies([self._parent_op]):
       return super(_UnreadVariable, self).scatter_nd_add(indices, updates, name)
 
   def scatter_nd_update(self, indices, updates, name=None):
+    # [FUNCTION DOC]
+    # N-dimensional indexed overwrite as in the base class, ordered after the parent update op.
     with ops.control_dependencies([self._parent_op]):
       return super(_UnreadVariable,
                    self).scatter_nd_update(indices, updates, name)
 
   def scatter_nd_max(self, indices, updates, name=None):
+    # [FUNCTION DOC]
+    # N-dimensional indexed maximum as in the base class, ordered after the parent update op.
     with ops.control_dependencies([self._parent_op]):
       return super(_UnreadVariable, self).scatter_nd_max(indices, updates, name)
 
   def scatter_nd_min(self, indices, updates, name=None):
+    # [FUNCTION DOC]
+    # N-dimensional indexed minimum as in the base class, ordered after the parent update op.
     with ops.control_dependencies([self._parent_op]):
       return super(_UnreadVariable, self).scatter_nd_min(indices, updates, name)
 
   @property
   def op(self) -> ops.Operation:
+    # [FUNCTION DOC]
+    # Property: returns the parent update op rather than the handle's op.
     """The op for this variable."""
     return self._parent_op
 
 
 @ops.RegisterGradient("ReadVariableOp")
 def _ReadGrad(_, grad):
+  # [FUNCTION DOC]
+  # HELPER: gradient function registered for the read-variable op.
+  # Passes the incoming gradient through unchanged (the read is an identity on the value); the
+  # first argument (the op) is ignored. Returns the gradient.
   """Gradient for read op."""
   return grad
 
 
 def variable_shape(handle, out_type=None):
+  # [FUNCTION DOC]
+  # Returns the shape of the variable behind a handle as a tensor. out_type defaults to a 64-bit
+  # integer if the global default-int64-shape flag is on, else 32-bit. If the handle data is
+  # missing, unset, has unknown rank or any unknown dimension, runs the variable-shape op at run
+  # time; otherwise returns a constant built from the static dimensions.
   """Returns the shape of the variable from the handle.
 
   If the output shape dtype is not specified, it will be set to int64 if
@@ -2551,6 +3108,12 @@ def variable_shape(handle, out_type=None):
 
 @ops.RegisterGradient("ResourceGather")
 def _GatherGrad(op, grad):
+  # [FUNCTION DOC]
+  # HELPER: gradient function registered for the resource gather op.
+  # Builds sparse gradients: reshapes the incoming gradient to a flat list of index rows plus the
+  # remaining variable dimensions and wraps it in an IndexedSlices using the flattened indices and
+  # the variable's shape. Returns a pair: that sparse gradient for the handle and nothing for the
+  # indices.
   """Gradient for gather op."""
   # Build appropriately shaped IndexedSlices
   handle = op.inputs[0]
@@ -2565,12 +3128,21 @@ def _GatherGrad(op, grad):
 
 @tf_export("__internal__.ops.is_resource_variable", v1=[])
 def is_resource_variable(var):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring begins with an extra quotation mark character.
+  # Returns true if var is a resource variable: an instance of the base resource variable class or
+  # any object advertising that it should act as one.
   """"Returns True if `var` is to be considered a ResourceVariable."""
   return isinstance(var, BaseResourceVariable) or hasattr(
       var, "_should_act_as_resource_variable")
 
 
 def copy_to_graph_uninitialized(var):
+  # [FUNCTION DOC]
+  # HELPER: used when exporting variables into another graph.
+  # Creates an UninitializedVariable in the current default graph mirroring var's trainable flag,
+  # constraint, shape, dtype, shared name, synchronization and aggregation, merging var's handle
+  # data, and initializes its trackable state. Returns the new variable; the original is untouched.
   """Copies an existing variable to a new graph, with no initializer."""
   # Like ResourceVariable.__deepcopy__, but does not set an initializer on the
   # new variable.
@@ -2597,29 +3169,51 @@ ops.NotDifferentiable("VariableShape")
 # TODO(b/246356867): This is the draft implementation. Currently VariableSpec is
 # the only class using them. Move them to a separate file when necessary.
 class StructurePattern:
+  # [CLASS DOC]
+  # HELPER: empty base class for structure patterns used by VariableSpec to describe its nested
+  # structure; draft implementation, only VariableSpec uses it. Holds no state.
   pass
 
 
 class PLeaf(StructurePattern):
+  # [CLASS DOC]
+  # HELPER: singleton pattern standing for a leaf (non-nested) component in a structure; every
+  # construction returns the one shared instance, which is cached on the class.
   """Represents a singleton leaf StructurePattern."""
 
   def __new__(cls):
+    # [FUNCTION DOC]
+    # Singleton constructor: creates the instance on first use, stores it on the class and returns
+    # it; later calls return the same object.
     if not hasattr(cls, "instance"):
       cls.instance = super().__new__(cls)
     return cls.instance
 
 
 class PList(StructurePattern):
+  # [CLASS DOC]
+  # HELPER: pattern describing an ordered list of sub-patterns; holds them in a components list.
   """Represents a list of StructurePatterns."""
 
   def __init__(self, *components):
+    # [FUNCTION DOC]
+    # Stores the given sub-patterns (variable number of arguments) as a list attribute.
     self.components = list(components)
 
   def __eq__(self, other):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: defines equality without a matching hash method, so instances are unhashable.
+    # Equal when other is also a list pattern with equal components.
     return isinstance(other, PList) and self.components == other.components
 
 
 class VariableSpec(tensor_module.DenseSpec):
+  # [CLASS DOC]
+  # Type specification (and trace type) for a variable: records shape, dtype, trainable flag and an
+  # optional alias id that links several occurrences of the same variable inside one trace. Used by
+  # tf.function to key traces, to turn variables into resource-handle components and back, to
+  # build placeholders, and for compatibility, subtype and common-supertype checks. Its value type
+  # is ResourceVariable. A codec is registered at import so it can be serialized.
   """Describes a tf.Variable.
 
   A `VariableSpec` provides metadata describing the `tf.Variable` objects
@@ -2632,11 +3226,19 @@ class VariableSpec(tensor_module.DenseSpec):
 
   def __init__(self, shape, dtype=dtypes.float32, trainable=True,
                alias_id=None):
+    # [FUNCTION DOC]
+    # Creates a spec. Inputs: shape, dtype (default 32-bit float), trainable (default true),
+    # alias_id (optional identifier tying together uses of one variable; default nothing).
+    # Initializes the dense spec base with shape and dtype and stores the other two attributes.
     super(VariableSpec, self).__init__(shape, dtype=dtype)
     self.trainable = trainable
     self.alias_id = alias_id
 
   def is_compatible_with(self, spec_or_value):
+    # [FUNCTION DOC]
+    # Returns true if the argument (a spec or a resource variable) has a compatible shape, the same
+    # dtype and the same trainable flag; when it is a spec, alias ids must also be equal. Any other
+    # type gives false. No side effects.
     """Returns True if `spec_or_value` is compatible with this `VariableSpec`.
 
     `spec_or_value` is considered to be compatible with this `VariableSpec` if
@@ -2675,6 +3277,9 @@ class VariableSpec(tensor_module.DenseSpec):
 
   @classmethod
   def from_value(cls, value):
+    # [FUNCTION DOC]
+    # Class method: builds a spec from a variable using its shape, dtype and trainable flag. The
+    # alias id is left as nothing. Returns the new spec.
     """Creates a `VariableSpec` from the given `Variable`.
 
     `value`'s shape, dtype, and trainable attributes will be used to create
@@ -2695,9 +3300,18 @@ class VariableSpec(tensor_module.DenseSpec):
     return cls(value.shape, dtype=value.dtype, trainable=value.trainable)
 
   def _to_components(self, value):
+    # [FUNCTION DOC]
+    # Type-spec hook: returns a one-element list holding the variable's resource handle.
     return [value.handle]
 
   def _from_components(self, components):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the type and length error messages contain a stray letter f before the
+    # placeholder text (a misplaced f-string prefix).
+    # Type-spec hook: rebuilds a ResourceVariable from a list or tuple holding exactly one resource
+    # handle tensor, with this spec's trainable flag, shape and dtype. Raises a type error if the
+    # components are not a list or tuple, and value errors if the length is not one or the element
+    # is not a resource-dtype tensor.
     if not isinstance(components, (list, tuple)):
       raise TypeError(f"Components of a ResourceVariable must be a list or "
                       f"tuple, got f{components} instead.")
@@ -2716,6 +3330,9 @@ class VariableSpec(tensor_module.DenseSpec):
 
   @property
   def _component_specs(self):
+    # [FUNCTION DOC]
+    # Type-spec property: a one-element list with a scalar tensor spec of resource dtype whose
+    # handle data carries this spec's alias id.
     return [
         tensor_module.TensorSpec(
             [],
@@ -2727,10 +3344,16 @@ class VariableSpec(tensor_module.DenseSpec):
     ]
 
   def _serialize(self):
+    # [FUNCTION DOC]
+    # Type-spec hook: returns the tuple of shape, dtype, trainable flag and alias id.
     return self.shape, self.dtype, self.trainable, self.alias_id
 
   # TraceType method
   def is_subtype_of(self, other):
+    # [FUNCTION DOC]
+    # Trace-type check. False if other is a different class. If both alias ids are nothing,
+    # defers to the dense spec rule. If exactly one is nothing raises a not-implemented error;
+    # otherwise defers to the dense spec rule as well.
     if type(self) is not type(other):
       return False
 
@@ -2748,6 +3371,10 @@ class VariableSpec(tensor_module.DenseSpec):
 
   # TraceType method
   def most_specific_common_supertype(self, others):
+    # [FUNCTION DOC]
+    # Trace-type merge of this spec with a list of others. Returns nothing if any is a different
+    # class. If all alias ids are nothing, defers to the dense spec; if only some are nothing,
+    # raises a not-implemented error; otherwise defers to the dense spec.
     if any(type(self) is not type(other) for other in others):
       return None
 
@@ -2766,6 +3393,13 @@ class VariableSpec(tensor_module.DenseSpec):
 
   # TraceType method
   def placeholder_value(self, placeholder_context):
+    # [FUNCTION DOC]
+    # Trace-type hook that creates the stand-in variable used while tracing a function. If the
+    # context is unnest-only, returns this spec. Otherwise reuses an existing variable registered
+    # under the alias id, or builds a resource placeholder, wraps it as a variable and registers
+    # it (only when an alias id exists). Then captures the variable's handle in the context graph
+    # under the chosen name and tags the captured op with the user-specified name. Returns the
+    # variable. Side effects: registers placeholders and captures into the traced graph.
     if placeholder_context.unnest_only:
       return self
 
@@ -2795,26 +3429,42 @@ class VariableSpec(tensor_module.DenseSpec):
     return variable
 
   def to_tensors(self, value):
+    # [FUNCTION DOC]
+    # Trace-type hook: asserts value is a resource variable, records the access and returns a list
+    # with its handle tensor.
     assert isinstance(value, BaseResourceVariable)
     variable_accessed(value)
     return [value.handle]
 
   def cast(self, value, _):
+    # [FUNCTION DOC]
+    # Trace-type hook: asserts value is a resource variable and returns it unchanged; the second
+    # argument (casting context) is ignored.
     assert isinstance(value, BaseResourceVariable)
     return value
 
   def _get_structure(self):
+    # [FUNCTION DOC]
+    # Returns a list pattern of four leaf patterns, one each for shape, dtype, trainable flag and
+    # alias id.
     # shape, dtype, trainable, and alias_id are all leaves.
     return PList(PLeaf(), PLeaf(), PLeaf(), PLeaf())
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns text naming the class with its shape, dtype, trainable flag and alias id.
     return (f"{type(self).__name__}(shape={self.shape}, dtype={self.dtype!r}, "
             f"trainable={self.trainable!r}, alias_id={self.alias_id!r})")
 
   def __hash__(self):
+    # [FUNCTION DOC]
+    # Hash combining shape, dtype, trainable flag and alias id; consistent with equality.
     return hash((self.shape, self.dtype, self.trainable, self.alias_id))
 
   def __eq__(self, other):
+    # [FUNCTION DOC]
+    # Equal when other has exactly the same class and equal shape, dtype, trainable flag and alias
+    # id.
     return (type(self) is type(other) and self.shape == other.shape and
             self.dtype == other.dtype and self.trainable == other.trainable and
             self.alias_id == other.alias_id)
@@ -2831,6 +3481,14 @@ def write_object_proto_for_resource_variable(resource_variable,
                                              proto,
                                              options,
                                              enforce_naming=True):
+  # [FUNCTION DOC]
+  # Fills a SavedObject message with variable details for SavedModel export: marks the variable
+  # field as set, then writes the op name (taken from the variable name), trainable flag, dtype,
+  # synchronization, aggregation, shape and, when the save options request variable devices and
+  # the object has a device, the device string. Inputs: resource_variable (a resource variable or
+  # distributed value), proto (message to update), options (save options), enforce_naming
+  # (default true: require the name to end in the zero-index suffix). Raises a value error when
+  # naming is enforced and the suffix is missing. Returns nothing; mutates proto.
   """Writes additional information of the variable into the SavedObject proto.
 
   This allows users to define a `hook` to provide extra information of the
@@ -2866,5 +3524,8 @@ def write_object_proto_for_resource_variable(resource_variable,
 
 
 def get_xla_sharding(var: BaseResourceVariable) -> Any:
+  # [FUNCTION DOC]
+  # Returns the XLA sharding annotation previously set on the given resource variable, or nothing
+  # if none. Reads the variable's private attribute through its getter; no side effects.
   """Returns the XLA sharding associated with the variable."""
   return var._get_xla_sharding()  # pylint: disable=protected-access
