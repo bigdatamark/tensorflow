@@ -213,7 +213,6 @@ class _EagerSavedModelLoader(loader_impl.SavedModelLoader):
     # Returns a mapping from signature key to concrete function. If an output depends on an
     # unfed placeholder, the underlying unliftable error is re-raised with an extended message.
     """Creates ConcreteFunctions for signatures in `meta_graph_def`."""
-    """Creates ConcreteFunctions for signatures in `meta_graph_def`."""
     signature_functions = {}
     for signature_key, signature_def in meta_graph_def.signature_def.items():
       if signature_def.inputs:
