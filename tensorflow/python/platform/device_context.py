@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: stub module providing device-context hooks for the open-source build.
+# Defines a single placeholder for obtaining the enclosing TPU context; in this build it does
+# nothing. Presumably replaced by an internal implementation elsewhere. No import side effects.
+
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,4 +20,9 @@
 """Helpers to get device context."""
 
 def enclosing_tpu_context():
+  # [FUNCTION DOC]
+  # HELPER: hook used by code that needs to know whether it runs inside a TPU context.
+  # KNOWN ISSUE: the name suggests it returns the enclosing TPU context, but this stub has no
+  # body beyond a no-op and always returns the null value.
+  # Takes no inputs, has no side effects, returns nothing/null.
   pass

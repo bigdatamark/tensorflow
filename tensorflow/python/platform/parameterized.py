@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Placeholder for a parameterized-test extension of the unit test framework. KNOWN ISSUE: the
+# module is not implemented; importing it unconditionally raises an import error saying not
+# implemented yet, so nothing can be used from it. Import-time side effect: that exception.
+
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Test that a crashing process prints a native stack trace. The same script plays two roles
+# chosen by a command-line option named child: in the parent role the test launches itself as a
+# subprocess in the child role, where one test aborts the process with the abort signal; the
+# parent captures output and checks a stack trace marker appears. Module state: a global flags
+# holder, set only when run as a script, after parsing the child option with the standard
+# argument parser and stripping it from the argument list before the test main runs.
+
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,12 +40,27 @@ _CHILD_FLAG_HELP = 'Boolean. Set to true if this is the child process.'
 
 
 class StacktraceHandlerTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case with two tests that cooperate across two processes. Depends on the module-level
+  # flags holder being set (only true when the file is run as a script, otherwise the tests fail
+  # with an attribute error on the null value).
 
   def testChildProcessKillsItself(self):
+    # [FUNCTION DOC]
+    # Only does something in the child role: sends the abort signal to the current process, which
+    # should make the stack trace handler print a trace. In the parent role it does nothing and
+    # passes. KNOWN ISSUE: if run in the child role it never reports success; it relies on the
+    # parent test inspecting the output.
     if FLAGS.child:
       os.kill(os.getpid(), signal.SIGABRT)
 
   def testGeneratesStacktrace(self):
+    # [FUNCTION DOC]
+    # Returns immediately in the child role. In the parent role: launches the script again as a
+    # subprocess with the child option true (using the Python executable if known, otherwise the
+    # script directly), in the current working directory with piped output; waits and collects
+    # both output streams, logs them, and asserts the combined bytes contain the interpreter
+    # frame-evaluation marker, which shows a native stack trace was printed by the aborted child.
     if FLAGS.child:
       return
 

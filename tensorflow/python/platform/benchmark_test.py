@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Unit test for the benchmark reporting facility. Defines one test class that is both a test case
+# and a TensorFlow benchmark, and checks that a reported benchmark is serialized to a file with
+# the expected contents. Runs the test main when executed as a script. Not a helper module.
+
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,8 +26,21 @@ from tensorflow.python.platform import benchmark
 from tensorflow.python.platform import test
 
 class BenchmarkTest(test.TestCase, benchmark.TensorFlowBenchmark):
+  # [CLASS DOC]
+  # Test case covering the benchmark report method. Inherits from both the TensorFlow test case
+  # and the TensorFlow benchmark base class, so it is also registered as a benchmark class
+  # (it defines no benchmark-named methods, so nothing runs as a benchmark).
 
   def testReportBenchmark(self):
+    # [FUNCTION DOC]
+    # Scenario: sets the report-file-prefix environment variable to a temp directory (side effect:
+    # modifies the process environment and is never restored), deletes any stale output file, and
+    # reports a benchmark with 2000 iterations, wall time 1000, an explicit name and two metrics
+    # (one with only a minimum, one with minimum and maximum). Reads back the file the report
+    # produced, parses it as a benchmark-entries proto, converts to a dictionary and deletes the
+    # file. Asserts the iteration count is 2000 and that the whole entry equals the expected
+    # dictionary: class-qualified name, iterations as a string, wall time, zero cpu time and
+    # throughput, empty extras, and both metrics with their bounds.
     output_dir = self.get_temp_dir() + os.path.sep
     os.environ['TEST_REPORT_FILE_PREFIX'] = output_dir
     proto_file_path = os.path.join(output_dir,

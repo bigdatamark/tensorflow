@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: import-time sanity check support for the TensorFlow package. Defines the key under which
+# the build information lists required Microsoft C++ runtime library names, and a function that
+# verifies the environment before the native extension is loaded. Import-time side effect:
+# imports the generated build-info module and, if that import fails, raises an import error
+# explaining that TensorFlow must not be imported from its source directory.
+
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +36,16 @@ except ImportError:
 
 
 def preload_check():
+  # [FUNCTION DOC]
+  # HELPER: called early during package import to give actionable errors before native loading.
+  # KNOWN ISSUE: the docstring says it raises only when loading will fail; on non-Windows systems
+  # it merely loads the CPU feature guard extension, which logs information (and can itself raise
+  # an import error if the extension is missing) rather than checking configuration.
+  # On Windows: for each comma-separated library name in the build information entry, tries to
+  # load it; if any fail, raises an import error naming the missing libraries and how to install
+  # the Visual C++ redistributable. On other systems: imports the CPU feature guard extension and
+  # asks it to report CPU features compiled in but unused (side effect: may log a warning).
+  # No inputs; returns nothing.
   """Raises an exception if the environment is not correctly configured.
 
   Raises:

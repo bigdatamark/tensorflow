@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Minimal smoke test for the logging wrapper module: logs one error message and expects no
+# exception. Uses the googletest router for the test case class and main. Runs the test main
+# when executed as a script.
+
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,8 +23,15 @@ from tensorflow.python.platform import tf_logging as logging
 
 
 class EventLoaderTest(googletest.TestCase):
+  # [CLASS DOC]
+  # KNOWN ISSUE: the class name (event loader) is a leftover; it actually tests the logging
+  # wrapper, not an event loader.
+  # Test case holding the single logging smoke test; no fixtures.
 
   def test_log(self):
+    # [FUNCTION DOC]
+    # Emits one error-level log message through the TensorFlow logging wrapper. The only
+    # expectation is that no exception is raised; nothing is asserted about the output.
     # Just check that logging works without raising an exception.
     logging.error("test log message")
 

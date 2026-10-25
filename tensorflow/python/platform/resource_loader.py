@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Utilities for locating and reading data files that ship alongside code, including under a
+# Bazel runfiles tree. Offers: reading a resource's bytes, the directory of the calling script,
+# a root directory that holds all declared data dependencies, the resolved path of a data file,
+# and a no-op readahead helper. All are exported in the v1 API only. Import-time side effect:
+# tries to import the Bazel runfiles library and falls back to a null placeholder if missing.
+
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +36,12 @@ except ImportError:
 
 @tf_export(v1=['resource_loader.load_resource'])
 def load_resource(path):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the fallback path resolution in the data-file path function inspects the caller's
+  # frame, and here the caller is this module, so a relative path that is not found in runfiles is
+  # resolved against this module's directory, not the directory of the code calling this function.
+  # Reads and returns the full contents (bytes) of the resource at a path relative to the
+  # tensorflow directory. Input: path string. Raises an IO error if the file cannot be opened.
   """Load the resource at given path, where path is relative to tensorflow/.
 
   Args:
@@ -47,6 +60,10 @@ def load_resource(path):
 # pylint: disable=protected-access
 @tf_export(v1=['resource_loader.get_data_files_path'])
 def get_data_files_path():
+  # [FUNCTION DOC]
+  # Returns the directory containing the source file of the immediate caller (found by inspecting
+  # the call stack one level up), which is where data files declared in the build rule live. No
+  # inputs; no side effects. Behavior depends on who calls it, so wrapping it changes the result.
   """Get a direct path to the data files colocated with the script.
 
   Returns:
@@ -58,6 +75,16 @@ def get_data_files_path():
 
 @tf_export(v1=['resource_loader.get_root_dir_with_all_resources'])
 def get_root_dir_with_all_resources():
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it returns the path to a specified file, but it takes no
+  # arguments and returns a directory. Also the directory examined is that of this module's
+  # caller chain start: the data-files-path function is called from here, so the starting point
+  # is this module's own directory rather than the caller's.
+  # Walks up from the starting script directory, collecting parent directories, until it finds a
+  # directory whose name contains the runfiles marker; the directory just below that (the
+  # repository root in the runfiles tree) is returned. If the marker is never found, the root of
+  # the filesystem is reached, or the script is directly inside runfiles, returns the starting
+  # script directory instead. No inputs; no side effects.
   """Get a root directory containing all the data attributes in the build rule.
 
   Returns:
@@ -98,6 +125,15 @@ def get_root_dir_with_all_resources():
 
 @tf_export(v1=['resource_loader.get_path_to_datafile'])
 def get_path_to_datafile(path):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it raises an IO error if the path is not found, but it never
+  # checks existence of the fallback path; it returns an unchecked old-style path instead. The
+  # source comment itself calls the old-style fallback buggy but kept for compatibility.
+  # Resolves a data file path (string relative to the tensorflow directory). If the runfiles
+  # library is available, creates a runfiles locator and looks up the path under the tensorflow
+  # directory; if the located file exists it is returned. Otherwise returns the path joined to the
+  # directory of the immediate caller's source file. Side effect: creates a runfiles object each
+  # call; may raise if the runfiles environment is not set up.
   """Get the path to the specified file in the data dependencies.
 
   The path is relative to tensorflow/
@@ -128,5 +164,8 @@ def get_path_to_datafile(path):
 
 @tf_export(v1=['resource_loader.readahead_file_path'])
 def readahead_file_path(path, readahead='128M'):  # pylint: disable=unused-argument
+  # [FUNCTION DOC]
+  # No-op stand-in for an internal read-ahead feature. Inputs: path (string) and readahead size
+  # text (default 128M, ignored). Returns the path unchanged. No side effects.
   """Readahead files not implemented; simply returns given path."""
   return path

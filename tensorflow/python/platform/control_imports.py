@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Helper module of boolean switches choosing between Google-internal and open-source
+# dependencies. One overall switch (set to open source) and per-dependency switches for app,
+# flags, file access, googletest, logging and parameterized testing, all currently true.
+# KNOWN ISSUE: the TODO says the per-dependency switches should be flipped and removed, so they
+# are transitional; nothing in this file uses them. No functions; import has no side effects.
+
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

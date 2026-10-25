@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# Benchmark infrastructure for TensorFlow. Defines the abstract Benchmark base class (and its
+# TensorFlow-specific subclass exported as the public test benchmark class), a metaclass that
+# registers every concrete subclass in a global registry, a metaclass for generating
+# parameterized benchmarks, a function that writes benchmark results (either printing them or
+# serializing them to a file named by an environment variable), a ConfigProto factory, and the
+# entry point that runs registered benchmarks selected by a regular expression from the command
+# line. Import-time side effects: creates the global benchmark registry (an empty set) and
+# registers a few public symbols through the export decorator. Not a helper module; it is the
+# public benchmarking API surfaced by the test package.
+
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -49,6 +60,12 @@ OVERRIDE_GLOBAL_THREADPOOL = "TF_OVERRIDE_GLOBAL_THREADPOOL"
 
 
 def _rename_function(f, arg_num, name):
+  # [FUNCTION DOC]
+  # HELPER: used by the parameterized benchmark metaclass so generated methods show real names.
+  # Builds a new function object from an existing function by replacing the code object's
+  # argument count and name. Inputs: f is the function to copy, arg_num is the new positional
+  # argument count to record, name is the new function name. Returns the new function, which
+  # shares the original's globals, defaults and closure. No side effects on f.
   """Rename the given function's name appears in the stack trace."""
   func_code = f.__code__
   new_code = func_code.replace(co_argcount=arg_num, co_name=name)
@@ -59,6 +76,21 @@ def _rename_function(f, arg_num, name):
 def _global_report_benchmark(
     name, iters=None, cpu_time=None, wall_time=None,
     throughput=None, extras=None, metrics=None):
+  # [FUNCTION DOC]
+  # HELPER: internal reporting backend used by the Benchmark report method.
+  # KNOWN ISSUE: the docstring says IOError is the only extra exception, but a TypeError is also
+  # raised when metrics is not a list or a metric lacks a name or value field; and the logging
+  # call formats iters with an integer directive so a non-integer iters would fail formatting.
+  # Logs the benchmark, then builds a benchmark-entries protocol buffer with one entry holding
+  # the name and whichever of iterations, cpu time, wall time and throughput were given (nothing
+  # for those that are null). Extras (a mapping) are stored as numbers when numeric, otherwise as
+  # strings. Metrics (a list of mappings with required name and value, optional min_value and
+  # max_value) are appended as metric entries. Raises a type error if extras is not a mapping, if
+  # metrics is not a list, or if a metric lacks name or value. If the report-file-prefix
+  # environment variable is unset, prints the proto text and returns nothing. Otherwise writes the
+  # serialized proto to a file named prefix plus the benchmark name with slashes replaced by
+  # double underscores, raising an IO error if that file already exists. Side effects: logging,
+  # stdout printing or file creation.
   """Method for recording a benchmark directly.
 
   Args:
@@ -138,9 +170,18 @@ def _global_report_benchmark(
 
 
 class _BenchmarkRegistrar(type):
+  # [CLASS DOC]
+  # HELPER: metaclass machinery behind the Benchmark base class.
+  # Metaclass that registers every newly created non-abstract benchmark class in the module-level
+  # global benchmark registry. Holds no state itself; side effect is on the registry at class
+  # creation time. Used as the metaclass of Benchmark and extended by the parameterized variant.
   """The Benchmark class registrar.  Used by abstract Benchmark class."""
 
   def __new__(mcs, clsname, base, attrs):
+    # [FUNCTION DOC]
+    # Creates the class normally, then adds it to the global benchmark registry unless it is the
+    # abstract base (decided by the class's abstractness check). Inputs: metaclass, class name,
+    # tuple of base classes, mapping of class attributes. Returns the new class.
     newclass = type.__new__(mcs, clsname, base, attrs)
     if not newclass.is_abstract():
       GLOBAL_BENCHMARK_REGISTRY.add(newclass)
@@ -149,6 +190,12 @@ class _BenchmarkRegistrar(type):
 
 @tf_export("__internal__.test.ParameterizedBenchmark", v1=[])
 class ParameterizedBenchmark(_BenchmarkRegistrar):
+  # [CLASS DOC]
+  # Metaclass that expands each benchmark method (name starting with "benchmark") into one method
+  # per entry of the class attribute listing benchmark parameters. Each entry is a sequence whose
+  # first item is a case-name suffix and the rest are extra arguments passed to the original
+  # method. Inherits the registration behavior of the registrar metaclass. Exported publicly as
+  # an internal test symbol. The original methods are removed from the class.
   """Metaclass to generate parameterized benchmarks.
 
   Use this class as a metaclass and override the `_benchmark_parameters` to
@@ -172,9 +219,24 @@ class ParameterizedBenchmark(_BenchmarkRegistrar):
   """
 
   def __new__(mcs, clsname, base, attrs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the class docstring example lists the metaclass before the Benchmark base in a
+    # way that is not valid syntax; also the check for duplicate names raises a bare generic
+    # exception rather than a specific error type.
+    # Creates a class whose benchmark methods are expanded per parameter set. Inputs: metaclass,
+    # class name, bases, attribute mapping, which must contain the parameter list attribute
+    # (missing it raises a key error). For each attribute starting with "benchmark", the original
+    # is deleted and, for every parameter entry, a new method named original plus two underscores
+    # plus the case suffix is added, wrapping the original with the remaining parameters and
+    # renamed so stack inspection finds the new name. Raises a generic exception if a generated
+    # name already exists. Returns the class built by the parent metaclass (and thus registered).
     param_config_list = attrs["_benchmark_parameters"]
 
     def create_benchmark_function(original_benchmark, params):
+      # [FUNCTION DOC]
+      # HELPER: closure factory so each generated benchmark binds its own parameters.
+      # Returns a function taking an instance that calls the original benchmark with the instance
+      # followed by the given parameters.
       return lambda self: original_benchmark(self, *params)
 
     for name in attrs.copy().keys():
@@ -201,6 +263,10 @@ class ParameterizedBenchmark(_BenchmarkRegistrar):
 
 
 class Benchmark(metaclass=_BenchmarkRegistrar):
+  # [CLASS DOC]
+  # Abstract base for benchmarks. Its metaclass auto-registers each concrete subclass in the
+  # global registry. Subclasses define methods whose names start with "benchmark"; these are
+  # invoked by the benchmark runner, and call the report method to emit results. Stateless itself.
   """Abstract class that provides helper functions for running benchmarks.
 
   Any class subclassing this one is immediately registered in the global
@@ -212,10 +278,20 @@ class Benchmark(metaclass=_BenchmarkRegistrar):
 
   @classmethod
   def is_abstract(cls):
+    # [FUNCTION DOC]
+    # Class method telling the registrar whether the class is the abstract base itself. Returns
+    # true when the class's method resolution order has at most two entries (the metaclass-built
+    # base and its parent), meaning it is Benchmark; false for any subclass.
     # mro: (_BenchmarkRegistrar, Benchmark) means this is Benchmark
     return len(cls.mro()) <= 2
 
   def _get_name(self, overwrite_name=None):
+    # [FUNCTION DOC]
+    # HELPER: computes the benchmark entry name for the report method.
+    # Walks the current call stack from outermost to innermost looking for the first frame whose
+    # local "self" is a Benchmark instance; that frame's function name is the method name. The
+    # result is the class name of that instance, a dot, then overwrite_name if given (optional)
+    # else the method name. Raises a value error when no Benchmark instance is on the stack.
     """Returns full name of class and method calling report_benchmark."""
 
     # Find the caller method (outermost Benchmark class)
@@ -248,6 +324,12 @@ class Benchmark(metaclass=_BenchmarkRegistrar):
       extras=None,
       name=None,
       metrics=None):
+    # [FUNCTION DOC]
+    # Public method benchmarks call to record a result. Determines the entry name from the call
+    # stack (or the optional name override), then forwards iterations, cpu time, wall time,
+    # throughput, extras mapping, and metrics list to the module-level reporting function, which
+    # prints or writes the result. All parameters are optional. Returns nothing. May raise a
+    # value error if no benchmark method is on the stack, and the reporting function's errors.
     """Report a benchmark.
 
     Args:
@@ -273,6 +355,10 @@ class Benchmark(metaclass=_BenchmarkRegistrar):
 
 @tf_export("test.benchmark_config")
 def benchmark_config():
+  # [FUNCTION DOC]
+  # Builds and returns a new session configuration protocol buffer with the graph optimizer's
+  # dependency optimization turned off, so benchmarked ops are not pruned away. Takes no inputs
+  # and has no side effects.
   """Returns a tf.compat.v1.ConfigProto for disabling the dependency optimizer.
 
     Returns:
@@ -286,9 +372,18 @@ def benchmark_config():
 
 @tf_export("test.Benchmark")
 class TensorFlowBenchmark(Benchmark):
+  # [CLASS DOC]
+  # Public benchmark base class for TensorFlow code. Adds running an op or tensor in a session
+  # with timing and reporting, plus a helper to evaluate tensors. Instances set an environment
+  # variable so the runtime uses a fresh thread pool per benchmark. Subclasses are registered
+  # like any Benchmark subclass; this class itself is treated as abstract.
   """Abstract class that provides helpers for TensorFlow benchmarks."""
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor. Side effect: sets the process-wide environment variable asking the runtime to
+    # allocate a new thread pool per benchmark to the value one, then calls the parent
+    # constructor. No inputs.
     # Allow TensorFlow runtime to allocate a new threadpool with different
     # number of threads for each new benchmark.
     os.environ[OVERRIDE_GLOBAL_THREADPOOL] = "1"
@@ -296,6 +391,10 @@ class TensorFlowBenchmark(Benchmark):
 
   @classmethod
   def is_abstract(cls):
+    # [FUNCTION DOC]
+    # Class method override: true only when the class's method resolution order has at most three
+    # entries, i.e. it is TensorFlowBenchmark itself, so that it is not registered; false for
+    # subclasses.
     # mro: (_BenchmarkRegistrar, Benchmark, TensorFlowBenchmark) means
     # this is TensorFlowBenchmark.
     return len(cls.mro()) <= 3
@@ -311,6 +410,22 @@ class TensorFlowBenchmark(Benchmark):
                        name=None,
                        extras=None,
                        mbs=0):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says the returned mapping may include the key
+    # "full_chrome_trace_format", but the code stores the trace under "full_trace_chrome_format".
+    # KNOWN ISSUE: throughput is computed as mbs divided by the median time, which raises a
+    # zero-division error when the median is exactly zero, and gives a negative value when
+    # min_iters is zero (median becomes minus one). The default mbs of zero yields zero throughput.
+    # Times an op or tensor in a session. Runs burn_iters untimed warm-up runs, then min_iters
+    # timed runs (wall-clock deltas). If store_trace or store_memory_usage is true, performs one
+    # extra fully-traced run; the trace is kept (Chrome format string) only when store_trace, and
+    # per-allocator maximum byte counts are added to extras when store_memory_usage. The median
+    # time is reported via the report method with iterations, wall time, extras, name and
+    # throughput. Afterwards the mean and standard deviation of times (minus one for empty or, for
+    # deviation, single samples) and the trace are merged into the extras and returned
+    # along with the reported values as a mapping. Inputs: sess (session), op_or_tensor, optional
+    # feed_dict, burn_iters, min_iters, store_trace, store_memory_usage, optional name, optional
+    # extras mapping (mutated in place, since memory info is added to it), mbs megabytes moved.
     """Run an op or tensor in the given session.  Report the results.
 
     Args:
@@ -373,6 +488,10 @@ class TensorFlowBenchmark(Benchmark):
           extras["allocator_maximum_num_bytes_%s" % k] = v.num_bytes
 
     def _median(x):
+      # [FUNCTION DOC]
+      # HELPER: statistics for run_op_benchmark.
+      # Returns the median of a list of numbers (average of the two middle elements for an even
+      # count), or minus one for an empty list.
       if not x:
         return -1
       s = sorted(x)
@@ -381,6 +500,11 @@ class TensorFlowBenchmark(Benchmark):
       return (s[l//2] + s[lm1//2]) / 2.0
 
     def _mean_and_stdev(x):
+      # [FUNCTION DOC]
+      # HELPER: statistics for run_op_benchmark.
+      # Returns a pair of the mean and sample standard deviation (n minus one denominator) of a
+      # list of numbers. Returns minus one for both when empty, and minus one for the deviation
+      # when there is a single element.
       if not x:
         return -1, -1
       l = len(x)
@@ -408,6 +532,10 @@ class TensorFlowBenchmark(Benchmark):
     return benchmark_values
 
   def evaluate(self, tensors):
+    # [FUNCTION DOC]
+    # Evaluates a tensor or nested list or tuple of tensors using the default session if one is
+    # set, otherwise a cached session obtained from the test-case mixin (so the subclass must
+    # provide a cached-session method, else an attribute error occurs). Returns the numpy values.
     """Evaluates tensors and returns numpy values.
 
     Args:
@@ -421,6 +549,16 @@ class TensorFlowBenchmark(Benchmark):
 
 
 def _run_benchmarks(regex):
+  # [FUNCTION DOC]
+  # HELPER: internal driver behind the benchmarks main entry point.
+  # KNOWN ISSUE: the docstring says the regex is matched against benchmark class names, but it is
+  # matched against the full dotted module, class and method name. The registry is a set, so the
+  # run order is not deterministic.
+  # Iterates over a snapshot of the global registry; for every attribute whose name starts with
+  # "benchmark" and is callable, builds the full name and, if the regex is the literal word "all"
+  # or a search match, lazily instantiates the class once and calls the bound method. Raises a
+  # value error if nothing matched. Side effects: runs benchmarks (which may print or write
+  # result files).
   """Run benchmarks that match regex `regex`.
 
   This function goes through the global benchmark registry, and matches
@@ -465,6 +603,13 @@ def _run_benchmarks(regex):
 
 
 def benchmarks_main(true_main, argv=None):
+  # [FUNCTION DOC]
+  # Entry point. Looks in argv (defaults to the process arguments) for an argument starting with
+  # the benchmark-filter flag (single or double dash, with an equals sign). If found, removes it
+  # from argv (mutating the list), takes the text after the first equals sign as a regular
+  # expression, and runs the matching benchmarks through the application runner. Otherwise
+  # calls true_main, a callable taking no arguments. Returns nothing; the app runner normally
+  # exits the process. Inputs: true_main callable, optional argv list.
   """Run benchmarks as declared in argv.
 
   Args:

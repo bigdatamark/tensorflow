@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Unit test verifying that the generated build information mapping agrees with the runtime
+# queries of how TensorFlow was built (CUDA, ROCm, TensorRT) and that its keys keep a stable
+# order. Depends on a generated build-info module that exists only in built packages.
+
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,8 +26,16 @@ from tensorflow.python.platform import test
 
 
 class BuildInfoTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the generated build information mapping; no shared fixtures.
 
   def testBuildInfo(self):
+    # [FUNCTION DOC]
+    # Asserts that the ROCm and CUDA flags in the build information mapping equal the values
+    # returned by the test module's built-with-ROCm and built-with-CUDA queries. On non-Windows
+    # systems it also imports the TensorRT utility extension and asserts the TensorRT flag equals
+    # whether TensorRT is enabled. Fails with an assertion error on mismatch, or an import error
+    # if the extension is missing.
     self.assertEqual(build_info.build_info['is_rocm_build'],
                      test.is_built_with_rocm())
     self.assertEqual(build_info.build_info['is_cuda_build'],
@@ -36,6 +49,9 @@ class BuildInfoTest(test.TestCase):
                        is_tensorrt_enabled())
 
   def testDeterministicOrder(self):
+    # [FUNCTION DOC]
+    # Asserts that the keys of the build information mapping contain, as a subsequence in order,
+    # the CUDA, ROCm and TensorRT build flags (other platform-specific keys may be interleaved).
     # The dict may contain other keys depending on the platform, but the ones
     # it always contains should be in order.
     self.assertContainsSubsequence(

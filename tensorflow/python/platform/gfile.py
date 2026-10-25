@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Import router for the file I/O layer. Re-exports functions of the low-level file I/O module
+# under the legacy capitalized gfile names (copy, make directory, remove, delete recursively,
+# exists, glob, is-directory, list directory, make directories, rename, stat, walk) and defines
+# two public file classes, the standard file wrapper and a deprecated v1-only fast variant,
+# plus an alias named Open for the standard wrapper. Import-time side effects: registers the
+# public API names through the export decorator. Not a helper module in itself, but mostly glue.
+
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,6 +43,11 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export('io.gfile.GFile', v1=['gfile.GFile', 'gfile.Open', 'io.gfile.GFile'])
 class GFile(_FileIO):
+  # [CLASS DOC]
+  # Public file object backed by TensorFlow's file system layer, so paths may use local files or
+  # remote URI schemes. Behavior is entirely inherited from the low-level file class; this class
+  # only fixes the constructor signature (name and mode). Exported as the public gfile class
+  # (also reachable under the legacy open and gfile names in v1). Usable as a context manager.
   r"""File I/O wrappers without thread locking.
 
   The main roles of the `tf.io.gfile` module are:
@@ -111,11 +124,19 @@ class GFile(_FileIO):
   """
 
   def __init__(self, name, mode='r'):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: name is the file path or URI (string or path-like), mode is the access
+    # mode string, defaulting to read. Delegates to the parent constructor; the file is opened
+    # lazily by the parent on first use. Returns nothing.
     super(GFile, self).__init__(name=name, mode=mode)
 
 
 @tf_export(v1=['gfile.FastGFile'])
 class FastGFile(_FileIO):
+  # [CLASS DOC]
+  # Deprecated v1-only public file class, functionally identical to the standard gfile class
+  # (inherits all behavior from the low-level file class). Its constructor is marked deprecated
+  # and emits a warning pointing users to the standard class.
   """File I/O wrappers without thread locking.
 
   Note, that this  is somewhat like builtin Python  file I/O, but
@@ -127,6 +148,11 @@ class FastGFile(_FileIO):
 
   @deprecated(None, 'Use tf.gfile.GFile.')
   def __init__(self, name, mode='r'):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the class docstring claims this class is faster or has distinct semantics, but
+    # it adds nothing over the standard class; only the deprecation decorator differs.
+    # Constructor, wrapped by a deprecation decorator that logs a warning on use. Inputs: name
+    # (path or URI) and mode (string, default read). Delegates to the parent constructor.
     super(FastGFile, self).__init__(name=name, mode=mode)
 
 

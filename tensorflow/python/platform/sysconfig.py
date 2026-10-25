@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Public system configuration queries for building native code against TensorFlow: the include
+# directory, the library directory, compiler flags, linker flags, and the build information
+# mapping. Each function is exported in the public sysconfig API. Reads version and ABI constants
+# from the versions module and the native session extension. No import-time side effects beyond
+# export registration.
+
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,6 +40,9 @@ from tensorflow.python.util.tf_export import tf_export
 # pylint: disable=g-import-not-at-top
 @tf_export('sysconfig.get_include')
 def get_include():
+  # [FUNCTION DOC]
+  # Returns the path of the include subdirectory under the library directory, where the C++
+  # headers are installed. No inputs; no side effects; does not check that it exists.
   """Get the directory containing the TensorFlow C++ header files.
 
   Returns:
@@ -43,6 +53,11 @@ def get_include():
 
 @tf_export('sysconfig.get_lib')
 def get_lib():
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it returns the directory with the framework library, but the
+  # code just returns the normalized path two levels above this file's directory (the package
+  # root) without checking that a library is there.
+  # Returns the package root directory string computed from this file's location. No inputs.
   """Get the directory containing the TensorFlow framework library.
 
   Returns:
@@ -55,6 +70,12 @@ def get_lib():
 
 @tf_export('sysconfig.get_compile_flags')
 def get_compile_flags():
+  # [FUNCTION DOC]
+  # Builds and returns a list of compiler flag strings: an include path option for the header
+  # directory; a definition of the C++ standard-library ABI macro from the build's ABI flag; a
+  # language standard option for C++11, 14, 17 or 20 when the build's C++ version constant matches
+  # one of those (otherwise no such option is added); and a definition of the Eigen maximum
+  # alignment macro taken from the native extension. No inputs; no side effects.
   """Returns the compilation flags for compiling with TensorFlow.
 
   The returned list of arguments can be passed to the compiler for compiling
@@ -90,6 +111,11 @@ def get_compile_flags():
 
 @tf_export('sysconfig.get_link_flags')
 def get_link_flags():
+  # [FUNCTION DOC]
+  # Builds and returns a list of linker flag strings. For a non-monolithic build, adds a library
+  # search path option for the library directory and a link option for the framework shared
+  # library named with the major version (macOS style name on Darwin, versioned shared object
+  # name elsewhere). For a monolithic build the list is empty. No inputs; no side effects.
   """Returns the linker flags for linking with TensorFlow.
 
   The returned list of arguments can be passed to the linker for linking against
@@ -118,6 +144,9 @@ def get_link_flags():
 
 @tf_export('sysconfig.get_build_info')
 def get_build_info():
+  # [FUNCTION DOC]
+  # Returns the generated build information mapping itself (not a copy), so callers mutating it
+  # alter shared state. No inputs.
   """Get a dictionary describing TensorFlow's build environment.
 
   Values are generated when TensorFlow is compiled, and are static for each
