@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Legacy (TF1-style) variable-sharing templates. Exposes the public factory that wraps an arbitrary
+# function so that variables created by its first call are reused by every later call, plus the
+# internal factory that can optionally compile the function into a graph function.
+# Defines a graph-mode template class, an eager-mode subclass, and a private per-template eager
+# variable store used by the eager class to track which variables belong to a template's scope.
+# Relies on the variable-scope machinery, the checkpoint dependency tracking and the trackable base.
+# Import-time side effects: only the public factory registration under the v1 API namespace.
+# Only the factory name is exported through the module's public name list.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,6 +46,15 @@ def make_template(name_,
                   unique_name_=None,
                   custom_getter_=None,
                   **kwargs):
+  # [FUNCTION DOC]
+  # Public entry point for building a variable-sharing template (v1 API only).
+  # Inputs: name_ is the scope name (made unique), func_ is the function to wrap, create_scope_now_
+  # chooses whether the variable scope is created at construction (true) or at first call (false,
+  # default), unique_name_ optionally overrides the name without uniquification, custom_getter_ is an
+  # optional variable getter, and any extra keyword arguments are bound to func_.
+  # Output: a template object (eager or graph flavor) that callers invoke like the function.
+  # Raises a value error (from the internals) if name_ is null, or if unique_name_ is given under
+  # eager execution. Delegates to the internal factory with graph-function compilation disabled.
   """Given an arbitrary function, wrap it so that it does variable sharing.
 
   @compatibility(TF2)
@@ -181,6 +199,14 @@ def make_template_internal(name_,
                            custom_getter_=None,
                            create_graph_function_=False,
                            **kwargs):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation behind the public template factory.
+  # Binds any extra keyword arguments to func_, then picks the template class by execution mode:
+  # under eager execution it returns the eager template (and rejects unique_name_ with a value
+  # error); otherwise it returns the graph template. The remaining inputs (name_, create_scope_now_,
+  # custom_getter_, create_graph_function_) are forwarded to the constructor; create_graph_function_
+  # makes the wrapped function run as a compiled graph function.
+  # Output: the newly built template. No other side effects beyond constructing it.
   """Make a template, optionally compiling func_ into a graph function.
 
   See `make_template` for full documentation.
@@ -245,6 +271,12 @@ def make_template_internal(name_,
 
 
 def _skip_common_stack_elements(stacktrace, base_case):
+  # [FUNCTION DOC]
+  # HELPER: trims stack traces when re-raising errors from a template call.
+  # Inputs: two lists of formatted stack entries. Walks both in step and returns the tail of the
+  # first list starting at the first position where they differ; if no difference is found within
+  # the shared length, returns only the last entry of the first list.
+  # Pure function, no side effects.
   """Skips items that the target stacktrace shares with the base stacktrace."""
   for i, (trace, base) in enumerate(zip(stacktrace, base_case)):
     if trace != base:
@@ -253,6 +285,14 @@ def _skip_common_stack_elements(stacktrace, base_case):
 
 
 class Template(trackable.Trackable):
+  # [CLASS DOC]
+  # Graph-mode variable-sharing wrapper around a function. The first call runs the function inside
+  # a fresh variable scope (creating variables); later calls re-enter the same scope with reuse.
+  # State: wrapped function, creation stack trace (for error messages), scope name, optional unique
+  # name, custom getter, the captured variable scope, a flag for completed first call and a flag for
+  # whether any call has started (for multi-threaded strategies). Created by the template factories;
+  # extends the trackable base so variables can be restored on first call. Exposes variable lists
+  # (all, trainable, non-trainable, global, local) filtered by the template's scope.
   """Wrap a function to aid in variable sharing.
 
   Templates are functions that create variables the first time they are called
@@ -271,6 +311,14 @@ class Template(trackable.Trackable):
                unique_name=None,
                custom_getter=None,
                create_graph_function=False):
+    # [FUNCTION DOC]
+    # Constructs a graph template. Stores the function (compiled into a graph function when
+    # create_graph_function is true), records the caller's stack trace minus the last two frames,
+    # and saves name, unique_name and custom_getter. Raises a value error if name is null.
+    # When create_scope_now is true, it immediately enters a pure variable scope (using the unique
+    # name or a uniquified scope for name) and keeps the resulting scope; otherwise the scope stays
+    # unset until the first call. Initializes the variables-created flag to false and the
+    # first-call flag to true.
     """Creates a template for the given function.
 
     Args:
@@ -327,6 +375,17 @@ class Template(trackable.Trackable):
     self._first_call = True
 
   def _call_func(self, args, kwargs):
+    # [FUNCTION DOC]
+    # HELPER: performs the actual wrapped-function call for the template's call method.
+    # Inputs: positional argument tuple and keyword argument mapping for the wrapped function.
+    # Output: the wrapped function's result.
+    # Behavior: after a completed first call, it snapshots global and trainable variable counts,
+    # calls the function, raises a value error if new trainable variables appeared, and logs (info)
+    # if only non-trainable ones appeared. On the first call it runs the function under checkpoint
+    # dependency capture (so variables can be restored), marking variables as created on success and
+    # resetting the first-call flag on failure. A concurrent call from another thread just calls it.
+    # Any exception is re-raised with its first argument extended by the template's original
+    # definition stack trace (the exception arguments are mutated).
     try:
       if self._variables_created:
         vars_at_start = len(
@@ -391,6 +450,11 @@ class Template(trackable.Trackable):
       raise
 
   def __call__(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Invokes the template with arbitrary positional and keyword arguments and returns the wrapped
+    # function's result. If the scope already exists it re-enters it, reusing variables unless this
+    # is the first call. Otherwise it opens a new variable scope (using the unique name or name and
+    # the custom getter), stores it as the template's scope, and calls the function inside it.
     if self._variable_scope:
       # Only reuse variables if not on first call.
       with variable_scope.variable_scope(
@@ -407,21 +471,32 @@ class Template(trackable.Trackable):
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the name passed at construction (not the uniquified scope name).
     """Returns the name given to this Template."""
     return self._name
 
   @property
   def func(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the wrapped function (the compiled graph function if requested).
     """Returns the func given to this Template."""
     return self._func
 
   @property
   def variable_scope(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the captured variable scope object, or null if the scope has not
+    # been created yet (no call made and scope creation was deferred).
     """Returns the variable scope object created by this Template."""
     return self._variable_scope
 
   @property
   def variable_scope_name(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the scope name with a trailing slash appended (unless the name
+    # is empty or already ends with a slash), so prefix matching cannot hit partial names.
+    # Returns nothing (null) when the scope has not been created yet.
     """Returns the variable scope name created by this Template."""
     if self._variable_scope:
       name = self._variable_scope.name
@@ -433,11 +508,17 @@ class Template(trackable.Trackable):
 
   @property
   def variables(self):
+    # [FUNCTION DOC]
+    # Read-only property: concatenation of the template's global variables followed by its local
+    # variables. Empty until the first call has completed.
     """Returns the list of global and local variables created by the Template."""
     return self.global_variables + self.local_variables
 
   @property
   def trainable_variables(self):
+    # [FUNCTION DOC]
+    # Read-only property: trainable variables from the default graph collection whose names fall
+    # under the template's scope name. Returns an empty list if the first call has not completed.
     """Returns the list of trainable variables created by the Template."""
     if self._variables_created:
       return ops.get_collection(ops.GraphKeys.TRAINABLE_VARIABLES,
@@ -447,6 +528,9 @@ class Template(trackable.Trackable):
 
   @property
   def non_trainable_variables(self):
+    # [FUNCTION DOC]
+    # Read-only property: the template's global variables that are not in its trainable set.
+    # Note local variables are not included. Empty until the first call has completed.
     """Returns the list of non-trainable variables created by the Template."""
     # TODO(apassos) Make sure it matches Eager when using local variables.
     global_variables = self.global_variables
@@ -455,6 +539,9 @@ class Template(trackable.Trackable):
 
   @property
   def global_variables(self):
+    # [FUNCTION DOC]
+    # Read-only property: global variables from the default graph collection under the template's
+    # scope name. Returns an empty list if the first call has not completed.
     """Returns the list of global variables created by the Template."""
     if self._variables_created:
       return ops.get_collection(ops.GraphKeys.GLOBAL_VARIABLES,
@@ -464,6 +551,10 @@ class Template(trackable.Trackable):
 
   @property
   def local_variables(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it returns global variables, but the code returns the local
+    # variables collection entries under the template's scope.
+    # Read-only property; returns an empty list if the first call has not completed.
     """Returns the list of global variables created by the Template."""
     if self._variables_created:
       return ops.get_collection(ops.GraphKeys.LOCAL_VARIABLES,
@@ -473,16 +564,22 @@ class Template(trackable.Trackable):
 
   @property
   def weights(self):
+    # [FUNCTION DOC]
+    # Read-only property alias (Keras-style naming) for the full variables list.
     """List of weights/variables created by the Template."""
     return self.variables
 
   @property
   def trainable_weights(self):
+    # [FUNCTION DOC]
+    # Read-only property alias (Keras-style naming) for the trainable variables list.
     """List of trainable weights/variables created by the Template."""
     return self.trainable_variables
 
   @property
   def non_trainable_weights(self):
+    # [FUNCTION DOC]
+    # Read-only property alias (Keras-style naming) for the non-trainable variables list.
     """List of non-trainable weights/variables created by the Template."""
     return self.non_trainable_variables
 
@@ -491,14 +588,27 @@ class Template(trackable.Trackable):
               "The .var_scope property is deprecated. Please change your "
               "code to use the .variable_scope property")
   def var_scope(self):
+    # [FUNCTION DOC]
+    # Deprecated read-only property (deprecated since 2017-02-21; emits a deprecation warning when
+    # used) that returns the same scope object as the variable scope property.
     """Returns the variable scope object created by this Template."""
     return self._variable_scope
 
 
 class _EagerTemplateVariableStore:
+  # [CLASS DOC]
+  # HELPER: internal support class for the eager template.
+  # Owns an eager variable store (nested under an outer eager store when one is the default) and a
+  # variable scope name, so the eager template can list only variables living under its scope.
+  # Provides a context manager that makes the store default and closes sub-scopes on exit.
   """Wrapper around EagerVariableStore to support nesting EagerTemplates."""
 
   def __init__(self, variable_scope_name):
+    # [FUNCTION DOC]
+    # HELPER: constructor for the eager template's store.
+    # Input: the scope name (may be null if not yet known). Wraps the current default variable store
+    # in a new eager store when that default already stores eager variables; otherwise creates a
+    # standalone eager store. Marks the store as not yet used.
     self._variable_scope_name = variable_scope_name
     default = variable_scope._get_default_variable_store()  # pylint: disable=protected-access
     if default._store_eager_variables:  # pylint: disable=protected-access
@@ -510,10 +620,17 @@ class _EagerTemplateVariableStore:
     self._used_once = False
 
   def set_variable_scope_name(self, variable_scope_name):
+    # [FUNCTION DOC]
+    # HELPER: records the scope name once it becomes known (deferred scope creation). Returns nothing.
     self._variable_scope_name = variable_scope_name
 
   @tf_contextlib.contextmanager
   def as_default(self):
+    # [FUNCTION DOC]
+    # HELPER: context manager that makes this template's eager store the active one.
+    # On first use it adopts an outer eager default store if one exists, and marks itself used.
+    # Yields nothing. On exit (even on error) it closes the variable sub-scopes of its scope name
+    # in the scope store; raises a runtime error if the scope name was never set.
     try:
       if not self._used_once:
         # If an outer eager VariableStore was explicitly created and set by
@@ -540,6 +657,9 @@ class _EagerTemplateVariableStore:
           self._variable_scope_name)
 
   def _variables_in_scope(self, variable_list):
+    # [FUNCTION DOC]
+    # HELPER: filters a variable list to those whose names start with the scope name plus a slash.
+    # Raises a runtime error if the scope name has not been set. Returns the filtered list.
     if self._variable_scope_name is None:
       raise RuntimeError(
           "A variable scope must be set before variables can be accessed.")
@@ -549,18 +669,33 @@ class _EagerTemplateVariableStore:
     ]
 
   def variables(self):
+    # [FUNCTION DOC]
+    # HELPER: all variables in the eager store that live under the template's scope.
+    # Raises a runtime error if the scope name is unset.
     return self._variables_in_scope(self._eager_variable_store.variables())
 
   def trainable_variables(self):
+    # [FUNCTION DOC]
+    # HELPER: trainable variables in the eager store under the template's scope.
+    # Raises a runtime error if the scope name is unset.
     return self._variables_in_scope(
         self._eager_variable_store.trainable_variables())
 
   def non_trainable_variables(self):
+    # [FUNCTION DOC]
+    # HELPER: non-trainable variables in the eager store under the template's scope.
+    # Raises a runtime error if the scope name is unset.
     return self._variables_in_scope(
         self._eager_variable_store.non_trainable_variables())
 
 
 class EagerTemplate(Template):
+  # [CLASS DOC]
+  # Eager-execution flavor of the template. Same sharing semantics as the graph template, but
+  # variables are tracked through a private per-template eager variable store instead of graph
+  # collections, so variable lists are read from that store. Can only be built when eager execution
+  # is enabled. Overrides the call methods, the internal function-call helper and the variable
+  # properties; there are no local variables in eager mode.
   """Wrap a function to aid in variable sharing in Eager mode.
 
   Templates are functions that create variables the first time they are called
@@ -578,6 +713,11 @@ class EagerTemplate(Template):
                create_scope_now=False,
                custom_getter=None,
                create_graph_function=False):
+    # [FUNCTION DOC]
+    # Constructs an eager template. Raises a runtime error if eager execution is not enabled.
+    # Calls the base constructor (with no unique name), then creates the private eager variable
+    # store using the scope name if the scope was created now, or a null name to be set at first
+    # call. Also initializes the cached scope context manager to nothing.
     """Creates a template for the given function.
 
     Args:
@@ -620,6 +760,14 @@ class EagerTemplate(Template):
     self._variable_scope_context_manager = None
 
   def _call_func(self, args, kwargs):
+    # [FUNCTION DOC]
+    # HELPER: eager version of the function-call helper used by the call method.
+    # Inputs: positional argument tuple and keyword mapping. Output: the wrapped function's result.
+    # Snapshots the store's variables before the call; the first call runs under checkpoint
+    # dependency capture, later calls run directly. After a repeat call, raises a value error if
+    # new trainable variables appeared and logs (info) if other new variables appeared. Marks
+    # variables as created after the first call. Exceptions are re-raised with the original
+    # definition stack trace appended to the first exception argument (arguments are mutated).
     try:
       vars_at_start = self._template_store.variables()
       trainable_at_start = self._template_store.trainable_variables()
@@ -679,6 +827,11 @@ class EagerTemplate(Template):
       raise
 
   def __call__(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Invokes the eager template with arbitrary arguments and returns the wrapped function's result.
+    # If the scope exists, it caches and re-enters a scope manager that auto-reuses variables;
+    # otherwise it opens a new scope, stores it, and tells the store the scope name. In both cases
+    # the template's store is made default inside the scope before calling the function.
     # In both branches below, the template store is installed as default after
     # the variable scope is opened in order to ensure that templates nested at
     # the same level correctly uniquify lower variable scope names.
@@ -706,6 +859,9 @@ class EagerTemplate(Template):
 
   @property
   def variables(self):
+    # [FUNCTION DOC]
+    # Read-only property: all variables from the template's eager store, or an empty list before the
+    # first call has completed.
     """Returns the list of variables created by the Template."""
     # Currently there is no local variable in Eager mode.
     if not self._variables_created:
@@ -714,6 +870,9 @@ class EagerTemplate(Template):
 
   @property
   def trainable_variables(self):
+    # [FUNCTION DOC]
+    # Read-only property: trainable variables from the eager store; empty before the first call
+    # has completed.
     """Returns the list of trainable variables created by the Template."""
     # Currently there is no local variable in Eager mode.
     if not self._variables_created:
@@ -722,6 +881,9 @@ class EagerTemplate(Template):
 
   @property
   def non_trainable_variables(self):
+    # [FUNCTION DOC]
+    # Read-only property: non-trainable variables from the eager store; empty before the first call
+    # has completed.
     """Returns the list of non-trainable variables created by the Template."""
     # Currently there is no local variable in Eager mode.
     if not self._variables_created:
@@ -730,6 +892,9 @@ class EagerTemplate(Template):
 
   @property
   def global_variables(self):
+    # [FUNCTION DOC]
+    # Read-only property: in eager mode, the same list as the variables property (all variables
+    # are treated as global); empty before the first call has completed.
     """Returns the list of global variables created by the Template."""
     # Currently there is no local variable in Eager mode.
     if not self._variables_created:
@@ -738,6 +903,10 @@ class EagerTemplate(Template):
 
   @property
   def local_variables(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it returns global variables, but the code always returns an
+    # empty list because eager mode has no local variables.
+    # Read-only property.
     """Returns the list of global variables created by the Template."""
     # Currently there is no local variable in Eager mode.
     return []
