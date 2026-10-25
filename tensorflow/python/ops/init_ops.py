@@ -1,3 +1,15 @@
+# [MODULE DOC]
+# Legacy (TF1 style) variable initializers: classes that produce a tensor of a requested shape
+# and dtype, used with variable scopes and layers. Contains a base class (Initializer), constant
+# initializers (zeros, ones, constant), random distribution initializers (uniform, normal,
+# truncated normal), scale-aware initializers (uniform unit scaling, variance scaling and its
+# Glorot / LeCun / He specializations), and linear-algebra based initializers (orthogonal,
+# identity, and convolution delta-orthogonal / orthogonal kernels for 1D, 2D and 3D).
+# Also defines lower-case aliases for the classes, factory functions for LeCun and He
+# initializers, and two private helpers (fan computation and floating point dtype check).
+# Import-time side effects: many classes are exported to the v1 public API namespace through the
+# export decorator and have deprecated endpoints registered; the alias names are bound at module
+# level. Newer TF2 code uses the initializers in the separate TF2 module instead.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -50,9 +62,17 @@ from tensorflow.python.util.tf_export import tf_export
 
 
 class Initializer:
+  # [CLASS DOC]
+  # Abstract base class of all initializers in this module. Holds no state. Subclasses override
+  # the call method to build a tensor of a given shape and dtype, and the configuration methods
+  # to allow serialization to and from a plain mapping.
   """Initializer base class: all initializers inherit from this class."""
 
   def __call__(self, shape, dtype=None, partition_info=None):
+    # [FUNCTION DOC]
+    # Abstract call interface: builds a tensor of the given shape (and optional dtype and
+    # partition information) filled according to the initializer. This base version always
+    # raises a not-implemented error; subclasses must override it.
     """Returns a tensor object initialized as specified by the initializer.
 
     Args:
@@ -65,6 +85,10 @@ class Initializer:
     raise NotImplementedError
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the constructor configuration of the initializer as a serializable mapping.
+    # The base implementation takes no input and returns an empty mapping; subclasses return
+    # their constructor arguments. No side effects.
     """Returns the configuration of the initializer as a JSON-serializable dict.
 
     Returns:
@@ -74,6 +98,11 @@ class Initializer:
 
   @classmethod
   def from_config(cls, config):
+    # [FUNCTION DOC]
+    # Class method that creates a new instance of the class it is called on. The config input is
+    # a mapping of constructor argument names to values (normally the output of get_config) and
+    # is passed to the constructor as keyword arguments. Returns the new instance. Errors from
+    # the constructor (for example unexpected keys) propagate to the caller.
     """Instantiates an initializer from a configuration dictionary.
 
     Example:
@@ -97,6 +126,10 @@ class Initializer:
 @tf_export(v1=["initializers.zeros", "zeros_initializer"])
 @deprecation.deprecated_endpoints("initializers.zeros")
 class Zeros(Initializer):
+  # [CLASS DOC]
+  # Initializer producing tensors filled with zeros. Stores a default dtype (default float32)
+  # that is used when the call does not specify one. Exported to the v1 API (zeros_initializer)
+  # and registered with deprecated endpoints.
   """Initializer that generates tensors initialized to 0.
 
   @compatibility(TF2)
@@ -168,20 +201,33 @@ class Zeros(Initializer):
                    "Call initializer instance with the dtype argument instead "
                    "of passing it to the constructor", "dtype")
   def __init__(self, dtype=dtypes.float32):
+    # [FUNCTION DOC]
+    # Constructor. dtype (optional, default float32) is any value convertible to a data type and
+    # is stored as the default dtype. Passing it here is deprecated (a warning is emitted by the
+    # decorator); the dtype should be given at call time. Returns nothing.
     self.dtype = dtypes.as_dtype(dtype)
 
   def __call__(self, shape, dtype=None, partition_info=None):
+    # [FUNCTION DOC]
+    # Returns a tensor of the given shape filled with zeros. dtype is optional and falls back to
+    # the stored default. partition_info is accepted for interface compatibility and ignored.
     if dtype is None:
       dtype = self.dtype
     return array_ops.zeros(shape, dtype)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with the dtype name of the stored default dtype.
     return {"dtype": self.dtype.name}
 
 
 @tf_export(v1=["initializers.ones", "ones_initializer"])
 @deprecation.deprecated_endpoints("initializers.ones", "ones_initializer")
 class Ones(Initializer):
+  # [CLASS DOC]
+  # Initializer producing tensors filled with ones. Stores a default dtype (default float32)
+  # used when the call does not specify one. Exported to the v1 API (ones_initializer) with
+  # deprecated endpoints.
   """Initializer that generates tensors initialized to 1.
 
   @compatibility(TF2)
@@ -205,20 +251,34 @@ class Ones(Initializer):
                    "Call initializer instance with the dtype argument instead "
                    "of passing it to the constructor", "dtype")
   def __init__(self, dtype=dtypes.float32):
+    # [FUNCTION DOC]
+    # Constructor. dtype (optional, default float32) is any value convertible to a data type and
+    # is stored as the default dtype. Passing it here is deprecated (a warning is emitted by the
+    # decorator). Returns nothing.
     self.dtype = dtypes.as_dtype(dtype)
 
   def __call__(self, shape, dtype=None, partition_info=None):
+    # [FUNCTION DOC]
+    # Returns a tensor of the given shape filled with ones. dtype is optional and falls back to
+    # the stored default. partition_info is accepted for interface compatibility and ignored.
     if dtype is None:
       dtype = self.dtype
     return array_ops.ones(shape, dtype)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with the dtype name of the stored default dtype.
     return {"dtype": self.dtype.name}
 
 
 @tf_export(v1=["initializers.constant", "constant_initializer"])
 @deprecation.deprecated_endpoints("constant_initializer")
 class Constant(Initializer):
+  # [CLASS DOC]
+  # Initializer producing tensors from a fixed value: a scalar, or a list, tuple or array of
+  # values that fill the tensor (the last element repeats if fewer values than needed).
+  # Stores the value, a default dtype and a default flag for shape verification. Exported to the
+  # v1 API (constant_initializer) with deprecated endpoints.
   """Initializer that generates tensors with constant values.
 
   The resulting tensor is populated with values of type `dtype`, as
@@ -368,6 +428,11 @@ class Constant(Initializer):
   @deprecated_args(None, "Objects must now be the required shape or no shape "
                    "can be specified", "verify_shape")
   def __init__(self, value=0, dtype=dtypes.float32, verify_shape=False):
+    # [FUNCTION DOC]
+    # Constructor. value (default 0) must be a scalar, list, tuple or numpy array, otherwise a
+    # type error is raised. dtype (optional, default float32) is stored as the default dtype;
+    # verify_shape (optional, default false) is stored as the default shape-verification flag.
+    # Both dtype and verify_shape are deprecated constructor arguments (warnings emitted).
     if not (np.isscalar(value) or isinstance(value, (list, tuple, np.ndarray))):
       raise TypeError(
           f"Invalid type for initial value={value} of type: "
@@ -379,6 +444,11 @@ class Constant(Initializer):
     self._verify_shape = verify_shape
 
   def __call__(self, shape, dtype=None, partition_info=None, verify_shape=None):
+    # [FUNCTION DOC]
+    # Returns a constant tensor of the given shape built from the stored value. dtype and
+    # verify_shape are optional and default to the stored values; partition_info is ignored.
+    # When the value has more elements than the shape needs, the underlying constant operation
+    # raises a value error; with verify_shape true a mismatching value shape raises a type error.
     if dtype is None:
       dtype = self.dtype
     if verify_shape is None:
@@ -387,6 +457,10 @@ class Constant(Initializer):
         self.value, dtype=dtype, shape=shape, verify_shape=verify_shape)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with the stored value and the dtype name. The shape-verification flag is
+    # intentionally left out (for Keras compatibility), so a round trip through the configuration
+    # does not preserve it.
     # We don't include `verify_shape` for compatibility with Keras.
     # `verify_shape` should be passed as an argument to `__call__` rather
     # than as a constructor argument: conceptually it isn't a property
@@ -397,6 +471,10 @@ class Constant(Initializer):
 @tf_export(v1=["initializers.random_uniform", "random_uniform_initializer"])
 @deprecation.deprecated_endpoints("initializers.random_uniform")
 class RandomUniform(Initializer):
+  # [CLASS DOC]
+  # Initializer drawing values from a uniform distribution between a lower and upper bound.
+  # Stores the bounds, an optional random seed and a default dtype. Exported to the v1 API
+  # (random_uniform_initializer) with deprecated endpoints.
   """Initializer that generates tensors with a uniform distribution.
 
   Args:
@@ -464,18 +542,28 @@ class RandomUniform(Initializer):
                    "Call initializer instance with the dtype argument instead "
                    "of passing it to the constructor", "dtype")
   def __init__(self, minval=.0, maxval=None, seed=None, dtype=dtypes.float32):
+    # [FUNCTION DOC]
+    # Constructor. minval (default 0) and maxval (default none, meaning 1 for floating types) are
+    # numbers or scalar tensors bounding the range; seed is an optional integer; dtype (default
+    # float32) is the default output type (its constructor use is deprecated). Stores all of them.
     self.minval = minval
     self.maxval = maxval
     self.seed = seed
     self.dtype = dtypes.as_dtype(dtype)
 
   def __call__(self, shape, dtype=None, partition_info=None):
+    # [FUNCTION DOC]
+    # Returns a tensor of the given shape with values drawn uniformly from the stored range.
+    # dtype is optional (defaults to the stored one); partition_info is ignored. Uses the stored
+    # seed; random op errors (such as integer dtype without maxval) propagate.
     if dtype is None:
       dtype = self.dtype
     return random_ops.random_uniform(
         shape, self.minval, self.maxval, dtype, seed=self.seed)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with minval, maxval, seed and the dtype name.
     return {
         "minval": self.minval,
         "maxval": self.maxval,
@@ -487,6 +575,10 @@ class RandomUniform(Initializer):
 @tf_export(v1=["initializers.random_normal", "random_normal_initializer"])
 @deprecation.deprecated_endpoints("initializers.random_normal")
 class RandomNormal(Initializer):
+  # [CLASS DOC]
+  # Initializer drawing values from a normal distribution with a given mean and standard
+  # deviation. Stores mean, standard deviation, optional seed and a floating point default dtype.
+  # Exported to the v1 API (random_normal_initializer) with deprecated endpoints.
   """Initializer that generates tensors with a normal distribution.
 
   Args:
@@ -554,18 +646,28 @@ class RandomNormal(Initializer):
                    "Call initializer instance with the dtype argument instead "
                    "of passing it to the constructor", "dtype")
   def __init__(self, mean=0.0, stddev=1.0, seed=None, dtype=dtypes.float32):
+    # [FUNCTION DOC]
+    # Constructor. mean (default 0) and stddev (default 1) are numbers or scalar tensors; seed is
+    # an optional integer; dtype (default float32, constructor use deprecated) must be a floating
+    # point type, otherwise a value error is raised. Stores all of them.
     self.mean = mean
     self.stddev = stddev
     self.seed = seed
     self.dtype = _assert_float_dtype(dtypes.as_dtype(dtype))
 
   def __call__(self, shape, dtype=None, partition_info=None):
+    # [FUNCTION DOC]
+    # Returns a tensor of the given shape with normally distributed values using the stored mean,
+    # standard deviation and seed. dtype is optional (defaults to the stored one); partition_info
+    # is ignored.
     if dtype is None:
       dtype = self.dtype
     return random_ops.random_normal(
         shape, self.mean, self.stddev, dtype, seed=self.seed)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with mean, stddev, seed and the dtype name.
     return {
         "mean": self.mean,
         "stddev": self.stddev,
@@ -578,6 +680,10 @@ class RandomNormal(Initializer):
 @deprecation.deprecated_endpoints("initializers.truncated_normal",
                                   "truncated_normal_initializer")
 class TruncatedNormal(Initializer):
+  # [CLASS DOC]
+  # Initializer drawing from a normal distribution truncated at two standard deviations from the
+  # mean (out-of-range samples are redrawn). Stores mean, standard deviation, optional seed and a
+  # floating point default dtype. Exported to the v1 API (truncated_normal_initializer).
   """Initializer that generates a truncated normal distribution.
 
   These values are similar to values from a `random_normal_initializer`
@@ -650,18 +756,28 @@ class TruncatedNormal(Initializer):
                    "Call initializer instance with the dtype argument instead "
                    "of passing it to the constructor", "dtype")
   def __init__(self, mean=0.0, stddev=1.0, seed=None, dtype=dtypes.float32):
+    # [FUNCTION DOC]
+    # Constructor. mean (default 0) and stddev (default 1) are numbers or scalar tensors; seed is
+    # an optional integer; dtype (default float32, constructor use deprecated) must be a floating
+    # point type, otherwise a value error is raised. Stores all of them.
     self.mean = mean
     self.stddev = stddev
     self.seed = seed
     self.dtype = _assert_float_dtype(dtypes.as_dtype(dtype))
 
   def __call__(self, shape, dtype=None, partition_info=None):
+    # [FUNCTION DOC]
+    # Returns a tensor of the given shape with truncated normal values (samples farther than two
+    # standard deviations from the mean are redrawn) using the stored mean, stddev and seed.
+    # dtype is optional (defaults to the stored one); partition_info is ignored.
     if dtype is None:
       dtype = self.dtype
     return random_ops.truncated_normal(
         shape, self.mean, self.stddev, dtype, seed=self.seed)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with mean, stddev, seed and the dtype name.
     return {
         "mean": self.mean,
         "stddev": self.stddev,
@@ -676,6 +792,10 @@ class TruncatedNormal(Initializer):
 @deprecation.deprecated_endpoints("uniform_unit_scaling_initializer",
                                   "initializers.uniform_unit_scaling")
 class UniformUnitScaling(Initializer):
+  # [CLASS DOC]
+  # Deprecated initializer drawing uniformly from a symmetric range whose size shrinks with the
+  # input dimension, so the output variance stays constant through a layer. Stores a scale
+  # factor, optional seed and a floating point default dtype. Exported to the v1 API.
   """Initializer that generates tensors without scaling variance.
 
   When initializing a deep network, it is in principle advantageous to keep
@@ -711,11 +831,20 @@ class UniformUnitScaling(Initializer):
               "Use tf.initializers.variance_scaling instead with distribution="
               "uniform to get equivalent behavior.")
   def __init__(self, factor=1.0, seed=None, dtype=dtypes.float32):
+    # [FUNCTION DOC]
+    # Constructor (deprecated in favor of the variance scaling initializer). factor (default 1)
+    # multiplies the range; seed is an optional integer; dtype (default float32) must be a
+    # floating point type, otherwise a value error is raised. Stores all of them.
     self.factor = factor
     self.seed = seed
     self.dtype = _assert_float_dtype(dtypes.as_dtype(dtype))
 
   def __call__(self, shape, dtype=None, partition_info=None):
+    # [FUNCTION DOC]
+    # Returns a tensor of the given shape with values uniform in plus/minus the square root of
+    # three over the input size, times factor. The input size is the product of all dimensions
+    # but the last (taken from the full shape of partition_info when given, else from shape),
+    # with a minimum of one so zero-size tensors do not fail. dtype defaults to the stored one.
     if dtype is None:
       dtype = self.dtype
     scale_shape = shape
@@ -735,6 +864,8 @@ class UniformUnitScaling(Initializer):
         shape, -max_val, max_val, dtype, seed=self.seed)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with factor, seed and the dtype name.
     return {"factor": self.factor, "seed": self.seed, "dtype": self.dtype.name}
 
 
@@ -742,6 +873,11 @@ class UniformUnitScaling(Initializer):
 @deprecation.deprecated_endpoints("initializers.variance_scaling",
                                   "variance_scaling_initializer")
 class VarianceScaling(Initializer):
+  # [CLASS DOC]
+  # Initializer whose spread adapts to the weight shape: variance is scale divided by fan-in,
+  # fan-out or their average, using a truncated normal, untruncated normal or uniform
+  # distribution. Stores scale, mode, distribution, seed and a floating point default dtype.
+  # Base class of the Glorot initializers; also used by the LeCun and He factory functions.
   """Initializer capable of adapting its scale to the shape of weights tensors.
 
   @compatibility(TF2)
@@ -836,6 +972,13 @@ class VarianceScaling(Initializer):
                distribution="truncated_normal",
                seed=None,
                dtype=dtypes.float32):
+    # [FUNCTION DOC]
+    # Constructor. scale (default 1) must be a positive number; mode (default fan-in) must be
+    # one of fan-in, fan-out, fan-avg; distribution (default truncated normal) is matched case
+    # insensitively and must be normal (deprecated alias of truncated normal), uniform,
+    # truncated normal or untruncated normal; seed is an optional integer; dtype (default
+    # float32) must be a floating point type. Raises a value error for any invalid argument.
+    # Stores the (lower-cased) values.
     if scale <= 0.:
       raise ValueError("Argument `scale` must be a positive float. Received: "
                        f"{scale}")
@@ -856,6 +999,13 @@ class VarianceScaling(Initializer):
     self.dtype = _assert_float_dtype(dtypes.as_dtype(dtype))
 
   def __call__(self, shape, dtype=None, partition_info=None):
+    # [FUNCTION DOC]
+    # Returns a tensor of the given shape. The scale is divided by the fan-in, fan-out or their
+    # average (each at least one) as chosen by mode, where the fans come from the full shape in
+    # partition_info when given, else from shape. For normal / truncated normal the standard
+    # deviation is the square root of the scale divided by 0.8796 (correcting for truncation);
+    # for untruncated normal it is the square root of the scale; for uniform the range limit is
+    # the square root of three times the scale. dtype is optional (defaults to the stored one).
     if dtype is None:
       dtype = self.dtype
     scale = self.scale
@@ -883,6 +1033,8 @@ class VarianceScaling(Initializer):
           shape, -limit, limit, dtype, seed=self.seed)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with scale, mode, distribution, seed and the dtype name.
     return {
         "scale": self.scale,
         "mode": self.mode,
@@ -896,6 +1048,10 @@ class VarianceScaling(Initializer):
 @deprecation.deprecated_endpoints("initializers.orthogonal",
                                   "orthogonal_initializer")
 class Orthogonal(Initializer):
+  # [CLASS DOC]
+  # Initializer producing a (reshaped) orthogonal matrix from the QR decomposition of a random
+  # normal matrix, multiplied by a gain. Stores gain, seed and a floating point default dtype.
+  # Exported to the v1 API (orthogonal_initializer).
   """Initializer that generates an orthogonal matrix.
 
   If the shape of the tensor to initialize is two-dimensional, it is initialized
@@ -924,11 +1080,22 @@ class Orthogonal(Initializer):
                    "Call initializer instance with the dtype argument instead "
                    "of passing it to the constructor", "dtype")
   def __init__(self, gain=1.0, seed=None, dtype=dtypes.float32):
+    # [FUNCTION DOC]
+    # Constructor. gain (default 1) is a multiplicative factor; seed is an optional integer;
+    # dtype (default float32, constructor use deprecated) must be a floating point type,
+    # otherwise a value error is raised. Stores all of them.
     self.gain = gain
     self.dtype = _assert_float_dtype(dtypes.as_dtype(dtype))
     self.seed = seed
 
   def __call__(self, shape, dtype=None, partition_info=None):
+    # [FUNCTION DOC]
+    # Returns an orthogonal tensor of the given shape (at least two dimensions, otherwise a
+    # value error is raised). All dimensions but the last are flattened into rows; a random
+    # normal matrix (transposed shape if rows are fewer than columns) is QR-decomposed, the
+    # sign of the diagonal of R is applied to Q to make it uniform, Q is transposed back when
+    # needed, reshaped to shape and multiplied by the gain. dtype is optional; partition_info is
+    # ignored.
     if dtype is None:
       dtype = self.dtype
     # Check the shape
@@ -960,12 +1127,19 @@ class Orthogonal(Initializer):
     return self.gain * array_ops.reshape(q, shape)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with gain, seed and the dtype name.
     return {"gain": self.gain, "seed": self.seed, "dtype": self.dtype.name}
 
 
 # Note these haven't been ported to TF2.0. They are not currently visible and
 # the tests are non trivial to port
 class ConvolutionDeltaOrthogonal(Initializer):
+  # [CLASS DOC]
+  # Initializer for 1D, 2D or 3D convolution kernels (shape rank 3 to 5) where only the center
+  # spatial position holds an orthogonal matrix and all other positions are zero. Stores gain,
+  # seed and a floating point default dtype. Not exported to the public API (see the comment
+  # above the class).
   """Initializer that generates a delta orthogonal kernel for ConvNets.
 
   The shape of the tensor must have length 3, 4 or 5. The number of input
@@ -988,11 +1162,22 @@ class ConvolutionDeltaOrthogonal(Initializer):
   """
 
   def __init__(self, gain=1.0, seed=None, dtype=dtypes.float32):
+    # [FUNCTION DOC]
+    # Constructor. gain (default 1) scales the kernel; seed is an optional integer; dtype
+    # (default float32) must be a floating point type, otherwise a value error is raised.
+    # Stores all of them.
     self.gain = gain
     self.dtype = _assert_float_dtype(dtypes.as_dtype(dtype))
     self.seed = seed
 
   def __call__(self, shape, dtype=None, partition_info=None):
+    # [FUNCTION DOC]
+    # Returns a kernel tensor of the given shape (rank 3, 4 or 5; the last two entries are input
+    # and output filters). Raises a value error for another rank or when input filters exceed
+    # output filters. Builds an orthogonal square matrix of size output filters from a QR
+    # decomposition of a random normal matrix, keeps its first input-filters rows, scales by gain
+    # and places it at the center spatial index of an otherwise zero tensor of the given shape.
+    # dtype is optional; partition_info is ignored.
     if dtype is None:
       dtype = self.dtype
     # Check the shape
@@ -1031,10 +1216,16 @@ class ConvolutionDeltaOrthogonal(Initializer):
     return weight
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with gain, seed and the dtype name.
     return {"gain": self.gain, "seed": self.seed, "dtype": self.dtype.name}
 
 
 class ConvolutionOrthogonal(Initializer):
+  # [CLASS DOC]
+  # Abstract base class of the 1D, 2D and 3D orthogonal convolution kernel initializers.
+  # Stores gain, seed and a floating point default dtype, and offers helpers to build random
+  # orthogonal matrices and symmetric projection matrices. Subclasses implement the call.
   """Initializer that generates orthogonal kernel for ConvNets.
 
   Base class used to construct 1D, 2D and 3D orthogonal kernels for convolution.
@@ -1053,18 +1244,32 @@ class ConvolutionOrthogonal(Initializer):
   """
 
   def __init__(self, gain=1.0, seed=None, dtype=dtypes.float32):
+    # [FUNCTION DOC]
+    # Constructor. gain (default 1) scales the kernel; seed is an optional integer; dtype
+    # (default float32) must be a floating point type, otherwise a value error is raised.
+    # Stores all of them.
     self.gain = gain
     self.dtype = _assert_float_dtype(dtypes.as_dtype(dtype))
     self.seed = seed
 
   def __call__(self, shape, dtype=None, partition_info=None):
+    # [FUNCTION DOC]
+    # Abstract call: always raises a not-implemented error; concrete 1D, 2D and 3D subclasses
+    # provide the real behavior.
     raise NotImplementedError
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with gain, seed and the dtype name.
     return {"gain": self.gain, "seed": self.seed, "dtype": self.dtype.name}
 
   # Helper functions.
   def _orthogonal_matrix(self, n):
+    # [FUNCTION DOC]
+    # HELPER: building block for the orthogonal convolution kernels.
+    # Returns a random n by n orthogonal matrix (QR decomposition of a random normal matrix with
+    # the sign of the diagonal of R applied for uniformity). Side effect: if the stored seed is
+    # set (nonzero), it is incremented afterwards so the next call draws different numbers.
     """Construct an n x n orthogonal matrix.
 
     Args:
@@ -1083,6 +1288,12 @@ class ConvolutionOrthogonal(Initializer):
     return q
 
   def _symmetric_projection(self, n):
+    # [FUNCTION DOC]
+    # HELPER: building block for the orthogonal convolution kernels.
+    # Returns a random n by n symmetric projection matrix: takes a random orthogonal matrix,
+    # zeroes a random subset of its columns (each kept with probability one half), and returns
+    # the product of the masked matrix with its transpose. Side effect: increments the stored
+    # seed if it is set (nonzero).
     """Compute a n x n symmetric projection matrix.
 
     Args:
@@ -1102,6 +1313,11 @@ class ConvolutionOrthogonal(Initializer):
 
 
 class ConvolutionOrthogonal2D(ConvolutionOrthogonal):
+  # [CLASS DOC]
+  # Initializer for 2D convolution kernels of shape (size, size, in filters, out filters) that
+  # are orthogonal (isometric under circular padding), built by convolving random 2 by 2 blocks
+  # of projection matrices. Inherits storage and helpers from the 1D/2D/3D base class and adds
+  # 2D helpers working on mappings indexed by pairs of positions.
   """Initializer that generates a 2D orthogonal kernel for ConvNets.
 
   The shape of the tensor must have length 4. The number of input
@@ -1123,6 +1339,11 @@ class ConvolutionOrthogonal2D(ConvolutionOrthogonal):
   """
 
   def __call__(self, shape, dtype=None, partition_info=None):
+    # [FUNCTION DOC]
+    # Returns an orthogonal 2D kernel for the given shape. Raises a value error unless the shape
+    # has four entries, input filters do not exceed output filters, and the two spatial sizes are
+    # equal. Builds the kernel with the orthogonal-kernel helper and multiplies by gain.
+    # dtype is optional; partition_info is ignored.
     if dtype is None:
       dtype = self.dtype
     if len(shape) != 4:
@@ -1143,6 +1364,10 @@ class ConvolutionOrthogonal2D(ConvolutionOrthogonal):
     return kernel
 
   def _dict_to_tensor(self, x, k1, k2):
+    # [FUNCTION DOC]
+    # HELPER: assembles the 2D orthogonal kernel.
+    # Stacks a mapping from (row, column) position pairs to matrices into one tensor with k1
+    # rows and k2 columns of blocks. Returns the stacked tensor.
     """Convert a dictionary to a tensor.
 
     Args:
@@ -1158,6 +1383,11 @@ class ConvolutionOrthogonal2D(ConvolutionOrthogonal):
         array_ops_stack.stack([x[i, j] for j in range(k2)]) for i in range(k1)])
 
   def _block_orth(self, p1, p2):
+    # [FUNCTION DOC]
+    # HELPER: assembles the 2D orthogonal kernel.
+    # Given two symmetric projection matrices of equal size, returns a mapping from the four
+    # position pairs of a 2 by 2 kernel to matrices: p1 p2, p1 (I-p2), (I-p1) p2, (I-p1)(I-p2).
+    # Raises a value error if the two matrices have different shapes.
     """Construct a 2 x 2 kernel.
 
     Used to construct orthgonal kernel.
@@ -1186,6 +1416,12 @@ class ConvolutionOrthogonal2D(ConvolutionOrthogonal):
     return kernel2x2
 
   def _matrix_conv(self, m1, m2):
+    # [FUNCTION DOC]
+    # HELPER: assembles the 2D orthogonal kernel.
+    # Convolves two square grids (mappings from position pairs to n by n matrices) of side k and
+    # l, using matrix multiplication as the product, and returns a grid of side k+l-1 (a mapping
+    # from position pairs to matrices). Raises a value error if the matrix sizes of the two
+    # inputs differ.
     """Matrix convolution.
 
     Args:
@@ -1219,6 +1455,13 @@ class ConvolutionOrthogonal2D(ConvolutionOrthogonal):
     return result
 
   def _orthogonal_kernel(self, ksize, cin, cout):
+    # [FUNCTION DOC]
+    # HELPER: core of the 2D orthogonal initializer call.
+    # Builds a kernel of shape (ksize, ksize, cin, cout). Raises a value error if cin exceeds
+    # cout. For ksize one, returns the first cin rows of a random orthogonal matrix with two
+    # singleton leading axes. Otherwise convolves ksize-1 random 2 by 2 projection blocks,
+    # left-multiplies every position by the orthogonal matrix, and stacks the result.
+    # Consumes randomness and advances the stored seed.
     """Construct orthogonal kernel for convolution.
 
     Args:
@@ -1252,6 +1495,11 @@ class ConvolutionOrthogonal2D(ConvolutionOrthogonal):
 
 
 class ConvolutionOrthogonal1D(ConvolutionOrthogonal):
+  # [CLASS DOC]
+  # Initializer for 1D convolution kernels of shape (size, in filters, out filters) that are
+  # orthogonal (isometric under circular padding), built by convolving random blocks of
+  # projection matrices. Inherits storage and helpers from the base class and adds 1D helpers
+  # working on mappings indexed by a single position.
   """Initializer that generates a 1D orthogonal kernel for ConvNets.
 
   The shape of the tensor must have length 3. The number of input
@@ -1274,6 +1522,11 @@ class ConvolutionOrthogonal1D(ConvolutionOrthogonal):
   """
 
   def __call__(self, shape, dtype=None, partition_info=None):
+    # [FUNCTION DOC]
+    # Returns an orthogonal 1D kernel for the given shape. Raises a value error unless the shape
+    # has three entries and input filters do not exceed output filters. Builds the kernel with
+    # the orthogonal-kernel helper (kernel size from the first entry) and multiplies by gain.
+    # dtype is optional; partition_info is ignored.
     if dtype is None:
       dtype = self.dtype
     if len(shape) != 3:
@@ -1290,6 +1543,10 @@ class ConvolutionOrthogonal1D(ConvolutionOrthogonal):
     return kernel
 
   def _dict_to_tensor(self, x, k):
+    # [FUNCTION DOC]
+    # HELPER: assembles the 1D orthogonal kernel.
+    # Stacks a mapping from positions 0..k-1 to matrices into one tensor with k entries along
+    # the first axis. Returns the stacked tensor.
     """Convert a dictionary to a tensor.
 
     Args:
@@ -1303,6 +1560,10 @@ class ConvolutionOrthogonal1D(ConvolutionOrthogonal):
     return array_ops_stack.stack([x[i] for i in range(k)])
 
   def _block_orth(self, projection_matrix):
+    # [FUNCTION DOC]
+    # HELPER: assembles the 1D orthogonal kernel.
+    # Given a symmetric projection matrix, returns a mapping with two entries: the matrix itself
+    # at position 0 and the identity minus the matrix at position 1.
     """Construct a kernel.
 
     Used to construct orthgonal kernel.
@@ -1321,6 +1582,11 @@ class ConvolutionOrthogonal1D(ConvolutionOrthogonal):
     return kernel
 
   def _matrix_conv(self, m1, m2):
+    # [FUNCTION DOC]
+    # HELPER: assembles the 1D orthogonal kernel.
+    # Convolves two mappings (position to n by n matrix) of lengths k and l using matrix
+    # multiplication as the product, returning a mapping of length k+l-1. Raises a value error
+    # if the matrix sizes of the two inputs differ.
     """Matrix convolution.
 
     Args:
@@ -1351,6 +1617,14 @@ class ConvolutionOrthogonal1D(ConvolutionOrthogonal):
     return result
 
   def _orthogonal_kernel(self, ksize, cin, cout):
+    # [FUNCTION DOC]
+    # HELPER: core of the 1D orthogonal initializer call.
+    # KNOWN ISSUE: the docstring claims the result has shape (ksize, ksize, cin, cout), but the
+    # code returns a 3D kernel of shape (ksize, cin, cout) (copied from the 2D version).
+    # Raises a value error if cin exceeds cout. For ksize one, returns the first cin rows of a
+    # random orthogonal matrix with one leading singleton axis. Otherwise convolves ksize-1
+    # random projection blocks, left-multiplies each position by the orthogonal matrix, and
+    # stacks the result. Consumes randomness and advances the stored seed.
     """Construct orthogonal kernel for convolution.
 
     Args:
@@ -1381,6 +1655,11 @@ class ConvolutionOrthogonal1D(ConvolutionOrthogonal):
 
 
 class ConvolutionOrthogonal3D(ConvolutionOrthogonal):
+  # [CLASS DOC]
+  # Initializer for 3D convolution kernels of shape (size, size, size, in filters, out filters)
+  # that are orthogonal (isometric under circular padding), built by convolving random 2x2x2
+  # blocks of projection matrices. Inherits storage and helpers from the base class and adds 3D
+  # helpers working on mappings indexed by triples of positions.
   """Initializer that generates a 3D orthogonal kernel for ConvNets.
 
   The shape of the tensor must have length 5. The number of input
@@ -1403,6 +1682,11 @@ class ConvolutionOrthogonal3D(ConvolutionOrthogonal):
   """
 
   def __call__(self, shape, dtype=None, partition_info=None):
+    # [FUNCTION DOC]
+    # Returns an orthogonal 3D kernel for the given shape. Raises a value error unless the shape
+    # has five entries, input filters do not exceed output filters, and the three spatial sizes
+    # are equal. Builds the kernel with the orthogonal-kernel helper and multiplies by gain.
+    # dtype is optional; partition_info is ignored.
     if dtype is None:
       dtype = self.dtype
     if len(shape) != 5:
@@ -1424,6 +1708,10 @@ class ConvolutionOrthogonal3D(ConvolutionOrthogonal):
     return kernel
 
   def _dict_to_tensor(self, x, k1, k2, k3):
+    # [FUNCTION DOC]
+    # HELPER: assembles the 3D orthogonal kernel.
+    # Stacks a mapping from position triples to matrices into one tensor with k1, k2 and k3
+    # blocks along the first three axes. Returns the stacked tensor.
     """Convert a dictionary to a tensor.
 
     Args:
@@ -1441,6 +1729,13 @@ class ConvolutionOrthogonal3D(ConvolutionOrthogonal):
          for j in range(k2)]) for i in range(k1)])
 
   def _block_orth(self, p1, p2, p3):
+    # [FUNCTION DOC]
+    # HELPER: assembles the 3D orthogonal kernel.
+    # KNOWN ISSUE: the docstring title says it constructs a 3 x 3 kernel, but the code builds a
+    # 2 x 2 x 2 kernel (as the docstring return section also says).
+    # Given three symmetric projection matrices of equal size, returns a mapping from the eight
+    # binary position triples to matrices, each the product of p or (identity minus p) for the
+    # three inputs chosen by the triple. Raises a value error if the matrices differ in shape.
     """Construct a 3 x 3 kernel.
 
     Used to construct orthgonal kernel.
@@ -1465,9 +1760,16 @@ class ConvolutionOrthogonal3D(ConvolutionOrthogonal):
     kernel2x2x2 = {}
 
     def matmul(p1, p2, p3):
+      # [FUNCTION DOC]
+      # HELPER: local shortcut for the block construction.
+      # Returns the matrix product of the three given matrices, multiplied left to right.
       return math_ops.matmul(math_ops.matmul(p1, p2), p3)
 
     def cast(i, p):
+      # [FUNCTION DOC]
+      # HELPER: local shortcut for the block construction.
+      # Selects between a projection matrix and its complement: returns p when i is one and the
+      # identity minus p when i is zero (the identity matrix is taken from the enclosing scope).
       """Return p or (1-p)."""
       return i * p + (1 - i) * (eye - p)
 
@@ -1478,6 +1780,11 @@ class ConvolutionOrthogonal3D(ConvolutionOrthogonal):
     return kernel2x2x2
 
   def _matrix_conv(self, m1, m2):
+    # [FUNCTION DOC]
+    # HELPER: assembles the 3D orthogonal kernel.
+    # Convolves two cubic grids (mappings from position triples to n by n matrices) of side k and
+    # l, using matrix multiplication as the product, and returns a grid of side k+l-1. Raises a
+    # value error if the matrix sizes of the two inputs differ.
     """Matrix convolution.
 
     Args:
@@ -1516,6 +1823,13 @@ class ConvolutionOrthogonal3D(ConvolutionOrthogonal):
     return result
 
   def _orthogonal_kernel(self, ksize, cin, cout):
+    # [FUNCTION DOC]
+    # HELPER: core of the 3D orthogonal initializer call.
+    # Builds a kernel of shape (ksize, ksize, ksize, cin, cout). Raises a value error if cin
+    # exceeds cout. For ksize one, returns the first cin rows of a random orthogonal matrix with
+    # three singleton leading axes. Otherwise convolves ksize-1 random 2x2x2 projection blocks,
+    # left-multiplies every position by the orthogonal matrix, and stacks the result.
+    # Consumes randomness and advances the stored seed.
     """Construct orthogonal kernel for convolution.
 
     Args:
@@ -1555,6 +1869,10 @@ class ConvolutionOrthogonal3D(ConvolutionOrthogonal):
 @tf_export(v1=["initializers.identity"])
 @deprecation.deprecated_endpoints("initializers.identity")
 class Identity(Initializer):
+  # [CLASS DOC]
+  # Initializer producing a two dimensional identity matrix scaled by a gain. Stores gain and a
+  # floating point default dtype. Supports partitioned variables by slicing the full identity.
+  # Exported to the v1 API.
   """Initializer that generates the identity matrix.
 
   Only use for 2D matrices.
@@ -1569,10 +1887,22 @@ class Identity(Initializer):
                    "Call initializer instance with the dtype argument instead "
                    "of passing it to the constructor", "dtype")
   def __init__(self, gain=1.0, dtype=dtypes.float32):
+    # [FUNCTION DOC]
+    # Constructor. gain (default 1) multiplies the identity matrix; dtype (default float32,
+    # constructor use deprecated) must be a floating point type, otherwise a value error is
+    # raised. Stores both.
     self.gain = gain
     self.dtype = _assert_float_dtype(dtypes.as_dtype(dtype))
 
   def __call__(self, shape, dtype=None, partition_info=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the error message says the shape must be "at least two-dimensional", but the
+    # code requires exactly two dimensions (any other rank, including three or more, raises).
+    # Returns the gain times an identity matrix. The full shape is taken from partition_info
+    # when given, else from shape; it must have exactly two entries, otherwise a value error is
+    # raised. A tensor-shape object is converted to a list. With partition_info, the identity
+    # of the full shape is sliced at the partition offset to the requested shape. dtype is
+    # optional (defaults to the stored one).
     full_shape = shape if partition_info is None else partition_info.full_shape
     if len(full_shape) != 2:
       raise ValueError("The tensor to initialize, specified by argument `shape`"
@@ -1589,6 +1919,8 @@ class Identity(Initializer):
     return self.gain * initializer
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with gain and the dtype name.
     return {"gain": self.gain, "dtype": self.dtype.name}
 
 
@@ -1596,6 +1928,10 @@ class Identity(Initializer):
 @deprecation.deprecated_endpoints("glorot_uniform_initializer",
                                   "initializers.glorot_uniform")
 class GlorotUniform(VarianceScaling):
+  # [CLASS DOC]
+  # Variance scaling initializer preset: scale one, fan-average mode, uniform distribution
+  # (Xavier uniform). Only the constructor and configuration methods are specialized; calling
+  # is inherited. Exported to the v1 API.
   """The Glorot uniform initializer, also called Xavier uniform initializer.
 
   It draws samples from a uniform distribution within [-limit, limit]
@@ -1617,10 +1953,17 @@ class GlorotUniform(VarianceScaling):
                    "Call initializer instance with the dtype argument instead "
                    "of passing it to the constructor", "dtype")
   def __init__(self, seed=None, dtype=dtypes.float32):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the dtype argument is accepted (and documented) but never forwarded to the
+    # parent constructor, so the stored default dtype is always float32 regardless of input.
+    # Constructor. seed is an optional integer; initializes the parent with scale one, fan-avg
+    # mode and uniform distribution.
     super(GlorotUniform, self).__init__(
         scale=1.0, mode="fan_avg", distribution="uniform", seed=seed)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with only seed and the dtype name (the other settings are fixed).
     return {"seed": self.seed, "dtype": self.dtype.name}
 
 
@@ -1628,6 +1971,10 @@ class GlorotUniform(VarianceScaling):
 @deprecation.deprecated_endpoints("glorot_normal_initializer",
                                   "initializers.glorot_normal")
 class GlorotNormal(VarianceScaling):
+  # [CLASS DOC]
+  # Variance scaling initializer preset: scale one, fan-average mode, truncated normal
+  # distribution (Xavier normal). Only the constructor and configuration methods are
+  # specialized; calling is inherited. Exported to the v1 API.
   """The Glorot normal initializer, also called Xavier normal initializer.
 
   It draws samples from a truncated normal distribution centered on 0
@@ -1650,10 +1997,17 @@ class GlorotNormal(VarianceScaling):
                    "Call initializer instance with the dtype argument instead "
                    "of passing it to the constructor", "dtype")
   def __init__(self, seed=None, dtype=dtypes.float32):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the dtype argument is accepted (and documented) but never forwarded to the
+    # parent constructor, so the stored default dtype is always float32 regardless of input.
+    # Constructor. seed is an optional integer; initializes the parent with scale one, fan-avg
+    # mode and truncated normal distribution.
     super(GlorotNormal, self).__init__(
         scale=1.0, mode="fan_avg", distribution="truncated_normal", seed=seed)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with only seed and the dtype name (the other settings are fixed).
     return {"seed": self.seed, "dtype": self.dtype.name}
 
 
@@ -1681,6 +2035,9 @@ convolutional_orthogonal_3d = ConvolutionOrthogonal3D
 
 @tf_export(v1=["initializers.lecun_normal"])
 def lecun_normal(seed=None):
+  # [FUNCTION DOC]
+  # Factory: returns a variance scaling initializer with scale one, fan-in mode and truncated
+  # normal distribution. seed is an optional integer. No other side effects.
   """LeCun normal initializer.
 
   It draws samples from a truncated normal distribution centered on 0
@@ -1709,6 +2066,9 @@ def lecun_normal(seed=None):
 
 @tf_export(v1=["initializers.lecun_uniform"])
 def lecun_uniform(seed=None):
+  # [FUNCTION DOC]
+  # Factory: returns a variance scaling initializer with scale one, fan-in mode and uniform
+  # distribution. seed is an optional integer. No other side effects.
   """LeCun uniform initializer.
 
   It draws samples from a uniform distribution within [-limit, limit]
@@ -1736,6 +2096,9 @@ def lecun_uniform(seed=None):
 
 @tf_export(v1=["initializers.he_normal"])
 def he_normal(seed=None):
+  # [FUNCTION DOC]
+  # Factory: returns a variance scaling initializer with scale two, fan-in mode and truncated
+  # normal distribution. seed is an optional integer. No other side effects.
   """He normal initializer.
 
   It draws samples from a truncated normal distribution centered on 0
@@ -1761,6 +2124,9 @@ def he_normal(seed=None):
 
 @tf_export(v1=["initializers.he_uniform"])
 def he_uniform(seed=None):
+  # [FUNCTION DOC]
+  # Factory: returns a variance scaling initializer with scale two, fan-in mode and uniform
+  # distribution. seed is an optional integer. No other side effects.
   """He uniform variance scaling initializer.
 
   It draws samples from a uniform distribution within [-limit, limit]
@@ -1787,6 +2153,12 @@ def he_uniform(seed=None):
 
 
 def _compute_fans(shape):
+  # [FUNCTION DOC]
+  # HELPER: used by the variance scaling initializer (and tests) to size the random draws.
+  # Takes a shape (tuple of integers or tensor-shape) and returns a pair of integers (fan-in,
+  # fan-out). Empty shape gives (1, 1); one dimension gives that size for both; two dimensions
+  # give (rows, columns); higher ranks treat the last two entries as input and output depth and
+  # multiply both by the product of the remaining (spatial) dimensions. No side effects.
   """Computes the number of input and output units for a weight shape.
 
   Args:
@@ -1814,6 +2186,10 @@ def _compute_fans(shape):
 
 
 def _assert_float_dtype(dtype):
+  # [FUNCTION DOC]
+  # HELPER: validation shared by the initializer constructors.
+  # Takes a data type object; returns it unchanged if it is a floating point type, otherwise
+  # raises a value error.
   """Validate and return floating point type based on `dtype`.
 
   `dtype` must be a floating point type.
