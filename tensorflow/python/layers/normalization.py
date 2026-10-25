@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: lazy compatibility alias module for the legacy batch normalization layer.
+# Creates a lazy loader for the legacy normalization module of the separate tf_keras package, so
+# that package is imported only when an attribute is first requested. A module-level attribute hook
+# maps the class names and the functional names to the loaded implementations.
+# Import-time side effect: only creates the lazy loader, no import of tf_keras happens yet.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +32,13 @@ normalization = lazy_loader.LazyLoader(
 # pylint: disable=invalid-name
 # lazy load all the attributes until they are accessed for the first time
 def __getattr__(name):
+  # [FUNCTION DOC]
+  # HELPER: lazy-loading hook that serves this module's public names on first access.
+  # Module-level attribute hook. Input: name, the attribute being looked up. Returns the batch
+  # normalization layer class for the names BatchNormalization or BatchNorm, and the functional
+  # batch normalization function for batch_normalization or batch_norm, loading the tf_keras
+  # implementation on first use. Raises an attribute error for any other name. Side effect: first
+  # access triggers the import of the lazily loaded tf_keras module.
   if name in ['BatchNormalization', 'BatchNorm']:
     return normalization.BatchNormalization
   elif name in ['batch_normalization', 'batch_norm']:

@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: thin compatibility alias module so old import paths for the base layer keep working.
+# Re-exports the legacy layer base class, the input specification class and the two helpers that
+# switch Keras-style variable handling on or off, all taken from the legacy tf layers module under
+# the keras package. No logic of its own; the only import-time effect is importing that module.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

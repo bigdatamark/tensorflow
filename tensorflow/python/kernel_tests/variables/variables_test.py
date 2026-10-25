@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# KNOWN ISSUE: the module docstring says tests for tf.py, which does not describe the content.
+# Tests for TensorFlow variables: the Variable and VariableV1 classes, partitioned variables,
+# initialization reporting, containers and aggregation enums. Test classes run under the standard
+# TensorFlow test runner, many restricted to legacy graph mode or version 2 only. Contains a
+# small shared helper for initialized values. No import-time side effects.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -44,20 +50,38 @@ from tensorflow.python.util import compat
 
 
 def initialized_value(var):
+  # [FUNCTION DOC]
+  # HELPER: shared test utility that mimics the removed initialized-value accessor of variables.
+  # Input: var, a graph-mode variable. Builds a conditional op returning the variable's current value
+  # if the variable is already initialized, otherwise its initial value tensor. Returns that tensor.
+  # Adds ops to the default graph; no other side effects.
   return tf_cond.cond(
       variable_v1.is_variable_initialized(var), var.read_value,
       lambda: var.initial_value)
 
 
 class VariablesTestCase(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Main test case for the Variable and VariableV1 classes: initialization and naming, assignment,
+  # collections, operator overloads, device placement, proto round trips, trainable flags and
+  # save-slice info parsing. Mixes graph-only (legacy) tests, v2-only tests and parameterized tests;
+  # most create variables inside a cached session and evaluate them.
 
   @test_util.run_deprecated_v1
   def testDistributeStrategy(self):
+    # [FUNCTION DOC]
+    # Legacy graph test: a freshly created V1 variable has no distribution strategy; asserts the
+    # private strategy attribute is null.
     v = variable_v1.VariableV1(0.0)
     self.assertIsNone(v._distribute_strategy)
 
   @test_util.run_v1_only("b/120545219")
   def testInitialization(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: several shape assertions are duplicated verbatim (get_shape is checked twice).
+    # Legacy graph test: creates two scalar variables and checks default names, shared names, scalar
+    # shapes, that evaluating before initialization raises an op error about uninitialized value,
+    # and that after running the global initializer the values equal the initial values.
     with self.cached_session():
       var0 = variable_v1.VariableV1(0.0)
       self.assertEqual("Variable:0", var0.name)
@@ -86,6 +110,11 @@ class VariablesTestCase(test.TestCase, parameterized.TestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testInitializationOrder(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: shape assertions are duplicated (get_shape checked twice for each variable).
+    # Legacy graph test: a random variable, a variable initialized from its initialized value, and a
+    # third built from a sum of both; checks names and shapes, then after global initialization
+    # that the dependent variables hold the expected values (equal copy, and sum plus two).
     with self.cached_session():
       rnd = variables.Variable(random_ops.random_uniform([3, 6]), name="rnd")
       self.assertEqual("rnd:0", rnd.name)
@@ -117,6 +146,9 @@ class VariablesTestCase(test.TestCase, parameterized.TestCase):
 
   @test_util.run_deprecated_v1
   def testCyclicInitializer(self):
+    # [FUNCTION DOC]
+    # Legacy graph test: a while loop output used as initial value is returned unchanged by the
+    # private guard against uninitialized dependencies, i.e. no cycle error or rewriting.
     with self.cached_session():
       cyclic = while_loop.while_loop(
           cond=lambda i: i < 10,
@@ -128,6 +160,9 @@ class VariablesTestCase(test.TestCase, parameterized.TestCase):
 
   @test_util.run_deprecated_v1
   def testIterableV1(self):
+    # [FUNCTION DOC]
+    # Legacy graph test: iterating over a scalar or vector variable in graph mode raises a type
+    # error saying iteration is not allowed in graph mode.
     with self.assertRaisesRegex(TypeError, "not allowed.*Graph mode"):
       for _ in variables.Variable(0.0):
         pass
@@ -137,6 +172,9 @@ class VariablesTestCase(test.TestCase, parameterized.TestCase):
 
   @test_util.run_v2_only
   def testIterableV2(self):
+    # [FUNCTION DOC]
+    # Version 2 only test: iterating over a scalar variable raises a type error mentioning scalar
+    # tensor; iterating over a two-element vector variable yields its values, compared to the list.
     with self.assertRaisesRegex(TypeError, "scalar tensor"):
       for _ in variables.Variable(0.0):
         pass
@@ -147,6 +185,9 @@ class VariablesTestCase(test.TestCase, parameterized.TestCase):
 
   @test_util.run_deprecated_v1
   def testAssignments(self):
+    # [FUNCTION DOC]
+    # Legacy graph test: add, subtract and assign ops on a scalar variable; after initialization
+    # checks each op's returned value and the variable value (0, then 1, -1, 4).
     with self.cached_session():
       var = variables.Variable(0.0)
       plus_one = var.assign_add(1.0)
@@ -166,6 +207,9 @@ class VariablesTestCase(test.TestCase, parameterized.TestCase):
 
   @test_util.run_deprecated_v1
   def testResourceAssignments(self):
+    # [FUNCTION DOC]
+    # Legacy graph test: same add/subtract/assign sequence as the plain variable test but with a
+    # resource variable, running each op through the session and checking the variable value.
     with self.session():
       var = resource_variable_ops.ResourceVariable(0.0)
       plus_one = var.assign_add(1.0)
@@ -184,6 +228,9 @@ class VariablesTestCase(test.TestCase, parameterized.TestCase):
       self.assertAllClose(4.0, self.evaluate(var))
 
   def testAssignDifferentShapesEagerNotAllowed(self):
+    # [FUNCTION DOC]
+    # Eager mode: assigning an array of a different shape to a fixed-shape variable raises a value
+    # error about incompatible shapes.
     with context.eager_mode():
       var = variables.Variable(np.zeros(shape=[1, 1]))
       with self.assertRaisesRegex(ValueError, "shape.*and.*are incompatible"):
@@ -191,6 +238,9 @@ class VariablesTestCase(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testAssignDifferentShapesAllowed(self):
+    # [FUNCTION DOC]
+    # Runs in graph and eager modes: a variable created with an unknown shape accepts assignment
+    # of a differently shaped array; the value is read back after each assignment and compared.
     var = variables.Variable(np.zeros(shape=[1, 1]),
                              shape=tensor_shape.TensorShape(None))
     self.evaluate(variables.global_variables_initializer())
@@ -199,6 +249,10 @@ class VariablesTestCase(test.TestCase, parameterized.TestCase):
     self.assertAllEqual(np.zeros(shape=[2, 2]), var.read_value())
 
   def testZeroSizeStringAssign(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the session bound as sess is never used (evaluation goes through the test helper).
+    # Creates a non-trainable local string variable of size zero, runs the local initializer,
+    # assigns it its own value and asserts the assignment result is an empty list.
     with self.cached_session() as sess:
       array = variable_v1.VariableV1(
           initial_value=array_ops.zeros((0,), dtype=dtypes.string),
@@ -211,6 +265,11 @@ class VariablesTestCase(test.TestCase, parameterized.TestCase):
       self.assertEqual([], list(self.evaluate(copy_op)))
 
   def _countUpToTest(self, dtype):
+    # [FUNCTION DOC]
+    # HELPER: shared body for the count-up-to tests, parameterized by data type.
+    # Input: dtype, the integer type of the variable. Builds a variable starting at zero and a
+    # count-up-to-3 op; asserts the op returns 0, 1, 2 while the variable increments to 3, and that
+    # further runs raise an op error about reaching the limit while the variable stays at 3.
     with self.cached_session():
       zero = constant_op.constant(0, dtype=dtype)
       var = variables.Variable(zero)
@@ -238,14 +297,21 @@ class VariablesTestCase(test.TestCase, parameterized.TestCase):
 
   @test_util.run_deprecated_v1
   def testCountUpToInt32(self):
+    # [FUNCTION DOC]
+    # Legacy graph test: runs the count-up-to helper with 32-bit integers.
     self._countUpToTest(dtypes.int32)
 
   @test_util.run_deprecated_v1
   def testCountUpToInt64(self):
+    # [FUNCTION DOC]
+    # Legacy graph test: runs the count-up-to helper with 64-bit integers.
     self._countUpToTest(dtypes.int64)
 
   @test_util.run_v1_only("b/120545219")
   def testControlDepsNone(self):
+    # [FUNCTION DOC]
+    # Legacy graph test: inside a control dependency scope an ordinary constant gets the dependency,
+    # but a variable's initializer, value op and reference op have no control inputs.
     with self.cached_session():
       c = constant_op.constant(1.0)
       with ops.control_dependencies([c]):
@@ -260,17 +326,29 @@ class VariablesTestCase(test.TestCase, parameterized.TestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testControlFlow(self):
+    # [FUNCTION DOC]
+    # Legacy graph test: variables created inside both branches of a conditional can be initialized
+    # and read without initializing an outer variable; running the conditional result fails with an
+    # uninitialized error until the outer variable is initialized, after which it succeeds.
     with self.cached_session() as sess:
       v0 = variables.Variable(0, name="v0")
       var_dict = {}
 
       # Call get_variable in each of the cond clauses.
       def var_in_then_clause():
+        # [FUNCTION DOC]
+        # HELPER: true-branch callback for the conditional in the control flow test.
+        # Creates variable v1 (initial value 1), stores it in the enclosing mapping under its key and
+        # returns it added to the outer variable v0.
         v1 = variables.Variable(1, name="v1")
         var_dict["v1"] = v1
         return v1 + v0
 
       def var_in_else_clause():
+        # [FUNCTION DOC]
+        # HELPER: false-branch callback for the conditional in the control flow test.
+        # Creates variable v2 (initial value 2), stores it in the enclosing mapping under its key and
+        # returns it added to the outer variable v0.
         v2 = variables.Variable(2, name="v2")
         var_dict["v2"] = v2
         return v2 + v0
@@ -297,11 +375,21 @@ class VariablesTestCase(test.TestCase, parameterized.TestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testControlFlowInitialization(self):
+    # [FUNCTION DOC]
+    # Legacy graph test: creating a variable inside a while loop body raises a value error stating
+    # that the initializer is inside a control-flow construct.
     """Expects an error if an initializer is in a control-flow scope."""
     def cond(i, _):
+      # [FUNCTION DOC]
+      # HELPER: loop condition callback; returns whether the counter (first argument) is below 10;
+      # the second loop variable is ignored.
       return i < 10
 
     def body(i, _):
+      # [FUNCTION DOC]
+      # HELPER: loop body callback. Creates a variable from a zero scalar integer (the forbidden
+      # action under test) and returns the incremented counter with the variable's read value;
+      # the second loop variable input is ignored.
       zero = array_ops.zeros([], dtype=dtypes.int32)
       v = variables.Variable(initial_value=zero)
       return (i + 1, v.read_value())
@@ -311,6 +399,8 @@ class VariablesTestCase(test.TestCase, parameterized.TestCase):
 
   @test_util.run_deprecated_v1
   def testUseVariableAsTensor(self):
+    # [FUNCTION DOC]
+    # Legacy graph test: two scalar variables passed directly to the add op give their sum (5).
     with self.cached_session():
       var_x = variables.Variable(2.0)
       var_y = variables.Variable(3.0)
@@ -321,6 +411,9 @@ class VariablesTestCase(test.TestCase, parameterized.TestCase):
 
   @test_util.run_deprecated_v1
   def testZeroSizeVarSameAsConst(self):
+    # [FUNCTION DOC]
+    # Legacy graph test: a matrix product with a zero-size variable gives the same result as with a
+    # zero-size constant, and equals a two-by-two matrix of zeros.
     with self.cached_session():
       zero_size_var = variables.Variable(array_ops.zeros([0, 2]))
       zero_size_const = array_ops.ones([2, 0])
@@ -334,6 +427,9 @@ class VariablesTestCase(test.TestCase, parameterized.TestCase):
 
   @test_util.run_deprecated_v1
   def testCachingDevice(self):
+    # [FUNCTION DOC]
+    # Legacy graph test: a variable with a caching device keeps its own device but its value tensor is
+    # placed on the caching device; a variable without it has the same device as its initialized value.
     with self.cached_session():
       var = variables.Variable(2.0)
       self.assertEqual(var.device, initialized_value(var).device)
@@ -344,6 +440,9 @@ class VariablesTestCase(test.TestCase, parameterized.TestCase):
 
   @test_util.run_deprecated_v1
   def testCollections(self):
+    # [FUNCTION DOC]
+    # Legacy graph test: checks which variables show up in the global and trainable collections for
+    # default, non-trainable, trainable and explicitly specified collections (no duplicates).
     with self.cached_session():
       var_x = variable_v1.VariableV1(2.0)
       var_y = variable_v1.VariableV1(2.0, trainable=False)
@@ -360,6 +459,9 @@ class VariablesTestCase(test.TestCase, parameterized.TestCase):
 
   @test_util.run_deprecated_v1
   def testCollectionsWithScope(self):
+    # [FUNCTION DOC]
+    # Legacy graph test: variables created in two name scopes are filtered by scope name when listing
+    # global and trainable variables.
     with self.cached_session():
       with ops.name_scope("scope_1"):
         var_x = variable_v1.VariableV1(2.0)
@@ -375,6 +477,9 @@ class VariablesTestCase(test.TestCase, parameterized.TestCase):
       self.assertEqual([var_y], variables.trainable_variables("scope_2"))
 
   def testOperatorWrapping(self):
+    # [FUNCTION DOC]
+    # Checks that each wrapped-function attribute (name, doc and similar) of the variable addition
+    # operator equals that of the tensor addition operator.
     for attr in functools.WRAPPER_ASSIGNMENTS:
       self.assertEqual(
           getattr(variables.Variable.__add__, attr),
@@ -382,6 +487,10 @@ class VariablesTestCase(test.TestCase, parameterized.TestCase):
 
   @test_util.run_deprecated_v1
   def testOperators(self):
+    # [FUNCTION DOC]
+    # Legacy graph test: applies arithmetic, reflected arithmetic, comparison, negation, absolute
+    # value, modulo, boolean logic, invert, slicing and matrix multiplication operators to variables
+    # and checks the evaluated results against hand-computed values.
     with self.cached_session():
       var_f = variables.Variable([2.0])
       add = var_f + 0.0
@@ -456,6 +565,10 @@ class VariablesTestCase(test.TestCase, parameterized.TestCase):
 
   @test_util.run_deprecated_v1
   def testSession(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the name suggests session behavior but it only initializes a variable and checks
+    # its value; the session bound as sess is unused.
+    # Legacy graph test: creates a vector variable, initializes and evaluates it.
     with self.cached_session() as sess:
       var = variables.Variable([1, 12])
       self.evaluate(variables.global_variables_initializer())
@@ -463,6 +576,9 @@ class VariablesTestCase(test.TestCase, parameterized.TestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testColocation(self):
+    # [FUNCTION DOC]
+    # Legacy graph test: an assign op created under a different device scope than its variable is
+    # colocated with the variable (device and colocation group of the variable).
     with ops.device("/job:ps"):
       var = variable_v1.VariableV1(0, name="v")
     with ops.device("/job:worker/task:7"):
@@ -472,6 +588,10 @@ class VariablesTestCase(test.TestCase, parameterized.TestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testInitializerFunction(self):
+    # [FUNCTION DOC]
+    # Legacy graph test: a variable created from an initializer callable has the right shape and
+    # initial value but fails with a failed-precondition error until initialized; a second variable
+    # initialized from the negation of the first's initialized value matches shape and negated value.
     value = [[-42], [133.7]]
     shape = [2, 1]
     with self.cached_session():
@@ -496,6 +616,9 @@ class VariablesTestCase(test.TestCase, parameterized.TestCase):
       self.assertAllClose(np.negative(value), self.evaluate(v2))
 
   def testConstraintArg(self):
+    # [FUNCTION DOC]
+    # A callable constraint is stored on the variable; a non-callable constraint (zero) raises a
+    # value error.
     constraint = lambda x: x
     v = variables.Variable(
         lambda: constant_op.constant(1.),
@@ -510,6 +633,9 @@ class VariablesTestCase(test.TestCase, parameterized.TestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testNoRefDataRace(self):
+    # [FUNCTION DOC]
+    # Legacy graph test: chained variables each initialized from the previous one's initialized value
+    # plus two get the expected values after one global initialization.
     with self.cached_session():
       a = variables.Variable([1, 2, 3], dtype=dtypes.float32)
       b = variables.Variable(initialized_value(a) + 2)
@@ -521,6 +647,9 @@ class VariablesTestCase(test.TestCase, parameterized.TestCase):
 
   @test_util.run_deprecated_v1
   def testInitializerFunctionDevicePlacement(self):
+    # [FUNCTION DOC]
+    # Legacy graph test: a variable created under a device scope has that device and is colocated
+    # with itself; its initializer inputs are colocated too, as also for one created without a scope.
     with self.cached_session():
       initializer = lambda: constant_op.constant(42.0)
       with ops.device("/cpu:100"):
@@ -540,6 +669,11 @@ class VariablesTestCase(test.TestCase, parameterized.TestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testVariableDefInitializedInstances(self):
+    # [FUNCTION DOC]
+    # Legacy graph test: a variable restored from a variable definition message without an initial
+    # value can still compute initialized value (3), does not re-run the initializer once assigned,
+    # and when the initial-value-name field is cleared it round trips to the same message but
+    # using its initialized value raises a value error.
     with ops.Graph().as_default(), self.cached_session() as sess:
       v_def = variables.Variable(
           initial_value=constant_op.constant(3.0)).to_proto()
@@ -566,6 +700,9 @@ class VariablesTestCase(test.TestCase, parameterized.TestCase):
         self.evaluate(initialized_value(v))
 
   def testTrainableInProto(self):
+    # [FUNCTION DOC]
+    # Checks the trainable flag survives a round trip through the variable definition message for
+    # both trainable and non-trainable variables.
     with ops.Graph().as_default():
       non_trainable_variable = variables.Variable(
           trainable=False,
@@ -583,6 +720,9 @@ class VariablesTestCase(test.TestCase, parameterized.TestCase):
           .trainable)
 
   def testSynchronizationAndAggregationSaved(self):
+    # [FUNCTION DOC]
+    # Checks synchronization (none) and aggregation (only first replica) are kept on the variable
+    # and again after a round trip through the variable definition message.
     with ops.Graph().as_default():
       original_variable = variables.Variable(
           initial_value=constant_op.constant(10.0),
@@ -603,6 +743,9 @@ class VariablesTestCase(test.TestCase, parameterized.TestCase):
 
   @test_util.run_deprecated_v1
   def testLoad(self):
+    # [FUNCTION DOC]
+    # Legacy graph test: the load method overwrites a zero matrix variable with ones; verified by
+    # evaluation.
     with self.cached_session():
       var = variables.Variable(np.zeros((5, 5), np.float32))
       self.evaluate(variables.global_variables_initializer())
@@ -612,16 +755,27 @@ class VariablesTestCase(test.TestCase, parameterized.TestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testRepr(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the expected string includes a reference-dtype suffix, which only holds for
+    # legacy reference variables (hence the v1-only restriction).
+    # Legacy graph test: checks the exact text representation of a named V1 matrix variable.
     var = variable_v1.VariableV1(np.zeros((5, 5), np.float32), name="noop")
     self.assertEqual(
         "<tf.Variable 'noop:0' shape=(5, 5) dtype=float32_ref>",
         repr(var))
 
   def testVariableNamesPreserveNameScopesWithFunction(self):
+    # [FUNCTION DOC]
+    # Creates a variable the first time a traced function is run inside a name scope and checks the
+    # variable name keeps the scope prefix (foo/bar:0), invoked inside the default graph context.
     v = None
 
     @def_function.function
     def create_variable():
+      # [FUNCTION DOC]
+      # HELPER: traced function used by the name scope test. Inside a name scope, creates the
+      # enclosing variable only on the first call, then asserts its name has the scope prefix.
+      # Takes no input and returns nothing; mutates the enclosing variable binding.
       with ops.name_scope("foo"):
         nonlocal v
         if v is None:
@@ -632,6 +786,10 @@ class VariablesTestCase(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(variable_v1.VariableV1, variables.Variable)
   def testTrainableVariable(self, cls):
+    # [FUNCTION DOC]
+    # Parameterized over the V1 and V2 variable classes: a default variable is trainable; with
+    # on-read synchronization it defaults to non-trainable; an explicit trainable flag overrides that
+    # in either direction. Input cls is the variable class under test.
     v1 = cls(1.0)
     self.assertEqual(True, v1.trainable)
 
@@ -647,6 +805,8 @@ class VariablesTestCase(test.TestCase, parameterized.TestCase):
     self.assertEqual(False, v4.trainable)
 
   def testSaveSliceInfoFromSpecPasses(self):
+    # [FUNCTION DOC]
+    # Round trip: parsing the spec string of a save slice info yields an object with the same spec.
     save_slice_info = variables.Variable.SaveSliceInfo(
         full_name="foo",
         full_shape=[2, 3, 4],
@@ -666,18 +826,29 @@ class VariablesTestCase(test.TestCase, parameterized.TestCase):
       dict(spec="0 a,0:0:0", error_message="var_offset must be an integer"),
       dict(spec="0 0,a:0:0", error_message="var_shape must be an integer"))
   def testSaveSliceInfoFromSpecFails(self, spec, error_message):
+    # [FUNCTION DOC]
+    # Parameterized over malformed spec strings: each makes the spec parser raise a value error whose
+    # message matches the given pattern. Inputs: spec, the bad string; error_message, expected text.
     with self.assertRaisesRegex(ValueError, error_message):
       variables.Variable.SaveSliceInfo.from_spec(spec)
 
 
 class IsInitializedTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for reporting uninitialized variables and training with zero-size variables, each in its
+  # own graph with a session.
 
   def testNoVars(self):
+    # [FUNCTION DOC]
+    # With no variables, the uninitialized-variable report is empty.
     with ops.Graph().as_default(), self.cached_session() as sess:
       uninited = variables.report_uninitialized_variables()
       self.assertEqual(0, self.evaluate(uninited).size)
 
   def testAssertVariablesInitialized(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: name says assert but it tests the report of uninitialized variable names.
+    # Two variables are reported by name (v, w) before the global initializer and none afterwards.
     with ops.Graph().as_default(), self.cached_session() as sess:
       v = variables.Variable([1, 2], name="v")
       w = variables.Variable([3, 4], name="w")
@@ -689,6 +860,9 @@ class IsInitializedTest(test.TestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testVariableList(self):
+    # [FUNCTION DOC]
+    # Legacy graph test: report lists both names, then only v after initializing w, then nothing
+    # after initializing v.
     with ops.Graph().as_default(), self.cached_session() as sess:
       v = variable_v1.VariableV1([1, 2], name="v")
       w = variable_v1.VariableV1([3, 4], name="w")
@@ -700,6 +874,8 @@ class IsInitializedTest(test.TestCase):
       self.assertEqual(0, self.evaluate(uninited).size)
 
   def testZeroSizeVarInitialized(self):
+    # [FUNCTION DOC]
+    # A zero-size variable is not reported as uninitialized after its initializer runs.
     with ops.Graph().as_default(), self.cached_session() as sess:
       v = variables.Variable(array_ops.zeros([0, 2]), name="v")
       uninited = variables.report_uninitialized_variables()
@@ -707,6 +883,9 @@ class IsInitializedTest(test.TestCase):
       self.assertEqual(0, self.evaluate(uninited).size)
 
   def testTrainingWithZeroSizeVar(self):
+    # [FUNCTION DOC]
+    # Gradient descent (rate 0.1) on an objective using a zero-size variable runs; the ones matrix
+    # variable is updated from ones to 0.9 everywhere.
     with ops.Graph().as_default(), self.cached_session() as sess:
       a = variables.Variable(array_ops.zeros([0, 2]))
       b = variables.Variable(array_ops.ones([2, 2]))
@@ -721,12 +900,19 @@ class IsInitializedTest(test.TestCase):
 
 @test_util.run_v1_only("b/120545219")
 class ObsoleteIsInitializedTest(test.TestCase):
+  # [CLASS DOC]
+  # Legacy-graph-only tests (class decorated) for the obsolete assert-variables-initialized helper.
 
   def testNoVars(self):
+    # [FUNCTION DOC]
+    # With no variables in the graph the obsolete helper returns a null value.
     with ops.Graph().as_default():
       self.assertEqual(None, variables.assert_variables_initialized())
 
   def testVariables(self):
+    # [FUNCTION DOC]
+    # The helper's result raises an op error about uninitialized value before the global initializer
+    # and runs cleanly afterwards.
     with ops.Graph().as_default(), self.cached_session() as sess:
       v = variable_v1.VariableV1([1, 2])
       w = variable_v1.VariableV1([3, 4])
@@ -738,6 +924,9 @@ class ObsoleteIsInitializedTest(test.TestCase):
       self.evaluate(inited)
 
   def testVariableList(self):
+    # [FUNCTION DOC]
+    # The helper restricted to variable v: running its op fails while v is uninitialized, even if
+    # w is initialized, and succeeds once v is initialized.
     with ops.Graph().as_default(), self.cached_session() as sess:
       v = variable_v1.VariableV1([1, 2])
       w = variable_v1.VariableV1([3, 4])
@@ -752,8 +941,14 @@ class ObsoleteIsInitializedTest(test.TestCase):
 
 
 class PartitionedVariableTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for the partitioned variable wrapper: construction, validation errors and assignments.
 
   def testPartitionedVariable(self):
+    # [FUNCTION DOC]
+    # Builds a partitioned variable from two single-element variables given in reversed order and
+    # checks they are re-sorted by slice offset, length is 2, iteration yields them in order, and
+    # shapes of the wrapper and its concatenated tensor are two.
     with ops.Graph().as_default():
       v0 = variables.Variable([0])
       v1 = variables.Variable([1])
@@ -783,6 +978,9 @@ class PartitionedVariableTest(test.TestCase):
       self.assertEqual([2], concatenated.shape)
 
   def testPartitionedVariableFailures(self):
+    # [FUNCTION DOC]
+    # Checks that constructing a partitioned variable raises value errors for: empty variable list,
+    # variables lacking save slice info, mismatched full shapes, and a non-positive partition count.
     with ops.Graph().as_default():
       with self.assertRaisesRegex(ValueError, "empty"):
         variables.PartitionedVariable(
@@ -832,6 +1030,10 @@ class PartitionedVariableTest(test.TestCase):
             partitions=partitions)
 
   def testPartitionedVariableAssignments(self):
+    # [FUNCTION DOC]
+    # Builds two partitioned variables and checks that assign, add and subtract work from tensors,
+    # lists of tensors and from other partitioned variables, returning per-partition results that
+    # match both the returned values and the underlying variables.
     with ops.Graph().as_default(), self.cached_session():
       v0 = variables.Variable(initial_value=[0.0])
       v1 = variables.Variable(initial_value=[1.0])
@@ -910,8 +1112,13 @@ class PartitionedVariableTest(test.TestCase):
 
 
 class VariableContainerTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for container scopes applied to variables.
 
   def testContainer(self):
+    # [FUNCTION DOC]
+    # Checks the container attribute of variables created under nested container scopes: empty
+    # outside scopes, innermost scope name inside, and an explicit container overriding the scope.
     with ops.Graph().as_default():
       v0 = variables.Variable([0])
       with ops.container("l1"):
@@ -935,8 +1142,13 @@ class VariableContainerTest(test.TestCase):
 
 
 class AggregationModesTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests that the version 1 and version 2 aggregation enums agree.
 
   def testV1V2Equal(self):
+    # [FUNCTION DOC]
+    # Checks each aggregation mode (none, sum, mean, only first replica and the legacy only-first-tower
+    # alias) is equal in both enum versions in both comparison directions and has equal hashes.
     v1 = variables.VariableAggregation
     v2 = variables.VariableAggregationV2
 

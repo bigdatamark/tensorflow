@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: thin compatibility alias module for the legacy core layers.
+# Re-exports the Dense, Dropout and Flatten layer classes and their lowercase functional forms from
+# the legacy tf layers core module under the keras package, and adds the alternative names
+# FullyConnected and fully_connected for the dense layer. No logic of its own.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

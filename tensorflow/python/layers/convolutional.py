@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: thin compatibility alias module for the legacy convolution layers.
+# Re-exports the 1D, 2D and 3D convolution, separable convolution and transposed convolution layer
+# classes plus their lowercase functional forms from the legacy tf layers convolutional module
+# under the keras package, and defines extra alternative names (Convolution*, Deconv*, and
+# lowercase convolution*/deconv* forms) bound to the same objects. No logic of its own.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: shared validation and shape arithmetic utilities for the layers package.
+# Provides conversion of a channels-first/last format name into a rank-specific layout string,
+# normalization and validation of tuple, data format and padding arguments, computation of output
+# or input lengths for convolutions and transposed convolutions, and conditional helpers that
+# evaluate one of two callables depending on a possibly constant boolean predicate.
+# No import-time side effects beyond imports.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,6 +27,12 @@ from tensorflow.python.ops import variables
 
 
 def convert_data_format(data_format, ndim):
+  # [FUNCTION DOC]
+  # Maps a data format name and tensor rank to the layout string used by TensorFlow ops.
+  # Inputs: data_format, either channels_last or channels_first; ndim, the tensor rank (3, 4 or 5).
+  # Returns NWC, NHWC or NDHWC for channels_last and NCW, NCHW or NCDHW for channels_first.
+  # Raises a value error if the rank is not 3, 4 or 5, or if the format name is neither of the two.
+  # No side effects.
   if data_format == 'channels_last':
     if ndim == 3:
       return 'NWC'
@@ -46,6 +59,14 @@ def convert_data_format(data_format, ndim):
 
 
 def normalize_tuple(value, n, name):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the integer check only tests convertibility, so non-integer numbers such as floats
+  # are accepted and returned unchanged, although the docstring promises a tuple of integers.
+  # Validates an argument and turns it into a tuple of integers of a fixed length.
+  # Inputs: value, a single integer (repeated n times) or an iterable of n integer-convertible items;
+  # n, the required tuple size; name, the argument name used only in error messages.
+  # Returns the resulting tuple. Raises a value error if value is not iterable, has the wrong length,
+  # or contains an element that cannot be converted to an integer.
   """Transforms a single integer or iterable of integers into an integer tuple.
 
   Args:
@@ -85,6 +106,10 @@ def normalize_tuple(value, n, name):
 
 
 def normalize_data_format(value):
+  # [FUNCTION DOC]
+  # Lowercases a data format string and validates it. Input: value, a string. Returns the lowercase
+  # form, which is channels_first or channels_last. Raises a value error for any other string.
+  # A non-string input fails with an attribute error from the lowercase call.
   data_format = value.lower()
   if data_format not in {'channels_first', 'channels_last'}:
     raise ValueError('The `data_format` argument must be one of '
@@ -94,6 +119,9 @@ def normalize_data_format(value):
 
 
 def normalize_padding(value):
+  # [FUNCTION DOC]
+  # Lowercases a padding string and validates it. Input: value, a string. Returns valid or same.
+  # Raises a value error for any other string. A non-string input fails with an attribute error.
   padding = value.lower()
   if padding not in {'valid', 'same'}:
     raise ValueError('The `padding` argument must be one of "valid", "same". '
@@ -102,6 +130,12 @@ def normalize_padding(value):
 
 
 def conv_output_length(input_length, filter_size, padding, stride, dilation=1):
+  # [FUNCTION DOC]
+  # Computes the output length of a convolution along one dimension. Inputs: input_length, integer
+  # or nothing; filter_size; padding, one of same, valid, full; stride; dilation, default 1.
+  # Returns nothing if input_length is nothing; otherwise the dilated-filter output length divided
+  # by the stride, rounded up. Uses an assertion (an assertion error, not a value error) for an
+  # unsupported padding string. No side effects.
   """Determines output length of a convolution given input length.
 
   Args:
@@ -128,6 +162,11 @@ def conv_output_length(input_length, filter_size, padding, stride, dilation=1):
 
 
 def conv_input_length(output_length, filter_size, padding, stride):
+  # [FUNCTION DOC]
+  # Computes the input length that a convolution would need to produce a given output length.
+  # Inputs: output_length (integer or nothing), filter_size, padding (same, valid or full), stride.
+  # Returns nothing if output_length is nothing, else the input length. Assertion error on a bad
+  # padding string. No side effects.
   """Determines input length of a convolution given output length.
 
   Args:
@@ -152,6 +191,13 @@ def conv_input_length(output_length, filter_size, padding, stride):
 
 
 def deconv_output_length(input_length, filter_size, padding, stride):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says padding is one of same, valid, full, but no validation is done:
+  # any other string silently behaves like same padding.
+  # Computes the output length of a transposed convolution along one dimension. Inputs: input_length
+  # (integer or nothing), filter_size, padding, stride. Returns nothing if input_length is nothing;
+  # otherwise the length scaled by stride, plus the filter overhang for valid padding or minus the
+  # overlap for full padding.
   """Determines output length of a transposed convolution given input length.
 
   Args:
@@ -174,6 +220,14 @@ def deconv_output_length(input_length, filter_size, padding, stride):
 
 
 def smart_cond(pred, true_fn=None, false_fn=None, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: true_fn and false_fn default to nothing, so calling without them fails later.
+  # Chooses between two callables by a predicate. Inputs: pred, a boolean, tensor or variable;
+  # true_fn and false_fn, callables; name, optional name for the conditional op. If pred is a
+  # variable, always builds a graph conditional op. Otherwise delegates to the framework smart
+  # conditional, which calls just one callable when pred is a constant and builds a conditional op
+  # when it is dynamic. Returns the chosen callable's result. Raises a type error (from the
+  # delegate) if a callable is not callable.
   """Return either `true_fn()` if predicate `pred` is true else `false_fn()`.
 
   If `pred` is a bool or has a constant value, we return either `true_fn()`
@@ -200,6 +254,11 @@ def smart_cond(pred, true_fn=None, false_fn=None, name=None):
 
 
 def constant_value(pred):
+  # [FUNCTION DOC]
+  # Returns the boolean value of a predicate when it is statically known. Input: pred, a boolean,
+  # the integer 1 or 0 (converted to true or false), a tensor or a variable. Returns true or false
+  # for constants, and nothing for variables or tensors with dynamic values. Raises a type error
+  # (from the delegate) for unsupported types.
   """Return the bool value for `pred`, or None if `pred` had a dynamic value.
 
     Args:

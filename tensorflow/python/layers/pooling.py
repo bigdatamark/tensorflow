@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: thin compatibility alias module for the legacy pooling layers.
+# Re-exports average and max pooling layer classes (1D, 2D, 3D) and their lowercase functional
+# forms from the legacy tf layers pooling module under the keras package, and defines short
+# alternative names (AvgPool2D, MaxPool2D, avg_pool2d, max_pool2d) for the 2D variants.
+# No logic of its own.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

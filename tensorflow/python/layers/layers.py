@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: aggregation module that gathers the public legacy layers API in one namespace.
+# Imports (only for re-export) the base Layer class, the core layers (Dense, Dropout, Flatten), the
+# convolution layers, and the pooling layers together with their functional forms from the sibling
+# modules of this package. Defines no new code. Batch normalization is deliberately not imported
+# here; it lives in the separate lazily loaded normalization module.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
