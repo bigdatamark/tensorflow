@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Utilities for warm-starting a TF1-style graph from a checkpoint. Exposes the VocabInfo
+# record (exported as the train.VocabInfo compat.v1 name) describing old/new vocabulary
+# files, and the warm_start function (exported as train.warm_start) which initializes
+# selected variables from a checkpoint, optionally renaming variables or remapping rows or
+# columns of vocabulary-backed variables. Private helpers infer variable names, group
+# partitioned variables, detect object-based checkpoint key names and load vocabulary-remapped
+# initial values. Import-time side effect: API export registration only.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -40,6 +48,13 @@ class VocabInfo(
         "backup_initializer",
         "axis",
     ])):
+  # [CLASS DOC]
+  # Immutable record (named tuple) with seven fields describing how a vocabulary-backed
+  # variable maps between an old checkpoint and the new model: new_vocab (path), new_vocab_size,
+  # num_oov_buckets, old_vocab (path), old_vocab_size (-1 means all), backup_initializer
+  # (initializer for new entries, nothing means zeros) and axis (0 for rows, 1 for columns).
+  # Created by users and passed to warm_start in a mapping keyed by variable name. The
+  # constructor validates the axis.
   """Vocabulary information for warm-starting.
 
   See `tf.estimator.WarmStartSettings` for examples of using
@@ -113,6 +128,13 @@ class VocabInfo(
               old_vocab_size=-1,
               backup_initializer=None,
               axis=0):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the class docstring lists old_vocab_size as optional but the default is -1
+    # (meaning the whole old vocabulary), and its Example Usage text is mis-indented.
+    # Constructor of the named tuple. Inputs: new_vocab, new_vocab_size, num_oov_buckets,
+    # old_vocab (required), old_vocab_size (default -1 = use all), backup_initializer (default
+    # nothing, meaning zeros) and axis (default 0). Returns the new record with the fields in
+    # that order. Raises a value error if axis is not 0 or 1.
     if axis != 0 and axis != 1:
       raise ValueError("The only supported values for the axis argument are 0 "
                        "and 1.  Provided axis: {}".format(axis))
@@ -130,6 +152,13 @@ class VocabInfo(
 
 
 def _infer_var_name(var):
+  # [FUNCTION DOC]
+  # HELPER: determines the saved name of a variable for warm_start.
+  # KNOWN ISSUE: the docstring omits that a type error is raised when the list maps to more
+  # than one saveable name.
+  # Input: a list holding a variable, or slices of one variable, or a partitioned variable.
+  # Returns the single checkpoint name those objects share (a string). Raises a type error
+  # if more than one distinct name results.
   """Returns name of the `var`.
 
   Args:
@@ -151,6 +180,12 @@ def _infer_var_name(var):
 
 
 def _get_var_info(var, prev_tensor_name=None):
+  # [FUNCTION DOC]
+  # HELPER: normalizes a variable argument for warm_start's checkpoint initialization.
+  # Inputs: var (a variable, a list of slices of one variable, or a partitioned variable) and
+  # prev_tensor_name (optional checkpoint tensor name; if empty the variable's own name is
+  # used). Returns a pair: the checkpoint tensor name and the variable (a partitioned variable
+  # is replaced by its list of slices). Raises a type error for any other kind of input.
   """Helper method for standarizing Variable and naming.
 
   Args:
@@ -196,6 +231,19 @@ def _warm_start_var_with_vocab(var,
                                prev_tensor_name=None,
                                initializer=None,
                                axis=0):
+  # [FUNCTION DOC]
+  # HELPER: vocabulary-aware branch of warm_start.
+  # KNOWN ISSUE: the missing-argument error message ends with a closing brace instead of a
+  # bracket, and the docstring does not mention the type error for unsupported variables or the
+  # value error for a bad axis.
+  # Inputs: var (variable, list of slices or partitioned variable), current vocab path and size,
+  # prev_ckpt (checkpoint directory or file), prev_vocab_path, previous_vocab_size (-1 = all),
+  # current_oov_buckets, prev_tensor_name (optional, defaults to the variable's name),
+  # initializer (optional, for missing entries) and axis (0 rows, 1 columns).
+  # For each slice builds a matrix-remapping initializer reading the checkpoint, evaluates it
+  # for the slice's shape (and partition info), and replaces the slice's initializer operation
+  # with an assignment of that value. Returns nothing. Raises a value error if the required
+  # paths, size or checkpoint are empty or axis is invalid, and a type error for a bad var.
   """Warm-starts given variable from `prev_tensor_name` tensor in `prev_ckpt`.
 
   Use this method when the `var` is backed by vocabulary. This method stitches
@@ -309,6 +357,13 @@ def _warm_start_var_with_vocab(var,
 
 
 def _get_grouped_variables(vars_to_warm_start):
+  # [FUNCTION DOC]
+  # HELPER: selects and groups the variables for warm_start.
+  # Input: vars_to_warm_start, a regex string or nothing (matches trainable variables), a list
+  # of strings (scopes matched within global variables) or a list of variables. Returns a
+  # mapping from full variable name to the list of variables (or slices) with that name; slices
+  # of a partitioned variable are grouped under one name. Raises a value error for an unsupported
+  # type or a list of mixed types. Side effect: logging.
   """Collects and groups (possibly partitioned) variables into a dictionary.
 
   The variables can be provided explicitly through vars_to_warm_start, or they
@@ -364,6 +419,12 @@ def _get_grouped_variables(vars_to_warm_start):
 
 
 def _get_object_checkpoint_renames(path, variable_names):
+  # [FUNCTION DOC]
+  # HELPER: lets warm_start read object-based checkpoints.
+  # Inputs: path (checkpoint directory or file) and variable_names (iterable of names).
+  # Reads the object-graph key mapping; if the checkpoint is name-based (not-found error)
+  # returns an empty mapping. Otherwise returns a mapping from each variable name to its
+  # checkpoint key. Raises a value error if some names are missing from the checkpoint.
   """Returns a dictionary mapping variable names to checkpoint keys.
 
   The warm-starting utility expects variable names to match with the variable
@@ -407,6 +468,18 @@ def warm_start(ckpt_to_initialize_from,
                vars_to_warm_start=".*",
                var_name_to_vocab_info=None,
                var_name_to_prev_var_name=None):
+  # [FUNCTION DOC]
+  # Public entry point: initializes variables of the current graph from a checkpoint.
+  # Inputs: ckpt_to_initialize_from (checkpoint directory or file), vars_to_warm_start (regex
+  # string, list of scopes, list of variables or nothing; default regex matching all trainable
+  # variables), var_name_to_vocab_info (optional mapping from names to vocabulary records) and
+  # var_name_to_prev_var_name (optional mapping from names to checkpoint names; when empty it is
+  # derived from object-based checkpoints). Variables with vocabulary info are remapped through
+  # the vocabulary helper; the rest are batched into checkpoint initialization calls, split
+  # whenever two variables would load from the same checkpoint tensor. When vars_to_warm_start is
+  # nothing only vocabulary variables are warm-started.
+  # Returns nothing. Raises a value error if any name given in the rename or vocabulary
+  # mappings was not used. Side effects: replaces variable initializers, logs progress.
   """Warm-starts a model using the given settings.
 
   If you are using a tf.estimator.Estimator, this will automatically be called

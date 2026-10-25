@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Legacy (TF1 / compat.v1) loss scaling classes for mixed precision training: the abstract
+# LossScale base, FixedLossScale (constant value), DynamicLossScale (grows after a run of
+# finite-gradient steps, shrinks on nonfinite gradients), plus the get factory that converts
+# an identifier (number, the word "dynamic", an instance or nothing) into a loss scale object.
+# Private helpers check gradient finiteness and conditionally assign variables.
+# Import-time side effects: classes are registered under the compat.v1 mixed_precision and
+# train.experimental API names and some endpoints are marked deprecated.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -41,6 +49,14 @@ from tensorflow.python.util.tf_export import tf_export
         'train.experimental.LossScale'
     ])
 class LossScale(trackable.Trackable, metaclass=abc.ABCMeta):
+  # [CLASS DOC]
+  # Abstract base class for TF1 loss scales. A loss scale is a callable object returning a
+  # scalar float32 tensor, with an update method that adjusts it from gradients, and
+  # get_config / from_config for serialization. Holds a private mapping from (variable name,
+  # graph key) to the variables it owns, and overrides the Trackable hooks so only weights
+  # belonging to the current graph (or eager mode) are saved and looked up in checkpoints.
+  # Uses an abstract-base metaclass; concrete subclasses are FixedLossScale and
+  # DynamicLossScale.
   """Base class for all TF1 loss scales.
 
   This is an abstract base class, so you cannot instantiate it directly.
@@ -75,16 +91,28 @@ class LossScale(trackable.Trackable, metaclass=abc.ABCMeta):
   """
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor with no inputs. Creates the empty mapping that later records weights added
+    # through the private add-weight method. Returns nothing.
     """Initializes the loss scale class."""
     self._weights = {}
 
   @abc.abstractmethod
   def __call__(self):
+    # [FUNCTION DOC]
+    # Abstract method: subclasses return the current loss scale as a scalar float32 tensor.
+    # Takes no inputs. The base implementation does nothing and returns nothing.
     """Returns the current loss scale as a scalar `float32` tensor."""
     pass
 
   @abc.abstractmethod
   def update(self, grads):
+    # [FUNCTION DOC]
+    # Abstract method: subclasses update the loss scale based on the unscaled gradients
+    # (a nested structure; empty entries are ignored). Subclasses return a pair of an update
+    # operation (nothing in eager mode for the documented contract) and a flag saying whether
+    # the gradients should be applied this step. The base implementation does nothing and
+    # returns nothing. Must be called in a cross-replica context under a distribution strategy.
     """Updates the value of the loss scale.
 
     The loss scale will be potentially updated, based on the value of `grads`.
@@ -121,6 +149,14 @@ class LossScale(trackable.Trackable, metaclass=abc.ABCMeta):
     pass
 
   def _add_weight(self, name, initial_value, dtype=None):
+    # [FUNCTION DOC]
+    # HELPER: used by subclasses (DynamicLossScale) to create their state variables.
+    # Creates a non-trainable resource variable with automatic synchronization and no
+    # aggregation, using the given name, initial value and optional dtype. The variable is
+    # stored under a key made of its name and the current graph key (nothing in eager mode),
+    # and any deferred checkpoint dependency with that name is resolved against it.
+    # Returns the new variable. Raises a runtime error if the same key was already added.
+    # Side effects: creates a variable and mutates the internal weight mapping.
     """Adds a weight to this loss scale.
 
     Args:
@@ -160,6 +196,12 @@ class LossScale(trackable.Trackable, metaclass=abc.ABCMeta):
   def _trackable_children(self,
                           save_type=trackable.SaveType.CHECKPOINT,
                           **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: Trackable checkpointing hook.
+    # Inputs: save_type (kind of save, defaults to checkpoint) and extra keyword arguments
+    # passed to the parent. Returns a mapping from names to trackable objects: the weights
+    # registered for the current graph (or eager mode), visited in name order, updated with
+    # the children reported by the parent class. No side effects.
     """From Trackable. Gather graph-specific weights to save."""
     if context.executing_eagerly():
       graph_key = None
@@ -175,6 +217,12 @@ class LossScale(trackable.Trackable, metaclass=abc.ABCMeta):
     return weights
 
   def _lookup_dependency(self, name, cached_dependencies=None):
+    # [FUNCTION DOC]
+    # HELPER: Trackable checkpointing hook.
+    # Inputs: name of the dependency and an optional precomputed dependency mapping. First
+    # asks the parent class; if it finds something that is returned. Otherwise returns the
+    # weight stored under that name for the current graph (or eager mode), or nothing if
+    # there is none. No side effects.
     """From Trackable. Find a weight in the current graph."""
     unconditional = super(LossScale, self)._lookup_dependency(
         name, cached_dependencies)
@@ -189,11 +237,18 @@ class LossScale(trackable.Trackable, metaclass=abc.ABCMeta):
 
   @abc.abstractmethod
   def get_config(self):
+    # [FUNCTION DOC]
+    # Abstract method: subclasses return a serializable mapping of constructor arguments.
+    # Base implementation does nothing and returns nothing.
     """Returns the config of this loss scale."""
     pass
 
   @classmethod
   def from_config(cls, config):
+    # [FUNCTION DOC]
+    # Class method: builds an instance of the calling class by passing the entries of the
+    # config mapping as named constructor arguments. Returns the new loss scale. Errors from
+    # the constructor (unknown or invalid arguments) propagate.
     """Creates the LossScale from its config."""
     return cls(**config)
 
@@ -207,6 +262,12 @@ class LossScale(trackable.Trackable, metaclass=abc.ABCMeta):
         'train.experimental.FixedLossScale'
     ])
 class FixedLossScale(LossScale):
+  # [CLASS DOC]
+  # Loss scale whose value never changes. Stores the value as a plain Python float (no
+  # tensors or variables created at construction). Calling it converts that float to a
+  # tensor; update does nothing useful and always allows gradients to be applied. The
+  # constructor is wrapped with a deprecation warning pointing to the Keras loss scale
+  # optimizer.
   """Loss scale with a fixed value.
 
   The loss scale is not updated for the lifetime of instances of this class.
@@ -218,6 +279,11 @@ class FixedLossScale(LossScale):
             'LossScaleOptimizer now has all the functionality of '
             'FixedLossScale')
   def __init__(self, loss_scale_value):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: booleans pass the type check because they are integers (true acts as one).
+    # Constructor. Input: loss_scale_value, a Python int or float that must be at least 1.
+    # Stores it as a float. Raises a value error if it is not an int or float, or if it is
+    # smaller than 1. Side effect: emits a deprecation warning when called (via decorator).
     """Creates the fixed loss scale.
 
     Args:
@@ -244,22 +310,42 @@ class FixedLossScale(LossScale):
     self._loss_scale_value = float(loss_scale_value)
 
   def __call__(self):
+    # [FUNCTION DOC]
+    # Returns the fixed loss scale converted to a scalar float32 tensor. No inputs, no side
+    # effects other than creating a tensor in the current context.
     return ops.convert_to_tensor(self._loss_scale_value)
 
   def update(self, grads):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the base-class contract says the update op is nothing in eager mode, but
+    # this always returns a no-op operation object.
+    # Ignores the gradients. Returns a pair: a no-op operation and the constant true flag,
+    # meaning gradients should always be applied.
     del grads
     return control_flow_ops.no_op(), True
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns a text representation showing the class name and the fixed value.
     return 'FixedLossScale(%s)' % self._loss_scale_value
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with a single entry, the loss scale value, usable with from_config.
     return {'loss_scale_value': self._loss_scale_value}
 
 
 def _is_all_finite(grads):
+  # [FUNCTION DOC]
+  # HELPER: used by DynamicLossScale.update to detect overflow.
+  # Input: a flat list of gradients (tensors, sparse indexed slices, or nothing which is
+  # skipped). Returns a scalar boolean tensor that is true only if every value of every
+  # non-empty gradient is finite. For sparse gradients only the values part is checked.
   """Returns a scalar boolean tensor indicating if all gradients are finite."""
   def raw_values(g):
+    # [FUNCTION DOC]
+    # HELPER: for the finiteness check. Returns the values tensor of a sparse indexed-slices
+    # gradient, or the gradient itself if it is dense.
     return g.values if isinstance(g, indexed_slices.IndexedSlices) else g
 
   is_finite_per_grad = [
@@ -271,6 +357,10 @@ def _is_all_finite(grads):
 
 
 def _op_in_graph_mode(tensor):
+  # [FUNCTION DOC]
+  # HELPER: lets update paths return an operation in graph mode but a tensor in eager mode.
+  # Input: a tensor. Returns the tensor itself when executing eagerly, otherwise its
+  # producing operation. No side effects.
   """Returns the tensor's op in graph mode, or the tensor in eager mode.
 
   This is useful because sometimes an op is needed in graph mode instead of a
@@ -288,6 +378,12 @@ def _op_in_graph_mode(tensor):
 
 
 def _assign_if_finite(var, value):
+  # [FUNCTION DOC]
+  # HELPER: guards the loss scale increase in DynamicLossScale against overflow.
+  # Inputs: var (a variable) and value (a scalar tensor). Builds a conditional that assigns
+  # the value to the variable only when the value is finite, otherwise does nothing.
+  # Returns the conditional result (an operation in graph mode). Side effect: the assignment
+  # when run and the condition is true.
   """Assigns a value to a variable if the value is finite."""
   return cond.cond(
       math_ops.is_finite(value), lambda: _op_in_graph_mode(var.assign(value)),
@@ -304,6 +400,13 @@ def _assign_if_finite(var, value):
         'train.experimental.DynamicLossScale'
     ])
 class DynamicLossScale(LossScale):
+  # [CLASS DOC]
+  # Loss scale that adapts during training. State: a non-trainable float32 variable with the
+  # current loss scale, an int64 variable counting consecutive steps with finite gradients,
+  # and the configured initial value, increment period and multiplier. Update multiplies the
+  # scale after enough finite steps and divides it (never below one) on nonfinite gradients,
+  # signaling that the step's gradients should be skipped. Supports distribution strategies by
+  # combining finiteness across replicas. The constructor is marked deprecated.
   """Loss scale that dynamically adjusts itself.
 
   Dynamic loss scaling works by adjusting the loss scale as training progresses.
@@ -327,6 +430,13 @@ class DynamicLossScale(LossScale):
                initial_loss_scale=2 ** 15,  # See docstring for why this is big.
                increment_period=2000,
                multiplier=2.):
+    # [FUNCTION DOC]
+    # Constructor. Inputs (all optional): initial_loss_scale (number, default 32768),
+    # increment_period (number of consecutive finite steps before growing, default 2000) and
+    # multiplier (growth and shrink factor, default 2). Values are coerced to float, int and
+    # float. Creates two variables through the add-weight helper: the current loss scale and
+    # the good-step counter (starting at zero). Emits a deprecation warning via decorator.
+    # Does no validation of the inputs.
     """Creates the dynamic loss scale.
 
     Args:
@@ -357,26 +467,49 @@ class DynamicLossScale(LossScale):
 
   @property
   def initial_loss_scale(self):
+    # [FUNCTION DOC]
+    # Read-only property: the initial loss scale as a float.
     return self._initial_loss_scale
 
   @property
   def increment_period(self):
+    # [FUNCTION DOC]
+    # Read-only property: number of consecutive finite-gradient steps before the scale grows.
     return self._increment_period
 
   @property
   def multiplier(self):
+    # [FUNCTION DOC]
+    # Read-only property: the factor used to grow or shrink the loss scale.
     return self._multiplier
 
   def __call__(self):
+    # [FUNCTION DOC]
+    # Returns the current loss scale variable converted to a scalar float32 tensor.
     return ops.convert_to_tensor(self._current_loss_scale)
 
   def update(self, grads):
+    # [FUNCTION DOC]
+    # Input: grads, a nested structure of unscaled gradients (flattened internally). Decides
+    # whether all gradients are finite; under a distribution strategy the check runs on each
+    # replica and the results are summed across replicas, requiring all replicas to be finite
+    # (must run in a cross-replica context). If finite: when the good-step counter plus one
+    # reaches the increment period the scale is multiplied (only assigned if the result is
+    # finite) and the counter reset, otherwise the counter is incremented. If not finite: the
+    # counter is reset and the scale divided by the multiplier, floored at one.
+    # Returns a pair: the update operation (conditional result) and the finiteness flag
+    # tensor that tells the caller whether to apply the gradients. Side effect: variable
+    # assignments when the returned operation is run (immediately in eager mode).
     """Updates loss scale based on if gradients are finite in current step."""
     grads = nest.flatten(grads)
     if distribute_lib.has_strategy():
       distribution = distribute_lib.get_cross_replica_context()
 
       def get_is_finite(grads):
+        # [FUNCTION DOC]
+        # HELPER: per-replica function for the update method. Input: flat list of gradients.
+        # Returns a float32 scalar, one if all are finite else zero (cast because booleans
+        # cannot be reduced across replicas).
         is_finite = _is_all_finite(grads)
         # We cast to float, because we cannot reduce booleans with
         # DistributionStrategy.
@@ -392,9 +525,16 @@ class DynamicLossScale(LossScale):
       is_finite = _is_all_finite(grads)
 
     def update_if_finite_grads():
+      # [FUNCTION DOC]
+      # HELPER: branch of the update method taken when gradients are finite. No inputs.
+      # Either grows the scale and resets the counter (when the period is reached) or just
+      # increments the good-step counter. Returns the conditional result.
       """Update assuming the gradients are finite."""
 
       def incr_loss_scale():
+        # [FUNCTION DOC]
+        # HELPER: grows the loss scale by the multiplier (assigned only if finite) and resets
+        # the good-step counter to zero. Returns a grouped operation.
         new_loss_scale = self._current_loss_scale * self._multiplier
         return control_flow_ops.group(
             _assign_if_finite(self._current_loss_scale, new_loss_scale),
@@ -406,6 +546,10 @@ class DynamicLossScale(LossScale):
               self._num_good_steps.assign_add(1)))
 
     def update_if_not_finite_grads():
+      # [FUNCTION DOC]
+      # HELPER: branch of the update method taken when some gradient is nonfinite. No inputs.
+      # Resets the good-step counter and divides the loss scale by the multiplier, never
+      # going below one. Returns a grouped operation.
       """Update assuming the gradients are nonfinite."""
 
       new_loss_scale = math_ops.maximum(
@@ -420,6 +564,10 @@ class DynamicLossScale(LossScale):
     return update_op, should_apply_gradients
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns a text representation. In eager mode it includes the current scale and good-step
+    # values (read from the variables) plus initial value, period and multiplier; in graph
+    # mode only the initial value, period and multiplier, since variable values are unavailable.
     if context.executing_eagerly():
       return ('DynamicLossScale(current_loss_scale=%s, num_good_steps=%s, '
               'initial_loss_scale=%s, increment_period=%s, multiplier=%s)' %
@@ -431,6 +579,9 @@ class DynamicLossScale(LossScale):
               (self.initial_loss_scale, self.increment_period, self.multiplier))
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with the initial loss scale, increment period and multiplier, suitable
+    # for from_config. The current scale and counter values are not included.
     return {
         'initial_loss_scale': self.initial_loss_scale,
         'increment_period': self.increment_period,
@@ -439,6 +590,12 @@ class DynamicLossScale(LossScale):
 
 
 def get(identifier):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: booleans count as integers, so a true/false identifier silently becomes a
+  # fixed loss scale of one or zero (zero is then rejected by the fixed loss scale constructor).
+  # Factory converting an identifier into a loss scale. A number gives a fixed loss scale; the
+  # word "dynamic" gives a dynamic loss scale with defaults; an existing loss scale is returned
+  # unchanged; nothing gives nothing. Raises a value error for anything else.
   """Get a loss scale object."""
   if isinstance(identifier, (int, float)):
     return FixedLossScale(identifier)

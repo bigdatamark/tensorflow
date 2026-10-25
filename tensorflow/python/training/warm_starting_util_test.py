@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Unit tests for warm_starting_util: the VocabInfo record, the private variable-info and
+# vocabulary remapping helpers, and the public warm_start function. A single test class writes
+# small checkpoints (plain, partitioned, with vocabulary files, object-based) in one graph and
+# then warm-starts variables of a fresh graph, including linear-model and embedding feature
+# column variables, checking the resulting variable values. Uses the temporary directory of
+# the test case for checkpoints and vocabulary files. No import-time side effects besides
+# defining shorthand initializers.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -38,14 +46,29 @@ zeros = init_ops.zeros_initializer
 
 
 class WarmStartingUtilTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering warm-starting from checkpoints. Provides helper methods to write
+  # vocabulary files and checkpoints (with optionally partitioned variables) into the test
+  # temporary directory, and to build linear models whose per-column variables are inspected.
+  # Each test builds a previous-run graph that saves a checkpoint, then a new graph and session
+  # in which variables are warm-started and verified.
 
   def _write_vocab(self, string_values, file_name):
+    # [FUNCTION DOC]
+    # HELPER: shared fixture for vocabulary tests.
+    # Writes the given list of strings, one per line, to a file of the given name inside the
+    # test temporary directory. Returns the full path of the file.
     vocab_file = os.path.join(self.get_temp_dir(), file_name)
     with open(vocab_file, "w") as f:
       f.write("\n".join(string_values))
     return vocab_file
 
   def _write_checkpoint(self, sess):
+    # [FUNCTION DOC]
+    # HELPER: shared fixture that saves a checkpoint.
+    # Input: sess, the active session. Initializes all global variables, then saves them with a
+    # standard saver under the file prefix "model" in the test temporary directory with global
+    # step zero (so the file is "model-0"). Returns nothing.
     self.evaluate(variables.global_variables_initializer())
     saver = saver_lib.Saver()
     ckpt_prefix = os.path.join(self.get_temp_dir(), "model")
@@ -56,6 +79,12 @@ class WarmStartingUtilTest(test.TestCase):
                            shape=None,
                            initializer=None,
                            partitioner=None):
+    # [FUNCTION DOC]
+    # HELPER: simulates a previous run that saved one variable.
+    # Inputs: var_name, optional shape, initializer and partitioner. In a private graph creates
+    # the variable, writes a checkpoint, and if partitioned asserts the variable is a
+    # partitioned variable and replaces it by its list of slices. Returns a pair: the variable
+    # (or list of slices) and its evaluated value(s).
     with ops.Graph().as_default() as g:
       with self.session(graph=g) as sess:
         var = variable_scope.get_variable(
@@ -73,6 +102,11 @@ class WarmStartingUtilTest(test.TestCase):
                             var_names,
                             shapes,
                             initializers):
+    # [FUNCTION DOC]
+    # HELPER: like the single-variable fixture but for several variables.
+    # Inputs: parallel lists of variable names, shapes and initializers. In a private graph
+    # creates all variables, writes a checkpoint, and returns the list of evaluated values in
+    # the same order.
     with ops.Graph().as_default() as g:
       with self.session(graph=g) as sess:
         all_vars = []
@@ -86,6 +120,10 @@ class WarmStartingUtilTest(test.TestCase):
         return [self.evaluate(var) for var in all_vars]
 
   def _create_dummy_inputs(self):
+    # [FUNCTION DOC]
+    # HELPER: builds placeholder inputs for feature columns. Returns a mapping with sparse
+    # placeholders named for integer, hashed, key-list and vocabulary columns and a dense
+    # float placeholder named "real".
     return {
         "sc_int": array_ops.sparse_placeholder(dtypes.int32),
         "sc_hash": array_ops.sparse_placeholder(dtypes.string),
@@ -95,6 +133,11 @@ class WarmStartingUtilTest(test.TestCase):
     }
 
   def _create_linear_model(self, feature_cols, partitioner):
+    # [FUNCTION DOC]
+    # HELPER: creates the variables of a linear model over the given feature columns.
+    # Inputs: feature_cols (list of columns) and partitioner (function or nothing) applied in
+    # the root variable scope. Builds the model on dummy inputs with one unit. Returns the
+    # mapping from each column (and the bias) to the list of its variables.
     cols_to_vars = {}
     with variable_scope.variable_scope("", partitioner=partitioner):
       # Create the variables.
@@ -107,11 +150,20 @@ class WarmStartingUtilTest(test.TestCase):
     return cols_to_vars
 
   def _assert_cols_to_vars(self, cols_to_vars, cols_to_expected_values, sess):
+    # [FUNCTION DOC]
+    # HELPER: assertion shared by the feature column tests.
+    # Inputs: cols_to_vars (column to list of variables), cols_to_expected_values (column to
+    # list of expected arrays, one per variable slice) and sess (session). Evaluates each
+    # variable and asserts it is close to the expected array. Returns nothing.
     for col, expected_values in cols_to_expected_values.items():
       for i, var in enumerate(cols_to_vars[col]):
         self.assertAllClose(expected_values[i], var.eval(sess))
 
   def testWarmStartVar(self):
+    # [FUNCTION DOC]
+    # Scenario: a checkpoint holds a 4x1 variable. In a new graph a same-named zero variable is
+    # created. Action: the variable info helper and checkpoint initialization are applied.
+    # Expected: after initialization the variable equals the checkpointed values.
     _, prev_val = self._create_prev_run_var(
         "fruit_weights", initializer=[[0.5], [1.], [1.5], [2.]])
 
@@ -126,6 +178,10 @@ class WarmStartingUtilTest(test.TestCase):
         self.assertAllClose(prev_val, fruit_weights.eval(sess))
 
   def testWarmStartVarPrevVarPartitioned(self):
+    # [FUNCTION DOC]
+    # Scenario: the checkpoint variable was saved in two partitions; the new variable is a
+    # single zero variable. Expected: after variable-info plus checkpoint initialization the new
+    # variable equals the concatenation of the saved partitions.
     _, weights = self._create_prev_run_var(
         "fruit_weights",
         shape=[4, 1],
@@ -144,6 +200,10 @@ class WarmStartingUtilTest(test.TestCase):
         self.assertAllClose(prev_val, fruit_weights.eval(sess))
 
   def testWarmStartVarCurrentVarPartitioned(self):
+    # [FUNCTION DOC]
+    # Scenario: the checkpoint holds an unpartitioned 4x1 variable; the new variable is
+    # partitioned into two slices. Expected: after initialization the concatenated slices equal
+    # the saved values.
     _, prev_val = self._create_prev_run_var(
         "fruit_weights", initializer=[[0.5], [1.], [1.5], [2.]])
 
@@ -166,6 +226,10 @@ class WarmStartingUtilTest(test.TestCase):
         self.assertAllClose(prev_val, new_val)
 
   def testWarmStartVarBothVarsPartitioned(self):
+    # [FUNCTION DOC]
+    # Scenario: both the saved and the new variable are partitioned in two, under different
+    # scope names. The previous tensor name is passed explicitly to the variable info helper.
+    # Expected: the new variable's concatenated slices equal the saved values.
     _, weights = self._create_prev_run_var(
         "old_scope/fruit_weights",
         shape=[4, 1],
@@ -193,6 +257,11 @@ class WarmStartingUtilTest(test.TestCase):
         self.assertAllClose(prev_val, new_val)
 
   def testWarmStartVarWithVocab(self):
+    # [FUNCTION DOC]
+    # Scenario: old vocabulary of four fruits with a saved 4x1 weight; new vocabulary lists them
+    # in reverse order plus one new fruit (5 entries). Action: the vocabulary warm-start helper
+    # is applied to a zero 5x1 variable. Expected: rows are reordered by word to
+    # 2, 1.5, 1, 0.5 and the new word gets zero.
     prev_vocab_path = self._write_vocab(["apple", "banana", "guava", "orange"],
                                         "old_vocab")
     self._create_prev_run_var(
@@ -213,6 +282,10 @@ class WarmStartingUtilTest(test.TestCase):
                             fruit_weights.eval(sess))
 
   def testWarmStartVarWithColumnVocab(self):
+    # [FUNCTION DOC]
+    # Scenario: a saved 4x2 output layer whose columns correspond to two old vocabulary words;
+    # the new vocabulary has three words (swapped order plus a new one). Action: the vocabulary
+    # helper with axis one. Expected: columns are swapped by word and the new column is zero.
     prev_vocab_path = self._write_vocab(["apple", "orange"], "old_vocab")
     self._create_prev_run_var(
         "fruit_output_layer",
@@ -238,6 +311,10 @@ class WarmStartingUtilTest(test.TestCase):
                              [2.3, 2., 0.]], fruit_output_layer.eval(sess))
 
   def testWarmStartVarWithVocabConstrainedOldVocabSize(self):
+    # [FUNCTION DOC]
+    # Scenario: same as the basic vocabulary test but the previous vocabulary size is limited to
+    # the first two words. Expected: only words in those two entries are carried over
+    # (banana gets 1, apple gets 0.5); others, including guava and orange, stay zero.
     prev_vocab_path = self._write_vocab(["apple", "banana", "guava", "orange"],
                                         "old_vocab")
     self._create_prev_run_var(
@@ -264,6 +341,10 @@ class WarmStartingUtilTest(test.TestCase):
                             fruit_weights.eval(sess))
 
   def testWarmStartVarWithVocabPrevVarPartitioned(self):
+    # [FUNCTION DOC]
+    # Scenario: the vocabulary-test setup, but the saved variable was written in two partitions.
+    # Expected: the remapped result is unchanged: reversed order values with zero for the new
+    # word.
     prev_vocab_path = self._write_vocab(["apple", "banana", "guava", "orange"],
                                         "old_vocab")
     self._create_prev_run_var(
@@ -287,6 +368,9 @@ class WarmStartingUtilTest(test.TestCase):
                             fruit_weights.eval(sess))
 
   def testWarmStartVarWithColumnVocabPrevVarPartitioned(self):
+    # [FUNCTION DOC]
+    # Scenario: the column-vocabulary setup (axis one) with the saved 4x2 variable partitioned in
+    # two. Expected: columns remapped by word as in the unpartitioned test, new column zero.
     prev_vocab_path = self._write_vocab(["apple", "orange"], "old_vocab")
     self._create_prev_run_var(
         "fruit_output_layer",
@@ -314,6 +398,10 @@ class WarmStartingUtilTest(test.TestCase):
                              [2.3, 2., 0.]], fruit_output_layer.eval(sess))
 
   def testWarmStartVarWithVocabCurrentVarPartitioned(self):
+    # [FUNCTION DOC]
+    # Scenario: the new variable has six rows in two partitions (five vocabulary entries plus
+    # one out-of-vocabulary bucket). Expected: the first slice holds 2, 1.5, 1 and the second
+    # 0.5 followed by two zeros; the variable remains a partitioned variable.
     prev_vocab_path = self._write_vocab(["apple", "banana", "guava", "orange"],
                                         "old_vocab")
     self._create_prev_run_var(
@@ -347,6 +435,10 @@ class WarmStartingUtilTest(test.TestCase):
                             fruit_weights_vars[1].eval(sess))
 
   def testWarmStartVarWithColumnVocabCurrentVarPartitioned(self):
+    # [FUNCTION DOC]
+    # Scenario: column-vocabulary remapping into a 4x3 variable partitioned into two row
+    # slices. Expected: each slice has the swapped columns with a zero last column
+    # (first slice rows 0.3/0.5 and 0.8/1.0, second slice rows 1.2/1.5 and 2.3/2.0).
     prev_vocab_path = self._write_vocab(["apple", "orange"], "old_vocab")
     self._create_prev_run_var(
         "fruit_output_layer",
@@ -379,6 +471,10 @@ class WarmStartingUtilTest(test.TestCase):
                             fruit_output_layer_vars[1].eval(sess))
 
   def testWarmStartVarWithVocabBothVarsPartitioned(self):
+    # [FUNCTION DOC]
+    # Scenario: saved variable partitioned in two; new vocabulary has six words and the new
+    # variable is six rows in two partitions. Expected: first slice 2, 1.5, 1; second slice 0.5,
+    # 0, 0 (both new words are zero).
     prev_vocab_path = self._write_vocab(["apple", "banana", "guava", "orange"],
                                         "old_vocab")
     self._create_prev_run_var(
@@ -411,6 +507,10 @@ class WarmStartingUtilTest(test.TestCase):
                             fruit_weights_vars[1].eval(sess))
 
   def testWarmStartVarWithColumnVocabBothVarsPartitioned(self):
+    # [FUNCTION DOC]
+    # Scenario: column-vocabulary remapping where both the saved 4x2 variable and the new 4x3
+    # variable are split into two row partitions. Expected: swapped columns with zero third
+    # column in each slice.
     prev_vocab_path = self._write_vocab(["apple", "orange"], "old_vocab")
     self._create_prev_run_var(
         "fruit_output_layer",
@@ -445,6 +545,10 @@ class WarmStartingUtilTest(test.TestCase):
                             fruit_output_layer_vars[1].eval(sess))
 
   def testWarmStart_ListOfVariables(self):
+    # [FUNCTION DOC]
+    # Scenario: checkpoint saves a 10x1 variable of ones; new graph has a zero variable of the
+    # same name. Action: warm start with the list of variable objects. Expected: after
+    # initialization the variable equals ones.
     # Save checkpoint from which to warm-start.
     _, prev_int_val = self._create_prev_run_var("v1", shape=[10, 1],
                                                 initializer=ones())
@@ -465,6 +569,9 @@ class WarmStartingUtilTest(test.TestCase):
         self.assertAllEqual(var, prev_int_val)
 
   def testWarmStart_ListOfStrings(self):
+    # [FUNCTION DOC]
+    # Scenario: same as the list-of-variables test but the variables to warm start are given as
+    # a list containing the variable name string. Expected: the variable is initialized to ones.
     # Save checkpoint from which to warm-start.
     _, prev_int_val = self._create_prev_run_var("v1", shape=[10, 1],
                                                 initializer=ones())
@@ -485,6 +592,10 @@ class WarmStartingUtilTest(test.TestCase):
         self.assertAllEqual(var, prev_int_val)
 
   def testWarmStart_TwoVarsFromTheSamePrevVar(self):
+    # [FUNCTION DOC]
+    # Scenario: the checkpoint has only "v1"; the new graph has zero variables "v1" and "v2" and
+    # a rename mapping from "v2" to "v1". Action: warm start both. Expected: both variables are
+    # initialized to ones, exercising the split initialization for a shared source tensor.
     # Save checkpoint from which to warm-start.
     _, prev_int_val = self._create_prev_run_var("v1", shape=[10, 1],
                                                 initializer=ones())
@@ -512,6 +623,11 @@ class WarmStartingUtilTest(test.TestCase):
         self.assertAllEqual(var2, prev_int_val)
 
   def testWarmStart_ListOfRegexes(self):
+    # [FUNCTION DOC]
+    # Scenario: checkpoint holds v1, v1/Momentum, v2 and v2/Momentum (ones); the new graph has
+    # zero versions of all four. Action: warm start with scope patterns for v1 and for v2
+    # followed by a non-slash character. Expected: v1, v1/Momentum and v2 become ones while
+    # v2/Momentum stays zero.
     # Save checkpoint from which to warm-start.
     [prev_v1_val, prev_v1_momentum_val,
      prev_v2_val, _] = self._create_prev_run_vars(
@@ -552,6 +668,10 @@ class WarmStartingUtilTest(test.TestCase):
         self.assertAllEqual(v2_momentum, np.zeros([10, 1]))
 
   def testWarmStart_SparseColumnIntegerized(self):
+    # [FUNCTION DOC]
+    # Scenario: identity categorical column with ten buckets in a linear model; a checkpoint
+    # holds its weights as ones. First verifies a model without warm start is zero, then warm
+    # starts with a regular expression for the column. Expected: weights equal the saved ones.
     # Create feature column.
     sc_int = fc.categorical_column_with_identity("sc_int", num_buckets=10)
 
@@ -582,6 +702,10 @@ class WarmStartingUtilTest(test.TestCase):
         self._assert_cols_to_vars(cols_to_vars, {sc_int: [prev_int_val]}, sess)
 
   def testWarmStart_SparseColumnHashed(self):
+    # [FUNCTION DOC]
+    # Scenario: hashed categorical column of 15 buckets with saved random weights. Without warm
+    # start the weights are zeros; with warm start by a pattern for the column they equal the
+    # saved values.
     # Create feature column.
     sc_hash = fc.categorical_column_with_hash_bucket(
         "sc_hash", hash_bucket_size=15)
@@ -613,6 +737,10 @@ class WarmStartingUtilTest(test.TestCase):
                                   sess)
 
   def testWarmStart_SparseColumnVocabulary(self):
+    # [FUNCTION DOC]
+    # Scenario: vocabulary-file categorical column (four words) with saved weights of ones.
+    # Without warm start weights are zero; with warm start by pattern and no vocabulary info
+    # (old vocabulary assumed unchanged) the weights equal the saved values.
     # Create vocab for sparse column "sc_vocab".
     vocab_path = self._write_vocab(["apple", "banana", "guava", "orange"],
                                    "vocab")
@@ -649,6 +777,10 @@ class WarmStartingUtilTest(test.TestCase):
                                   sess)
 
   def testWarmStart_ExplicitCheckpointFile(self):
+    # [FUNCTION DOC]
+    # Scenario: same as the vocabulary column test, but warm start is given the explicit
+    # checkpoint file prefix ("model-0") instead of the directory. Expected: weights are
+    # warm-started to the saved values.
     # Create vocab for sparse column "sc_vocab".
     vocab_path = self._write_vocab(["apple", "banana", "guava", "orange"],
                                    "vocab")
@@ -687,6 +819,11 @@ class WarmStartingUtilTest(test.TestCase):
                                   sess)
 
   def testWarmStart_SparseColumnVocabularyConstrainedVocabSizes(self):
+    # [FUNCTION DOC]
+    # Scenario: old vocabulary file has three words but only the first two are used (old size
+    # two); the new column uses the first two entries of a different four-word file (apple,
+    # banana). Vocabulary info with the limited old size is passed to warm start. Expected:
+    # apple keeps its saved weight one, banana is not in the old limited vocabulary and is zero.
     # Create old vocabulary, and use a size smaller than the total number of
     # entries.
     old_vocab_path = self._write_vocab(["apple", "guava", "banana"],
@@ -738,6 +875,10 @@ class WarmStartingUtilTest(test.TestCase):
         self._assert_cols_to_vars(cols_to_vars, {sc_vocab: [[[1], [0]]]}, sess)
 
   def testWarmStart_BucketizedColumn(self):
+    # [FUNCTION DOC]
+    # Scenario: bucketized numeric column with five buckets and saved random weights. Without
+    # warm start weights are zero; warm start with a pattern for the bucketized column restores
+    # the saved weights.
     # Create feature column.
     real = fc.numeric_column("real")
     real_bucket = fc.bucketized_column(real, boundaries=[0., 1., 2., 3.])
@@ -771,6 +912,11 @@ class WarmStartingUtilTest(test.TestCase):
                                   {real_bucket: [prev_bucket_val]}, sess)
 
   def testWarmStart_MultipleCols(self):
+    # [FUNCTION DOC]
+    # Scenario: a linear model with identity, hashed, key-list, vocabulary, bucketized and
+    # crossed columns plus a bias; a checkpoint stores all their weights. Without warm start all
+    # are zeros. Action: warm start with default variable selection and vocabulary info for the
+    # vocabulary column only. Expected: every column's weights and the bias equal the saved ones.
     # Create vocab for sparse column "sc_vocab".
     vocab_path = self._write_vocab(["apple", "banana", "guava", "orange"],
                                    "vocab")
@@ -863,6 +1009,12 @@ class WarmStartingUtilTest(test.TestCase):
         }, sess)
 
   def testWarmStartMoreSettings(self):
+    # [FUNCTION DOC]
+    # Scenario: hashed, key-list and vocabulary columns with all variables partitioned in two. The
+    # checkpoint stores the key-list weights under a different name. Action: warm start only the
+    # key-list and vocabulary variables, with vocabulary info (reordered six-word vocabulary)
+    # and a rename for the key-list variable. Expected: key-list weights loaded from the other
+    # name, vocabulary weights remapped (3, 2, 1 | 0.5, 0, 0), hashed weights stay zero.
     # Create old and new vocabs for sparse column "sc_vocab".
     prev_vocab_path = self._write_vocab(["apple", "banana", "guava", "orange"],
                                         "old_vocab")
@@ -892,6 +1044,10 @@ class WarmStartingUtilTest(test.TestCase):
         prev_keys_val = self.evaluate(sc_keys_weights)
 
     def _partitioner(shape, dtype):  # pylint:disable=unused-argument
+      # [FUNCTION DOC]
+      # HELPER: partitioner for the test's model. Inputs: shape and dtype (dtype unused).
+      # Returns a per-dimension partition count list that splits the first dimension in two
+      # (or fewer if smaller) and leaves other dimensions whole.
       # Partition each var into 2 equal slices.
       partitions = [1] * len(shape)
       partitions[0] = min(2, shape.dims[0].value)
@@ -931,6 +1087,10 @@ class WarmStartingUtilTest(test.TestCase):
         }, sess)
 
   def testWarmStartMoreSettingsNoPartitioning(self):
+    # [FUNCTION DOC]
+    # Scenario: the same as the more-settings test but the model has no partitioner. Expected:
+    # key-list weights loaded via the rename, vocabulary weights remapped into one six-row
+    # variable (3, 2, 1, 0.5, 0, 0), hashed weights unchanged (zeros).
     # Create old and new vocabs for sparse column "sc_vocab".
     prev_vocab_path = self._write_vocab(["apple", "banana", "guava", "orange"],
                                         "old_vocab")
@@ -990,6 +1150,11 @@ class WarmStartingUtilTest(test.TestCase):
         }, sess)
 
   def testWarmStartVarsToWarmstartIsNone(self):
+    # [FUNCTION DOC]
+    # Scenario: partitioned hashed, key-list and vocabulary columns. Action: warm start with the
+    # variable selection set to nothing, vocabulary info for the vocabulary variable and a rename
+    # for the key-list variable. Expected: only the vocabulary variable is warm-started
+    # (remapped); the rename is ignored for selection, so key-list and hashed weights stay zero.
     # Create old and new vocabs for sparse column "sc_vocab".
     prev_vocab_path = self._write_vocab(["apple", "banana", "guava", "orange"],
                                         "old_vocab")
@@ -1018,6 +1183,10 @@ class WarmStartingUtilTest(test.TestCase):
         self._write_checkpoint(sess)
 
     def _partitioner(shape, dtype):  # pylint:disable=unused-argument
+      # [FUNCTION DOC]
+      # HELPER: partitioner for the test's model. Inputs: shape and dtype (dtype unused).
+      # Returns a per-dimension partition count list that splits the first dimension in two
+      # (or fewer if smaller) and leaves other dimensions whole.
       # Partition each var into 2 equal slices.
       partitions = [1] * len(shape)
       partitions[0] = min(2, shape.dims[0].value)
@@ -1062,6 +1231,11 @@ class WarmStartingUtilTest(test.TestCase):
         }, sess)
 
   def testWarmStartEmbeddingColumn(self):
+    # [FUNCTION DOC]
+    # Scenario: a checkpoint stores a 4x2 embedding table for a vocabulary column; the new model
+    # has an embedding column (dimension two) over a six-word reordered vocabulary, partitioned
+    # in two. Vocabulary info uses a constant-valued random initializer (0.42) for new words.
+    # Expected: embedding rows are remapped by word and new words filled with 0.42.
     # Create old and new vocabs for embedding column "sc_vocab".
     prev_vocab_path = self._write_vocab(["apple", "banana", "guava", "orange"],
                                         "old_vocab")
@@ -1078,6 +1252,10 @@ class WarmStartingUtilTest(test.TestCase):
         self._write_checkpoint(sess)
 
     def _partitioner(shape, dtype):  # pylint:disable=unused-argument
+      # [FUNCTION DOC]
+      # HELPER: partitioner for the test's model. Inputs: shape and dtype (dtype unused).
+      # Returns a per-dimension partition count list that splits the first dimension in two
+      # (or fewer if smaller) and leaves other dimensions whole.
       # Partition each var into 2 equal slices.
       partitions = [1] * len(shape)
       partitions[0] = min(2, shape.dims[0].value)
@@ -1129,6 +1307,12 @@ class WarmStartingUtilTest(test.TestCase):
             }, sess)
 
   def testWarmStartEmbeddingColumnLinearModel(self):
+    # [FUNCTION DOC]
+    # Scenario: like the embedding test but built with a linear model, so the embedding column
+    # has both embedding weights and linear weights; the checkpoint stores both. Action: warm
+    # start variables matching the vocabulary column with vocabulary info for the embedding table.
+    # Expected: linear weights restored (0.69 and 0.71 in two parts), embedding rows remapped by
+    # word with 0.42 for new words.
     # Create old and new vocabs for embedding column "sc_vocab".
     prev_vocab_path = self._write_vocab(["apple", "banana", "guava", "orange"],
                                         "old_vocab")
@@ -1148,6 +1332,10 @@ class WarmStartingUtilTest(test.TestCase):
         self._write_checkpoint(sess)
 
     def _partitioner(shape, dtype):  # pylint:disable=unused-argument
+      # [FUNCTION DOC]
+      # HELPER: partitioner for the test's model. Inputs: shape and dtype (dtype unused).
+      # Returns a per-dimension partition count list that splits the first dimension in two
+      # (or fewer if smaller) and leaves other dimensions whole.
       # Partition each var into 2 equal slices.
       partitions = [1] * len(shape)
       partitions[0] = min(2, shape.dims[0].value)
@@ -1208,6 +1396,12 @@ class WarmStartingUtilTest(test.TestCase):
             sess)
 
   def testErrorConditions(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the first variable is created in the default graph outside any explicit
+    # graph context, so it leaks into whatever default graph the test runner provides.
+    # Scenario: (1) passing a list holding a partitioned variable to the vocabulary helper must
+    # raise a type error; (2) after saving a checkpoint, warm start with vocabulary info or a
+    # rename for a variable name that does not exist must raise a value error each time.
     x = variable_scope.get_variable(
         "x",
         shape=[4, 1],
@@ -1240,6 +1434,11 @@ class WarmStartingUtilTest(test.TestCase):
         var_name_to_prev_var_name={"y": "y2"})
 
   def testWarmStartFromObjectBasedCheckpoint(self):
+    # [FUNCTION DOC]
+    # Scenario: an object-based checkpoint is saved from a variable (tracked under the name "v")
+    # holding 4x1 values. In a new graph a zero variable with the original variable name exists.
+    # Action: warm start from the directory with default settings. Expected: the variable is
+    # initialized to the saved values, showing object-based key renaming works.
     prev_val = [[0.5], [1.], [1.5], [2.]]
     with ops.Graph().as_default() as g:
       with self.session(graph=g):
