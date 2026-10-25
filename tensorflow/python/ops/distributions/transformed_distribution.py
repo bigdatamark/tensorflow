@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Defines TransformedDistribution, a deprecated distribution that models Y = g(X) for a base
+# distribution of X and a bijector g. It also holds private helpers that try to evaluate small
+# tensor operations statically (at graph construction time) when inputs are constant, falling back
+# to graph ops otherwise. Exposes only TransformedDistribution through the module export list.
+# No registrations or flags at import time; the class constructor is wrapped by a deprecation
+# warning decorator that warns once.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -40,11 +47,22 @@ __all__ = [
 
 
 def _static_value(x):
+  # [FUNCTION DOC]
+  # HELPER: static-evaluation utility used throughout TransformedDistribution.
+  # Converts the input to a tensor and returns its statically known constant value as an array,
+  # or the null value if it cannot be determined at graph construction time. No side effects
+  # beyond creating a constant tensor when the input is not already a tensor.
   """Returns the static value of a `Tensor` or `None`."""
   return tensor_util.constant_value(ops.convert_to_tensor(x))
 
 
 def _logical_and(*args):
+  # [FUNCTION DOC]
+  # HELPER: static logical-and used for shape/override predicates.
+  # Takes any number of boolean-like values. If any has a known false value, returns a constant
+  # false tensor; if all are known true, returns a constant true tensor. Otherwise builds a
+  # graph op: a pairwise logical-and for exactly two inputs, or a reduce-all over the list.
+  # Returns a boolean tensor. Raises nothing itself.
   """Convenience function which attempts to statically `reduce_all`."""
   args_ = [_static_value(x) for x in args]
   if any(x is not None and not bool(x) for x in args_):
@@ -57,6 +75,11 @@ def _logical_and(*args):
 
 
 def _logical_equal(x, y):
+  # [FUNCTION DOC]
+  # HELPER: static equality check for override-shape logic.
+  # If both inputs have known static values, returns a constant boolean tensor holding whether
+  # the two arrays are entirely equal (a single whole-array comparison, not elementwise).
+  # Otherwise builds an elementwise equality graph op. Returns a boolean tensor.
   """Convenience function which attempts to statically compute `x == y`."""
   x_ = _static_value(x)
   y_ = _static_value(y)
@@ -66,6 +89,10 @@ def _logical_equal(x, y):
 
 
 def _logical_not(x):
+  # [FUNCTION DOC]
+  # HELPER: static logical negation for override predicates.
+  # Returns a constant tensor of the negated static value when the input is statically known,
+  # otherwise a graph logical-not op on the input. Returns a boolean tensor.
   """Convenience function which attempts to statically apply `logical_not`."""
   x_ = _static_value(x)
   if x_ is None:
@@ -74,6 +101,11 @@ def _logical_not(x):
 
 
 def _concat_vectors(*args):
+  # [FUNCTION DOC]
+  # HELPER: concatenates shape vectors when building sample shapes.
+  # Takes any number of 1-D vectors (lists or tensors). If all are statically known, returns a
+  # constant tensor of the flattened elements; otherwise builds a graph concat along axis zero.
+  # Returns a 1-D tensor.
   """Convenience function which concatenates input vectors."""
   args_ = [_static_value(x) for x in args]
   if any(x_ is None for x_ in args_):
@@ -82,6 +114,11 @@ def _concat_vectors(*args):
 
 
 def _pick_scalar_condition(pred, cond_true, cond_false):
+  # [FUNCTION DOC]
+  # HELPER: scalar conditional selection used for the rotation amount.
+  # Inputs: a scalar boolean predicate and two scalar alternatives. If the predicate is statically
+  # known, returns the corresponding alternative directly (no graph op); otherwise returns a
+  # where-style selection tensor. Only valid when all three inputs are scalars.
   """Convenience function which chooses the condition based on the predicate."""
   # Note: This function is only valid if all of pred, cond_true, and cond_false
   # are scalars. This means its semantics are arguably more like tf.cond than
@@ -93,6 +130,10 @@ def _pick_scalar_condition(pred, cond_true, cond_false):
 
 
 def _ones_like(x):
+  # [FUNCTION DOC]
+  # HELPER: builds a tensor of ones shaped like x, preferring static shape information.
+  # If the shape of x is fully defined, creates ones from the static shape list with x's dtype;
+  # otherwise uses the dynamic ones-like op. Intended only for small vectors. Returns a tensor.
   """Convenience function attempts to statically construct `ones_like`."""
   # Should only be used for small vectors.
   if x.get_shape().is_fully_defined():
@@ -101,6 +142,12 @@ def _ones_like(x):
 
 
 def _ndims_from_shape(shape):
+  # [FUNCTION DOC]
+  # HELPER: computes the rank implied by a shape vector.
+  # Input is a tensor holding a shape (must be 1-D of integer dtype). Raises a value error if its
+  # static rank is known and not one, and a type error if the dtype is not an integer type.
+  # Returns the number of elements of the shape vector, as a constant when statically known,
+  # otherwise as a dynamic tensor.
   """Returns `Tensor`'s `rank` implied by a `Tensor` shape."""
   if shape.get_shape().ndims not in (None, 1):
     raise ValueError("input is not a valid shape: not 1D")
@@ -112,11 +159,28 @@ def _ndims_from_shape(shape):
 
 
 def _is_scalar_from_shape(shape):
+  # [FUNCTION DOC]
+  # HELPER: tells whether a shape vector describes a scalar.
+  # Returns a boolean tensor that is true when the number of dimensions implied by the shape
+  # vector equals zero (a constant when statically known). Inherits the errors of the rank helper
+  # for non-vector or non-integer inputs.
   """Returns `True` `Tensor` if `Tensor` shape implies a scalar."""
   return _logical_equal(_ndims_from_shape(shape), 0)
 
 
 class TransformedDistribution(distribution_lib.Distribution):
+  # [CLASS DOC]
+  # Distribution of Y = g(X) where X follows a base distribution and g is an invertible
+  # differentiable bijector (identity when none is given). Optionally overrides the batch and/or
+  # event shape of a scalar base distribution, in which case extra sample dimensions are
+  # reinterpreted as batch or event dimensions (with cyclic rotation of dimensions when the
+  # event shape is overridden but the base has batch dimensions).
+  # State: the base distribution, the bijector, static/dynamic override shapes, flags telling
+  # whether batch/event shape is overridden, rotation count and event dimension indices to reduce.
+  # Overrides sampling, log_prob, prob, cdf-like methods, quantile, entropy and shape methods of
+  # the Distribution base class. Non-injective bijectors are supported for log_prob and prob only
+  # (summing over the inverse image); cdf-like methods, quantile and entropy raise not-implemented.
+  # The constructor is deprecated in favor of TensorFlow Probability.
   """A Transformed Distribution.
 
   A `TransformedDistribution` models `p(y)` given a base distribution `p(x)`,
@@ -240,6 +304,19 @@ class TransformedDistribution(distribution_lib.Distribution):
                event_shape=None,
                validate_args=False,
                name=None):
+    # [FUNCTION DOC]
+    # Builds the transformed distribution.
+    # Inputs: distribution (base distribution), bijector (optional; null means identity),
+    # batch_shape and event_shape (optional integer vectors overriding the base shapes; each is
+    # valid only if the base distribution is scalar in that respect), validate_args (boolean,
+    # adds runtime assertions), name (optional; defaults to bijector name joined with the base
+    # distribution name).
+    # Validates the overrides, computes static and dynamic override flags, the rotation count
+    # needed when only the event shape is overridden over a batched base, and the indices of
+    # dimensions to reduce in log_prob. Then calls the parent constructor with the dtype,
+    # reparameterization type and nan-stats setting taken from the base distribution and with
+    # graph parents combined from base and bijector. Raises errors from the override validation
+    # (type error, value error). Returns nothing; stores state on the instance.
     """Construct a Transformed Distribution.
 
     Args:
@@ -325,15 +402,24 @@ class TransformedDistribution(distribution_lib.Distribution):
 
   @property
   def distribution(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the base distribution p(x) that is being transformed.
     """Base distribution, p(x)."""
     return self._distribution
 
   @property
   def bijector(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the bijector used to map base samples x to outputs y
+    # (the identity bijector if none was supplied).
     """Function transforming x => y."""
     return self._bijector
 
   def _event_shape_tensor(self):
+    # [FUNCTION DOC]
+    # Dynamic event shape: picks the override event shape if event shape is overridden, else the
+    # base distribution's event shape tensor, and passes it through the bijector's forward event
+    # shape tensor. Returns a 1-D integer tensor.
     return self.bijector.forward_event_shape_tensor(
         distribution_util.pick_vector(
             self._is_event_override,
@@ -341,6 +427,10 @@ class TransformedDistribution(distribution_lib.Distribution):
             self.distribution.event_shape_tensor()))
 
   def _event_shape(self):
+    # [FUNCTION DOC]
+    # Static event shape: uses what is statically known about the override when an override may
+    # exist, otherwise the base distribution's static event shape, then lets the bijector map it
+    # forward so the bijector has the final say. Returns a static shape object.
     # If there's a chance that the event_shape has been overridden, we return
     # what we statically know about the `event_shape_override`. This works
     # because: `_is_maybe_event_override` means `static_override` is `None` or a
@@ -357,12 +447,20 @@ class TransformedDistribution(distribution_lib.Distribution):
         else self.distribution.event_shape)
 
   def _batch_shape_tensor(self):
+    # [FUNCTION DOC]
+    # Dynamic batch shape: the override batch shape if batch shape is overridden, otherwise the
+    # base distribution's batch shape tensor. The bijector does not alter batch shape.
+    # Returns a 1-D integer tensor.
     return distribution_util.pick_vector(
         self._is_batch_override,
         self._override_batch_shape,
         self.distribution.batch_shape_tensor())
 
   def _batch_shape(self):
+    # [FUNCTION DOC]
+    # Static batch shape: the statically known override when an override may exist, otherwise the
+    # base distribution's static batch shape. Parallels the event shape method except that the
+    # bijector is not consulted. Returns a static shape object.
     # If there's a chance that the batch_shape has been overridden, we return
     # what we statically know about the `batch_shape_override`. This works
     # because: `_is_maybe_batch_override` means `static_override` is `None` or a
@@ -379,6 +477,12 @@ class TransformedDistribution(distribution_lib.Distribution):
             else self.distribution.batch_shape)
 
   def _sample_n(self, n, seed=None):
+    # [FUNCTION DOC]
+    # Draws n base-distribution samples laid out for the override shapes (n goes first, or last
+    # when rotation is needed), then rotates dimensions if necessary. Inputs: n (number of
+    # samples), seed (optional random seed passed to the base sampler). The bijector is NOT
+    # applied here; the public sampling path applies it afterwards so caching works.
+    # Returns the pre-bijector samples tensor. Uses randomness.
     sample_shape = _concat_vectors(
         distribution_util.pick_vector(self._needs_rotation, self._empty, [n]),
         self._override_batch_shape,
@@ -390,6 +494,13 @@ class TransformedDistribution(distribution_lib.Distribution):
     return x
 
   def _call_sample_n(self, sample_shape, seed, name, **kwargs):
+    # [FUNCTION DOC]
+    # Overrides the parent sampling entry point so the bijector's forward result is the last
+    # modification of the output (needed for bijector caching). Inputs: sample_shape (shape of
+    # the leading sample dimensions, converted to an integer tensor), seed, name (name scope),
+    # extra keyword arguments forwarded to the base sampling and to the bijector forward call.
+    # Draws base samples, reshapes them to sample shape plus batch/event shape, applies the
+    # bijector forward map, and sets the static sample shape. Returns the sample tensor.
     # We override `_call_sample_n` rather than `_sample_n` so we can ensure that
     # the result of `self.bijector.forward` is not modified (and thus caching
     # works).
@@ -419,6 +530,12 @@ class TransformedDistribution(distribution_lib.Distribution):
       return y
 
   def _log_prob(self, y):
+    # [FUNCTION DOC]
+    # Log density of y. Applies the bijector inverse first (so caching works), gets the inverse
+    # log-determinant of the Jacobian, and for an injective bijector finishes with a single
+    # fiber. For a non-injective bijector the inverse returns several preimages; the per-fiber
+    # log probabilities are stacked and combined with a log-sum-exp. Input: value tensor y.
+    # Returns the log probability tensor.
     # For caching to work, it is imperative that the bijector is the first to
     # modify the input.
     x = self.bijector.inverse(y)
@@ -435,6 +552,13 @@ class TransformedDistribution(distribution_lib.Distribution):
         array_ops_stack.stack(lp_on_fibers), axis=0)
 
   def _finish_log_prob_for_one_fiber(self, y, x, ildj, event_ndims):
+    # [FUNCTION DOC]
+    # HELPER: finishes the log probability computation for one preimage in the log-prob method.
+    # Inputs: y (output value), x (one preimage), ildj (inverse log-det Jacobian), event_ndims
+    # (static integer count of event dims or a tensor). Rotates dimensions back, evaluates the
+    # base log probability, sums over reinterpreted event dims if the event shape is overridden,
+    # adds the Jacobian term, and when the event rank is statically an integer sets the static
+    # shape from y's batch part broadcast with the batch shape. Returns the log probability.
     """Finish computation of log_prob on one element of the inverse image."""
     x = self._maybe_rotate_dims(x, rotate_right=True)
     log_prob = self.distribution.log_prob(x)
@@ -449,6 +573,10 @@ class TransformedDistribution(distribution_lib.Distribution):
     return log_prob
 
   def _prob(self, y):
+    # [FUNCTION DOC]
+    # Density of y. Same structure as the log probability method: inverse bijector first, then
+    # the inverse log-det Jacobian; single fiber if injective, otherwise the per-fiber
+    # probabilities are summed. Input: value tensor y. Returns the probability tensor.
     x = self.bijector.inverse(y)
     event_ndims = self._maybe_get_static_event_ndims()
     ildj = self.bijector.inverse_log_det_jacobian(y, event_ndims=event_ndims)
@@ -461,6 +589,12 @@ class TransformedDistribution(distribution_lib.Distribution):
     return sum(prob_on_fibers)
 
   def _finish_prob_for_one_fiber(self, y, x, ildj, event_ndims):
+    # [FUNCTION DOC]
+    # HELPER: finishes the probability computation for one preimage in the probability method.
+    # Rotates dimensions back, evaluates the base probability, multiplies over reinterpreted event
+    # dims when the event shape is overridden, scales by the exponential of the inverse log-det
+    # Jacobian, and sets the static shape when the event rank is a static integer.
+    # Inputs mirror the log-prob counterpart. Returns the probability tensor.
     """Finish computation of prob on one element of the inverse image."""
     x = self._maybe_rotate_dims(x, rotate_right=True)
     prob = self.distribution.prob(x)
@@ -475,6 +609,12 @@ class TransformedDistribution(distribution_lib.Distribution):
     return prob
 
   def _log_cdf(self, y):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the code never checks monotonicity; for a decreasing bijector the base cdf at
+    # the inverse is not the cdf of the transformed variable, so the result would be wrong.
+    # Log cumulative distribution at y, computed as the base log cdf at the bijector inverse of y.
+    # Raises a not-implemented error if the event shape may be overridden or the bijector is not
+    # injective. Returns a tensor.
     if self._is_maybe_event_override:
       raise NotImplementedError("log_cdf is not implemented when overriding "
                                 "event_shape")
@@ -485,6 +625,10 @@ class TransformedDistribution(distribution_lib.Distribution):
     return self.distribution.log_cdf(x)
 
   def _cdf(self, y):
+    # [FUNCTION DOC]
+    # Cumulative distribution at y, computed as the base cdf at the bijector inverse of y.
+    # Raises a not-implemented error if the event shape may be overridden or the bijector is not
+    # injective. Assumes an increasing transform (monotonicity is not checked). Returns a tensor.
     if self._is_maybe_event_override:
       raise NotImplementedError("cdf is not implemented when overriding "
                                 "event_shape")
@@ -495,6 +639,10 @@ class TransformedDistribution(distribution_lib.Distribution):
     return self.distribution.cdf(x)
 
   def _log_survival_function(self, y):
+    # [FUNCTION DOC]
+    # Log survival function at y, computed as the base log survival function at the bijector
+    # inverse of y. Raises a not-implemented error if the event shape may be overridden or the
+    # bijector is not injective. Assumes an increasing transform. Returns a tensor.
     if self._is_maybe_event_override:
       raise NotImplementedError("log_survival_function is not implemented when "
                                 "overriding event_shape")
@@ -505,6 +653,10 @@ class TransformedDistribution(distribution_lib.Distribution):
     return self.distribution.log_survival_function(x)
 
   def _survival_function(self, y):
+    # [FUNCTION DOC]
+    # Survival function at y, computed as the base survival function at the bijector inverse of y.
+    # Raises a not-implemented error if the event shape may be overridden or the bijector is not
+    # injective. Assumes an increasing transform. Returns a tensor.
     if self._is_maybe_event_override:
       raise NotImplementedError("survival_function is not implemented when "
                                 "overriding event_shape")
@@ -515,6 +667,11 @@ class TransformedDistribution(distribution_lib.Distribution):
     return self.distribution.survival_function(x)
 
   def _quantile(self, value):
+    # [FUNCTION DOC]
+    # Quantile function: the base distribution's quantile of the given probability, mapped through
+    # the bijector forward transform. Input: probability tensor value. Raises a not-implemented
+    # error if the event shape may be overridden or the bijector is not injective.
+    # Assumes an increasing transform (not checked). Returns a tensor.
     if self._is_maybe_event_override:
       raise NotImplementedError("quantile is not implemented when overriding "
                                 "event_shape")
@@ -528,6 +685,12 @@ class TransformedDistribution(distribution_lib.Distribution):
     return self.bijector.forward(inv_cdf)
 
   def _entropy(self):
+    # [FUNCTION DOC]
+    # Differential entropy of Y: base entropy (scaled by the product of the event override shape
+    # and tiled across the batch override shape when overridden) minus the inverse log-det
+    # Jacobian evaluated at a dummy zero tensor of the full batch-plus-event shape. This is valid
+    # only for a constant-Jacobian bijector. Raises a not-implemented error if the Jacobian is not
+    # constant or the bijector is not injective. Returns the entropy tensor with batch shape set.
     if not self.bijector.is_constant_jacobian:
       raise NotImplementedError("entropy is not implemented")
     if not self.bijector._is_injective:  # pylint: disable=protected-access
@@ -572,6 +735,15 @@ class TransformedDistribution(distribution_lib.Distribution):
 
   def _maybe_validate_shape_override(self, override_shape, base_is_scalar,
                                      validate_args, name):
+    # [FUNCTION DOC]
+    # HELPER: validates a batch or event shape override for the constructor.
+    # Inputs: override_shape (null, list or tensor of integers), base_is_scalar (whether the base
+    # distribution is scalar in that respect), validate_args (add runtime assertions), name (op
+    # name). Converts to an int32 tensor; a null override becomes empty. A scalar override yields
+    # the empty vector. Raises a type error for non-integer dtype, value error if statically not
+    # a vector, has non-positive elements, or both base and override are non-scalar. With
+    # validate_args and unknown statics, adds dynamic assertions and returns the override shape
+    # guarded by control dependencies. Returns the validated override shape tensor.
     """Helper to __init__ which ensures override batch/event_shape are valid."""
     if override_shape is None:
       override_shape = []
@@ -620,6 +792,11 @@ class TransformedDistribution(distribution_lib.Distribution):
         dynamic_assertions, override_shape)
 
   def _maybe_rotate_dims(self, x, rotate_right=False):
+    # [FUNCTION DOC]
+    # HELPER: cyclically permutes the dimensions of x by the rotation count.
+    # Inputs: x (tensor) and rotate_right (default false: rotate left by the count; true: rotate
+    # right). Returns x unchanged if rotation is statically known to be unneeded; otherwise
+    # returns a transposed tensor in which all dimensions of x are cyclically rotated.
     """Helper which rolls left event_dims left or right event_dims right."""
     needs_rotation_const = tensor_util.constant_value(self._needs_rotation)
     if needs_rotation_const is not None and not needs_rotation_const:
@@ -630,6 +807,10 @@ class TransformedDistribution(distribution_lib.Distribution):
         x, _concat_vectors(math_ops.range(n, ndims), math_ops.range(0, n)))
 
   def _maybe_get_static_event_ndims(self):
+    # [FUNCTION DOC]
+    # HELPER: returns the event rank, preferring a static Python integer from the static event
+    # shape, then a statically evaluated value of the dynamic event shape size, and otherwise a
+    # dynamic scalar tensor. Takes no inputs.
     if self.event_shape.ndims is not None:
       return self.event_shape.ndims
 

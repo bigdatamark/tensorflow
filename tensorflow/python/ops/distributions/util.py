@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# HELPER: shared utility module for the legacy distributions package (distributions, bijectors).
+# Collects tensor helpers used when writing distributions: argument assertions (integer form,
+# symmetry, non-negative integers, casting closure, categorical event size), logit/probability
+# conversion, static-versus-dynamic shape and value helpers, dimension rotation, triangular
+# matrix packing and unpacking, tridiagonal construction, weighted log-sum-exp, inverse softplus,
+# quadrature grid processing, padding, caller-argument capture and a docstring-appending decorator.
+# No import-time side effects beyond imports.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -42,6 +50,14 @@ def assert_integer_form(x,
                         message=None,
                         int_dtype=None,
                         name="assert_integer_form"):
+  # [FUNCTION DOC]
+  # HELPER: argument validation for distributions needing integer-valued inputs.
+  # Builds an assertion that every element of x equals its cast to an integer type and back.
+  # Inputs: x (numeric tensor), data (tensors printed on failure), summarize (entries to print),
+  # message (prefix; default says x has non-integer components), int_dtype (integer type used for
+  # the cast; default is the same-width signed int for float16/32/64), name. If x already has an
+  # integer dtype, returns a no-op. Raises a type error for an unrecognized float dtype when no
+  # int_dtype is given. Returns the assertion op (fails at run time with invalid-argument).
   """Assert that x has integer components (or floats equal to integers).
 
   Args:
@@ -81,6 +97,10 @@ def assert_integer_form(x,
 
 
 def assert_symmetric(matrix):
+  # [FUNCTION DOC]
+  # HELPER: argument validation for matrix parameters. Input: a batch of matrices (tensor).
+  # Returns the same matrix with a control dependency on an assertion that it equals its
+  # transpose (exact equality, no tolerance); the assertion fails at run time otherwise.
   matrix_t = array_ops.matrix_transpose(matrix)
   return control_flow_ops.with_dependencies(
       [check_ops.assert_equal(matrix, matrix_t)], matrix)
@@ -88,6 +108,11 @@ def assert_symmetric(matrix):
 
 def embed_check_nonnegative_integer_form(
     x, name="embed_check_nonnegative_integer_form"):
+  # [FUNCTION DOC]
+  # HELPER: argument validation (for count-like parameters).
+  # Converts x to a tensor and attaches assertions that all elements are non-negative and, for
+  # non-integer dtypes, have no fractional part. Input: x (tensor-like), name. Returns x with
+  # the assertions as control dependencies; failures occur at run time.
   """Assert x is a non-negative tensor, and optionally of integers."""
   with ops.name_scope(name, values=[x]):
     x = ops.convert_to_tensor(x, name="x")
@@ -105,6 +130,10 @@ def embed_check_nonnegative_integer_form(
 
 
 def same_dynamic_shape(a, b):
+  # [FUNCTION DOC]
+  # Compares the run-time shapes of two tensors. Inputs: a and b (tensor-like). Returns a boolean
+  # scalar tensor, true only if ranks match and every dimension matches. Uses a conditional so
+  # that the elementwise shape comparison only runs when the ranks are equal. Creates graph ops.
   """Returns whether a and b have the same dynamic shape.
 
   Args:
@@ -121,6 +150,10 @@ def same_dynamic_shape(a, b):
   # static shape inference may break the equality comparison between
   # shape(a) and shape(b) in math_ops.equal.
   def all_shapes_equal():
+    # [FUNCTION DOC]
+    # HELPER: nested helper of the dynamic shape comparison. Takes nothing; closes over the two
+    # tensors. Returns a boolean scalar that is true when the two shape vectors are equal,
+    # computed by comparing the concatenation of both shapes against the swapped concatenation.
     return math_ops.reduce_all(
         math_ops.equal(
             array_ops.concat(
@@ -136,6 +169,11 @@ def same_dynamic_shape(a, b):
 
 
 def maybe_get_static_value(x, dtype=None):
+  # [FUNCTION DOC]
+  # Tries to get the constant value of x at graph construction time. Inputs: x (tensor, plain
+  # value or null) and dtype (optional numeric type to cast the result to). A null x is returned
+  # as is. If constant extraction fails with a type error, x itself is used as the value.
+  # Returns the static value (cast to dtype when given and a value exists), or null if unknown.
   """Helper which tries to return a static value.
 
   Given `x`, extract it's value statically, optionally casting to a specific
@@ -166,6 +204,15 @@ def get_logits_and_probs(logits=None,
                          validate_args=False,
                          name="get_logits_and_probs",
                          dtype=None):
+  # [FUNCTION DOC]
+  # HELPER: parameter handling shared by Bernoulli/Categorical-style distributions.
+  # Given exactly one of logits or probs, returns the pair (logits, probs). Inputs: logits and
+  # probs (floating tensors, one of which must be null), multidimensional (last axis holds class
+  # scores: softmax for logits, log for probs, no pivot), validate_args (adds assertions: probs
+  # non-negative and either at most one or last axis sums to one; categorical event-size checks),
+  # name, dtype (preferred dtype when converting). Raises a value error if both or neither are
+  # given, a type error if the input is not floating point. Probabilities of zero/one give
+  # minus/plus infinite logits.
   """Converts logit to probabilities (or vice-versa), and returns both.
 
   Args:
@@ -242,6 +289,9 @@ def get_logits_and_probs(logits=None,
 
 
 def _is_known_unsigned_by_dtype(dt):
+  # [FUNCTION DOC]
+  # HELPER: dtype classification. Returns true for boolean, uint8 and uint16 (base dtype of dt),
+  # false for everything else (including unsigned types it does not know, such as uint32).
   """Helper returning True if dtype is known to be unsigned."""
   return {
       dtypes.bool: True,
@@ -251,6 +301,9 @@ def _is_known_unsigned_by_dtype(dt):
 
 
 def _is_known_signed_by_dtype(dt):
+  # [FUNCTION DOC]
+  # HELPER: dtype classification. Returns true for float16/32/64 and int8/16/32/64 (base dtype
+  # of dt), false otherwise.
   """Helper returning True if dtype is known to be signed."""
   return {
       dtypes.float16: True,
@@ -264,11 +317,17 @@ def _is_known_signed_by_dtype(dt):
 
 
 def _is_known_dtype(dt):
+  # [FUNCTION DOC]
+  # HELPER: dtype classification. True if dt is in either the known-unsigned or known-signed set.
   """Helper returning True if dtype is known."""
   return _is_known_unsigned_by_dtype(dt) or _is_known_signed_by_dtype(dt)
 
 
 def _largest_integer_by_dtype(dt):
+  # [FUNCTION DOC]
+  # HELPER: for casting-closure checks. Returns the largest integer exactly representable in dt:
+  # two to the power of (mantissa bits plus one) for floats, the integer maximum for integer
+  # types, and one for boolean. Raises a type error for an unrecognized dtype.
   """Helper returning the largest integer exactly representable by dtype."""
   if not _is_known_dtype(dt):
     raise TypeError("Unrecognized dtype: {}".format(dt.name))
@@ -283,6 +342,9 @@ def _largest_integer_by_dtype(dt):
 
 
 def _smallest_integer_by_dtype(dt):
+  # [FUNCTION DOC]
+  # HELPER: for casting-closure checks. Returns zero for known unsigned types, otherwise the
+  # negative of the largest representable integer. Raises a type error for an unknown dtype.
   """Helper returning the smallest integer exactly representable by dtype."""
   if not _is_known_dtype(dt):
     raise TypeError("Unrecognized dtype: {}".format(dt.name))
@@ -292,6 +354,9 @@ def _smallest_integer_by_dtype(dt):
 
 
 def _is_integer_like_by_dtype(dt):
+  # [FUNCTION DOC]
+  # HELPER: dtype classification. True if dt is an integer type or boolean. Raises a type error
+  # for an unknown dtype.
   """Helper returning True if dtype.is_integer or is `bool`."""
   if not _is_known_dtype(dt):
     raise TypeError("Unrecognized dtype: {}".format(dt.name))
@@ -300,6 +365,14 @@ def _is_integer_like_by_dtype(dt):
 
 def embed_check_categorical_event_shape(
     categorical_param, name="embed_check_categorical_event_shape"):
+  # [FUNCTION DOC]
+  # HELPER: argument validation for categorical-style parameters.
+  # Ensures the last axis (number of classes) is at least two and not larger than what the
+  # floating dtype can represent exactly (and the int32 maximum). Input: categorical_param
+  # (floating tensor), name. Raises a type error for a non-float dtype, and a value error when
+  # statically the rank is below one, classes are fewer than two or exceed the limit. When the
+  # last dimension is unknown, returns the tensor with run-time assertions attached instead.
+  # Returns the (possibly guarded) tensor.
   """Embeds checks that categorical distributions don't have too many classes.
 
   A categorical-type distribution is one which, e.g., returns the class label
@@ -397,6 +470,13 @@ def embed_check_integer_casting_closed(x,
                                        target_dtype,
                                        assert_nonnegative=True,
                                        name="embed_check_casting_closed"):
+  # [FUNCTION DOC]
+  # HELPER: argument validation ensuring integer-valued tensors survive a cast to target_dtype.
+  # Inputs: x (integer or float tensor of integer-form values), target_dtype, assert_nonnegative
+  # (default true: also require non-negative), name. Raises a type error if either dtype is not
+  # integer/float-like or neither is an integer type. Adds assertions: non-negativity, integer
+  # form for float inputs, upper bound (and lower bound when negatives are allowed) of the
+  # target. Returns x unchanged if no assertion is needed, else x guarded by control dependencies.
   """Ensures integers remain unaffected despite casting to/from int/float types.
 
   Example integer-types: `uint8`, `int32`, `bool`.
@@ -485,6 +565,13 @@ def embed_check_integer_casting_closed(x,
 
 
 def log_combinations(n, counts, name="log_combinations"):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring formula reads as n! divided by a sum of factorials; the code
+  # actually computes log of n! minus the sum over the last axis of log of each count factorial,
+  # i.e. the log of n! divided by the product of the count factorials (the multinomial coefficient).
+  # Computes the log multinomial coefficient using the log-gamma function. Inputs: n (tensor,
+  # total outcomes) and counts (tensor whose last axis indexes classes), name. Returns a tensor
+  # with the last axis of counts reduced.
   """Multinomial coefficient.
 
   Given `n` and `counts`, where `counts` has last dimension `k`, we compute
@@ -519,6 +606,11 @@ def log_combinations(n, counts, name="log_combinations"):
 
 
 def matrix_diag_transform(matrix, transform=None, name=None):
+  # [FUNCTION DOC]
+  # Applies a function to only the diagonal of a (batch of) square matrix, leaving the rest as is.
+  # Inputs: matrix (rank two or higher tensor, last two dims equal), transform (elementwise
+  # callback from tensor to tensor; null returns the matrix unchanged), name (default
+  # matrix_diag_transform). Returns a tensor with the same shape and dtype as the matrix.
   """Transform diagonal of [batch-]matrix, leave rest of matrix unchanged.
 
   Create a trainable covariance defined by a Cholesky factor:
@@ -581,6 +673,15 @@ def matrix_diag_transform(matrix, transform=None, name=None):
 
 
 def rotate_transpose(x, shift, name="rotate_transpose"):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring mentions a validate_args option and GPU-to-CPU data movement, but
+  # the function has no such parameter and adds no such checks. Also the integer-type assertion
+  # result on shift is discarded, so it only takes effect through its static evaluation.
+  # Circularly rotates the dimensions of x. Inputs: x (tensor), shift (integer scalar; negative
+  # moves dimensions left, positive right; taken modulo the rank), name. If the rank and shift are
+  # statically known, returns x unchanged for rank below two or zero effective shift, otherwise a
+  # transpose with a rolled permutation; else builds the permutation dynamically. Returns the
+  # transposed tensor.
   """Circularly moves dims left or right.
 
   Effectively identical to:
@@ -658,6 +759,12 @@ def rotate_transpose(x, shift, name="rotate_transpose"):
 
 
 def pick_vector(cond, true_vector, false_vector, name="pick_vector"):
+  # [FUNCTION DOC]
+  # Chooses between two 1-D vectors (possibly of different lengths) by a scalar boolean.
+  # Inputs: cond (scalar boolean), true_vector, false_vector (1-D tensors of the same dtype),
+  # name. If cond is statically known, returns the chosen input immediately without graph nodes
+  # or validation. Otherwise concatenates the two and slices out the chosen one dynamically.
+  # Raises a type error if cond is not boolean, or the vector dtypes differ in the dynamic case.
   """Picks possibly different length row `Tensor`s based on condition.
 
   Value `Tensor`s should have exactly one dimension.
@@ -706,6 +813,11 @@ def pick_vector(cond, true_vector, false_vector, name="pick_vector"):
 def prefer_static_broadcast_shape(shape1,
                                   shape2,
                                   name="prefer_static_broadcast_shape"):
+  # [FUNCTION DOC]
+  # Broadcasts two shapes, statically when possible. Inputs: shape1 and shape2 (1-D integer
+  # tensors, or static shape objects), name. If both can be resolved to static shapes, returns
+  # the static broadcast shape object; otherwise returns a dynamic integer tensor of the broadcast
+  # shape. Raises a value error if a partially defined static shape must be turned into a tensor.
   """Convenience function which statically broadcasts shape when possible.
 
   Args:
@@ -720,9 +832,16 @@ def prefer_static_broadcast_shape(shape1,
   with ops.name_scope(name, values=[shape1, shape2]):
 
     def make_shape_tensor(x):
+      # [FUNCTION DOC]
+      # HELPER: nested helper of the static broadcast function. Converts the input to an int32
+      # tensor named shape and returns it.
       return ops.convert_to_tensor(x, name="shape", dtype=dtypes.int32)
 
     def get_tensor_shape(s):
+      # [FUNCTION DOC]
+      # HELPER: nested helper of the static broadcast function. Returns s if it is already a
+      # static shape object; otherwise tries to extract a constant value from it and wrap it as
+      # a static shape; returns null when the value is not statically known.
       if isinstance(s, tensor_shape.TensorShape):
         return s
       s_ = tensor_util.constant_value(make_shape_tensor(s))
@@ -731,6 +850,10 @@ def prefer_static_broadcast_shape(shape1,
       return None
 
     def get_shape_tensor(s):
+      # [FUNCTION DOC]
+      # HELPER: nested helper of the static broadcast function. Converts s to a shape tensor: a
+      # non-shape-object input is converted directly; a fully defined static shape is converted
+      # from its list; a partially defined static shape raises a value error.
       if not isinstance(s, tensor_shape.TensorShape):
         return make_shape_tensor(s)
       if s.is_fully_defined():
@@ -749,6 +872,8 @@ def prefer_static_broadcast_shape(shape1,
 
 
 def prefer_static_rank(x):
+  # [FUNCTION DOC]
+  # Returns the rank of tensor x as a constant array if statically known, else as a rank tensor.
   """Return static rank of tensor `x` if available, else `tf.rank(x)`.
 
   Args:
@@ -761,6 +886,8 @@ def prefer_static_rank(x):
 
 
 def prefer_static_shape(x):
+  # [FUNCTION DOC]
+  # Returns the shape of tensor x as a constant array if statically known, else as a shape tensor.
   """Return static shape of tensor `x` if available, else `tf.shape(x)`.
 
   Args:
@@ -773,6 +900,8 @@ def prefer_static_shape(x):
 
 
 def prefer_static_value(x):
+  # [FUNCTION DOC]
+  # Returns the constant value of x as an array if it can be determined statically, else x itself.
   """Return static value of tensor `x` if available, else `x`.
 
   Args:
@@ -788,6 +917,10 @@ def prefer_static_value(x):
 
 
 def gen_new_seed(seed, salt):
+  # [FUNCTION DOC]
+  # Derives a deterministic new random seed. Inputs: seed (integer or null) and salt (string).
+  # A null seed yields null. Otherwise hashes the seed text plus the salt with MD5 and returns
+  # the first eight hex digits as an integer masked to a non-negative 31-bit value.
   """Generate a new seed, from the given seed and salt."""
   if seed is None:
     return None
@@ -796,6 +929,14 @@ def gen_new_seed(seed, salt):
 
 
 def fill_triangular(x, upper=False, name=None):
+  # [FUNCTION DOC]
+  # Packs the last axis of x (length d = n(n+1)/2) into a triangular n by n matrix per batch
+  # member, filling elements in a clockwise spiral. Inputs: x (tensor, rank at least one),
+  # upper (default false: lower triangular), name. Computes n statically when the last
+  # dimension is known (raising a value error if it is not triangular-sized); otherwise
+  # computes it dynamically, without validation, so a bad size fails later in the reshape.
+  # Builds the matrix by concatenating x with a reversed tail, reshaping, and masking with a
+  # band-part. Returns a tensor of shape batch plus n by n with static shape set.
   """Creates a (batch of) triangular matrix from a vector of inputs.
 
   Created matrix can be lower- or upper-triangular. (It is more efficient to
@@ -911,6 +1052,13 @@ def fill_triangular(x, upper=False, name=None):
 
 
 def fill_triangular_inverse(x, upper=False, name=None):
+  # [FUNCTION DOC]
+  # Inverse of the spiral triangular packing: extracts the triangular part of a (batch of)
+  # n by n matrix into a vector of length n(n+1)/2. Inputs: x (tensor, rank at least two, square
+  # last two dims assumed but not checked), upper (default false: read the lower triangle), name.
+  # Returns a tensor with the last two dims replaced by one dim of the packed length; static shape
+  # is set when known. Entries outside the chosen triangle are assumed zero (they are added, not
+  # ignored, when folding the rotated portion).
   """Creates a vector from a (batch of) triangular matrix.
 
   The vector is created from the lower-triangular or upper-triangular portion
@@ -980,6 +1128,12 @@ def fill_triangular_inverse(x, upper=False, name=None):
 
 
 def tridiag(below=None, diag=None, above=None, name=None):
+  # [FUNCTION DOC]
+  # Builds a (batch of) tridiagonal matrix. Inputs: below (batch plus d-1 vector for the
+  # sub-diagonal), diag (batch plus d vector), above (batch plus d-1 for the super-diagonal);
+  # each may be null meaning zeros; name. Each given part is turned into a full matrix and the
+  # parts are summed (convenient, not efficient). Raises a value error if all three are null.
+  # Returns the matrix tensor.
   """Creates a matrix with values set above, below, and on the diagonal.
 
   Example:
@@ -1013,12 +1167,18 @@ def tridiag(below=None, diag=None, above=None, name=None):
   """
 
   def _pad(x):
+    # [FUNCTION DOC]
+    # HELPER: nested helper of the tridiagonal builder. Adds one zero at the start and end of the
+    # last axis of x (batch of vectors), returning a tensor longer by two along that axis.
     """Prepends and appends a zero to every vector in a batch of vectors."""
     shape = array_ops.concat([array_ops.shape(x)[:-1], [1]], axis=0)
     z = array_ops.zeros(shape, dtype=x.dtype)
     return array_ops.concat([z, x, z], axis=-1)
 
   def _add(*x):
+    # [FUNCTION DOC]
+    # HELPER: nested helper of the tridiagonal builder. Sums the given tensors, skipping nulls.
+    # Raises a value error if every argument is null. Returns the sum.
     """Adds list of Tensors, ignoring `None`."""
     s = None
     for y in x:
@@ -1053,6 +1213,14 @@ def reduce_weighted_logsumexp(logx,
                               keep_dims=False,
                               return_sign=False,
                               name=None):
+  # [FUNCTION DOC]
+  # Numerically stable log of the absolute value of a weighted sum of exponentials.
+  # Inputs: logx (numeric tensor), w (weights, same dtype; null means all ones), axis (dims to
+  # reduce; null reduces all), keep_dims (retain reduced dims as size one), return_sign (also
+  # return the sign of the weighted sum), name. Subtracts the maximum of log-abs-weighted terms
+  # (replaced by zero where infinite to avoid not-a-number), sums, and re-adds it. With no
+  # weights it is a plain log-sum-exp with sign one. Returns the result, or a pair of result
+  # and sign when return_sign is true.
   """Computes `log(abs(sum(weight * exp(elements across tensor dimensions))))`.
 
   If all weights `w` are known to be positive, it is more efficient to directly
@@ -1146,6 +1314,12 @@ def reduce_weighted_logsumexp(logx,
 # tensorflow/python/ops/softplus_op_test.py
 # once TF core is accepting new ops.
 def softplus_inverse(x, name=None):
+  # [FUNCTION DOC]
+  # Numerically stable inverse of softplus. Inputs: x (floating tensor, expected positive but not
+  # enforced), name. Uses a stable rearranged formula for ordinary values, returns the log of x
+  # for very small inputs and x itself for very large inputs (thresholds derived from the dtype
+  # epsilon), and substitutes ones in unselected branches so gradients do not become
+  # not-a-number. Returns a tensor of the same type and shape as x.
   """Computes the inverse softplus, i.e., x = softplus_inverse(softplus(x)).
 
   Mathematically this op is equivalent to:
@@ -1203,6 +1377,12 @@ def softplus_inverse(x, name=None):
 
 # TODO(b/35290280): Add unit-tests.
 def dimension_size(x, axis):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: for a non-negative axis the rank requirement used is the axis value rather than
+  # axis plus one, so an axis equal to the rank is not rejected by the static check.
+  # Returns the size of dimension axis of x: a static integer if known, else a dynamic scalar
+  # tensor taken from the run-time shape. Inputs: x (tensor), axis (integer, may be negative).
+  # May raise a value error if the static rank is lower than required.
   """Returns the size of a specific dimension."""
   # Since tf.gather isn't "constant-in, constant-out", we must first check the
   # static shape or fallback to dynamic shape.
@@ -1217,6 +1397,14 @@ def process_quadrature_grid_and_probs(quadrature_grid_and_probs,
                                       dtype,
                                       validate_args,
                                       name=None):
+  # [FUNCTION DOC]
+  # Validates or builds a quadrature grid with normalized weights. Inputs:
+  # quadrature_grid_and_probs (pair of grid and weights, or null), dtype (expected tensor dtype),
+  # validate_args (add run-time length-equality assertion when lengths are not statically
+  # known), name. If null, uses an eight-point Gauss-Hermite rule with weights normalized to
+  # sum to one. Otherwise converts both to tensors of dtype and normalizes the weights by their
+  # L1 norm over the last axis. Raises a value error if the static lengths differ.
+  # Returns a pair (grid, probs).
   """Validates quadrature grid, probs or computes them as necessary.
 
   Args:
@@ -1257,6 +1445,9 @@ def process_quadrature_grid_and_probs(quadrature_grid_and_probs,
     probs /= linalg_ops.norm(probs, ord=1, axis=-1, keepdims=True, name="probs")
 
     def _static_event_size(x):
+      # [FUNCTION DOC]
+      # HELPER: nested helper of the quadrature processing. Returns the static size of the last
+      # dimension of x as an integer, or null if unknown. Requires rank at least one.
       """Returns the static size of a specific dimension or `None`."""
       return tensor_shape.dimension_value(x.shape.with_rank_at_least(1)[-1])
 
@@ -1281,6 +1472,12 @@ def process_quadrature_grid_and_probs(quadrature_grid_and_probs,
 
 
 def pad(x, axis, front=False, back=False, value=0, count=1, name=None):
+  # [FUNCTION DOC]
+  # Pads one dimension of x with a constant. Inputs: x (tensor), axis (scalar integer, negative
+  # allowed), front and back (booleans choosing where to pad), value (pad value, converted to
+  # x's dtype), count (integer number of elements added at each chosen end), name. Raises a type
+  # error if count is not integer-like and a value error if neither front nor back is set.
+  # Computes the static output shape when possible and sets it. Returns the padded tensor.
   """Pads `value` to the front and/or back of a `Tensor` dim, `count` times.
 
   Args:
@@ -1352,6 +1549,13 @@ def pad(x, axis, front=False, back=False, value=0, count=1, name=None):
 
 
 def parent_frame_arguments():
+  # [FUNCTION DOC]
+  # Introspects the calling function's frame and returns a mapping from its argument names to
+  # their current values, with keyword-only extras (the catch-all keyword mapping) flattened in
+  # and the variable positional arguments excluded. At global scope returns an empty mapping.
+  # Values reflect any reassignment made before the call. On Python versions below 3.13 it also
+  # removes the entries from the frame's locals mapping; on 3.13 and later it copies without
+  # popping. Takes no inputs; has no other side effects.
   """Returns parent frame arguments.
 
   When called inside a function, returns a dictionary with the caller's function
@@ -1395,6 +1599,12 @@ def parent_frame_arguments():
 
 
 class AppendDocstring:
+  # [CLASS DOC]
+  # HELPER: decorator class used by distribution classes to append an extra note and a bulleted
+  # keyword-argument section to the documentation of the public method that wraps a private one.
+  # State: the combined additional note text. Instances are created with an optional note and an
+  # optional mapping from keyword names to one-line descriptions, then applied to a function; the
+  # call returns a wrapper function whose documentation has the note appended.
   """Helper class to promote private subclass docstring to public counterpart.
 
   Example:
@@ -1416,6 +1626,11 @@ class AppendDocstring:
   """
 
   def __init__(self, additional_note="", kwargs_dict=None):
+    # [FUNCTION DOC]
+    # Stores the note and, if a mapping of keyword names to descriptions is given, appends a
+    # keyword-arguments section with one bullet per entry in sorted key order (leading whitespace
+    # of each description removed). Raises a value error if a key contains whitespace or a
+    # description contains a newline. Returns nothing.
     """Initializes the AppendDocstring object.
 
     Args:
@@ -1443,9 +1658,16 @@ class AppendDocstring:
       self._additional_note += ("\n\n##### `kwargs`:\n\n" + "\n".join(bullets))
 
   def __call__(self, fn):
+    # [FUNCTION DOC]
+    # Decorator application. Input: fn (callable). Wraps fn in a pass-through function that
+    # preserves its metadata, then sets the wrapper's documentation to the additional note if fn
+    # had none, or appends the note to fn's documentation after a newline. Returns the wrapper.
 
     @functools.wraps(fn)
     def _fn(*args, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: nested pass-through wrapper created by the decorator; calls the wrapped function
+      # with all positional and keyword arguments unchanged and returns its result.
       return fn(*args, **kwargs)
 
     if _fn.__doc__ is None:

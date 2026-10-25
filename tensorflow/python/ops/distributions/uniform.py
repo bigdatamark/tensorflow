@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Defines the deprecated Uniform distribution (continuous uniform on the half-open interval from
+# low to high, with broadcastable parameters). Exposes the Uniform class, which is exported as the
+# version-one distributions Uniform symbol. Import-time side effect: the export registration only.
+# Part of the legacy distributions package, superseded by TensorFlow Probability.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,6 +36,11 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export(v1=["distributions.Uniform"])
 class Uniform(distribution.Distribution):
+  # [CLASS DOC]
+  # Batch of scalar-event uniform distributions parameterized by tensors low and high, which must
+  # be broadcast-compatible with low less than high. State: the low and high tensors (identity
+  # copies). Fully reparameterized. Implements batch/event shapes, sampling, density, cdf,
+  # entropy, mean, variance and standard deviation. Exported under the v1 distributions namespace.
   """Uniform distribution with `low` and `high` parameters.
 
   #### Mathematical Details
@@ -87,6 +97,16 @@ class Uniform(distribution.Distribution):
                validate_args=False,
                allow_nan_stats=True,
                name="Uniform"):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says an invalid-argument error is raised when low >= high and
+    # validate_args is false; the code adds the less-than assertion only when validate_args is
+    # true, so with false nothing is checked and invalid inputs silently give wrong results.
+    # Constructs the distribution. Inputs: low and high (floating tensors or values, defaults zero
+    # and one), validate_args (default false), allow_nan_stats (default true), name (default
+    # Uniform). Stores identity copies of low and high (under a control dependency on the
+    # assertion when validating), checks both have the same float dtype (raises a type error
+    # otherwise), then calls the parent constructor with fully reparameterized type and the two
+    # tensors as graph parents. Deprecated; emits a one-time warning. Returns nothing.
     """Initialize a batch of Uniform distributions.
 
     Args:
@@ -128,42 +148,67 @@ class Uniform(distribution.Distribution):
 
   @staticmethod
   def _param_shapes(sample_shape):
+    # [FUNCTION DOC]
+    # HELPER: supplies parameter shapes for the parent class's parameter-shape utilities.
+    # Input: desired sample shape (vector). Returns a mapping from the names low and high to
+    # the sample shape converted to an int32 tensor (the same shape for both).
     return dict(
         zip(("low", "high"),
             ([ops.convert_to_tensor(sample_shape, dtype=dtypes.int32)] * 2)))
 
   @property
   def low(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the lower boundary tensor of the interval.
     """Lower boundary of the output interval."""
     return self._low
 
   @property
   def high(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the upper boundary tensor of the interval.
     """Upper boundary of the output interval."""
     return self._high
 
   def range(self, name="range"):
+    # [FUNCTION DOC]
+    # Returns the interval width (high minus low), broadcast over the batch. Input: optional name
+    # for the name scope (default range). Creates a subtraction op.
     """`high - low`."""
     with self._name_scope(name):
       return self.high - self.low
 
   def _batch_shape_tensor(self):
+    # [FUNCTION DOC]
+    # Dynamic batch shape: the broadcast of the dynamic shapes of low and high. Returns an
+    # integer vector tensor.
     return array_ops.broadcast_dynamic_shape(
         array_ops.shape(self.low),
         array_ops.shape(self.high))
 
   def _batch_shape(self):
+    # [FUNCTION DOC]
+    # Static batch shape: the broadcast of the static shapes of low and high. Raises a value error
+    # if they are incompatible. Returns a static shape object.
     return array_ops.broadcast_static_shape(
         self.low.get_shape(),
         self.high.get_shape())
 
   def _event_shape_tensor(self):
+    # [FUNCTION DOC]
+    # Dynamic event shape: always an empty int32 vector since the event is scalar.
     return constant_op.constant([], dtype=dtypes.int32)
 
   def _event_shape(self):
+    # [FUNCTION DOC]
+    # Static event shape: always the scalar (empty) shape.
     return tensor_shape.TensorShape([])
 
   def _sample_n(self, n, seed=None):
+    # [FUNCTION DOC]
+    # Draws n samples per batch member. Inputs: n (count), seed (optional random seed). Generates
+    # standard uniform values of shape n plus batch shape and rescales them as low plus width times
+    # the draw. Returns the samples tensor. Uses randomness.
     shape = array_ops.concat([[n], self.batch_shape_tensor()], 0)
     samples = random_ops.random_uniform(shape=shape,
                                         dtype=self.dtype,
@@ -171,6 +216,9 @@ class Uniform(distribution.Distribution):
     return self.low + self.range() * samples
 
   def _prob(self, x):
+    # [FUNCTION DOC]
+    # Density at x: one over the width inside the interval [low, high) and zero outside; not-a-number
+    # inputs propagate. x is broadcast to the batch shape first. Returns a tensor.
     broadcasted_x = x * array_ops.ones(
         self.batch_shape_tensor(), dtype=x.dtype)
     return array_ops.where_v2(
@@ -182,6 +230,9 @@ class Uniform(distribution.Distribution):
             array_ops.ones_like(broadcasted_x) / self.range()))
 
   def _cdf(self, x):
+    # [FUNCTION DOC]
+    # Cumulative distribution at x: zero below low, one at or above high, and (x minus low)
+    # divided by the width in between. Broadcasts x with the batch shape. Returns a tensor.
     broadcast_shape = array_ops.broadcast_dynamic_shape(
         array_ops.shape(x), self.batch_shape_tensor())
     zeros = array_ops.zeros(broadcast_shape, dtype=self.dtype)
@@ -192,13 +243,21 @@ class Uniform(distribution.Distribution):
     return array_ops.where_v2(x >= self.high, ones, result_if_not_big)
 
   def _entropy(self):
+    # [FUNCTION DOC]
+    # Differential entropy: the natural log of the interval width. Returns a tensor.
     return math_ops.log(self.range())
 
   def _mean(self):
+    # [FUNCTION DOC]
+    # Mean: midpoint of low and high. Returns a tensor.
     return (self.low + self.high) / 2.
 
   def _variance(self):
+    # [FUNCTION DOC]
+    # Variance: width squared divided by twelve. Returns a tensor.
     return math_ops.square(self.range()) / 12.
 
   def _stddev(self):
+    # [FUNCTION DOC]
+    # Standard deviation: width divided by the square root of twelve. Returns a tensor.
     return self.range() / math.sqrt(12.)

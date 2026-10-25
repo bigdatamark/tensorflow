@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Assembles the public tf.linalg namespace by wildcard-importing the linalg implementation module
+# and every LinearOperator module (adjoint, block diagonal, block lower triangular, circulant,
+# composition, diagonal, full matrix, householder, identity, inversion, Kronecker, low rank
+# update, lower triangular, permutation, Toeplitz, tridiagonal, zeros). Import-time side effect:
+# after importing, it deletes several names (ops, array_ops, gen_linalg_ops, linalg_ops,
+# math_ops, special_math_ops, tf_export) from its namespace to seal the API, so they are not
+# exposed. Defines no functions or classes of its own.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
