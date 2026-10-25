@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Unit tests for the legacy Supervisor training helper. They run graph-mode scenarios with
+# temporary log directories: managed session behavior and error propagation, event file
+# contents (graph, meta graph, summaries, session logs, step rate), checkpoint creation and
+# restore, chief versus non-chief behavior, default and explicit init, local init and
+# ready-for-local-init ops, session config, global step detection, setup validation and
+# restart after stop. Some tests start an in-process local server. No import-time side effects
+# beyond defining the test case; the file runs the test main when executed directly.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -50,6 +58,11 @@ from tensorflow.python.training import supervisor
 
 
 def _summary_iterator(test_dir):
+  # [FUNCTION DOC]
+  # HELPER: shared by the event-file tests.
+  # Input: a directory path. Finds files whose names start with "event" in it, sorts them by
+  # name and returns an iterator over the events of the last one. Fails with an index error if
+  # no event file exists.
   """Reads events from test_dir/events.
 
   Args:
@@ -63,14 +76,28 @@ def _summary_iterator(test_dir):
 
 
 class SupervisorTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the Supervisor class in all its modes (single program, chief, non-chief).
+  # It has no shared setup; each test builds its own graph and uses a per-test directory under
+  # the temporary directory, via small helper methods for directories, waiting for files and
+  # creating a CSV data file.
 
   def _test_dir(self, test_name):
+    # [FUNCTION DOC]
+    # HELPER: fixture helper for the tests. Input: a test name. Returns a path under the
+    # temporary directory with that name, first deleting any existing directory there.
     test_dir = os.path.join(self.get_temp_dir(), test_name)
     if os.path.exists(test_dir):
       shutil.rmtree(test_dir)
     return test_dir
 
   def _wait_for_glob(self, pattern, timeout_secs, for_checkpoint=True):
+    # [FUNCTION DOC]
+    # HELPER: polling helper for tests that wait on background threads.
+    # Inputs: a path or glob pattern, a timeout in seconds, and a flag (default true) selecting
+    # whether to test for a checkpoint with that prefix or for any file matching the glob. Polls
+    # every 50 milliseconds and returns as soon as it exists; fails the test if the timeout
+    # passes.
     """Wait for a checkpoint file to appear.
 
     Args:
@@ -91,6 +118,10 @@ class SupervisorTest(test.TestCase):
 
   # This test does not test much.
   def testBasics(self):
+    # [FUNCTION DOC]
+    # Scenario: a supervisor with a log directory prepares a session, ten evaluations of a
+    # constant run, then the session is closed and the supervisor stopped. Expected: no errors
+    # (a smoke test, as the existing comment admits).
     logdir = self._test_dir("basics")
     with ops.Graph().as_default():
       my_op = constant_op.constant(1.0)
@@ -102,6 +133,9 @@ class SupervisorTest(test.TestCase):
       sv.stop()
 
   def testManagedSession(self):
+    # [FUNCTION DOC]
+    # Scenario: run a constant ten times inside a managed session. Expected: the block exits
+    # without error and the supervisor reports it should stop afterwards.
     logdir = self._test_dir("managed_session")
     with ops.Graph().as_default():
       my_op = constant_op.constant(1.0)
@@ -113,6 +147,10 @@ class SupervisorTest(test.TestCase):
       self.assertTrue(sv.should_stop())
 
   def testManagedSessionUserError(self):
+    # [FUNCTION DOC]
+    # Scenario: the body of a managed session raises a runtime error at step one. Expected: the
+    # error propagates out of the block with its message, the loop stopped at step one, and the
+    # supervisor reports it should stop.
     logdir = self._test_dir("managed_user_error")
     with ops.Graph().as_default():
       my_op = constant_op.constant(1.0)
@@ -131,6 +169,10 @@ class SupervisorTest(test.TestCase):
       self.assertEqual(1, last_step)
 
   def testManagedSessionIgnoreOutOfRangeError(self):
+    # [FUNCTION DOC]
+    # Scenario: the body raises an out-of-range error (input exhausted) at step three.
+    # Expected: the error is swallowed as normal termination, the loop ended at step three, and
+    # the supervisor reports it should stop.
     logdir = self._test_dir("managed_out_of_range")
     with ops.Graph().as_default():
       my_op = constant_op.constant(1.0)
@@ -149,6 +191,12 @@ class SupervisorTest(test.TestCase):
       self.assertEqual(3, last_step)
 
   def testManagedSessionDoNotKeepSummaryWriter(self):
+    # [FUNCTION DOC]
+    # Scenario: three scalar summaries are merged; a supervisor without automatic summaries
+    # writes the merged summary manually in two successive managed sessions, closing the writer
+    # each time, with a pause so the second event file has a different name. Expected: two
+    # event files, each holding a file version event, the graph, the meta graph, the summary
+    # values once, a STOP session log, and nothing more.
     logdir = self._test_dir("managed_not_keep_summary_writer")
     with ops.Graph().as_default():
       summary.scalar("c1", constant_op.constant(1))
@@ -201,6 +249,11 @@ class SupervisorTest(test.TestCase):
         next(rr)
 
   def testManagedSessionKeepSummaryWriter(self):
+    # [FUNCTION DOC]
+    # Scenario: same three summaries written in two managed sessions, but without closing the
+    # writer between them (standard services off); the writer is closed manually at the end.
+    # Expected: a single event file with file version, graph, meta graph, the summary twice and
+    # then nothing further (no stop message).
     logdir = self._test_dir("managed_keep_summary_writer")
     with ops.Graph().as_default():
       summary.scalar("c1", constant_op.constant(1))
@@ -252,6 +305,9 @@ class SupervisorTest(test.TestCase):
     self.assertRaises(StopIteration, lambda: next(rr))
 
   def _csv_data(self, logdir):
+    # [FUNCTION DOC]
+    # HELPER: fixture for the end-of-input tests. Input: an existing directory. Writes a file
+    # named data.csv with three records of three integers each and returns its path.
     # Create a small data file with 3 CSV records.
     data_path = os.path.join(logdir, "data.csv")
     with open(data_path, "w") as f:
@@ -261,6 +317,10 @@ class SupervisorTest(test.TestCase):
     return data_path
 
   def testManagedEndOfInputOneQueue(self):
+    # [FUNCTION DOC]
+    # Scenario: a CSV file is read for three epochs through one filename queue and a text line
+    # reader; the managed session loop runs until the supervisor says to stop. Expected: input
+    # exhaustion ends the loop cleanly with no error.
     # Tests that the supervisor finishes without an error when using
     # a fixed number of epochs, reading from a single queue.
     logdir = self._test_dir("managed_end_of_input_one_queue")
@@ -279,6 +339,9 @@ class SupervisorTest(test.TestCase):
           sess.run(rec)
 
   def testManagedEndOfInputTwoQueues(self):
+    # [FUNCTION DOC]
+    # Scenario: like the single-queue case, but records pass through a shuffle batch queue, so
+    # two queues feed the loop. Expected: the loop ends cleanly at input exhaustion, no error.
     # Tests that the supervisor finishes without an error when using
     # a fixed number of epochs, reading from two queues, the second
     # one producing a batch from the first one.
@@ -299,6 +362,10 @@ class SupervisorTest(test.TestCase):
           sess.run(shuff_rec)
 
   def testManagedMainErrorTwoQueues(self):
+    # [FUNCTION DOC]
+    # Scenario: the two-queue input pipeline runs in a managed session and the body raises a
+    # runtime error at step three. Expected: that error is the one that propagates out, not an
+    # error from the queue threads.
     # Tests that the supervisor correctly raises a main loop
     # error even when using multiple queues for input.
     logdir = self._test_dir("managed_main_error_two_queues")
@@ -324,6 +391,10 @@ class SupervisorTest(test.TestCase):
               sess.run(shuff_rec)
 
   def testSessionConfig(self):
+    # [FUNCTION DOC]
+    # Scenario: an op is placed on a second CPU device, and the session is prepared with a
+    # config that declares two CPU devices. Expected: the op evaluates ten times without error,
+    # showing the config is passed to the session.
     logdir = self._test_dir("session_config")
     with ops.Graph().as_default():
       with ops.device("/cpu:1"):
@@ -337,6 +408,11 @@ class SupervisorTest(test.TestCase):
       sv.stop()
 
   def testChiefCanWriteEvents(self):
+    # [FUNCTION DOC]
+    # Scenario: a chief with a log directory and no automatic summaries writes a merged summary
+    # manually, then stops. Expected: the event file contains, in order, the file version, a
+    # graph equal to the session graph, a meta graph equal to the one created beforehand (with
+    # the same embedded graph), the summary values, a STOP session log, and nothing more.
     logdir = self._test_dir("can_write")
     with ops.Graph().as_default():
       summary.scalar("c1", constant_op.constant(1))
@@ -387,8 +463,14 @@ class SupervisorTest(test.TestCase):
     self.assertRaises(StopIteration, lambda: next(rr))
 
   def testNonChiefCannotWriteEvents(self):
+    # [FUNCTION DOC]
+    # Scenario: a non-chief supervisor tries to record a summary and tries to start the
+    # standard services, each in a fresh graph. Expected: both raise a runtime error.
 
     def _summary_computed():
+      # [FUNCTION DOC]
+      # HELPER: nested action for the test. Creates a non-chief supervisor and a session, builds
+      # merged summaries and attempts to record them; expected to raise a runtime error.
       with ops.Graph().as_default():
         sv = supervisor.Supervisor(is_chief=False)
         sess = sv.prepare_or_wait_for_session("")
@@ -398,6 +480,9 @@ class SupervisorTest(test.TestCase):
         sv.summary_computed(sess, sess.run(summ))
 
     def _start_standard_services():
+      # [FUNCTION DOC]
+      # HELPER: nested action for the test. Creates a non-chief supervisor and a session and
+      # attempts to start the standard services; expected to raise a runtime error.
       with ops.Graph().as_default():
         sv = supervisor.Supervisor(is_chief=False)
         sess = sv.prepare_or_wait_for_session("")
@@ -407,6 +492,9 @@ class SupervisorTest(test.TestCase):
     self.assertRaises(RuntimeError, _start_standard_services)
 
   def testNoLogdirButWantSummary(self):
+    # [FUNCTION DOC]
+    # Scenario: a supervisor with an empty log directory and no automatic summaries is asked to
+    # record a summary. Expected: a runtime error saying a summary writer is required.
     with ops.Graph().as_default():
       summary.scalar("c1", constant_op.constant(1))
       summary.scalar("c2", constant_op.constant(2))
@@ -419,6 +507,10 @@ class SupervisorTest(test.TestCase):
 
   @test_util.run_v1_only("train.Supervisor is for v1 only")
   def testLogdirButExplicitlyNoSummaryWriter(self):
+    # [FUNCTION DOC]
+    # Scenario (version-1 only): log directory given but summary writer explicitly disabled,
+    # with one variable in the graph. Expected: a checkpoint still appears within three seconds,
+    # while recording a summary raises a runtime error about the missing writer.
     logdir = self._test_dir("explicit_no_summary_writer")
     with ops.Graph().as_default():
       variable_v1.VariableV1([1.0], name="foo")
@@ -435,6 +527,11 @@ class SupervisorTest(test.TestCase):
         sv.summary_computed(sess, sess.run(summ))
 
   def testNoLogdirButExplicitSummaryWriter(self):
+    # [FUNCTION DOC]
+    # Scenario: no log directory for the supervisor, but a file writer created by the test on a
+    # directory is passed in; a summary is recorded manually and the supervisor stopped.
+    # Expected: the event file in that directory has the file version, graph, meta graph,
+    # summary values, a STOP log, and nothing further.
     logdir = self._test_dir("explicit_summary_writer")
     with ops.Graph().as_default():
       summary.scalar("c1", constant_op.constant(1))
@@ -488,6 +585,9 @@ class SupervisorTest(test.TestCase):
     self.assertRaises(StopIteration, lambda: next(rr))
 
   def testNoLogdirSucceeds(self):
+    # [FUNCTION DOC]
+    # Scenario: a graph with one variable and a supervisor with an empty log directory and no
+    # summaries. Expected: preparing a session, closing it and stopping all succeed.
     with ops.Graph().as_default():
       variable_v1.VariableV1([1.0, 2.0, 3.0])
       sv = supervisor.Supervisor(logdir="", summary_op=None)
@@ -496,6 +596,9 @@ class SupervisorTest(test.TestCase):
       sv.stop()
 
   def testUseSessionManager(self):
+    # [FUNCTION DOC]
+    # Scenario: a supervisor is built with an explicit default session manager and then prepares
+    # a session. Expected: no error. The comment in the body says the extra init op is ignored.
     with ops.Graph().as_default():
       variable_v1.VariableV1([1.0, 2.0, 3.0])
       sm = session_manager_lib.SessionManager()
@@ -505,6 +608,9 @@ class SupervisorTest(test.TestCase):
 
   @test_util.run_v1_only("train.Supervisor is for v1 only")
   def testInitOp(self):
+    # [FUNCTION DOC]
+    # Scenario (version-1 only): default init op with one variable. Expected: after preparing the
+    # session the variable holds its initial values.
     logdir = self._test_dir("default_init_op")
     with ops.Graph().as_default():
       v = variable_v1.VariableV1([1.0, 2.0, 3.0])
@@ -515,11 +621,18 @@ class SupervisorTest(test.TestCase):
 
   @test_util.run_v1_only("train.Supervisor is for v1 only")
   def testInitFn(self):
+    # [FUNCTION DOC]
+    # Scenario (version-1 only): the init op is disabled and an init callback that runs the
+    # variable initializer is supplied. Expected: after preparing the session the variable holds
+    # its initial values, proving the callback ran.
     logdir = self._test_dir("default_init_op")
     with ops.Graph().as_default():
       v = variable_v1.VariableV1([1.0, 2.0, 3.0])
 
       def _init_fn(sess):
+        # [FUNCTION DOC]
+        # HELPER: init callback passed to the supervisor. Input: the session being
+        # initialized; runs the variable's initializer in it. Returns nothing.
         sess.run(v.initializer)
 
       sv = supervisor.Supervisor(logdir=logdir, init_op=None, init_fn=_init_fn)
@@ -529,6 +642,10 @@ class SupervisorTest(test.TestCase):
 
   @test_util.run_v1_only("train.Supervisor is for v1 only")
   def testInitOpWithFeedDict(self):
+    # [FUNCTION DOC]
+    # Scenario (version-1 only): a variable initialized from a placeholder, with an explicit
+    # global initializer op and a feed mapping the placeholder to three values. Expected: the
+    # variable has those values after the session is prepared.
     logdir = self._test_dir("feed_dict_init_op")
     with ops.Graph().as_default():
       p = array_ops.placeholder(dtypes.float32, shape=(3,))
@@ -543,12 +660,24 @@ class SupervisorTest(test.TestCase):
 
   @test_util.run_v1_only("train.Supervisor is for v1 only")
   def testReadyForLocalInitOp(self):
+    # [FUNCTION DOC]
+    # Scenario (version-1 only): a local server hosts a chief and a non-chief supervisor on
+    # separate graphs sharing a global variable; a local variable is initialized from it and
+    # a ready-for-local-init op checks the globals. The chief initializes the variable. Expected:
+    # the local variable copies the initial value 1 in both sessions, an increment in the
+    # non-chief gives 2 and the chief then reads 2 for the shared variable.
     server = server_lib.Server.create_local_server()
     logdir = self._test_dir("default_ready_for_local_init_op")
 
     uid = uuid.uuid4().hex
 
     def get_session(is_chief):
+      # [FUNCTION DOC]
+      # HELPER: nested factory for the test. Input: chief flag. Builds a graph with a uniquely
+      # named global variable, an increment op, a non-trainable local variable initialized from
+      # it, and a readiness op; builds a supervisor on the local server (explicit init op and
+      # readiness op, short recovery wait) and prepares a session. Returns the supervisor,
+      # session, variable, increment op and local variable.
       g = ops.Graph()
       with g.as_default():
         with ops.device("/job:localhost"):
@@ -586,6 +715,12 @@ class SupervisorTest(test.TestCase):
 
   @test_util.run_v1_only("train.Supervisor is for v1 only")
   def testReadyForLocalInitOpRestoreFromCheckpoint(self):
+    # [FUNCTION DOC]
+    # Scenario (version-1 only): first a supervisor writes a checkpoint with a variable at 10
+    # (waiting for checkpoint and event files). Then a chief and a non-chief supervisor are
+    # built on the local server with a variable at 1 and a local copy, with a readiness op.
+    # Expected: both restore 10 from the checkpoint; the local copies read 10, an increment in
+    # the non-chief gives 11 and the chief reads 11.
     server = server_lib.Server.create_local_server()
     logdir = self._test_dir("ready_for_local_init_op_restore")
 
@@ -607,6 +742,12 @@ class SupervisorTest(test.TestCase):
       sv.stop()
 
     def get_session(is_chief):
+      # [FUNCTION DOC]
+      # HELPER: nested factory for the test. Input: chief flag. Builds a graph with a uniquely
+      # named variable (initial value 1), an increment op, a local copy variable and a
+      # readiness op, then a supervisor (no explicit init op, so state comes from the
+      # checkpoint) on the local server and prepares a session. Returns the supervisor,
+      # session, variable, increment op and local copy.
       g = ops.Graph()
       with g.as_default():
         with ops.device("/job:localhost"):
@@ -642,6 +783,10 @@ class SupervisorTest(test.TestCase):
     sv1.stop()
 
   def testLocalInitOp(self):
+    # [FUNCTION DOC]
+    # Scenario: a local variable and a variable registered only as a table initializer, with the
+    # normal init op disabled. Expected: the global variable collection stays empty, and after
+    # preparing the session both values are initialized through the default local init op.
     logdir = self._test_dir("default_local_init_op")
     with ops.Graph().as_default():
       # A local variable.
@@ -666,6 +811,10 @@ class SupervisorTest(test.TestCase):
       sv.stop()
 
   def testLocalInitOpForNonChief(self):
+    # [FUNCTION DOC]
+    # Scenario: a non-chief supervisor with the init op disabled and a device-assigned local
+    # variable. Expected: the global variable collection is empty and the local variable is
+    # initialized by the local init op when the session is prepared.
     logdir = self._test_dir("default_local_init_op_non_chief")
     with ops.Graph().as_default():
       with ops.device("/job:localhost"):
@@ -685,6 +834,9 @@ class SupervisorTest(test.TestCase):
       sv.stop()
 
   def testInitOpFails(self):
+    # [FUNCTION DOC]
+    # Scenario: two variables, but the init op only initializes the first, on a local server.
+    # Expected: preparing the session raises a runtime error saying variable w is not initialized.
     server = server_lib.Server.create_local_server()
     logdir = self._test_dir("default_init_op_fails")
     with ops.Graph().as_default():
@@ -696,6 +848,10 @@ class SupervisorTest(test.TestCase):
         sv.prepare_or_wait_for_session(server.target)
 
   def testInitOpFailsForTransientVariable(self):
+    # [FUNCTION DOC]
+    # Scenario: two local variables, but the local init op only initializes the first, on a
+    # local server. Expected: preparing the session raises a runtime error saying variable w is
+    # not initialized.
     server = server_lib.Server.create_local_server()
     logdir = self._test_dir("default_init_op_fails_for_local_variable")
     with ops.Graph().as_default():
@@ -712,6 +868,10 @@ class SupervisorTest(test.TestCase):
 
   @test_util.run_v1_only("train.Supervisor is for v1 only")
   def testSetupFail(self):
+    # [FUNCTION DOC]
+    # Scenario (version-1 only): a non-chief supervisor on a graph whose variable has no device
+    # raises a value error saying devices must be set; the same variable placed on a parameter
+    # server job is accepted. Expected: error in the first case, none in the second.
     logdir = self._test_dir("setup_fail")
     with ops.Graph().as_default():
       variable_v1.VariableV1([1.0, 2.0, 3.0], name="v")
@@ -723,6 +883,9 @@ class SupervisorTest(test.TestCase):
 
   @test_util.run_v1_only("train.Supervisor is for v1 only")
   def testDefaultGlobalStep(self):
+    # [FUNCTION DOC]
+    # Scenario (version-1 only): a variable named global_step with value 287 exists in the graph.
+    # Expected: the supervisor adopts it as its global step and reading it gives 287.
     logdir = self._test_dir("default_global_step")
     with ops.Graph().as_default():
       variable_v1.VariableV1(287, name="global_step")
@@ -733,6 +896,11 @@ class SupervisorTest(test.TestCase):
 
   @test_util.run_v1_only("train.Supervisor is for v1 only")
   def testRestoreFromMetaGraph(self):
+    # [FUNCTION DOC]
+    # Scenario (version-1 only): one supervisor saves a checkpoint (with meta graph) of a
+    # variable of value 1. In a new graph the meta graph is imported to get a saver, and a new
+    # supervisor uses it. Expected: the saver is created, the restored variable reads 1, and
+    # saving again works.
     logdir = self._test_dir("restore_from_meta_graph")
     with ops.Graph().as_default():
       variable_v1.VariableV1(1, name="v0")
@@ -755,6 +923,12 @@ class SupervisorTest(test.TestCase):
   # We still sleep a bit to make the test robust.
   @test_util.run_v1_only("train.Supervisor is for v1 only")
   def testStandardServicesWithoutGlobalStep(self):
+    # [FUNCTION DOC]
+    # Scenario (version-1 only): a graph with one variable and a scalar summary, no global step;
+    # the standard services run, the test waits for the checkpoint and event file, then stops.
+    # Expected: the event file has the file version, graph, meta graph (with saver definition),
+    # one summary with value 1, a STOP log, nothing more; and the checkpoint restores the
+    # variable value 1.
     logdir = self._test_dir("standard_services_without_global_step")
     # Create a checkpoint.
     with ops.Graph().as_default():
@@ -806,6 +980,12 @@ class SupervisorTest(test.TestCase):
   # We should get a summary about the step time.
   @test_util.run_v1_only("train.Supervisor is for v1 only")
   def testStandardServicesWithGlobalStep(self):
+    # [FUNCTION DOC]
+    # Scenario (version-1 only): like the previous test but the graph has a global step of 123.
+    # Expected: the checkpoint file name carries the step 123; events are file version, graph,
+    # meta graph, a START session log at step 123, then (in either order, as they come from
+    # separate threads) a steps-per-second summary of zero and a CHECKPOINT log at step 123,
+    # then STOP and nothing more; restoring the checkpoint gives 123.
     logdir = self._test_dir("standard_services_with_global_step")
     # Create a checkpoint.
     with ops.Graph().as_default():
@@ -868,12 +1048,18 @@ class SupervisorTest(test.TestCase):
       self.assertEqual(123, self.evaluate(v)[0])
 
   def testNoQueueRunners(self):
+    # [FUNCTION DOC]
+    # Scenario: starting queue runners on a graph that has none. Expected: zero threads returned.
     with ops.Graph().as_default(), self.cached_session() as sess:
       sv = supervisor.Supervisor(logdir=self._test_dir("no_queue_runners"))
       self.assertEqual(0, len(sv.start_queue_runners(sess)))
       sv.stop()
 
   def testPrepareSessionAfterStopForChief(self):
+    # [FUNCTION DOC]
+    # Scenario: a chief prepares a session, stops, then prepares a second session. Expected:
+    # should-stop is true after the stop, false after the second preparation (the stop request
+    # is cleared), and true again after stopping again.
     logdir = self._test_dir("prepare_after_stop_chief")
     with ops.Graph().as_default():
       sv = supervisor.Supervisor(logdir=logdir, is_chief=True)
@@ -893,6 +1079,9 @@ class SupervisorTest(test.TestCase):
       self.assertTrue(sv.should_stop())
 
   def testPrepareSessionAfterStopForNonChief(self):
+    # [FUNCTION DOC]
+    # Scenario: same as the chief variant but for a non-chief supervisor. Expected: the same
+    # stop, restart and stop pattern of should-stop values.
     logdir = self._test_dir("prepare_after_stop_nonchief")
     with ops.Graph().as_default():
       sv = supervisor.Supervisor(logdir=logdir, is_chief=False)

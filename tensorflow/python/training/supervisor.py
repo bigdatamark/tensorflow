@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# Defines the legacy (graph mode only, deprecated) Supervisor training helper and its three
+# background looper threads. The Supervisor wraps a Coordinator, a Saver and a SessionManager:
+# it creates or recovers a session, runs initialization, and (for the chief) periodically writes
+# summaries, step-rate summaries and checkpoints. The module exposes the Supervisor class
+# (exported as the version-1 train Supervisor), SVSummaryThread, SVStepCounterThread and
+# SVTimerCheckpointThread. Import-time side effects: registers the Supervisor class with the
+# public API export mechanism and, at the bottom of the module, attaches legacy CamelCase alias
+# names (PrepareSession, StartQueueRunners, Stop, Loop, ShouldStop, ...) to the Supervisor class.
+# Superseded by the monitored training session facilities.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -38,6 +48,16 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export(v1=["train.Supervisor"])
 class Supervisor:
+  # [CLASS DOC]
+  # Deprecated training coordinator for graph-mode programs, for a single process or for a
+  # replicated cluster with one chief. It holds a graph, a Coordinator, optional Saver, init,
+  # local-init, ready and summary operations, a global step tensor, an optional summary writer,
+  # a log directory and checkpoint path (chief only), and a SessionManager. Instances are
+  # created once per program, then used mostly through the managed session context manager,
+  # which prepares a session, starts the checkpoint, summary and step-counter threads, and stops
+  # everything on exit. The constructor finalizes the graph and refuses to run in eager mode.
+  # USE_DEFAULT is a class-level sentinel meaning "build the default for this argument".
+  # Legacy CamelCase aliases are attached to the class at the end of the module.
   """A training helper that checkpoints models and computes summaries.
 
   This class is deprecated. Please use
@@ -223,6 +243,20 @@ class Supervisor:
                summary_writer=USE_DEFAULT,
                init_fn=None,
                local_init_run_options=None):
+    # [FUNCTION DOC]
+    # Constructs a Supervisor. Inputs: graph (defaults to the current default graph);
+    # ready_op, ready_for_local_init_op, init_op, local_init_op, summary_op, saver, global_step
+    # and summary_writer, each of which may be the USE_DEFAULT sentinel (build or look up the
+    # default), nothing (disable) or an explicit object; init_feed_dict (mapping used when
+    # running the init op); is_chief flag; logdir; save_summaries_secs, save_model_secs,
+    # recovery_wait_secs, stop_grace_secs numbers; checkpoint_basename; an optional
+    # session_manager; an optional init_fn callback; and optional local-init run options.
+    # Raises a runtime error if eager execution is enabled. Side effects: adds default ops to
+    # graph collections, builds a meta graph definition, creates a Coordinator, creates a file
+    # writer for the log directory when chief with a logdir and the default writer, verifies
+    # the setup, and finalizes the graph so it can no longer be modified. Non-chief
+    # supervisors keep logdir, save path, writer and timing settings unset. Returns nothing.
+    # The deprecation decorator logs a warning on each call.
     """Create a `Supervisor`.
 
     Args:
@@ -353,6 +387,11 @@ class Supervisor:
     graph.finalize()
 
   def _init_session_manager(self, session_manager=None):
+    # [FUNCTION DOC]
+    # HELPER: constructor helper that sets up the session manager.
+    # Stores the given session manager, or when nothing is given builds a default one from the
+    # already-initialized local init op, ready op, ready-for-local-init op, graph, recovery
+    # wait seconds and local init run options. Sets the session manager attribute; returns nothing.
     if session_manager is None:
       self._session_manager = session_manager_mod.SessionManager(
           local_init_op=self._local_init_op,
@@ -365,6 +404,11 @@ class Supervisor:
       self._session_manager = session_manager
 
   def _get_first_op_from_collection(self, key):
+    # [FUNCTION DOC]
+    # HELPER: lookup used by the default-selection logic of the constructor helpers.
+    # Input: a graph collection key. Returns the first item of that collection in the current
+    # default graph, or nothing if the collection is empty or a lookup error occurs. Logs an
+    # informational message when more than one item is found. No other side effects.
     """Returns the first `Operation` from a collection.
 
     Args:
@@ -388,6 +432,16 @@ class Supervisor:
   def _init_ready_op(self,
                      ready_op=USE_DEFAULT,
                      ready_for_local_init_op=USE_DEFAULT):
+    # [FUNCTION DOC]
+    # HELPER: constructor helper that resolves the readiness operations.
+    # For the ready op, the default is the first item of the ready-op collection, or a newly
+    # created uninitialized-variables report which is then added to that collection. For the
+    # ready-for-local-init op, the default is only the first item of its collection (possibly
+    # nothing); none is created. Explicit values (including nothing) are used unchanged.
+    # KNOWN ISSUE: the docstring says the ready-for-local-init default creates an op checking
+    # that global variables are initialized, but the code never creates one; it only looks up
+    # an existing collection entry and otherwise leaves it unset.
+    # Sets the ready op and ready-for-local-init op attributes; returns nothing.
     """Initializes ready_op.
 
     Args:
@@ -412,6 +466,14 @@ class Supervisor:
     self._ready_for_local_init_op = ready_for_local_init_op
 
   def _init_init_op(self, init_op=USE_DEFAULT, init_feed_dict=None):
+    # [FUNCTION DOC]
+    # HELPER: constructor helper that resolves the initialization operation.
+    # If the init op is the default sentinel, uses the first item of the init-op collection or
+    # creates a global-variables initializer and registers it in that collection. Otherwise the
+    # given value (possibly nothing) is used. Stores the init op and the feed dictionary
+    # attributes; returns nothing.
+    # KNOWN ISSUE: docstring says tables are also initialized; the default only initializes
+    # global variables (tables are handled by the local init op).
     """Initializes init_op.
 
     Args:
@@ -429,6 +491,13 @@ class Supervisor:
     self._init_feed_dict = init_feed_dict
 
   def _init_local_init_op(self, local_init_op=USE_DEFAULT):
+    # [FUNCTION DOC]
+    # HELPER: constructor helper that resolves the per-instance local initialization operation.
+    # With the default sentinel, uses the first item of the local-init collection, else groups a
+    # local-variables initializer and a lookup-tables initializer into one op and registers it
+    # in that collection. Stores the local init op attribute; returns nothing.
+    # KNOWN ISSUE: the check on the list of initializers is dead code, since the list always has
+    # two entries.
     """Initializes local_init_op.
 
     Args:
@@ -451,6 +520,12 @@ class Supervisor:
     self._local_init_op = local_init_op
 
   def _init_saver(self, saver=USE_DEFAULT):
+    # [FUNCTION DOC]
+    # HELPER: constructor helper that resolves the saver.
+    # With the default sentinel, uses the first saver in the savers collection; if there is none
+    # and the graph has global variables, creates a new saver for all variables and registers
+    # it in the collection (otherwise the saver stays unset). Explicit values are used as given.
+    # Stores the saver attribute; returns nothing.
     """Initializes saver.
 
     Args:
@@ -465,6 +540,11 @@ class Supervisor:
     self._saver = saver
 
   def _init_summary_op(self, summary_op=USE_DEFAULT):
+    # [FUNCTION DOC]
+    # HELPER: constructor helper that resolves the merged-summary operation.
+    # With the default sentinel, uses the first item of the summary-op collection, else merges
+    # all summaries in the graph and, if any exist, registers the result in that collection.
+    # Stores the summary op attribute (possibly nothing); returns nothing.
     """Initializes summary_op.
 
     Args:
@@ -480,6 +560,13 @@ class Supervisor:
     self._summary_op = summary_op
 
   def _init_global_step(self, global_step=USE_DEFAULT):
+    # [FUNCTION DOC]
+    # HELPER: constructor helper that resolves the global step tensor.
+    # With the default sentinel, uses the first item of the global-step collection, else looks
+    # up a tensor named global_step of an integer type in the default graph and registers it in
+    # the collection; if none is suitable it stays unset. Stores the global step attribute;
+    # returns nothing.
+    # KNOWN ISSUE: docstring says it creates a global step tensor; it only finds an existing one.
     """Initializes global_step.
 
     Args:
@@ -497,6 +584,8 @@ class Supervisor:
 
   @property
   def is_chief(self):
+    # [FUNCTION DOC]
+    # Read-only property. Returns the boolean chief flag given to the constructor. No side effects.
     """Return True if this is a chief supervisor.
 
     Returns:
@@ -506,6 +595,8 @@ class Supervisor:
 
   @property
   def session_manager(self):
+    # [FUNCTION DOC]
+    # Read-only property. Returns the session manager in use (given or default-built). No side effects.
     """Return the SessionManager used by the Supervisor.
 
     Returns:
@@ -515,6 +606,9 @@ class Supervisor:
 
   @property
   def coord(self):
+    # [FUNCTION DOC]
+    # Read-only property. Returns the Coordinator shared by the supervisor and its service
+    # threads; callers may use it to manage their own threads. No side effects.
     """Return the Coordinator used by the Supervisor.
 
     The Coordinator can be useful if you want to run multiple threads
@@ -527,6 +621,8 @@ class Supervisor:
 
   @property
   def init_op(self):
+    # [FUNCTION DOC]
+    # Read-only property. Returns the initialization operation (possibly nothing). No side effects.
     """Return the Init Op used by the supervisor.
 
     Returns:
@@ -536,6 +632,9 @@ class Supervisor:
 
   @property
   def init_feed_dict(self):
+    # [FUNCTION DOC]
+    # Read-only property. Returns the mapping of tensors to values fed when the init op runs,
+    # or nothing. No side effects.
     """Return the feed dictionary used when evaluating the `init_op`.
 
     Returns:
@@ -545,6 +644,8 @@ class Supervisor:
 
   @property
   def ready_op(self):
+    # [FUNCTION DOC]
+    # Read-only property. Returns the readiness-check tensor (possibly nothing). No side effects.
     """Return the Ready Op used by the supervisor.
 
     Returns:
@@ -554,10 +655,16 @@ class Supervisor:
 
   @property
   def ready_for_local_init_op(self):
+    # [FUNCTION DOC]
+    # Read-only property. Returns the tensor that signals the model is ready for the local init
+    # op to run (possibly nothing, meaning no check). No side effects; it has no docstring.
     return self._ready_for_local_init_op
 
   @property
   def summary_writer(self):
+    # [FUNCTION DOC]
+    # Read-only property. Returns the summary writer (only set for a chief with a log directory
+    # or an explicit writer), otherwise nothing. No side effects.
     """Return the SummaryWriter used by the chief supervisor.
 
     Returns:
@@ -567,6 +674,8 @@ class Supervisor:
 
   @property
   def summary_op(self):
+    # [FUNCTION DOC]
+    # Read-only property. Returns the merged-summary tensor or nothing. No side effects.
     """Return the Summary Tensor used by the chief supervisor.
 
     Returns:
@@ -576,6 +685,10 @@ class Supervisor:
 
   @property
   def save_summaries_secs(self):
+    # [FUNCTION DOC]
+    # Read-only property. Returns the number of seconds between summary computations (nothing for
+    # a non-chief supervisor). No side effects.
+    # KNOWN ISSUE: docstring says it returns a timestamp; it actually returns an interval in seconds.
     """Return the delay between summary computations.
 
     Returns:
@@ -585,6 +698,9 @@ class Supervisor:
 
   @property
   def global_step(self):
+    # [FUNCTION DOC]
+    # Read-only property. Returns the global step tensor, or nothing if steps are not tracked.
+    # No side effects.
     """Return the global_step Tensor used by the supervisor.
 
     Returns:
@@ -594,6 +710,9 @@ class Supervisor:
 
   @property
   def saver(self):
+    # [FUNCTION DOC]
+    # Read-only property. Returns the saver, or nothing if no checkpointing is configured.
+    # No side effects.
     """Return the Saver used by the supervisor.
 
     Returns:
@@ -603,6 +722,10 @@ class Supervisor:
 
   @property
   def save_model_secs(self):
+    # [FUNCTION DOC]
+    # Read-only property. Returns the number of seconds between checkpoints (nothing for a
+    # non-chief supervisor). No side effects.
+    # KNOWN ISSUE: docstring says it returns a timestamp; it actually returns an interval in seconds.
     """Return the delay between checkpoints.
 
     Returns:
@@ -612,6 +735,10 @@ class Supervisor:
 
   @property
   def save_path(self):
+    # [FUNCTION DOC]
+    # Read-only property. Returns the checkpoint file prefix (log directory joined with the
+    # checkpoint basename), or nothing when not chief or no log directory was given.
+    # No side effects.
     """Return the save path used by the supervisor.
 
     Returns:
@@ -620,6 +747,12 @@ class Supervisor:
     return self._save_path
 
   def _write_graph(self):
+    # [FUNCTION DOC]
+    # HELPER: called by prepare_or_wait_for_session on the chief after the session is prepared.
+    # Asserts the supervisor is chief. If a log directory exists, writes the graph definition
+    # (with shapes) as a text file named graph.pbtxt there. If a summary writer exists and the
+    # graph was not yet added, adds the graph and the meta graph to the event file and marks it
+    # as added. Returns nothing.
     """Writes graph_def to `logdir` and adds it to summary if applicable."""
     assert self._is_chief
     if self._logdir:
@@ -632,6 +765,15 @@ class Supervisor:
       self._graph_added_to_summary = True
 
   def start_standard_services(self, sess):
+    # [FUNCTION DOC]
+    # Starts the background service threads for the given session. Raises a runtime error if
+    # not chief. With no log directory it only logs a warning and returns nothing. Otherwise, if
+    # a global step and a writer exist, writes a START session log at the current step. Then
+    # creates and starts: a summary thread (if summary interval, writer and summary op exist),
+    # a step-counter thread (if interval, writer and global step exist) and a checkpoint thread
+    # (if a saver and a model save interval exist). Returns the list of started threads.
+    # KNOWN ISSUE: the docstring lists a ValueError for a missing log directory, but the code
+    # logs a warning and returns nothing instead of raising or returning a list.
     """Start the standard services for 'sess'.
 
     This starts services in the background.  The services started depend
@@ -689,6 +831,15 @@ class Supervisor:
                                   wait_for_checkpoint=False,
                                   max_wait_secs=7200,
                                   start_standard_services=True):
+    # [FUNCTION DOC]
+    # Obtains a ready session. Inputs: master address string (default empty, in-process);
+    # optional session config; wait_for_checkpoint flag; max_wait_secs (default 7200);
+    # start_standard_services flag (default true). Clears the coordinator stop request and
+    # reopens the summary writer if present. Chief: prepares the session (restore from the log
+    # directory checkpoint or run init op and init callback), writes the graph, and optionally
+    # starts the standard services. Non-chief: waits for the chief to make the model ready.
+    # If the flag is set, also starts queue runners (raises a runtime error in eager mode).
+    # Returns the session. Side effects: threads started, files written by the chief.
     """Make sure the model is ready to be used.
 
     Create a session on 'master', recovering or initializing the model as
@@ -741,6 +892,11 @@ class Supervisor:
     return sess
 
   def start_queue_runners(self, sess, queue_runners=None):
+    # [FUNCTION DOC]
+    # Starts daemon threads for queue runners. Inputs: a session and an optional list of queue
+    # runners (default: those in the graph queue-runner collection). Raises a runtime error when
+    # eager execution is enabled. Each runner creates and starts its threads under the
+    # supervisor coordinator. Returns the flat list of started threads.
     """Start threads for `QueueRunners`.
 
     Note that the queue runners collected in the graph key `QUEUE_RUNNERS`
@@ -776,6 +932,10 @@ class Supervisor:
     return threads
 
   def loop(self, timer_interval_secs, target, args=None, kwargs=None):
+    # [FUNCTION DOC]
+    # Starts a looper thread, tied to the supervisor coordinator, that repeatedly calls the
+    # target callable with optional positional and keyword arguments, every given number of
+    # seconds (or continuously if the interval is nothing). Returns the already-started thread.
     """Start a LooperThread that calls a function periodically.
 
     If `timer_interval_secs` is None the thread calls `target(*args, **kwargs)`
@@ -807,6 +967,15 @@ class Supervisor:
            threads=None,
            close_summary_writer=True,
            ignore_live_threads=False):
+    # [FUNCTION DOC]
+    # Stops the services without closing the session. Inputs: optional extra threads to join,
+    # close_summary_writer flag (default true), ignore_live_threads flag. Requests a coordinator
+    # stop, then joins threads using the configured grace period; the first exception reported
+    # by a thread is re-raised, and a runtime error is raised for threads still alive unless
+    # ignoring them. In all cases, afterwards, if requested and a writer exists, writes a STOP
+    # session log, closes the writer and resets the graph-added flag. Returns nothing.
+    # KNOWN ISSUE: docstring says close_summary_writer defaults to false when the writer was
+    # supplied by the user; the code always defaults to true and closes any writer.
     """Stop the services and the coordinator.
 
     This does not close the session.
@@ -843,6 +1012,9 @@ class Supervisor:
         self._graph_added_to_summary = False
 
   def request_stop(self, ex=None):
+    # [FUNCTION DOC]
+    # Asks the coordinator to stop all threads. Optional ex is an exception or exception-info
+    # tuple; the first one recorded is re-raised when threads are joined. Returns nothing.
     """Request that the coordinator stop the threads.
 
     See `Coordinator.request_stop()`.
@@ -855,6 +1027,9 @@ class Supervisor:
     self._coord.request_stop(ex=ex)
 
   def should_stop(self):
+    # [FUNCTION DOC]
+    # Returns true if the coordinator has been asked to stop (by request, an exception, or
+    # stop). Used as the training-loop exit condition. No side effects.
     """Check if the coordinator was told to stop.
 
     See `Coordinator.should_stop()`.
@@ -865,6 +1040,9 @@ class Supervisor:
     return self._coord.should_stop()
 
   def stop_on_exception(self):
+    # [FUNCTION DOC]
+    # Returns the coordinator's context handler which, when used in a with block, requests a stop
+    # if the block raises an exception. No other side effects.
     """Context handler to stop the supervisor when an exception is raised.
 
     See `Coordinator.stop_on_exception()`.
@@ -875,10 +1053,20 @@ class Supervisor:
     return self._coord.stop_on_exception()
 
   def wait_for_stop(self):
+    # [FUNCTION DOC]
+    # Blocks the calling thread until the coordinator has been asked to stop. Returns nothing.
     """Block waiting for the coordinator to stop."""
     self._coord.wait_for_stop()
 
   def summary_computed(self, sess, summary, global_step=None):
+    # [FUNCTION DOC]
+    # Writes a manually computed summary to the event log. Inputs: a session, a summary (message
+    # or serialized string) and an optional integer step; if the step is missing and a global
+    # step tensor exists, the current value is read through the session. Raises a runtime error
+    # when there is no summary writer. Side effect: appends to the event file. Returns nothing.
+    # KNOWN ISSUE: the docstring claims a type error for a bad summary and says the error is for
+    # a missing log directory; the type check is not here (it is left to the writer) and the
+    # runtime error is actually raised whenever there is no summary writer, e.g. non-chief.
     """Indicate that a summary was computed.
 
     Args:
@@ -898,6 +1086,11 @@ class Supervisor:
     self._summary_writer.add_summary(summary, global_step)
 
   def _default_global_step_tensor(self):
+    # [FUNCTION DOC]
+    # HELPER: used by the global step initialization helper.
+    # Looks in the default graph for a tensor named global_step (output zero). Returns it if its
+    # base type is a 32 or 64-bit integer; otherwise logs a warning and returns nothing. Returns
+    # nothing if no such tensor exists.
     """Returns the global_step from the default graph.
 
     Returns:
@@ -914,6 +1107,11 @@ class Supervisor:
       return None
 
   def _verify_setup(self):
+    # [FUNCTION DOC]
+    # HELPER: final validation step of the constructor.
+    # For a non-chief supervisor, scans all graph operations and raises a value error naming the
+    # first variable operation without a device assignment (replicas need explicit devices).
+    # Does nothing for a chief. Returns nothing.
     """Check that all is good.
 
     Raises:
@@ -934,6 +1132,16 @@ class Supervisor:
                       config=None,
                       start_standard_services=True,
                       close_summary_writer=True):
+    # [FUNCTION DOC]
+    # Generator-based context manager yielding a ready session. Inputs: master address string
+    # (default empty), optional session config, start_standard_services flag (default true),
+    # close_summary_writer flag (default true). Prepares or waits for a session and yields it.
+    # Any exception from setup or from the with body is passed to request_stop, so it is
+    # recorded and re-raised by the later stop (control-flow exceptions like out-of-range are
+    # swallowed as normal termination by the coordinator). On exit it always stops the
+    # supervisor (joining threads, optionally closing the writer) and then closes the session,
+    # silently ignoring close errors; if session creation failed, the close attempt fails
+    # harmlessly and is ignored.
     """Returns a context manager for a managed session.
 
     This context manager creates and automatically recovers a session.  It
@@ -1022,9 +1230,18 @@ class Supervisor:
 
 
 class SVSummaryThread(coordinator.LooperThread):
+  # [CLASS DOC]
+  # HELPER: background service of the Supervisor, started by start_standard_services.
+  # Looper thread that, every summary interval of its supervisor, runs the merged summary op
+  # (and global step if tracked) in the session and writes the result to the supervisor's
+  # summary writer. Holds references to the supervisor and session.
   """A thread to save summaries on a timer."""
 
   def __init__(self, sv, sess):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: the owning supervisor and a session. Initializes the looper with the
+    # supervisor coordinator and its summary interval, and stores the supervisor and session.
+    # Returns nothing.
     """Create a SVSummaryThread.
 
     Args:
@@ -1036,6 +1253,10 @@ class SVSummaryThread(coordinator.LooperThread):
     self._sess = sess
 
   def run_loop(self):
+    # [FUNCTION DOC]
+    # One iteration of the timer loop. Runs the summary op (together with the global step when
+    # one exists) in the session; if the supervisor has a summary writer, logs and writes the
+    # serialized summary tagged with the step (nothing if untracked). Returns nothing.
     if self._sv.global_step is not None:
       summary_strs, global_step = self._sess.run(
           [self._sv.summary_op, self._sv.global_step])
@@ -1048,9 +1269,19 @@ class SVSummaryThread(coordinator.LooperThread):
 
 
 class SVStepCounterThread(coordinator.LooperThread):
+  # [CLASS DOC]
+  # HELPER: background service of the Supervisor, started by start_standard_services.
+  # Looper thread that periodically reads the step counter, computes steps per second since the
+  # previous tick, and writes it as a scalar summary named after the counter op plus "/sec".
+  # State: supervisor, session, last time, last step, counter tensor and summary tag.
   """Threads to count steps and measure their duration."""
 
   def __init__(self, sv, sess, step_counter=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: supervisor, session, optional step counter tensor (default the
+    # supervisor global step). Initializes the looper with the coordinator and summary interval,
+    # zeroes the last time and step, and builds the summary tag from the counter op name.
+    # Fails with an attribute error if no counter is available. Returns nothing.
     """Create a `SVStepCounterThread`.
 
     Args:
@@ -1069,10 +1300,18 @@ class SVStepCounterThread(coordinator.LooperThread):
     self._summary_tag = "%s/sec" % self._step_counter.op.name
 
   def start_loop(self):
+    # [FUNCTION DOC]
+    # Hook called once when the thread starts. Records the current wall-clock time and reads the
+    # current step value from the session as the baseline for rate computation. Returns nothing.
     self._last_time = time.time()
     self._last_step = training_util.global_step(self._sess, self._step_counter)
 
   def run_loop(self):
+    # [FUNCTION DOC]
+    # One iteration of the timer loop. Reads the current step, computes steps added and elapsed
+    # seconds since the previous tick, updates the stored baselines, and derives steps per
+    # second (positive infinity if no time elapsed). If a summary writer exists, writes a scalar
+    # summary at the current step; also logs the rate for the first ten calls. Returns nothing.
     # Count the steps.
     current_step = training_util.global_step(self._sess, self._step_counter)
     added_steps = current_step - self._last_step
@@ -1096,9 +1335,16 @@ class SVStepCounterThread(coordinator.LooperThread):
 
 
 class SVTimerCheckpointThread(coordinator.LooperThread):
+  # [CLASS DOC]
+  # HELPER: background service of the Supervisor, started by start_standard_services.
+  # Looper thread that every model save interval saves a checkpoint with the supervisor's saver
+  # to its save path, and records a CHECKPOINT session log event. Holds the supervisor and session.
   """A thread to checkpoint on a timer."""
 
   def __init__(self, sv, sess):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: supervisor and session. Initializes the looper with the coordinator
+    # and the model save interval, and stores the supervisor and session. Returns nothing.
     """Create a `SVTimerCheckpointThread`.
 
     Args:
@@ -1110,6 +1356,11 @@ class SVTimerCheckpointThread(coordinator.LooperThread):
     self._sess = sess
 
   def run_loop(self):
+    # [FUNCTION DOC]
+    # One iteration of the timer loop. Logs and saves a checkpoint at the save path, using the
+    # global step in the file name when tracked. If a summary writer and global step exist,
+    # reads the step and writes a CHECKPOINT session log with the checkpoint path. Side effects:
+    # checkpoint files written, event file appended. Returns nothing.
     logging.info("Saving checkpoint to path %s", self._sv.save_path)
     self._sv.saver.save(
         self._sess, self._sv.save_path, global_step=self._sv.global_step)
