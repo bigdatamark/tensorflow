@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# Maintenance script that regenerates the reorders_v2 table used by the TF 1.x to 2.0 upgrade tool.
+# It reads from the upgrade specification the list of functions whose positional arguments were
+# reordered, the functions with argument transformers (which need all keyword names), and the
+# symbol renames; it walks the compat v1 and v2 public APIs to find each function's argument list
+# in both versions and writes a Python source file mapping each function name to its list of
+# argument names, with leading null entries for arguments unchanged between versions. Run through
+# bazel; output goes to a fixed third_party path. Import-time side effects: imports TensorFlow and
+# the upgrade specification module; the entry point runs only when executed as a script.
+# KNOWN ISSUE: the header text embedded in the generated file says it is a list of renames from
+# TF 1.0 to TF 2.0, although the file holds argument reorderings.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -63,6 +74,17 @@ self.reordered_function_names in tf_upgrade_v2.py.
 
 def collect_function_arg_names(function_names, return_all_args_function_names,
                                function_renames):
+  # [FUNCTION DOC]
+  # Computes, for each reordered function, the argument names the upgrader needs.
+  # Inputs: function_names, the set of v1 function names to process; return_all_args_function_names,
+  # names for which the full v1 argument list is returned without comparing with v2;
+  # function_renames, mapping from v1 names to v2 names. Walks the compat v1 and v2 APIs (skipping
+  # contrib) to map names to objects; for classes uses constructor arguments without self.
+  # Output: mapping from function name to list of argument names, where a leading run of
+  # arguments identical in v1 and v2 is replaced by null entries.
+  # Raises a value error when a requested name is missing from compat v1, when a rename only moves
+  # the symbol into compat v1, when the v2 name is missing, or when arguments did not change.
+  # No side effects besides traversing loaded modules.
   """Determines argument names for reordered function signatures.
 
   Args:
@@ -79,6 +101,11 @@ def collect_function_arg_names(function_names, return_all_args_function_names,
   function_name_v2_to_attr = {}
 
   def visit(unused_path, unused_parent, children):
+    # [FUNCTION DOC]
+    # HELPER: visitor callback for the API traversal in the enclosing function.
+    # Called with path and parent (unused) and the children as name and object pairs. Records the
+    # object for each v1 name that is among the requested functions and for every v2 name, in two
+    # enclosing mappings. Returns nothing.
     """Visitor that collects arguments for reordered functions."""
     for child in children:
       _, attr = tf_decorator.unwrap(child[1])
@@ -99,6 +126,11 @@ def collect_function_arg_names(function_names, return_all_args_function_names,
   traverse.traverse(tf.compat.v2, visitor)
 
   def get_arguments_list(attr):
+    # [FUNCTION DOC]
+    # HELPER: argument name extractor for the enclosing function.
+    # Input: attr, a class or callable. For a class returns the constructor argument names without
+    # the first (self); otherwise returns the positional argument names of the callable. Does not
+    # include variable or keyword argument names or defaults.
     if tf_inspect.isclass(attr):
       # Get constructor arguments if attr is a class
       arg_list = tf_inspect.getargspec(
@@ -163,10 +195,21 @@ def collect_function_arg_names(function_names, return_all_args_function_names,
 
 
 def get_reorder_line(name, arg_list):
+  # [FUNCTION DOC]
+  # HELPER: formatter for the generated output file.
+  # Returns one entry of the mapping as indented text: the quoted function name followed by the
+  # text form of the argument list. Pure function.
   return '    \'%s\': %s' % (name, str(arg_list))
 
 
 def update_reorders_v2(output_file_path):
+  # [FUNCTION DOC]
+  # Generates and writes the reorders file.
+  # Input: output_file_path, destination path; existing contents are replaced. Creates the upgrade
+  # specification, takes its reordered function names, the names of functions with transformers
+  # (all of whose arguments are needed) and its symbol renames, computes the argument lists,
+  # sorts the entries and writes header plus mapping. Returns nothing; writes a file through
+  # TensorFlow file IO. May raise value errors from the argument computation.
   """Writes a Python dictionary mapping function name to argument order.
 
   Args:
@@ -195,6 +238,9 @@ def update_reorders_v2(output_file_path):
 
 
 def main(unused_argv):
+  # [FUNCTION DOC]
+  # Entry point for the app runner: ignores the command line arguments and regenerates the reorders
+  # file at the fixed output path. Returns nothing.
   update_reorders_v2(_OUTPUT_FILE_PATH)
 
 

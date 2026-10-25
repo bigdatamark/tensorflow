@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Helper module for the TensorFlow API documentation generator: decides, for the installed
+# TensorFlow, which source directories the doc generator should search for symbol definitions and
+# which code-link URL prefix belongs to each directory (TensorFlow itself, Keras, TensorBoard and,
+# for older versions, the estimator package). Also provides the filter callback that keeps the
+# keras symbol in the public API tree. Import-time side effects: imports keras, tensorboard,
+# tensorflow and the docs tooling; the estimator package is optional and becomes null if absent.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,6 +35,17 @@ except ImportError:
 
 
 def get_base_dirs_and_prefixes(code_url_prefix):
+  # [FUNCTION DOC]
+  # HELPER: configuration glue for the documentation generator.
+  # Input: code_url_prefix, the URL prefix to use for links into TensorFlow's own source.
+  # Output: a pair of a list of base directories (ordered; the first match wins and unmatched
+  # objects are dropped, with the TensorFlow directory last) and a tuple of URL prefixes in the
+  # same order, where a null entry means do not link. The layout depends on the installed
+  # TensorFlow version (16 and later, 13 and later, 9 and later). Keras links use the master branch
+  # for development builds and the matching release tag otherwise.
+  # Raises a value error for versions older than 2.9.
+  # KNOWN ISSUE: the 2.9 to 2.15 branches dereference the estimator package, which is null when it
+  # is not installed, so they would fail with an attribute error in that case.
   """Returns the base_dirs and code_prefixes for OSS TensorFlow api gen."""
   base_dir = pathlib.Path(tf.__file__).parent
 
@@ -109,6 +127,13 @@ def get_base_dirs_and_prefixes(code_url_prefix):
 
 
 def explicit_filter_keep_keras(parent_path, parent, children):
+  # [FUNCTION DOC]
+  # HELPER: public-API filter callback for the doc generator.
+  # Inputs: parent_path (list of names from the root), parent (the module or class) and children
+  # (list of name and object pairs). Applies the standard explicit package contents filter, and
+  # when the parent is the tf, v1 or v2 package and the filter dropped a keras child, appends it
+  # back from the parent. Returns the filtered children, sorted by name when the keras check ran,
+  # otherwise the filter result unchanged. No side effects.
   """Like explicit_package_contents_filter, but keeps keras."""
   new_children = public_api.explicit_package_contents_filter(
       parent_path, parent, children)
@@ -126,4 +151,6 @@ def explicit_filter_keep_keras(parent_path, parent, children):
 
 
 def get_callbacks():
+  # [FUNCTION DOC]
+  # HELPER: returns the list of filter callbacks (just the keep-keras filter) for the doc generator.
   return [explicit_filter_keep_keras]

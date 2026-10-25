@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Test runner that executes the doctests embedded in docstrings of TensorFlow python modules
+# (the python and lite python packages). Defines flags to select modules, skip module prefixes,
+# list the modules found, and require a number of GPUs. Supports sharding through the standard test
+# shard environment variables. Import-time side effects: enables v2 behavior, enables interactive
+# logging, and defines the flags. Loading the tests builds one doctest suite per matching module
+# using the TensorFlow output checker and a fixture that enables soft device placement.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -56,6 +63,10 @@ PACKAGES = [
 
 
 def recursive_import(root):
+  # [FUNCTION DOC]
+  # HELPER: module discovery helper. Input: root, a python package object. Walks all sub-packages
+  # and modules beneath it and imports each, silently ignoring attribute and import errors.
+  # Returns nothing; side effect is populating the loaded module table. (Not called in this file.)
   """Recursively imports all the sub-modules under a root package.
 
   Args:
@@ -70,6 +81,10 @@ def recursive_import(root):
 
 
 def find_modules():
+  # [FUNCTION DOC]
+  # HELPER: module discovery helper for the test loader. Scans the loaded module table and returns
+  # a list of all modules whose names start with one of the configured package prefixes.
+  # Takes no inputs; no side effects. Note that the result follows table order.
   """Finds all the modules in the core package imported.
 
   Returns:
@@ -87,6 +102,12 @@ def find_modules():
 
 
 def filter_on_submodules(all_modules, submodules):
+  # [FUNCTION DOC]
+  # HELPER: module filter for the test loader. Inputs: all_modules, list of module objects;
+  # submodules, list of names relative to the core packages. Returns the list of modules whose
+  # name contains a package prefix followed by one of the submodule names.
+  # KNOWN ISSUE: the match is a substring test rather than a prefix test, and a module matching
+  # several submodule or package combinations is added to the result more than once.
   """Filters all the modules based on the modules flag.
 
   The module flag has to be relative to the core package imported.
@@ -114,6 +135,14 @@ def filter_on_submodules(all_modules, submodules):
 
 
 def setup_gpu(required_gpus):
+  # [FUNCTION DOC]
+  # HELPER: test environment setup for the GPU count requirement.
+  # Input: required_gpus, integer number of GPUs the tests need; zero means do nothing. Raises a
+  # value error if one or more GPUs are required but no physical GPU exists. If more physical GPUs
+  # exist than needed, makes only the first required ones visible; otherwise splits the first
+  # physical GPU into extra logical devices with a small memory limit so the total number of
+  # logical GPUs equals the requirement. Returns nothing; changes global device configuration.
+  # KNOWN ISSUE: the docstring mentions num_gpus but the parameter is named required_gpus.
   """Sets up the GPU devices.
 
   If there're more available GPUs than needed, it hides the additional ones. If
@@ -146,18 +175,38 @@ def setup_gpu(required_gpus):
 
 
 class TfTestCase(tf.test.TestCase):
+  # [CLASS DOC]
+  # HELPER: adapter that lets doctest suites reuse the TensorFlow test case fixture. Subclass of
+  # the TensorFlow test case whose set_up and tear_down methods are passed to the doctest suites
+  # as per-test setup and teardown callbacks.
 
   def set_up(self, test):
+    # [FUNCTION DOC]
+    # Doctest setup callback. Input: test, the doctest object (unused). Enables soft device
+    # placement globally so distributed doctests can run, runs the test case's own setup, and waits
+    # for pending asynchronous eager operations. Returns nothing.
     # Enable soft device placement to run distributed doctests.
     tf.config.set_soft_device_placement(True)
     self.setUp()
     context.async_wait()
 
   def tear_down(self, test):
+    # [FUNCTION DOC]
+    # Doctest teardown callback. Input: test, the doctest object (unused). Runs the test case's own
+    # teardown. Returns nothing.
     self.tearDown()
 
 
 def load_tests(unused_loader, tests, unused_ignore):
+  # [FUNCTION DOC]
+  # Standard unittest load hook: adds docstring tests to the suite.
+  # Inputs: unused_loader, tests (the suite to extend), unused_ignore. Finds the TensorFlow
+  # modules, optionally narrows them by the module flag; if the list flag is set prints the module
+  # names between separator lines and returns the suite unchanged. Otherwise reads the shard index
+  # and total shard count from the environment (defaults zero and one), sorts the modules by name,
+  # keeps only those belonging to this shard, skips modules matching the skip prefix flag, and
+  # adds a doctest suite per module (with extra globals for the tf, np and os names, ellipsis and
+  # whitespace normalization options, and the TensorFlow output checker). Returns the suite.
   """Loads all the tests in the docstrings and runs them."""
 
   tf_modules = find_modules()
@@ -210,6 +259,9 @@ def load_tests(unused_loader, tests, unused_ignore):
 # called by unittest framework before running any test.
 # https://docs.python.org/3/library/unittest.html#setupmodule-and-teardownmodule
 def setUpModule():
+  # [FUNCTION DOC]
+  # Module level fixture run once before the tests: configures GPUs according to the required
+  # GPU count flag. Returns nothing.
   setup_gpu(FLAGS.required_gpus)
 
 

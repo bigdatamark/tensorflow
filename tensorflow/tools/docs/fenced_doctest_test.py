@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Unit tests for the fenced cell parser in the fenced doctest library. A table of named scenarios
+# (text containing fenced cells, with the expected pairs of code and output) is shared by two
+# parameterized tests, one with the text as written and one with blank lines collapsed. Covers
+# simple cells, cells with output, unlabeled and wrong-label fences being skipped, skip markers,
+# file-level skip-all, multiple cells, cells inside lists and multi-line cells. Runs the absl test
+# main when executed as a script.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -211,8 +218,17 @@ ExampleTuples = List[Tuple[str, Optional[str]]]
 
 
 class G3DoctestTest(parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case for the fenced cell parser. Shares a helper that parses text and
+  # compares the extracted code and output pairs with the expected ones; no fixtures.
 
   def _do_test(self, expected_example_tuples, string):
+    # [FUNCTION DOC]
+    # HELPER: shared assertion routine for the parser tests.
+    # Inputs: expected_example_tuples, list of pairs of expected code and expected output (null
+    # if none); string, the text to parse. Creates a parser for python fences, parses the text
+    # (passing the current test name), strips trailing newlines from each code and output, and
+    # asserts that the resulting list equals the expected one. Fails with an assertion error.
     parser = fenced_doctest_lib.FencedCellParser(fence_label='python')
 
     example_tuples = []
@@ -227,11 +243,18 @@ class G3DoctestTest(parameterized.TestCase):
 
   @parameterized.named_parameters(*EXAMPLES)
   def test_parser(self, expected_example_tuples: ExampleTuples, string: str):
+    # [FUNCTION DOC]
+    # Parameterized test run once per named scenario. Inputs are the expected pairs and the
+    # text; asserts the parser extracts exactly the expected examples from the text as written.
     self._do_test(expected_example_tuples, string)
 
   @parameterized.named_parameters(*EXAMPLES)
   def test_parser_no_blanks(self, expected_example_tuples: ExampleTuples,
                             string: str):
+    # [FUNCTION DOC]
+    # Parameterized test run once per named scenario, like the plain parser test, but first
+    # replaces every blank line in the text by a single line break (removing blank separators), then
+    # asserts the parser still extracts exactly the expected examples.
     string = string.replace('\n\n', '\n')
     self._do_test(expected_example_tuples, string)
 

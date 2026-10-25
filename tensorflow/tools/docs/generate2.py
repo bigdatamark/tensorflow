@@ -1,3 +1,15 @@
+# [MODULE DOC]
+# Command line tool that generates the TensorFlow 2 Python API reference docs. Requires the
+# external tensorflow_docs package. Defines flags (code link prefix, output directory, search
+# hints, site path), a map of private sub-packages to hide, a page builder for the raw ops page
+# with a table of ops showing gradient (and, on newer versions, GPU XLA) support, and a name
+# scoring visitor that prefers the canonical exported name of a symbol. The main build function
+# marks some APIs deprecated or undocumented, runs the doc generator over the tf module, then
+# patches the generated table of contents and redirect files and checks that enough files were
+# produced. Import-time side effects (global state changes): sets the list of public names on the
+# tf module, aliases the compat v2 module to tf, aliases several keras modules (losses, metrics,
+# optimizers, initializers) onto tf, sets the tf module doc string, wraps the estimator class with
+# a warning header if present, defines flags, and reads extra type alias docs if available.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -121,11 +133,21 @@ except AttributeError:
 
 
 class RawOpsPageInfo(module_page.ModulePageInfo):
+  # [CLASS DOC]
+  # Page information builder for the raw ops module page. Inherits from the standard module page
+  # information but uses the generic template page builder and appends a generated table listing
+  # every raw op with a link and whether it has a registered gradient (plus GPU XLA support on
+  # TensorFlow 2.14 and later).
   """Generates a custom page for `tf.raw_ops`."""
 
   DEFAULT_BUILDER_CLASS = base_page.TemplatePageBuilder
 
   def build(self):
+    # [FUNCTION DOC]
+    # Builds the page text. Skips the module page implementation (which does not use a template)
+    # and calls the base page implementation, then appends the raw ops table, chosen by
+    # TensorFlow version (the newer variant for 2.14 development builds and later). Takes no
+    # inputs; returns the combined text as a string.
     # Skip the ModulePage implementation, which doesn't use a template.
     content = base_page.PageInfo.build(self)
 
@@ -137,6 +159,12 @@ class RawOpsPageInfo(module_page.ModulePageInfo):
     return "\n".join([content, raw_ops_doc])
 
   def generate_raw_ops_doc_lt_214(self):
+    # [FUNCTION DOC]
+    # Builds the raw ops note and table for TensorFlow older than 2.14. Output is a string: a note
+    # about low level access, a table header with op name and gradient columns, then one row per
+    # public (not underscore-prefixed) attribute of the raw ops module in sorted order, with a link
+    # to its page under the site path and a check or cross mark depending on whether the gradient
+    # registry has an entry for it. Takes no inputs besides the instance (which is unused).
     """Generates docs for `tf.raw_ops`."""
     del self
 
@@ -171,6 +199,10 @@ class RawOpsPageInfo(module_page.ModulePageInfo):
     return "\n".join(parts)
 
   def generate_raw_ops_doc_ge_214(self):
+    # [FUNCTION DOC]
+    # Same as the older variant but for 2.14 and later: adds a column for GPU XLA support, which
+    # is true when the op name is in the set of GPU kernel names reported by the XLA ops module.
+    # Returns the note, header and rows joined by line breaks as a string. The instance is unused.
     """Generates docs for `tf.raw_ops`."""
     del self
 
@@ -218,13 +250,27 @@ class RawOpsPageInfo(module_page.ModulePageInfo):
 # So prefix the score tuples with -1 when this is the canonical name, +1
 # otherwise. The generator chooses the name with the lowest score.
 class TfExportAwareVisitor(doc_generator_visitor.DocGeneratorVisitor):
+  # [CLASS DOC]
+  # Doc generator visitor that scores candidate names for a symbol using TensorFlow export
+  # decorators. Inherits from the generic visitor and overrides name scoring so the name that is
+  # the canonical exported name wins when choosing a symbol's primary path.
   """A `tf_export`, `keras_export` and `estimator_export` aware doc_visitor."""
 
   class TfNameScore(NamedTuple):
+    # [CLASS DOC]
+    # Named tuple used as a sort key: canonical_score (an integer, lower is better) followed by
+    # the base visitor's own name score.
     canonical_score: int
     name_score: doc_generator_visitor.DocGeneratorVisitor.NameScore
 
   def _score_name(self, path: doc_generator_visitor.ApiPath) -> TfNameScore:
+    # [FUNCTION DOC]
+    # Scores a candidate API path for a symbol; lower scores are preferred.
+    # Input: path, the sequence of name components. Looks up the symbol in the visitor's index by the
+    # dotted name, then asks the export registry for its canonical name under the TensorFlow, Keras
+    # and (if available) estimator API names, taking the first found. The canonical score is -1
+    # if the dotted name equals the tf prefix plus the canonical name, else 1. Returns a score tuple
+    # of the canonical score and the base class score. Lookup errors are treated as no canonical name.
     name = ".".join(path)
     all_exports = [
         tf_export.TENSORFLOW_API_NAME,
@@ -254,6 +300,19 @@ class TfExportAwareVisitor(doc_generator_visitor.DocGeneratorVisitor):
 
 
 def build_docs(output_dir, code_url_prefix, search_hints):
+  # [FUNCTION DOC]
+  # Generates the TensorFlow 2 API docs.
+  # Inputs: output_dir, string path of the output directory; code_url_prefix, prefix for links to
+  # defining code; search_hints, whether to include search metadata at the top of each page.
+  # Marks compat v1, estimator, feature columns and keras preprocessing as deprecated, registers the
+  # custom raw ops page, hides raw ops from search, applies the do-not-document-in-subclasses
+  # decorator to all attributes (except the constructor) of the module, layer and optimizer
+  # classes, hides a list of internal paths, then runs the doc generator. Afterwards edits the
+  # table of contents (the overview path of the first section becomes a tf_overview page) and
+  # appends a redirect from that overview to the tf page.
+  # Returns nothing. Raises a value error if fewer than the expected number of files exist in the
+  # output directory. Side effects: mutates TensorFlow objects with marker attributes and writes
+  # many files, rewriting two yaml files.
   """Build api docs for tensorflow v2.
 
   Args:
@@ -322,6 +381,10 @@ def build_docs(output_dir, code_url_prefix, search_hints):
 
   @contextlib.contextmanager
   def edit_yaml_file(path):
+    # [FUNCTION DOC]
+    # HELPER: context manager used in the enclosing function. Input: path, a path object to a yaml
+    # file. Loads the file safely, yields the parsed content for the caller to modify in place, and
+    # on exit writes it back in block style, replacing the file. Raises file or parse errors.
     content = yaml.safe_load(path.read_text())
     yield content
 
@@ -350,6 +413,9 @@ def build_docs(output_dir, code_url_prefix, search_hints):
 
 
 def main(argv):
+  # [FUNCTION DOC]
+  # Entry point: ignores the argument list and calls the build function with the output directory,
+  # code URL prefix and search hints flag values. Returns nothing.
   del argv
   build_docs(
       output_dir=FLAGS.output_dir,

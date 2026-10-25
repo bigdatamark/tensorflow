@@ -1,3 +1,15 @@
+# [MODULE DOC]
+# Maintenance script that regenerates the renames_v2 table used by the TF 1.x to 2.0 upgrade tool.
+# It imports TensorFlow, walks the public API of the compat v1 and v2 namespaces (and the version
+# module), finds exported function, class and constant names that exist in v1 but are no longer
+# exported in v2, and writes a Python source file holding a mapping from the deprecated name to its
+# canonical v2 name (or to the compat.v1 location when there is no v2 equivalent). Entries already
+# covered by the manually maintained symbol renames are left out. Intended to be run through bazel;
+# the output goes to a fixed third_party path. Import-time side effects: imports TensorFlow and the
+# python modules needed so that exported symbols are registered; the main entry point is run through
+# the absl app runner only when executed as a script.
+# KNOWN ISSUE: the docstring refers to a file named reoders_v2 (typo for reorders_v2), and the
+# comment saying the python import is needed for sys.modules sits after unrelated imports.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -63,16 +75,30 @@ This file should be updated whenever endpoints are deprecated.
 
 
 def get_canonical_name(v2_names, v1_name):
+  # [FUNCTION DOC]
+  # HELPER: naming helper for the renames table generators in this script.
+  # Given the list of v2 API names for a symbol and its v1 name, returns the first v2 name if the
+  # list is non-empty, otherwise the v1 name prefixed with the compat v1 namespace. No side effects.
   if v2_names:
     return v2_names[0]
   return 'compat.v1.%s' % v1_name
 
 
 def get_all_v2_names():
+  # [FUNCTION DOC]
+  # HELPER: collects the set of known v2 names for the rename computation.
+  # Walks the public TensorFlow compat v2 API (skipping contrib, hiding the v1 and v2 children of
+  # compat) and returns a set of every exported v2 name of every function or class found.
+  # Takes no inputs; has no side effects beyond traversing the loaded modules.
   """Get a set of function/class names available in TensorFlow 2.0."""
   v2_names = set()  # All op names in TensorFlow 2.0
 
   def visit(unused_path, unused_parent, children):
+    # [FUNCTION DOC]
+    # HELPER: visitor callback for the API traversal in the enclosing function.
+    # Called for each module or class with its path, parent and list of (name, object) children;
+    # the first two are unused. For every child it unwraps decorators and adds all v2 export names
+    # to the enclosing set. Returns nothing; mutates the enclosing set.
     """Visitor that collects TF 2.0 names."""
     for child in children:
       _, attr = tf_decorator.unwrap(child[1])
@@ -88,6 +114,15 @@ def get_all_v2_names():
 
 
 def collect_constant_renames():
+  # [FUNCTION DOC]
+  # Finds exported constants whose v1 names are missing from their v2 names.
+  # Scans every loaded module; for each reads the lists of v1 and v2 exported constants, builds
+  # mappings from constant name to api names, and for each v1 name absent from the v2 names adds a
+  # pair of (old name, canonical new name). Returns a set of such pairs.
+  # KNOWN ISSUE: errors while reading a module's constants are swallowed by a bare catch that
+  # does nothing, after which the code continues using the lists from a previous module (or fails
+  # with an undefined-variable error if the very first module fails). Also a constant exported in
+  # v1 but missing from the v2 list raises a missing-key error.
   """Looks for constants that need to be renamed in TF 2.0.
 
   Returns:
@@ -122,6 +157,12 @@ def collect_constant_renames():
 
 
 def collect_function_renames():
+  # [FUNCTION DOC]
+  # Finds exported functions and classes whose v1 names are no longer exported in v2.
+  # Gathers all v2 names, then traverses the version module and compat v1 and v2 namespaces (skipping
+  # contrib). For each symbol, v1 names that are internal are ignored; if the symbol has no v2 names,
+  # the v2 names are taken as those v1 names that some other symbol exports in v2. Each v1 name not
+  # in the v2 names becomes a pair of (old name, canonical new name). Returns a set of pairs.
   """Looks for functions/classes that need to be renamed in TF 2.0.
 
   Returns:
@@ -133,6 +174,11 @@ def collect_function_renames():
   all_v2_names = get_all_v2_names()
 
   def visit(unused_path, unused_parent, children):
+    # [FUNCTION DOC]
+    # HELPER: visitor callback for the API traversal in the enclosing function.
+    # Called with path, parent (both unused) and children (name and object pairs). For each child
+    # computes v1 and v2 export names as described above and adds rename pairs to the enclosing
+    # set. Returns nothing; mutates the enclosing set.
     """Visitor that collects rename strings to add to rename_line_set."""
     for child in children:
       _, attr = tf_decorator.unwrap(child[1])
@@ -166,10 +212,20 @@ def collect_function_renames():
 
 
 def get_rename_line(name, canonical_name):
+  # [FUNCTION DOC]
+  # HELPER: formatter for the generated output file.
+  # Returns one text entry of the mapping: the old name and the canonical name each prefixed with
+  # the tf namespace, quoted, split over two indented lines. Pure function.
   return '    \'tf.%s\':\n        \'tf.%s\'' % (name, canonical_name)
 
 
 def update_renames_v2(output_file_path):
+  # [FUNCTION DOC]
+  # Generates and writes the renames file.
+  # Input: output_file_path, the destination path; existing contents are replaced. Computes function
+  # and constant renames, merges them, drops names present in the manual symbol renames of the
+  # compatibility module, sorts the entries and writes the file header followed by the mapping.
+  # Returns nothing; side effect is writing the file through TensorFlow file IO.
   """Writes a Python dictionary mapping deprecated to canonical API names.
 
   Args:
@@ -194,6 +250,9 @@ def update_renames_v2(output_file_path):
 
 
 def main(unused_argv):
+  # [FUNCTION DOC]
+  # Entry point for the app runner: ignores the command line arguments and regenerates the renames
+  # file at the fixed output path. Returns nothing.
   update_renames_v2(_OUTPUT_FILE_PATH)
 
 

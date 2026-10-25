@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# End-to-end test of the API doc generator. Builds a fake TensorFlow module (an automatically
+# populated module object that creates child modules on attribute access) holding a handful of real
+# TensorFlow symbols, substitutes it for the module used by the doc generator, builds the docs into
+# a temporary directory and checks the raw ops page, the table of contents overview entry and the
+# redirect entry, plus the GPU XLA columns on newer versions. Import-time side effect: constructs
+# the fake module at module level. Runs the googletest main when executed as a script.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,8 +36,16 @@ from tensorflow.tools.docs import generate2
 
 
 class AutoModule(types.ModuleType):
+  # [CLASS DOC]
+  # HELPER: test double for a module. A module type whose missing public attributes are created on
+  # demand as new child modules of the same type, stored on the parent; names beginning with an
+  # underscore are reported as missing. Used to build the fake TensorFlow namespace.
 
   def __getattr__(self, name):
+    # [FUNCTION DOC]
+    # Attribute fallback called for missing attributes. Input: name. Raises an attribute error for
+    # names starting with an underscore; otherwise creates a new child module of this type with
+    # that name, stores it on this object so later lookups find it, and returns it.
     if name.startswith('_'):
       raise AttributeError()
     mod = AutoModule(name)
@@ -57,9 +72,22 @@ fake_tf.__version__ = tf.__version__
 
 
 class Generate2Test(googletest.TestCase):
+  # [CLASS DOC]
+  # Test case for the doc generation script; contains a single end-to-end test that uses the
+  # module level fake TensorFlow namespace.
 
   @mock.patch.object(generate2, 'tf', fake_tf)
   def test_end_to_end(self):
+    # [FUNCTION DOC]
+    # Scenario: with the fake module patched in as the generator's TensorFlow, lowers the minimum
+    # expected file count to one, recreates an empty output directory under the test temp
+    # directory, and runs the docs build with an empty code URL prefix and search hints on.
+    # Asserts: the raw ops page links to the Add op page; the table of contents first section
+    # entry is titled Overview with the tf_overview path; the redirects list contains a redirect
+    # from tf_overview to tf; and, for versions 2.14 and later, the table rows show Add with
+    # gradient and XLA support and Print with gradient but no XLA support.
+    # KNOWN ISSUE: permanently overwrites the generator's minimum file count constant and never
+    # restores it, leaking state into other tests in the same process.
     generate2.MIN_NUM_FILES_EXPECTED = 1
     output_dir = pathlib.Path(googletest.GetTempDir())/'output'
     if os.path.exists(output_dir):

@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Command line script that generates the Java reference docs for TensorFlow.org. Defines flags for
+# output directory (required), site path prefix, an unused code URL prefix, an unused search hints
+# switch, and a switch controlling whether bazel-generated op sources are included. Defines path
+# constants for the Java sources and the bazel output of generated ops. Import-time side effect:
+# defines command line flags. The entry point runs only when executed as a script.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -53,6 +59,15 @@ OP_SOURCE_PATH = (
 
 
 def main(unused_argv):
+  # [FUNCTION DOC]
+  # Entry point: ignores its argument. Copies the Java sources into a fresh temporary directory;
+  # when the generate-ops flag is on, runs configure with default answers, builds the Java op
+  # generation bazel target and copies the generated ops into the temporary tree. Then calls the
+  # Java doc generator for the org.tensorflow package, writing to the output directory flag with
+  # the site path flag. Returns nothing. Raises a called-process error if the bazel build fails,
+  # and a file error if the sources are missing.
+  # KNOWN ISSUE: the temporary directory is never removed, and the code URL prefix and search
+  # hints flags are accepted but unused.
   merged_source = pathlib.Path(tempfile.mkdtemp())
   shutil.copytree(SOURCE_PATH, merged_source / 'java')
 
