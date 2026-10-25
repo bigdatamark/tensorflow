@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Defines the PythonState mixin, an abstract trackable class that lets arbitrary Python state be
+# stored in an object-based checkpoint as a single string tensor. Subclasses implement serialize
+# and deserialize; the checkpoint machinery saves the serialized string under a fixed key. The
+# module exposes the key constant and the class (exported publicly as an experimental training
+# API). Import-time side effect: registers the public export only.
 """Utilities for including Python state in TensorFlow checkpoints."""
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
@@ -27,6 +33,12 @@ PYTHON_STATE = "py_state"
 
 @tf_export("train.experimental.PythonState")
 class PythonState(base.Trackable, metaclass=abc.ABCMeta):
+  # [CLASS DOC]
+  # Abstract mixin for trackable objects whose state is arbitrary Python data. Concrete subclasses
+  # supply serialize (state to string) and deserialize (string back to state); the class provides
+  # the checkpoint hook that stores the serialized string as a scalar string tensor under the
+  # key given by the module constant. Uses an abstract-base-class metaclass, so subclasses that do
+  # not implement both abstract methods cannot be instantiated.
   """A mixin for putting Python state in an object-based checkpoint.
 
   This is an abstract class which allows extensions to TensorFlow's object-based
@@ -74,13 +86,26 @@ class PythonState(base.Trackable, metaclass=abc.ABCMeta):
 
   @abc.abstractmethod
   def serialize(self):
+    # [FUNCTION DOC]
+    # Abstract callback: subclasses return the object's state encoded as a string (bytes-like
+    # string suitable for a string tensor). Takes no arguments. The base version has no body
+    # and is never called directly.
     """Callback to serialize the object. Returns a string."""
 
   @abc.abstractmethod
   def deserialize(self, string_value):
+    # [FUNCTION DOC]
+    # Abstract callback: subclasses restore their state from the string previously produced by
+    # serialize. Input: string_value, the serialized string. Returns nothing; mutates the object.
     """Callback to deserialize the object."""
 
   def _serialize_to_tensors(self):
+    # [FUNCTION DOC]
+    # HELPER: checkpoint-saving hook called by the trackable machinery.
+    # Calls serialize and wraps the result in a string constant created outside any function
+    # graph (in the initialization scope). Returns a mapping from the fixed state key to that
+    # scalar string tensor. Propagates any error raised by serialize. Note: no matching restore
+    # hook is defined here.
     """Implements Trackable._serialize_to_tensors."""
     with ops.init_scope():
       value = constant_op.constant(self.serialize(), dtype=dtypes.string)
