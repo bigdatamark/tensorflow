@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# Defines RowPartition, a composite tensor describing how a flat sequence of values is divided into
+# contiguous variable-length rows, and RowPartitionSpec, its type specification. A RowPartition
+# always stores a row_splits vector and may cache extra equivalent encodings (row lengths, value
+# row ids, number of rows, number of values, uniform row length). It is the building block used by
+# RaggedTensor and structured tensors to encode each ragged dimension. The module exposes the
+# public RowPartition class (exported as the experimental RowPartition API) and RowPartitionSpec
+# (registered in the type spec registry under a fixed name), plus private helper functions that
+# validate, merge, cast and convert partition tensors. Import-time side effects: the spec is
+# registered with the type spec registry, a codec for the spec is registered with the nested
+# structure coder, and a private unique key object is created that guards the constructor.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -55,6 +66,15 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export("experimental.RowPartition")
 class RowPartition(composite_tensor.CompositeTensor):
+  # [CLASS DOC]
+  # Composite tensor that records how a sequence of nvals values is split into nrows contiguous
+  # rows. Holds a mandatory row_splits tensor (1-D, int32 or int64) and optional cached tensors
+  # for row lengths, value row ids, number of rows, uniform row length and number of values, all
+  # with the same dtype as row_splits. Instances are created only through the factory class
+  # methods (from value row ids, row splits, row lengths, row starts, row limits, uniform row
+  # length); the constructor is private and requires a secret key. Accessor methods return the
+  # cached encoding when present and otherwise derive it from row_splits. Its type spec is
+  # RowPartitionSpec. It stores no values, only the partitioning.
   """Partitioning of a sequence of values into contiguous subsequences ("rows").
 
   A `RowPartition` describes how a sequence with `nvals` items should be
@@ -123,6 +143,15 @@ class RowPartition(composite_tensor.CompositeTensor):
                uniform_row_length=None,
                nvals=None,
                internal=False):
+    # [FUNCTION DOC]
+    # HELPER: private constructor used only by the RowPartition factory methods.
+    # Builds a RowPartition from a row_splits tensor plus optional cached encodings (row_lengths,
+    # value_rowids, nrows, uniform_row_length, nvals; each a tensor or nothing). The internal
+    # argument must be the module's private factory key, otherwise a value error is raised.
+    # row_splits must be a Tensor (a plain list raises a type error) of int32 or int64 (else value
+    # error) and rank 1; its static shape is reset to unknown length. Every non-null cached value
+    # must be a Tensor (else type error) with the same dtype as row_splits (else value error).
+    # Returns nothing; stores the tensors on the new instance and performs no value validation.
     """Creates a `RowPartition` from the specified encoding tensor(s).
 
     This constructor is private -- please use one of the following ops to
@@ -199,6 +228,18 @@ class RowPartition(composite_tensor.CompositeTensor):
                         validate=True,
                         dtype=None,
                         dtype_hint=None):
+    # [FUNCTION DOC]
+    # Factory: builds a RowPartition from a sorted vector giving the row index of each value.
+    # Inputs: value_rowids (1-D integer tensor or list, nonnegative, ascending); nrows (optional
+    # integer scalar, defaults to the last row id plus one, or zero when empty; must exceed the
+    # last row id); validate (bool, default true, adds assertions for rank, nonnegativity,
+    # ordering and nrows bound); dtype and dtype_hint (optional int32/int64 choice, default int64).
+    # Converts the arguments to tensors, computes row lengths with a bincount and row splits with
+    # a cumulative sum, and caches value_rowids, row_lengths and nrows on the result. Static
+    # shapes are filled in when nrows is a known constant.
+    # Returns the new RowPartition. Raises a type error if validate is not a bool, and a value
+    # error if a constant nrows is negative or not larger than the last constant row id, or if
+    # the dtype is not int32/int64. Imports bincount lazily to avoid an import cycle.
     """Creates a `RowPartition` with rows partitioned by `value_rowids`.
 
     This `RowPartition` divides a sequence `values` into rows by specifying
@@ -318,6 +359,15 @@ class RowPartition(composite_tensor.CompositeTensor):
                       validate=True,
                       dtype=None,
                       dtype_hint=None):
+    # [FUNCTION DOC]
+    # Factory: builds a RowPartition directly from a row_splits vector of split points.
+    # Inputs: row_splits (1-D integer tensor or list; non-empty, first element zero, ascending);
+    # validate (bool, default true, adds assertions on rank, first element zero and ordering);
+    # dtype and dtype_hint (optional int32/int64 choice, default int64).
+    # If row_splits is a tensor spec (symbolic placeholder) it is passed straight to the
+    # constructor without conversion or validation. Otherwise it is converted to a tensor.
+    # Returns the new RowPartition with no extra cached encodings. Raises a type error if
+    # validate is not a bool and a value error if row_splits is an empty list or tuple.
     """Creates a `RowPartition` with rows partitioned by `row_splits`.
 
     This `RowPartition` divides a sequence `values` into rows by indicating
@@ -381,6 +431,14 @@ class RowPartition(composite_tensor.CompositeTensor):
                        validate=True,
                        dtype=None,
                        dtype_hint=None):
+    # [FUNCTION DOC]
+    # Factory: builds a RowPartition from a vector with the length of every row.
+    # Inputs: row_lengths (1-D integer tensor or list, nonnegative); validate (bool, default true,
+    # adds assertions on rank and nonnegativity); dtype and dtype_hint (optional int32/int64
+    # choice, default int64).
+    # Row splits are computed as zero followed by the cumulative sum of the lengths, and the
+    # lengths are cached on the result. Returns the new RowPartition. Raises a type error if
+    # validate is not a bool and a value error if the dtype is not int32/int64.
     """Creates a `RowPartition` with rows partitioned by `row_lengths`.
 
     This `RowPartition` divides a sequence `values` into rows by indicating
@@ -437,6 +495,15 @@ class RowPartition(composite_tensor.CompositeTensor):
                       validate=True,
                       dtype=None,
                       dtype_hint=None):
+    # [FUNCTION DOC]
+    # Factory: builds a RowPartition from the start offset of each row plus the total value count.
+    # Inputs: row_starts (1-D integer tensor or list, ascending, first element zero when not
+    # empty); nvals (scalar giving the number of values, cast to the dtype of row_starts);
+    # validate (bool, default true, adds assertions on rank, first element zero, ordering and that
+    # the last start does not exceed nvals); dtype and dtype_hint (optional int32/int64 choice).
+    # Row splits are row_starts with nvals appended; nvals is cached on the result.
+    # Returns the new RowPartition. Raises a type error if validate is not a bool and a value
+    # error for an unsupported dtype.
     """Creates a `RowPartition` with rows partitioned by `row_starts`.
 
     Equivalent to: `from_row_splits(concat([row_starts, nvals], axis=0))`.
@@ -488,6 +555,14 @@ class RowPartition(composite_tensor.CompositeTensor):
                       validate=True,
                       dtype=None,
                       dtype_hint=None):
+    # [FUNCTION DOC]
+    # Factory: builds a RowPartition from the end offset (limit) of each row.
+    # Inputs: row_limits (1-D integer tensor or list, ascending, first element nonnegative);
+    # validate (bool, default true, adds assertions on rank, nonnegativity of the first limit and
+    # ordering); dtype and dtype_hint (optional int32/int64 choice, default int64).
+    # Row splits are a leading zero followed by the limits. Nothing else is cached.
+    # Returns the new RowPartition. Raises a type error if validate is not a bool and a value
+    # error for an unsupported dtype.
     """Creates a `RowPartition` with rows partitioned by `row_limits`.
 
     Equivalent to: `from_row_splits(values, concat([0, row_limits], axis=0))`.
@@ -536,6 +611,20 @@ class RowPartition(composite_tensor.CompositeTensor):
                               validate=True,
                               dtype=None,
                               dtype_hint=None):
+    # [FUNCTION DOC]
+    # Factory: builds a RowPartition in which every row has the same length.
+    # Inputs: uniform_row_length (nonnegative integer scalar); nvals (optional number of values);
+    # nrows (optional number of rows); at least one of nvals and nrows must be given; validate
+    # (bool, default true); dtype and dtype_hint (optional int32/int64 choice, default int64). All
+    # of the numeric arguments are converted (or cast, when dtype is given) to one common dtype.
+    # Missing nrows is derived as nvals divided by the row length (zero when the length is zero);
+    # missing nvals as nrows times the row length. Row splits are multiples of the row length,
+    # built as a constant when everything is statically known. With validate, constants are
+    # checked immediately and otherwise assertions check that nrows times the row length equals
+    # nvals, that the length is a scalar and that it is nonnegative.
+    # Returns a RowPartition caching uniform_row_length, nrows and nvals. Raises a type error if
+    # validate is not a bool, and a value error if neither nvals nor nrows is given, if constant
+    # values are inconsistent or the length is negative.
     """Creates a `RowPartition` with rows partitioned by `uniform_row_length`.
 
     This `RowPartition` divides a sequence `values` into rows that all have
@@ -668,6 +757,12 @@ class RowPartition(composite_tensor.CompositeTensor):
 
   @classmethod
   def _convert_row_partition(cls, partition, name, dtype=None, dtype_hint=None):
+    # [FUNCTION DOC]
+    # HELPER: dtype-normalising conversion used by all of the factory methods.
+    # Converts one partitioning argument (list, array or tensor) to a tensor named name. A numpy
+    # int32 array with no explicit dtype keeps int32; otherwise standard conversion is used with
+    # dtype_hint defaulting to int64. Returns the tensor. Raises a value error if the resulting
+    # dtype is not int32 or int64.
     """Converts `partition` to Tensors.
 
     Args:
@@ -705,6 +800,12 @@ class RowPartition(composite_tensor.CompositeTensor):
     return partition
 
   def _with_dependencies(self, dependencies):
+    # [FUNCTION DOC]
+    # HELPER: attaches sanity-check ops to a partition.
+    # KNOWN ISSUE: the copy keeps row_lengths, value_rowids, nrows and uniform_row_length but
+    # silently drops the cached nvals, unlike the other copy helpers.
+    # Takes a list of check tensors, gates the row_splits tensor behind them and returns a new
+    # RowPartition sharing the other cached encodings. Does not modify self.
     """Returns a new RowPartition equal to self with control dependencies.
 
     Specifically, self._row_splits is gated by the given control dependencies.
@@ -732,10 +833,15 @@ class RowPartition(composite_tensor.CompositeTensor):
 
   @property
   def dtype(self):
+    # [FUNCTION DOC]
+    # Property returning the integer dtype (int32 or int64) shared by all encoding tensors; it is
+    # the dtype of row_splits.
     """The `DType` used to encode the row partition (either int32 or int64)."""
     return self._row_splits.dtype
 
   def row_splits(self):
+    # [FUNCTION DOC]
+    # Returns the stored row_splits tensor (1-D, length nrows plus one). No computation is done.
     """Returns the row-split indices for this row partition.
 
     `row_splits` specifies where the values for each row begin and end.
@@ -751,6 +857,9 @@ class RowPartition(composite_tensor.CompositeTensor):
     return self._row_splits
 
   def value_rowids(self):
+    # [FUNCTION DOC]
+    # Returns the row index of every value as a 1-D tensor. Uses the cached encoding when
+    # present, otherwise converts row_splits to segment ids (builds new ops each call).
     """Returns the row indices for this row partition.
 
     `value_rowids` specifies the row index for each value.  In particular,
@@ -765,6 +874,10 @@ class RowPartition(composite_tensor.CompositeTensor):
     return segment_id_ops.row_splits_to_segment_ids(self._row_splits)
 
   def nvals(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: a cached nvals tensor is deliberately ignored (the lookup is commented out
+    # under a TODO), so the result is always recomputed from row_splits.
+    # Returns the total number of values as a scalar tensor: the last element of row_splits.
     """Returns the number of values partitioned by this `RowPartition`.
 
     If the sequence partitioned by this `RowPartition` is a tensor, then
@@ -780,6 +893,10 @@ class RowPartition(composite_tensor.CompositeTensor):
     return self._row_splits[-1]
 
   def nrows(self):
+    # [FUNCTION DOC]
+    # Returns the number of rows as a scalar tensor of this partition's dtype. Uses the cached
+    # value if present; otherwise the static length of row_splits minus one as a constant, or a
+    # dynamic shape computation when the length is not statically known.
     """Returns the number of rows created by this `RowPartition`.
 
     Returns:
@@ -794,6 +911,10 @@ class RowPartition(composite_tensor.CompositeTensor):
       return constant_op.constant(nsplits.value - 1, dtype=self.dtype)
 
   def uniform_row_length(self):
+    # [FUNCTION DOC]
+    # Returns the cached uniform row length scalar tensor, or nothing if none was recorded. It is
+    # not computed from the data, so a partition with equal row lengths built another way still
+    # returns nothing.
     """Returns the length of each row in this partition, if rows are uniform.
 
     If all rows in this `RowPartition` have the same length, then this returns
@@ -805,6 +926,8 @@ class RowPartition(composite_tensor.CompositeTensor):
     return self._uniform_row_length
 
   def row_starts(self):
+    # [FUNCTION DOC]
+    # Returns the start offset of each row: row_splits without its last element (a 1-D tensor).
     """Returns the start indices for rows in this row partition.
 
     These indices specify where the values for each row begin.
@@ -819,6 +942,10 @@ class RowPartition(composite_tensor.CompositeTensor):
     return self._row_splits[:-1]
 
   def row_limits(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says the result equals row_splits without its last element, but
+    # the code returns row_splits without its first element (the end offset of each row).
+    # Returns the end offset of each row as a 1-D tensor.
     """Returns the limit indices for rows in this row partition.
 
     These indices specify where the values for each row end.
@@ -832,6 +959,9 @@ class RowPartition(composite_tensor.CompositeTensor):
     return self._row_splits[1:]
 
   def row_lengths(self):
+    # [FUNCTION DOC]
+    # Returns the length of each row as a 1-D tensor: the cached row lengths if present,
+    # otherwise the differences between consecutive row_splits entries.
     """Returns the lengths of rows in this `RowPartition`.
 
     Returns:
@@ -846,6 +976,10 @@ class RowPartition(composite_tensor.CompositeTensor):
 
   @property
   def static_nrows(self):
+    # [FUNCTION DOC]
+    # Property giving the number of rows as a Python integer when statically known, else nothing.
+    # Tries, in order, the static shape of row_splits (minus one), the static shape of the cached
+    # row lengths, and the constant value of the cached nrows tensor.
     """The number of rows in this partition, if statically known.
 
     ```python
@@ -873,6 +1007,11 @@ class RowPartition(composite_tensor.CompositeTensor):
 
   @property
   def static_nvals(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring example refers to a non-existent static_vals name; the property
+    # is static_nvals.
+    # Property giving the number of values when statically known, else nothing. Tries the
+    # constant value of the cached nvals tensor, then the static length of cached value_rowids.
     """The number of values in this partition, if statically known.
 
     ```python
@@ -895,6 +1034,9 @@ class RowPartition(composite_tensor.CompositeTensor):
 
   @property
   def static_uniform_row_length(self):
+    # [FUNCTION DOC]
+    # Property giving the uniform row length as a number if the cached uniform_row_length tensor
+    # exists and is a constant; otherwise nothing.
     """The number of values in each row of this partition, if statically known.
 
     Returns:
@@ -906,6 +1048,10 @@ class RowPartition(composite_tensor.CompositeTensor):
     return None
 
   def offsets_in_rows(self):
+    # [FUNCTION DOC]
+    # Returns a 1-D tensor with, for every value, its position within its own row (for row
+    # lengths 3, 2, 0, 2 this gives 0 1 2 0 1 0 1). Implemented with a ragged range op over the
+    # row lengths and flattening the result.
     """Return the offset of each value.
 
     RowPartition takes an array x and converts it into sublists.
@@ -924,6 +1070,10 @@ class RowPartition(composite_tensor.CompositeTensor):
         deltas=constant_op.constant(1, self.dtype)).rt_dense_values
 
   def is_uniform(self):
+    # [FUNCTION DOC]
+    # Returns a Python bool: true only if a uniform row length was recorded at construction. A
+    # false result does not prove rows differ in length (for example equal row lengths built from
+    # row lengths report false).
     """Returns true if the partition is known to be uniform statically.
 
     This is based upon the existence of self._uniform_row_length. For example:
@@ -937,6 +1087,11 @@ class RowPartition(composite_tensor.CompositeTensor):
     return self._uniform_row_length is not None
 
   def _static_check(self):
+    # [FUNCTION DOC]
+    # HELPER: internal consistency check.
+    # KNOWN ISSUE: it does not check the cached nvals dtype, so an inconsistent nvals passes.
+    # Raises a value error if any of the cached uniform_row_length, row_lengths, value_rowids or
+    # nrows tensors has a dtype different from row_splits. Returns nothing.
     """Checks if the object is internally consistent.
 
     Raises:
@@ -966,6 +1121,12 @@ class RowPartition(composite_tensor.CompositeTensor):
   # =============================================================================
 
   def with_dtype(self, dtype):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the new partition does not carry over the cached nvals tensor (and it is not
+    # cast), so that cache is lost after a dtype change.
+    # Takes a dtype (int32 or int64, or anything convertible). Returns self if it already has that
+    # dtype, otherwise a new RowPartition with row_splits and the cached row_lengths, value_rowids,
+    # nrows and uniform_row_length cast. Raises a value error for any other dtype.
     """Returns a copy of this RowPartition with the given encoding dtype.
 
     Args:
@@ -995,6 +1156,9 @@ class RowPartition(composite_tensor.CompositeTensor):
   # =============================================================================
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns a string description: nrows and uniform_row_length when a uniform row length is
+    # cached (nrows may print as nothing if not cached), otherwise the row_splits tensor.
     if self._uniform_row_length is not None:
       return (f"tf.RowPartition(nrows={self._nrows}, "
               f"uniform_row_length={self._uniform_row_length})")
@@ -1006,6 +1170,9 @@ class RowPartition(composite_tensor.CompositeTensor):
   # =============================================================================
 
   def _has_precomputed_row_splits(self):
+    # [FUNCTION DOC]
+    # HELPER: cache query. Returns true if row_splits is present, which is always the case for a
+    # constructed partition.
     """Returns true if `row_splits` has already been computed.
 
     If true, then `self.row_splits()` will return its value without calling
@@ -1014,6 +1181,8 @@ class RowPartition(composite_tensor.CompositeTensor):
     return self._row_splits is not None
 
   def _has_precomputed_row_lengths(self):
+    # [FUNCTION DOC]
+    # HELPER: cache query. Returns true if a row_lengths tensor is cached on this partition.
     """Returns true if `row_lengths` has already been computed.
 
     If true, then `self.row_lengths()` will return its value without calling
@@ -1022,6 +1191,8 @@ class RowPartition(composite_tensor.CompositeTensor):
     return self._row_lengths is not None
 
   def _has_precomputed_value_rowids(self):
+    # [FUNCTION DOC]
+    # HELPER: cache query. Returns true if a value_rowids tensor is cached on this partition.
     """Returns true if `value_rowids` has already been computed.
 
     If true, then `self.value_rowids()` will return its value without calling
@@ -1030,6 +1201,8 @@ class RowPartition(composite_tensor.CompositeTensor):
     return self._value_rowids is not None
 
   def _has_precomputed_nrows(self):
+    # [FUNCTION DOC]
+    # HELPER: cache query. Returns true if an nrows tensor is cached on this partition.
     """Returns true if `nrows` has already been computed.
 
     If true, then `self.nrows()` will return its value without calling
@@ -1038,6 +1211,9 @@ class RowPartition(composite_tensor.CompositeTensor):
     return self._nrows is not None
 
   def _has_precomputed_nvals(self):
+    # [FUNCTION DOC]
+    # HELPER: cache query. Returns true if an nvals tensor is cached on this partition (note that
+    # the public nvals accessor does not actually use that cache).
     """Returns true if `nvals` has already been computed.
 
     If true, then `self.nvals()` will return its value without calling
@@ -1046,6 +1222,9 @@ class RowPartition(composite_tensor.CompositeTensor):
     return self._nvals is not None
 
   def _with_precomputed_row_splits(self):
+    # [FUNCTION DOC]
+    # HELPER: copy helper. Returns a new RowPartition with the same cached encodings and the
+    # row_splits taken from the accessor (which is already stored, so this is effectively a copy).
     """Returns a copy of `self` with `row_splits` precomputed."""
     return RowPartition(
         row_splits=self.row_splits(),
@@ -1057,6 +1236,9 @@ class RowPartition(composite_tensor.CompositeTensor):
         internal=_row_partition_factory_key)
 
   def _with_precomputed_row_lengths(self):
+    # [FUNCTION DOC]
+    # HELPER: copy helper. Returns a new RowPartition identical to this one but with row_lengths
+    # computed (via the accessor) and cached.
     """Returns a copy of `self` with `row_lengths` precomputed."""
     return RowPartition(
         row_splits=self._row_splits,
@@ -1068,6 +1250,9 @@ class RowPartition(composite_tensor.CompositeTensor):
         internal=_row_partition_factory_key)
 
   def _with_precomputed_value_rowids(self):
+    # [FUNCTION DOC]
+    # HELPER: copy helper. Returns a new RowPartition identical to this one but with value_rowids
+    # computed (via the accessor) and cached.
     """Returns a copy of `self` with `value_rowids` precomputed."""
     return RowPartition(
         row_splits=self._row_splits,
@@ -1079,6 +1264,9 @@ class RowPartition(composite_tensor.CompositeTensor):
         internal=_row_partition_factory_key)
 
   def _with_precomputed_nrows(self):
+    # [FUNCTION DOC]
+    # HELPER: copy helper. Returns a new RowPartition identical to this one but with nrows
+    # computed (via the accessor) and cached.
     """Returns a copy of `self` with `nrows` precomputed."""
     return RowPartition(
         row_splits=self._row_splits,
@@ -1090,6 +1278,10 @@ class RowPartition(composite_tensor.CompositeTensor):
         internal=_row_partition_factory_key)
 
   def _with_precomputed_nvals(self):
+    # [FUNCTION DOC]
+    # HELPER: copy helper.
+    # KNOWN ISSUE: the docstring says row_splits is precomputed, but the method caches nvals.
+    # Returns a new RowPartition identical to this one but with nvals computed and cached.
     """Returns a copy of `self` with `row_splits` precomputed."""
     return RowPartition(
         row_splits=self.row_splits(),
@@ -1101,6 +1293,12 @@ class RowPartition(composite_tensor.CompositeTensor):
         internal=_row_partition_factory_key)
 
   def _merge_with_spec(self, b):
+    # [FUNCTION DOC]
+    # HELPER: refines a partition with static information from a RowPartitionSpec b.
+    # Raises a value error if b is not compatible with this partition's own spec. Otherwise
+    # returns a new RowPartition whose nrows, nvals and uniform_row_length are constants taken from
+    # b where b specifies them, falling back to this partition's cached values; the other
+    # encodings are shared.
     """Merge with a TypeSpec to create a new RowPartition."""
     a_spec = self._type_spec
     if not a_spec.is_compatible_with(b):
@@ -1123,6 +1321,14 @@ class RowPartition(composite_tensor.CompositeTensor):
         internal=_row_partition_factory_key)
 
   def _merge_precomputed_encodings(self, other, validate=True):
+    # [FUNCTION DOC]
+    # HELPER: combines the cached encodings of two partitions that describe the same partition.
+    # Inputs: other (a RowPartition) and validate (bool, default true; add runtime equality
+    # checks). Returns self if both hold identical tensors, then merges each encoding in order of
+    # increasing cost (nrows, nvals, uniform_row_length, row_splits, row_lengths, value_rowids),
+    # validating only until one encoding has been proven equal. Returns self or other when either
+    # already holds all merged tensors, otherwise a new RowPartition. Raises a value error (from
+    # the tensor merge) when static shapes are incompatible.
     """Returns a RowPartition that merges encodings from `self` and `other`.
 
     Requires that `self` and `other` describe the same partition.
@@ -1200,6 +1406,9 @@ class RowPartition(composite_tensor.CompositeTensor):
 
   @property
   def _type_spec(self):
+    # [FUNCTION DOC]
+    # Property required by the composite tensor protocol: returns the RowPartitionSpec built from
+    # this partition's static row, value and uniform-length information and dtype.
     return RowPartitionSpec.from_value(self)
 
 
@@ -1212,6 +1421,11 @@ class RowPartition(composite_tensor.CompositeTensor):
 
 @type_spec_registry.register("tf.RowPartitionSpec")
 class RowPartitionSpec(type_spec.TypeSpec):
+  # [CLASS DOC]
+  # Type specification of a RowPartition, registered in the type spec registry under a fixed
+  # name. Stores the statically known number of rows, number of values and uniform row length
+  # (each as a one-element shape that may be unknown) and the integer dtype. The only tensor
+  # component is the row_splits vector, so values convert to and from that one tensor.
   """Type specification for a `tf.RowPartition`."""
 
   __slots__ = ["_nrows", "_nvals", "_uniform_row_length", "_dtype"]
@@ -1223,6 +1437,13 @@ class RowPartitionSpec(type_spec.TypeSpec):
                nvals=None,
                uniform_row_length=None,
                dtype=dtypes.int64):
+    # [FUNCTION DOC]
+    # Builds a spec from optional nrows, nvals, uniform_row_length (numbers, or a shape for the
+    # latter; nothing means unknown) and dtype (int32 or int64, default int64). Values are stored
+    # wrapped as one-element shapes. Infers missing values when possible: zero rows or zero row
+    # length imply zero values; known nvals and row length imply nrows; known nrows and row length
+    # imply nvals. Raises a value error for an unsupported dtype or for mutually inconsistent
+    # dimensions (nvals incompatible with nrows or row length, including non-divisible cases).
     """Constructs a new RowPartitionSpec.
 
     Args:
@@ -1279,6 +1500,9 @@ class RowPartitionSpec(type_spec.TypeSpec):
       self._nvals = tensor_shape.TensorShape([ncols * nrows])
 
   def is_compatible_with(self, other):
+    # [FUNCTION DOC]
+    # Returns true if other is compatible with this spec: the base type spec check must pass and
+    # the merged nrows, nvals and uniform row length must be mutually consistent.
     if not super(RowPartitionSpec, self).is_compatible_with(other):
       return False
     nrows = self._nrows.merge_with(other.nrows)
@@ -1287,10 +1511,16 @@ class RowPartitionSpec(type_spec.TypeSpec):
     return self._dimensions_compatible(nrows, nvals, ncols)
 
   def _serialize(self):
+    # [FUNCTION DOC]
+    # Returns the tuple of nrows, nvals and uniform row length (as one-element shapes) and dtype
+    # that identifies this spec.
     return (self._nrows, self._nvals, self._uniform_row_length, self._dtype)
 
   @classmethod
   def _deserialize(cls, serialization):
+    # [FUNCTION DOC]
+    # Rebuilds a spec from the tuple made by the serialize method: unwraps nrows and nvals to
+    # plain numbers (or nothing) and passes the uniform row length and dtype through.
     # Remove TensorShape wrappers from serialization.
     (nrows, nvals, uniform_row_length, dtype) = serialization
     nrows = tensor_shape.dimension_value(nrows[0])
@@ -1299,46 +1529,73 @@ class RowPartitionSpec(type_spec.TypeSpec):
 
   @property
   def nrows(self):
+    # [FUNCTION DOC]
+    # Property: the statically known number of rows as a number, or nothing if unknown.
     return tensor_shape.dimension_value(self._nrows[0])
 
   @property
   def nvals(self):
+    # [FUNCTION DOC]
+    # Property: the statically known number of values as a number, or nothing if unknown.
     return tensor_shape.dimension_value(self._nvals[0])
 
   @property
   def uniform_row_length(self):
+    # [FUNCTION DOC]
+    # Property: the statically known uniform row length as a number, or nothing if unknown.
     return tensor_shape.dimension_value(self._uniform_row_length[0])
 
   @property
   def dtype(self):
+    # [FUNCTION DOC]
+    # Property: the integer dtype (int32 or int64) used to encode the partition.
     return self._dtype
 
   @property
   def _component_specs(self):
+    # [FUNCTION DOC]
+    # Property: the tensor spec of the single component, a 1-D tensor of the spec's dtype whose
+    # length is nrows plus one (unknown if nrows is unknown).
     row_splits_shape = tensor_shape.TensorShape(
         [tensor_shape.dimension_at_index(self._nrows, 0) + 1])
     return tensor_lib.TensorSpec(row_splits_shape, self._dtype)
 
   def _to_components(self, value):
+    # [FUNCTION DOC]
+    # Decomposes a RowPartition into its single tensor component, its row_splits tensor. Other
+    # cached encodings are not preserved.
     return value.row_splits()
 
   def _from_components(self, tensor):
+    # [FUNCTION DOC]
+    # Rebuilds a RowPartition from a row_splits tensor without validation. The static information
+    # held by this spec (nrows, nvals, uniform row length) is not re-applied to the result.
     return RowPartition.from_row_splits(tensor, validate=False)
 
   @classmethod
   def from_value(cls, value):
+    # [FUNCTION DOC]
+    # Creates a spec describing a RowPartition value using its static number of rows, values and
+    # uniform row length and its dtype. Raises a type error if value is not a RowPartition.
     if not isinstance(value, RowPartition):
       raise TypeError("Expected `value` to be a `RowPartition`")
     return cls(value.static_nrows, value.static_nvals,
                value.static_uniform_row_length, value.dtype)
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns a string showing the spec's nrows, nvals, uniform row length and dtype.
     return ("RowPartitionSpec(nrows=%s, nvals=%s, uniform_row_length=%s, "
             "dtype=%r)" % (self.nrows, self.nvals, self.uniform_row_length,
                            self.dtype))
 
   @staticmethod
   def _dimensions_compatible(nrows, nvals, uniform_row_length):
+    # [FUNCTION DOC]
+    # HELPER: static consistency test shared by the spec compatibility and merge methods.
+    # Takes three one-element shapes. Returns false when values exist with zero rows or zero row
+    # length, when nvals is not divisible by a nonzero row length, or when nvals differs from the
+    # product of row length and rows (all known); otherwise true.
     """Returns true if the given dimensions are compatible."""
     nrows = tensor_shape.dimension_value(nrows[0])
     nvals = tensor_shape.dimension_value(nvals[0])
@@ -1355,6 +1612,11 @@ class RowPartitionSpec(type_spec.TypeSpec):
     return True
 
   def _merge_with(self, other):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: a comment says behavior is unspecified when dtypes differ, but the code
+    # explicitly raises a value error in that case.
+    # Returns a spec combining the static information of both specs. Raises a value error if the
+    # merged dimensions are inconsistent or the dtypes differ.
     """Merge two RowPartitionSpecs."""
     nrows = self._nrows.merge_with(other.nrows)
     nvals = self._nvals.merge_with(other.nvals)
@@ -1373,11 +1635,16 @@ class RowPartitionSpec(type_spec.TypeSpec):
                             dtype=self.dtype)
 
   def with_dtype(self, dtype):
+    # [FUNCTION DOC]
+    # Returns a copy of this spec with the given integer dtype and the same static dimensions.
     nrows = tensor_shape.dimension_value(self._nrows[0])
     nvals = tensor_shape.dimension_value(self._nvals[0])
     return RowPartitionSpec(nrows, nvals, self._uniform_row_length, dtype)
 
   def __deepcopy__(self, memo):
+    # [FUNCTION DOC]
+    # Returns a new equivalent spec with the same dimensions and dtype; the memo mapping is
+    # ignored.
     del memo
     dtype = self.dtype
     nrows = tensor_shape.dimension_value(self._nrows[0])
@@ -1401,20 +1668,38 @@ nested_structure_coder.register_codec(
 
 
 def _assert_monotonic_increasing(tensor, message=None):
+  # [FUNCTION DOC]
+  # HELPER: validation for the RowPartition factory methods.
+  # Returns an assertion op checking that all consecutive differences of the 1-D tensor are
+  # non-negative (the tensor is sorted ascending); message is an optional error text.
   return check_ops.assert_non_negative(
       tensor[1:] - tensor[:-1], message=message)
 
 
 def _assert_zero(tensor, message=None):
+  # [FUNCTION DOC]
+  # HELPER: validation for the RowPartition factory methods.
+  # Returns an assertion op checking that the tensor equals zero (in its own dtype); message is an
+  # optional error text.
   return check_ops.assert_equal(
       tensor, constant_op.constant(0, dtype=tensor.dtype), message=message)
 
 
 def _cast_if_not_none(tensor, dtype):
+  # [FUNCTION DOC]
+  # HELPER: used when changing the dtype of a RowPartition. Returns nothing for a null input,
+  # otherwise the tensor cast to dtype.
   return None if tensor is None else math_ops.cast(tensor, dtype)
 
 
 def _merge_tensors(t1, t2, name, validate):
+  # [FUNCTION DOC]
+  # HELPER: per-encoding merge step of the partition merge method.
+  # Inputs: two optional tensors t1, t2 that should hold equal values, a name for error messages,
+  # and validate (add a runtime equality check). Returns a pair of merged tensor and a flag telling
+  # whether equality was established. A null input yields the other one (flag false); identical
+  # objects yield true; otherwise static shapes must be compatible (else value error) and, with
+  # validate, the result is gated on an equality assertion (flag true).
   """Merge two optional Tensors with equal values into a single Tensor.
 
   Args:
@@ -1451,12 +1736,18 @@ _row_partition_factory_key = object()  # unique private object
 
 
 def _get_dtype_or_none(value):
+  # [FUNCTION DOC]
+  # HELPER: returns the dtype if value is a Tensor, otherwise nothing.
   if isinstance(value, tensor_lib.Tensor):
     return value.dtype
   return None
 
 
 def _get_target_dtype(values, dtype=None, dtype_hint=None):
+  # [FUNCTION DOC]
+  # HELPER: picks the common dtype for converting several values. Priority: explicit dtype; the
+  # dtype of the first Tensor in values; the dtype of the first numpy array; dtype_hint; and
+  # finally int64.
   """Gets the target dtype of a family of values."""
   if dtype is not None:
     return dtype
@@ -1476,6 +1767,11 @@ def _get_target_dtype(values, dtype=None, dtype_hint=None):
 
 
 def _convert_all_to_tensors(values, dtype=None, dtype_hint=None):
+  # [FUNCTION DOC]
+  # HELPER: batch conversion for from_uniform_row_length.
+  # Takes a list of pairs (value, name), plus optional dtype and dtype_hint. Chooses one target
+  # dtype for all values, then returns a list of the same length: null values stay null; others
+  # are converted to tensors when dtype is not given, or cast to the target when dtype is given.
   """Convert a list of objects to tensors of the same dtype."""
   target_dtype = _get_target_dtype([x for (x, _) in values], dtype, dtype_hint)
 
