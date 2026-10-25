@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Core implementations of neural-net functionality behind the public nn namespace: losses
+# (Poisson, sigmoid and weighted cross entropy, noise-contrastive and sampled softmax), activation
+# helpers (relu layer, swish), normalization (l2 normalize, moments, batch normalization),
+# depthwise and separable convolutions, and statistics helpers (zero fraction, sufficient
+# statistics, weighted moments). Many functions come in a legacy (v1) and a newer (v2) variant
+# that are exported under different API names. Import-time side effects: functions are registered
+# with the API export and dispatch systems, and one v1 doc string is overwritten with the v2 one.
+# Part of the core ops package; not a helper module.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -44,6 +53,16 @@ from tensorflow.python.util.tf_export import tf_export
 @tf_export("nn.log_poisson_loss")
 @dispatch.add_dispatch_support
 def log_poisson_loss(targets, log_input, compute_full_loss=False, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the Returns section calls the result "logistic losses", but this computes the
+  # log Poisson loss; also the statically checked shape compatibility is only partial (unknown
+  # dimensions pass), so the "same shape" requirement is enforced only where shapes are known.
+  # Computes the elementwise log Poisson loss: exp of log_input minus log_input times targets.
+  # Inputs: targets (tensor-like, same dtype/shape as log_input), log_input (float tensor-like),
+  # compute_full_loss (boolean, default false; when true a Stirling approximation of the log
+  # factorial of targets is added, using zero where targets lie between 0 and 1), name (optional).
+  # Output: tensor with the shape of log_input. Raises a value error if the static shapes of the
+  # two inputs are incompatible. No side effects other than creating ops in a name scope.
   """Computes log Poisson loss given `log_input`.
 
   Gives the log-likelihood loss between the prediction and the target under the
@@ -113,6 +132,15 @@ def sigmoid_cross_entropy_with_logits(
     labels=None,
     logits=None,
     name=None):
+  # [FUNCTION DOC]
+  # Legacy (v1) sigmoid cross entropy: the actual implementation behind both the v1 and v2 API.
+  # Validates that labels and logits were given by keyword (via an internal check), converts both
+  # to tensors, and returns the numerically stable elementwise loss: max(x,0) - x*z +
+  # log(1+exp(-|x|)), written with conditional selects so gradients at zero are defined.
+  # Inputs: labels and logits (tensor-like, same type and shape), name (optional).
+  # Output: tensor of the same shape as logits. Raises a value error if the static shapes are
+  # incompatible, or if an argument is missing/passed positionally per the internal check.
+  # No side effects besides graph ops.
   """See sigmoid_cross_entropy_with_logits_v2."""
   # pylint: disable=protected-access
   nn_ops._ensure_xent_args("sigmoid_cross_entropy_with_logits", labels, logits)
@@ -155,6 +183,11 @@ def sigmoid_cross_entropy_with_logits_v2(  # pylint: disable=invalid-name
     labels=None,
     logits=None,
     name=None):
+  # [FUNCTION DOC]
+  # Public v2 entry point for sigmoid cross entropy; a thin wrapper that forwards labels, logits
+  # and name to the legacy implementation. The v2 signature defaults both tensors to nothing so
+  # callers must use keyword arguments. Output: elementwise loss tensor shaped like logits.
+  # Raises a value error on incompatible static shapes. No side effects.
   r"""Computes sigmoid cross entropy given `logits`.
 
   Measures the probability error in tasks with two outcomes in which each
@@ -251,6 +284,13 @@ sigmoid_cross_entropy_with_logits.__doc__ = (
 @dispatch.add_dispatch_support
 def weighted_cross_entropy_with_logits_v2(labels, logits, pos_weight,
                                           name=None):
+  # [FUNCTION DOC]
+  # Computes a sigmoid cross entropy where the positive-label term is multiplied by pos_weight,
+  # trading recall against precision, using a numerically stable combined formula.
+  # Inputs: labels and logits (tensor-like, same type and shape; labels in the zero-to-one range),
+  # pos_weight (non-negative scalar or tensor broadcastable to logits), name (optional).
+  # Output: elementwise loss tensor shaped like logits. Raises a value error when the static
+  # shapes of labels and logits are incompatible. No side effects besides graph ops.
   """Computes a weighted cross entropy.
 
   This is like `sigmoid_cross_entropy_with_logits()` except that `pos_weight`,
@@ -347,6 +387,14 @@ def weighted_cross_entropy_with_logits(labels=None,
                                        pos_weight=None,
                                        name=None,
                                        targets=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: pos_weight defaults to nothing although it is required; omitting it fails later
+  # with a type error from arithmetic on a null value rather than a clear message.
+  # Legacy (v1) weighted cross entropy. Resolves the deprecated targets alias into labels (via the
+  # deprecation lookup helper, which errors if both are given) and delegates to the v2 function.
+  # Inputs: labels, logits, pos_weight, name, targets (deprecated alias of labels).
+  # Output: elementwise weighted loss tensor shaped like logits. Raises a value error on shape
+  # mismatch. Emits a deprecation warning when targets is used.
   """Computes a weighted cross entropy.
 
   This is like `sigmoid_cross_entropy_with_logits()` except that `pos_weight`,
@@ -407,6 +455,12 @@ def weighted_cross_entropy_with_logits(labels=None,
 @tf_export(v1=["nn.relu_layer"])
 @dispatch.add_dispatch_support
 def relu_layer(x, weights, biases, name=None):
+  # [FUNCTION DOC]
+  # Fully connected layer with rectified-linear activation: matrix-multiplies x by weights, adds
+  # the biases vector, and applies relu. Inputs: x (2-D, batch by in_units), weights (2-D, in_units
+  # by out_units), biases (1-D, out_units), name (optional; scope defaults to relu_layer).
+  # Output: 2-D tensor, batch by out_units. Shape errors come from the underlying ops.
+  # No side effects besides graph ops.
   """Computes Relu(x * weight + biases).
 
   Args:
@@ -432,6 +486,12 @@ def relu_layer(x, weights, biases, name=None):
 @dispatch.register_unary_elementwise_api
 @dispatch.add_dispatch_support
 def swish(features, beta=1.0):
+  # [FUNCTION DOC]
+  # Computes the SiLU/Swish activation: features times sigmoid of beta times features, with a
+  # custom gradient that recomputes the sigmoid during backprop to save memory.
+  # Inputs: features (tensor-like of preactivations), beta (scalar, default 1.0, cast to the dtype
+  # of features). Output: activation tensor shaped like features.
+  # Registers a custom gradient for both features and beta. No other side effects.
   # pylint: disable=g-doc-args
   """Computes the SiLU or Swish activation function: `x * sigmoid(beta * x)`.
 
@@ -459,8 +519,17 @@ def swish(features, beta=1.0):
 
   @custom_gradient.custom_gradient
   def swish_impl(features, beta):
+    # [FUNCTION DOC]
+    # HELPER: inner function of swish that carries the custom gradient decoration.
+    # Returns a pair: the forward activation (features times sigmoid of beta times features) and
+    # the gradient function. Inputs are the already converted features and beta tensors.
 
     def grad(dy):
+      # [FUNCTION DOC]
+      # HELPER: gradient callback for swish_impl.
+      # Given the upstream gradient dy, recomputes the sigmoid under a control dependency on dy (so
+      # it is not merged with the forward pass) and returns two gradients: with respect to features
+      # (dy times the swish derivative) and with respect to beta (a scalar sum over all elements).
       """Gradient for the Swish activation function."""
       # Naively, x * tf.nn.sigmoid(x) requires keeping both x and sigmoid(x)
       # around for backprop, effectively doubling the tensor's memory
@@ -488,6 +557,13 @@ def swish(features, beta=1.0):
 @tf_export("linalg.normalize")
 @dispatch.add_dispatch_support
 def normalize(tensor, ord="euclidean", axis=None, name=None):
+  # [FUNCTION DOC]
+  # Divides a tensor by its norm along the given axis (or over all values when axis is nothing),
+  # using the linear-algebra norm op with kept dimensions.
+  # Inputs: tensor (float or complex), ord (norm order, default euclidean), axis (integer, pair of
+  # integers, or nothing), name (optional). Output: a pair of the normalized tensor and the norm
+  # tensor (cast to the input dtype). Invalid ord or axis raises a value error from the norm op.
+  # Zero norms are not guarded, so division by zero yields non-finite values.
   """Normalizes `tensor` along dimension `axis` using specified norm.
 
   This uses `tf.linalg.norm` to compute the norm along `axis`.
@@ -543,6 +619,14 @@ def normalize(tensor, ord="euclidean", axis=None, name=None):
 @dispatch.add_dispatch_support
 @deprecated_args(None, "dim is deprecated, use axis instead", "dim")
 def l2_normalize(x, axis=None, epsilon=1e-12, name=None, dim=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says epsilon bounds the norm, but it actually bounds the sum of
+  # squares before the reciprocal square root is taken.
+  # Normalizes x along axis by multiplying with the reciprocal square root of the larger of the
+  # sum of squares and epsilon. Complex input is handled by normalizing real and imaginary parts
+  # with the same factor. Inputs: x (tensor, real or complex), axis (integer or list, nothing means
+  # all axes), epsilon (small positive lower bound), name, dim (deprecated alias for axis).
+  # Output: tensor shaped like x. Emits a deprecation warning for dim.
   """Normalizes along dimension `axis` using an L2 norm.
 
   For a 1-D tensor with `axis = 0`, computes
@@ -598,6 +682,10 @@ def l2_normalize(x, axis=None, epsilon=1e-12, name=None, dim=None):
 
 
 def _count_nonzero(input_tensor, dtype=dtypes.int64):
+  # [FUNCTION DOC]
+  # HELPER: used by zero_fraction to count nonzero entries cheaply.
+  # Counts elements of input_tensor not equal to zero by casting the comparison to the given dtype
+  # (default 64-bit integer) and summing. Returns a scalar of that dtype. No side effects.
   """Same as math_ops.count_nonzero.
 
   The reduction is done in dtype, which can be faster for 32-bit dtypes.
@@ -621,6 +709,11 @@ def _count_nonzero(input_tensor, dtype=dtypes.int64):
 @tf_export("math.zero_fraction", "nn.zero_fraction")
 @dispatch.add_dispatch_support
 def zero_fraction(value, name=None):
+  # [FUNCTION DOC]
+  # Returns the fraction of elements equal to zero as a 32-bit float scalar (not-a-number for an
+  # empty input). Uses a runtime conditional so tensors with up to the 32-bit integer limit of
+  # elements are counted with a cheaper 32-bit reduction, larger ones with 64-bit.
+  # Inputs: value (numeric tensor-like), name (optional). No side effects besides graph ops.
   """Returns the fraction of zeros in `value`.
 
   If `value` is empty, the result is `nan`.
@@ -671,6 +764,15 @@ def depthwise_conv2d(input,
                      name=None,
                      data_format=None,
                      dilations=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: on the TPU path the dilation rate is passed to the native op directly and the
+  # space-to-batch wrapper is skipped; the "dilations" argument is also silently rebound there.
+  # Legacy (v1) depthwise 2-D convolution: applies a separate filter to each input channel.
+  # Inputs: input (4-D tensor), filter (4-D: height, width, in_channels, channel_multiplier),
+  # strides (list of 4), padding ("SAME", "VALID" or explicit pad list), rate (pair, default 1,1),
+  # name, data_format ("NHWC" default or "NCHW"), dilations (alias of rate, takes the deprecated
+  # lookup). Output: 4-D tensor with in_channels times channel_multiplier channels.
+  # Side effect: emits a warning when a dilation above 1 is combined with strides other than 1.
   """Depthwise 2-D convolution.
 
   Given a 4D input tensor ('NHWC' or 'NCHW' data formats)
@@ -781,6 +883,11 @@ def depthwise_conv2d(input,
           name=name)
 
     def op(input_converted, _, padding):
+      # [FUNCTION DOC]
+      # HELPER: callback passed to the space-to-batch wrapper of depthwise_conv2d.
+      # Runs the native depthwise convolution on the (possibly rearranged) input with the outer
+      # filter, strides and data format, using the padding the wrapper supplies; the second
+      # argument is ignored. Returns the convolution result tensor.
       return nn_ops.depthwise_conv2d_native(
           input=input_converted,
           filter=filter,
@@ -807,6 +914,10 @@ def depthwise_conv2d_v2(input,
                         data_format=None,
                         dilations=None,
                         name=None):
+  # [FUNCTION DOC]
+  # Public v2 depthwise 2-D convolution; forwards to the v1 implementation, mapping dilations to
+  # its rate argument. Inputs: input, filter, strides, padding, data_format, dilations, name as in
+  # the v1 function (argument order differs). Output: 4-D tensor. Same warning side effect.
   """Depthwise 2-D convolution.
 
   Given a 4D input tensor ('NHWC' or 'NCHW' data formats)
@@ -910,6 +1021,13 @@ def separable_conv2d(input,
                      name=None,
                      data_format=None,
                      dilations=None):
+  # [FUNCTION DOC]
+  # Legacy (v1) separable 2-D convolution: a depthwise convolution (with optional dilation via
+  # space-to-batch) followed by a 1x1 pointwise convolution that mixes channels.
+  # Inputs: input (4-D), depthwise_filter (4-D), pointwise_filter (4-D whose first two dimensions
+  # must be 1), strides (applies to the depthwise stage only), padding, rate (default 1,1), name,
+  # data_format, dilations (alias of rate). Output: 4-D tensor with out_channels channels.
+  # Raises a value error if the pointwise filter is not rank 4 or its leading dims are not 1.
   """2-D convolution with separable filters.
 
   Performs a depthwise convolution that acts separately on channels followed by
@@ -983,6 +1101,11 @@ def separable_conv2d(input,
     # separable_conv2d  // Conv2D op corresponding to the pointwise conv.
 
     def op(input_converted, _, padding):
+      # [FUNCTION DOC]
+      # HELPER: callback passed to the space-to-batch wrapper of separable_conv2d.
+      # Runs the native depthwise convolution (the first stage) with the outer depthwise filter and
+      # strides, using the padding the wrapper supplies; the second argument is ignored.
+      # Returns the convolution result tensor (op named depthwise).
       return nn_ops.depthwise_conv2d_native(
           input=input_converted,
           filter=depthwise_filter,
@@ -1019,6 +1142,11 @@ def separable_conv2d_v2(
     dilations=None,
     name=None,
 ):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring mentions a rate argument, but this function's parameter is named
+  # dilations (it is passed on as rate).
+  # Public v2 separable 2-D convolution; forwards everything to the v1 function with dilations as
+  # rate. Inputs and output as for the v1 function. Same errors.
   """2-D convolution with separable filters.
 
   Performs a depthwise convolution that acts separately on channels followed by
@@ -1087,6 +1215,14 @@ def separable_conv2d_v2(
 @dispatch.add_dispatch_support
 def sufficient_statistics(x, axes, shift=None, keep_dims=None, name=None,
                           keepdims=None):
+  # [FUNCTION DOC]
+  # Computes the sufficient statistics (count, sum, sum of squares, shift) for mean and variance
+  # over the given axes in one pass, optionally after subtracting a shift for stability.
+  # Inputs: x (tensor), axes (list of integers, may be negative; duplicates removed, which can
+  # reorder them), shift (optional tensor), keep_dims / keepdims (alias; default false), name.
+  # Output: tuple of count (scalar, x dtype), shifted sum, shifted sum of squares, and the shift
+  # (nothing when no shift). The count is a static constant when shapes are known, else computed
+  # at runtime. No side effects besides graph ops.
   """Calculate the sufficient statistics for the mean and variance of `x`.
 
   These sufficient statistics are computed using the one pass algorithm on
@@ -1161,6 +1297,9 @@ def sufficient_statistics(x, axes, shift=None, keep_dims=None, name=None,
 @tf_export("nn.sufficient_statistics", v1=[])
 @dispatch.add_dispatch_support
 def sufficient_statistics_v2(x, axes, shift=None, keepdims=False, name=None):
+  # [FUNCTION DOC]
+  # Public v2 wrapper of sufficient statistics; forwards to the v1 function with keepdims passed
+  # as keep_dims. Returns the same four-element tuple (count, sum, sum of squares, shift).
   """Calculate the sufficient statistics for the mean and variance of `x`.
 
   These sufficient statistics are computed using the one pass algorithm on
@@ -1191,6 +1330,11 @@ def sufficient_statistics_v2(x, axes, shift=None, keepdims=False, name=None):
 @tf_export("nn.normalize_moments")
 @dispatch.add_dispatch_support
 def normalize_moments(counts, mean_ss, variance_ss, shift, name=None):
+  # [FUNCTION DOC]
+  # Turns sufficient statistics into a mean and variance: divides the sums by the count, adds the
+  # shift back to the mean when a shift was used, and takes the variance as the mean of squares
+  # minus the square of the (shifted) mean. Inputs: counts, mean_ss, variance_ss (tensors), shift
+  # (tensor or nothing), name. Output: tuple of mean and variance. No side effects.
   """Calculate the mean and variance of based on the sufficient statistics.
 
   Args:
@@ -1230,6 +1374,12 @@ def moments(
     name=None,
     keep_dims=None,
     keepdims=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the shift argument is accepted but ignored (the true mean is always used).
+  # Computes the mean and (biased, population) variance of x over axes. Half-precision input is
+  # computed in 32-bit floats and cast back. The mean is treated as constant for the variance's
+  # gradient path via stop-gradient. Inputs: x (tensor), axes (list of integers), shift (unused),
+  # name, keep_dims / keepdims (alias; default false). Output: tuple of mean and variance.
   """Calculate the mean and variance of `x`.
 
   The mean and variance are calculated by aggregating the contents of `x`
@@ -1295,6 +1445,10 @@ def moments_v2(
     shift=None,
     keepdims=False,
     name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the shift argument is accepted but ignored by the implementation.
+  # Public v2 moments; forwards to the v1 function with keepdims passed as keep_dims.
+  # Returns a tuple of mean and variance computed over axes.
   """Calculates the mean and variance of `x`.
 
   The mean and variance are calculated by aggregating the contents of `x`
@@ -1328,6 +1482,13 @@ def moments_v2(
 @dispatch.add_dispatch_support
 def weighted_moments(x, axes, frequency_weights, name=None, keep_dims=None,
                      keepdims=None):
+  # [FUNCTION DOC]
+  # Computes the frequency-weighted mean and variance of x over axes with a two-pass method:
+  # weighted sum divided by the broadcast sum of weights (zero-safe division), then the weighted
+  # squared distance from that mean divided likewise. Half-precision input is computed in 32-bit.
+  # Inputs: x (tensor), axes (list of integers), frequency_weights (positive tensor broadcastable
+  # with x), name, keep_dims / keepdims (alias; default false). Output: tuple of weighted mean
+  # and weighted variance. Reductions keep dimensions internally, squeezed at the end if asked.
   """Returns the frequency-weighted mean and variance of `x`.
 
   Args:
@@ -1404,6 +1565,9 @@ def weighted_moments(x, axes, frequency_weights, name=None, keep_dims=None,
 @tf_export("nn.weighted_moments", v1=[])
 @dispatch.add_dispatch_support
 def weighted_moments_v2(x, axes, frequency_weights, keepdims=False, name=None):
+  # [FUNCTION DOC]
+  # Public v2 wrapper of weighted moments; forwards to the v1 function with keepdims passed as
+  # keep_dims. Returns a tuple of weighted mean and weighted variance over axes.
   """Returns the frequency-weighted mean and variance of `x`.
 
   Args:
@@ -1435,6 +1599,14 @@ def batch_normalization(x,
                         scale,
                         variance_epsilon,
                         name=None):
+  # [FUNCTION DOC]
+  # Applies batch normalization with supplied statistics: multiplies x by the reciprocal square
+  # root of variance plus variance_epsilon (times scale when given) and shifts by offset minus
+  # mean times that factor (offset treated as zero when absent); the factor is cast to x dtype.
+  # Inputs: x (tensor), mean, variance (full-rank with size-one normalized dims, or 1-D matching
+  # the last dimension), offset and scale (same shapes, or nothing), variance_epsilon (small
+  # float), name. Output: tensor shaped like x. The exact op order is relied on by external graph
+  # rewriting code, so it should not be changed.
   r"""Batch normalization.
 
   Normalizes a tensor by `mean` and `variance`, and applies (optionally) a
@@ -1510,6 +1682,17 @@ def fused_batch_norm(
     is_training=True,
     name=None,
     exponential_avg_factor=1.0):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says mean and variance "must be None" when training with factor
+  # 1.0, but the code only substitutes empty tensors when they are None and does not reject
+  # non-null values in that case; they are simply passed to the kernel.
+  # Legacy (v1) fused batch normalization via the fused kernel (version 3). Inputs: x (4-D or 5-D),
+  # scale and offset (1-D), mean and variance (1-D population statistics, needed for inference or
+  # when the averaging factor is not 1.0), epsilon (default 0.001), data_format (NHWC default,
+  # NCHW, NDHWC, NCDHW), is_training (default true), name, exponential_avg_factor (default 1.0).
+  # Output: tuple of normalized tensor, running mean, running variance (batch statistics are
+  # dropped). Raises a value error if mean or variance is missing when not training or when the
+  # averaging factor differs from 1.0.
   r"""Batch normalization.
 
 
@@ -1613,6 +1796,14 @@ def batch_norm_with_global_normalization(t=None,
                                          input=None,  # pylint: disable=redefined-builtin
                                          mean=None,
                                          variance=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: documented as deprecated, but no deprecation warning is emitted; and although
+  # most parameters default to nothing, they are effectively required (a missing epsilon or
+  # tensors fails inside the batch normalization call with an unclear error).
+  # Legacy batch norm wrapper: resolves the aliases input/t, mean/m, variance/v through the
+  # deprecated-argument lookup, then calls batch_normalization, using gamma as scale only when
+  # scale_after_normalization is true (otherwise no scale), beta as offset. Returns the
+  # normalized tensor. Raises if an alias and its main argument are both given.
   """Batch normalization.
 
   This op is deprecated. See `tf.nn.batch_normalization`.
@@ -1665,6 +1856,10 @@ def batch_norm_with_global_normalization_v2(input,
                                             variance_epsilon,
                                             scale_after_normalization,
                                             name=None):
+  # [FUNCTION DOC]
+  # Public v2 form of the legacy global-normalization batch norm; forwards all arguments to the
+  # v1 function by keyword. Returns the normalized tensor. Inputs: input (4-D), mean, variance,
+  # beta, gamma, variance_epsilon, scale_after_normalization (boolean), name.
   """Batch normalization.
 
   This op is deprecated. See `tf.nn.batch_normalization`.
@@ -1708,6 +1903,10 @@ def batch_norm_with_global_normalization_v2(input,
 
 
 def _sum_rows(x):
+  # [FUNCTION DOC]
+  # HELPER: used by the sampled-logits computation (noise-contrastive loss) for row sums.
+  # Sums each row of a matrix by multiplying with a column of ones, which has a cheaper gradient
+  # than a plain reduction. Input: x (2-D tensor). Output: 1-D tensor with one sum per row.
   """Returns a vector summing up each row of the matrix x."""
   # _sum_rows(x) is equivalent to math_ops.reduce_sum(x, 1) when x is
   # a matrix.  The gradient of _sum_rows(x) is more efficient than
@@ -1733,6 +1932,18 @@ def _compute_sampled_logits(weights,
                             partition_strategy="mod",
                             name=None,
                             seed=None):
+  # [FUNCTION DOC]
+  # HELPER: shared by the noise-contrastive and sampled-softmax loss functions.
+  # Builds the logits and target labels for sampled training. Gathers class weights and biases
+  # for the true labels plus sampled classes (sampled via the log-uniform sampler when none are
+  # provided, using the seed), computes true logits as row-wise dot products plus bias and
+  # sampled logits by a matrix product, optionally masks accidental hits (sampled class equal to
+  # a true class) with a large negative weight, optionally subtracts log expected counts, and
+  # concatenates. Inputs: weights (tensor or list/partitioned variable of class embeddings),
+  # biases, labels (batch by num_true class ids), inputs (batch by dim), num_sampled, num_classes,
+  # num_true, sampled_values (optional tuple of three tensors), subtract_log_q, remove_accidental_hits,
+  # partition_strategy ("mod" or "div"), name, seed. Output: tuple of logits and labels, both
+  # batch by (num_true + num_sampled); labels are 1/num_true for true columns, zero for sampled.
   """Helper function for nce_loss and sampled_softmax_loss functions.
 
   Computes sampled output training logits and labels suitable for implementing
@@ -1918,6 +2129,12 @@ def nce_loss_v2(weights,
                 sampled_values=None,
                 remove_accidental_hits=False,
                 name="nce_loss"):
+  # [FUNCTION DOC]
+  # Public v2 noise-contrastive estimation loss. Forwards to the v1 function with the partition
+  # strategy fixed to "div" (no strategy argument is exposed). Inputs: weights, biases, labels
+  # (int class ids, batch by num_true), inputs (batch by dim), num_sampled, num_classes, num_true,
+  # sampled_values (optional), remove_accidental_hits (default false), name. Output: 1-D tensor
+  # of per-example losses. Random candidate sampling occurs when no sampled values are given.
   """Computes and returns the noise-contrastive estimation training loss.
 
   See [Noise-contrastive estimation: A new estimation principle for
@@ -2024,6 +2241,13 @@ def nce_loss(weights,
              remove_accidental_hits=False,
              partition_strategy="mod",
              name="nce_loss"):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: unlike the sampled softmax loss there is no seed argument, so the random
+  # sampling cannot be seeded at op level here.
+  # Legacy (v1) noise-contrastive estimation loss. Builds sampled logits and labels with the
+  # shared helper (log-expected-count correction on), computes sigmoid cross entropy against the
+  # labels, and sums each row. Inputs as for the v2 function plus partition_strategy ("mod"
+  # default, or "div"). Output: 1-D tensor of per-example losses, length batch size.
   """Computes and returns the noise-contrastive estimation training loss.
 
   A common use case is to use this method for training, and calculate the full
@@ -2136,6 +2360,12 @@ def sampled_softmax_loss_v2(weights,
                             remove_accidental_hits=True,
                             seed=None,
                             name="sampled_softmax_loss"):
+  # [FUNCTION DOC]
+  # Public v2 sampled softmax loss. Forwards to the v1 function with the partition strategy fixed
+  # to "div". Inputs: weights, biases, labels (class ids, batch by num_true), inputs, num_sampled,
+  # num_classes, num_true, sampled_values (optional), remove_accidental_hits (default true),
+  # seed (optional sampling seed), name. Output: 1-D tensor of per-example losses.
+  # For training only; random sampling happens when no sampled values are provided.
   """Computes and returns the sampled softmax training loss.
 
   This is a faster way to train a softmax classifier over a huge number of
@@ -2229,6 +2459,12 @@ def sampled_softmax_loss(weights,
                          partition_strategy="mod",
                          name="sampled_softmax_loss",
                          seed=None):
+  # [FUNCTION DOC]
+  # Legacy (v1) sampled softmax loss, an approximation of full softmax cross entropy for very
+  # many classes (training only; generally underestimates the full loss). Builds sampled logits
+  # and labels with the shared helper, blocks gradient flow into the labels, and returns softmax
+  # cross entropy per example. Inputs as in the v2 function plus partition_strategy ("mod"
+  # default or "div"). Output: 1-D tensor of per-example losses.
   """Computes and returns the sampled softmax training loss.
 
   This is a faster way to train a softmax classifier over a huge number of

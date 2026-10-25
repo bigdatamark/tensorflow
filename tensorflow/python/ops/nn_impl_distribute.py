@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Distribution-strategy aware loss helpers for the neural-net ops. Exposes two public functions
+# (scale_regularization_loss and compute_average_loss) that divide loss sums by the global batch
+# size or replica count of the current distribution strategy. Import-time side effects: the
+# functions are registered with the public API export system and the dispatch system.
+# Not a helper module; it is part of the public nn namespace.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,6 +33,12 @@ from tensorflow.python.util.tf_export import tf_export
 @tf_export("nn.scale_regularization_loss")
 @dispatch.add_dispatch_support
 def scale_regularization_loss(regularization_loss):
+  # [FUNCTION DOC]
+  # Sums the given regularization loss (any shape) and divides by the number of replicas in sync
+  # of the current strategy, so that summing across replicas gives the unscaled total.
+  # Input: regularization_loss, a tensor or list-like of losses. Output: a scalar tensor.
+  # Raises a runtime error if a strategy exists and the call is made in cross-replica context.
+  # No side effects beyond graph/eager ops.
   """Scales the sum of the given regularization losses by number of replicas.
 
   Usage with distribution strategy and custom training loop:
@@ -72,6 +84,15 @@ def scale_regularization_loss(regularization_loss):
 def compute_average_loss(
     per_example_loss, sample_weight=None, global_batch_size=None
 ):
+  # [FUNCTION DOC]
+  # Computes a weighted average loss: optionally scales per-example losses by sample weights,
+  # sums them, and divides by the global batch size (zero result if that size is zero).
+  # Inputs: per_example_loss (tensor-like, rank-checked), sample_weight (optional, broadcast
+  # against the losses), global_batch_size (optional scalar non-negative integer; when omitted it
+  # is the size of the first dimension times the number of replicas).
+  # Output: a scalar tensor of the same dtype as the input losses.
+  # Raises a runtime error if the batch size is omitted and the call is in cross-replica context;
+  # assertion ops fail if the batch size is not a scalar, not an integer or is negative.
   """Scales per-example losses with sample_weights and computes their average.
 
   Usage with distribution strategy and custom training loop:
