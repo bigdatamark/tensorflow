@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Unit tests and benchmarks for the legacy recurrent network driver (rnn module) and the RNN cell
+# implementations. Defines several tiny test cells (plus one, scalar state, unbalanced tuple
+# output, tensor-array state), the RNNTest case (validation errors, batch size inference, state
+# types, initial state creation, cell building, checkpoint interchange between LSTM variants),
+# module-level benchmark graph builders and timers, and a benchmark class. Importing the gradient
+# modules registers gradient functions. Running as a script starts the test runner.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -46,86 +53,160 @@ from tensorflow.python.training import saver
 
 
 class Plus1RNNCell(rnn_cell_impl.RNNCell):
+  # [CLASS DOC]
+  # HELPER: tiny recurrent cell used by the tests in this module as a simple cell with
+  # predictable behaviour. Output size and state size are both five; each step returns the input
+  # plus one as output and the state plus one as the new state. Holds no variables.
   """RNN Cell generating (output, new_state) = (input + 1, state + 1)."""
 
   @property
   def output_size(self):
+    # [FUNCTION DOC]
+    # Property: size of the cell output, always five.
     return 5
 
   @property
   def state_size(self):
+    # [FUNCTION DOC]
+    # Property: size of the cell state, always five.
     return 5
 
   def call(self, input_, state, scope=None):
+    # [FUNCTION DOC]
+    # One time step. Inputs: input tensor, state tensor, and an unused optional scope. Returns a
+    # pair of the input plus one and the state plus one. No side effects.
     return (input_ + 1, state + 1)
 
 
 class ScalarStateRNNCell(rnn_cell_impl.RNNCell):
+  # [CLASS DOC]
+  # HELPER: test cell whose state is a single scalar integer counter. Output size is one; each
+  # step passes the input through unchanged and increments the state.
+  # KNOWN ISSUE: the docstring claims the output is the input plus one, but the code returns the
+  # input unchanged.
   """RNN Cell generating (output, new_state) = (input + 1, state + 1)."""
 
   @property
   def output_size(self):
+    # [FUNCTION DOC]
+    # Property: size of the cell output, always one.
     return 1
 
   @property
   def state_size(self):
+    # [FUNCTION DOC]
+    # Property: the state is a scalar, so returns an empty (rank-zero) tensor shape.
     return tensor_shape.TensorShape([])
 
   def zero_state(self, batch_size, dtype):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: ignores the dtype argument and always returns an int32 scalar.
+    # Inputs: batch size and dtype (both ignored). Returns a scalar integer zero tensor as the
+    # initial state.
     return array_ops.zeros([], dtype=dtypes.int32)
 
   def call(self, input_, state, scope=None):
+    # [FUNCTION DOC]
+    # One time step. Inputs: input tensor, state tensor, and an unused optional scope. Returns a
+    # pair of the unchanged input and the state plus one. No side effects.
     return (input_, state + 1)
 
 
 class UnbalancedOutputRNNCell(rnn_cell_impl.RNNCell):
+  # [CLASS DOC]
+  # HELPER: test cell with a nested (tuple) output of different sizes: the input itself (size
+  # one) and the input concatenated with itself (size two), and a scalar integer counter state
+  # that is incremented every step.
+  # KNOWN ISSUE: the docstring claims the output is the input plus one, but the code returns a
+  # tuple of the input and the doubled input.
   """RNN Cell generating (output, new_state) = (input + 1, state + 1)."""
 
   @property
   def output_size(self):
+    # [FUNCTION DOC]
+    # Property: returns a pair of tensor shapes, one of length one and one of length two, i.e. an
+    # unbalanced nested output structure.
     return  tensor_shape.TensorShape(1), tensor_shape.TensorShape((2))
 
   @property
   def state_size(self):
+    # [FUNCTION DOC]
+    # Property: the state is a scalar, so returns an empty (rank-zero) tensor shape.
     return tensor_shape.TensorShape([])
 
   def zero_state(self, batch_size, dtype):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: ignores the dtype argument and always returns an int32 scalar.
+    # Inputs: batch size and dtype (both ignored). Returns a scalar integer zero tensor as the
+    # initial state.
     return array_ops.zeros([], dtype=dtypes.int32)
 
   def call(self, input_, state, scope=None):
+    # [FUNCTION DOC]
+    # One time step. Inputs: input tensor, state tensor, and an unused optional scope. Concatenates
+    # the input with itself along the last axis. Returns a pair: a tuple of the input and the
+    # concatenation as the output, and the state plus one as the new state.
     concatenated = array_ops.concat((input_, input_), axis=-1)
     return (input_, concatenated), state + 1
 
 
 class TensorArrayStateRNNCell(rnn_cell_impl.RNNCell):
+  # [CLASS DOC]
+  # HELPER: test cell whose state is a pair of an integer step counter and a dynamically sized
+  # tensor array that records every input. Output size is one; the output is the input unchanged.
   """RNN Cell its state as a TensorArray."""
 
   @property
   def output_size(self):
+    # [FUNCTION DOC]
+    # Property: size of the cell output, always one.
     return 1
 
   @property
   def state_size(self):
+    # [FUNCTION DOC]
+    # Property: returns a pair of a scalar tensor shape (the counter) and an empty tuple standing
+    # in for the tensor array part.
     return (tensor_shape.TensorShape([]), ())
 
   def zero_state(self, batch_size, dtype):
+    # [FUNCTION DOC]
+    # Inputs: batch size (ignored) and dtype used for the array elements. Returns a pair: an int32
+    # scalar zero counter and an empty, dynamically growing tensor array of the given dtype.
     return (array_ops.zeros([], dtype=dtypes.int32),
             tensor_array_ops.TensorArray(
                 dtype=dtype, size=0, dynamic_size=True))
 
   def call(self, input_, state, scope=None):
+    # [FUNCTION DOC]
+    # One time step. Inputs: input tensor, state pair (counter, tensor array), unused optional
+    # scope. Writes the input into the array at the index given by the counter. Returns a pair:
+    # the unchanged input as output and the new state (counter plus one, updated array).
     new_array = state[1].write(state[0], input_)
     return (input_, (state[0] + 1, new_array))
 
 
 class RNNTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the dynamic RNN driver and the recurrent cell base class: sequence length and
+  # dtype validation, batch size inference, scalar / unbalanced / tensor-array states, initial
+  # state validation, cell building, and checkpoint interchange between two LSTM cell variants.
+  # Many tests run in both graph and eager modes.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: does not call the parent setUp, so the base test fixture setup is skipped.
+    # Fixture: stores a fixed seed on the instance and seeds the global NumPy random generator
+    # with it for reproducibility. Returns nothing.
     self._seed = 23489
     np.random.seed(self._seed)
 
   @test_util.run_in_graph_and_eager_modes
   def testInvalidSequenceLengthShape(self):
+    # [FUNCTION DOC]
+    # Scenario: runs the dynamic RNN with a simple cell and a two-dimensional sequence-length
+    # value (not a vector). Expects a value error saying it must be a vector. Runs in graph and
+    # eager modes (constant input in eager mode, placeholder in graph mode).
     cell = Plus1RNNCell()
     if context.executing_eagerly():
       inputs = [constant_op.constant(np.ones((3, 4)))]
@@ -140,6 +221,10 @@ class RNNTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testInvalidDtype(self):
+    # [FUNCTION DOC]
+    # Scenario: for each of the basic RNN, GRU, basic LSTM and LSTM cells, builds the cell with
+    # int32 dtype and runs the dynamic RNN on int32 input. Expects a value error saying the cell
+    # only supports floating point. Runs in graph and eager modes.
     if context.executing_eagerly():
       inputs = np.zeros((3, 4, 5), dtype=np.int32)
     else:
@@ -160,6 +245,11 @@ class RNNTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testBatchSizeFromInput(self):
+    # [FUNCTION DOC]
+    # Scenario: runs the dynamic RNN with the simple plus-one cell, with and without an explicit
+    # initial state, and asserts the batch dimension (three) of the output and final state. In
+    # graph mode it also repeats with an unknown batch dimension and asserts the output and state
+    # batch dimensions are unknown. Runs in graph and eager modes.
     cell = Plus1RNNCell()
     in_eager_mode = context.executing_eagerly()
     # With static batch size
@@ -200,6 +290,10 @@ class RNNTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testScalarStateIsAccepted(self):
+    # [FUNCTION DOC]
+    # Scenario: runs the dynamic RNN with the scalar-state cell on one sequence of four steps of
+    # length-one inputs with sequence length four. Asserts the outputs equal the inputs and the
+    # final state equals four (the number of steps). Runs in graph and eager modes.
     cell = ScalarStateRNNCell()
     in_eager_mode = context.executing_eagerly()
 
@@ -220,6 +314,11 @@ class RNNTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testUnbalancedOutputIsAccepted(self):
+    # [FUNCTION DOC]
+    # Scenario: runs the dynamic RNN with the cell returning a tuple output of different sizes.
+    # Asserts the outputs are a tuple, the first element equals the inputs, the second equals the
+    # inputs doubled along the last axis, and the final state is four. Runs in graph and eager
+    # modes.
     cell = UnbalancedOutputRNNCell()
     in_eager_mode = context.executing_eagerly()
 
@@ -242,6 +341,10 @@ class RNNTest(test.TestCase):
 
   @test_util.assert_no_new_pyobjects_executing_eagerly()
   def testEagerMemory(self):
+    # [FUNCTION DOC]
+    # Scenario: in eager mode, runs the dynamic RNN with the tensor-array-state cell once. The
+    # decorator asserts no new Python objects leak after execution; there are no explicit
+    # assertions in the body.
     with context.eager_mode():
       cell = TensorArrayStateRNNCell()
       inputs = np.array([[[1], [2], [3], [4]]], dtype=np.float32)
@@ -250,6 +353,11 @@ class RNNTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @test_util.run_v1_only("b/120545219")
   def testTensorArrayStateIsAccepted(self):
+    # [FUNCTION DOC]
+    # Scenario: runs the dynamic RNN with the tensor-array-state cell over four steps, stacks the
+    # array in the final state, and asserts the outputs equal the inputs, the counter is four and
+    # the stacked array holds the four inputs in order. Runs in graph and eager modes; skipped
+    # for non-v1 behaviour via the v1-only decorator (a known bug reference).
     cell = TensorArrayStateRNNCell()
     in_eager_mode = context.executing_eagerly()
 
@@ -274,6 +382,13 @@ class RNNTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testCellGetInitialState(self):
+    # [FUNCTION DOC]
+    # Scenario: exercises initial-state creation on a basic RNN cell of five units. Expects value
+    # errors when batch size and dtype are both missing, when the given batch size (python integer
+    # or tensor) differs from the input's batch dimension, and when the given dtype differs from
+    # the input's. Then asserts that deriving the state from the input alone, or from a tensor
+    # batch size and the input dtype, gives a state of unknown batch and five units with the input
+    # dtype. Graph-mode only (deprecated v1).
     cell = rnn_cell_impl.BasicRNNCell(5)
     with self.assertRaisesRegex(ValueError,
                                 "batch_size and dtype cannot be None"):
@@ -306,6 +421,11 @@ class RNNTest(test.TestCase):
 
   def _assert_cell_builds(self, cell_class, dtype, batch_size, in_size,
                           out_size):
+    # [FUNCTION DOC]
+    # HELPER: checks that a cell class can be built and applied.
+    # Inputs: cell class, dtype, batch size, input size, output size (number of units). Builds
+    # the cell for the given input shape, gets an initial state, applies the cell to a zero input,
+    # and asserts the output shape equals batch size by units. Returns nothing.
     cell = cell_class(out_size, dtype=dtype)
     in_shape = tensor_shape.TensorShape((batch_size, in_size))
     cell.build(in_shape)
@@ -316,6 +436,10 @@ class RNNTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testCellsBuild(self):
+    # [FUNCTION DOC]
+    # Scenario: builds and applies the basic RNN, basic LSTM, GRU and LSTM cells in float32 and
+    # float64 with batch five, input size seven and three units, via the shared build helper.
+    # Runs in graph and eager modes.
     f32 = dtypes.float32
     f64 = dtypes.float64
     self._assert_cell_builds(rnn_cell_impl.BasicRNNCell, f32, 5, 7, 3)
@@ -329,6 +453,12 @@ class RNNTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testBasicLSTMCellInterchangeWithLSTMCell(self):
+    # [FUNCTION DOC]
+    # Scenario: in one graph, builds a basic LSTM cell with one unit, sets its bias to ten for all
+    # four gates and saves a checkpoint in the test temp directory. In a fresh graph, builds an
+    # LSTM cell with the basic cell's name, restores the checkpoint and asserts its bias equals the
+    # saved values, showing variable-name compatibility. Side effect: writes a checkpoint file.
+    # Graph-mode only (deprecated v1).
     with self.session(graph=ops_lib.Graph()) as sess:
       basic_cell = rnn_cell_impl.BasicLSTMCell(1)
       basic_cell(array_ops.ones([1, 1]),
@@ -356,6 +486,13 @@ class RNNTest(test.TestCase):
 
 
 def _static_vs_dynamic_rnn_benchmark_static(inputs_list_t, sequence_length):
+  # [FUNCTION DOC]
+  # HELPER: builds the static-RNN graph used by the benchmark comparison.
+  # Inputs: list of per-step input tensors (each batch by depth) and a sequence-length value.
+  # Creates a peephole LSTM cell (untupled state, seeded uniform initialiser) with units equal to
+  # the input depth, runs the static RNN, takes gradients of the outputs and final state with
+  # respect to all trainable variables in the default graph, and returns a grouped op depending on
+  # the final state, gradients and outputs. Adds ops and variables to the current graph.
   (_, input_size) = inputs_list_t[0].get_shape().as_list()
   initializer = init_ops.random_uniform_initializer(-0.01, 0.01, seed=127)
   cell = rnn_cell_impl.LSTMCell(
@@ -378,6 +515,12 @@ def _static_vs_dynamic_rnn_benchmark_static(inputs_list_t, sequence_length):
 
 
 def _static_vs_dynamic_rnn_benchmark_dynamic(inputs_t, sequence_length):
+  # [FUNCTION DOC]
+  # HELPER: builds the dynamic-RNN graph used by the benchmark comparison.
+  # Inputs: a batch-by-time-by-depth input tensor and a sequence-length value. Creates the same
+  # peephole LSTM cell as the static helper, runs the dynamic RNN, takes gradients of outputs and
+  # final state with respect to all trainable variables in the default graph, and returns a
+  # grouped op depending on the final state, outputs and gradients. Adds ops to the current graph.
   (unused_0, unused_1, input_size) = inputs_t.get_shape().as_list()
   initializer = init_ops.random_uniform_initializer(-0.01, 0.01, seed=127)
   cell = rnn_cell_impl.LSTMCell(
@@ -397,6 +540,13 @@ def _static_vs_dynamic_rnn_benchmark_dynamic(inputs_t, sequence_length):
 
 
 def graph_creation_static_vs_dynamic_rnn_benchmark(max_time):
+  # [FUNCTION DOC]
+  # Benchmark helper comparing graph-construction time of static and dynamic RNNs.
+  # Input: number of time steps. Seeds the global random generator, makes random sequence lengths
+  # and random float inputs (batch and units fixed at 512), then times five constructions of each
+  # graph kind with the standard timer and prints the step count, both total times and their
+  # ratio. Returns a pair of the total static and total dynamic construction times in seconds;
+  # side effects are printing and creating temporary sessions and graphs.
   config = config_pb2.ConfigProto()
   config.allow_soft_placement = True
 
@@ -414,6 +564,9 @@ def graph_creation_static_vs_dynamic_rnn_benchmark(max_time):
   inputs = np.dstack(inputs_list).transpose([0, 2, 1])  # batch x time x depth
 
   def _create_static_rnn():
+    # [FUNCTION DOC]
+    # HELPER: timed unit of work. In a fresh graph and session, wraps each input in a non-trainable
+    # variable and builds the static-RNN benchmark graph. Takes nothing, returns nothing.
     with session.Session(config=config, graph=ops_lib.Graph()):
       inputs_list_t = [
           variables_lib.Variable(
@@ -422,6 +575,10 @@ def graph_creation_static_vs_dynamic_rnn_benchmark(max_time):
       _static_vs_dynamic_rnn_benchmark_static(inputs_list_t, sequence_length)
 
   def _create_dynamic_rnn():
+    # [FUNCTION DOC]
+    # HELPER: timed unit of work. In a fresh graph and session, wraps the stacked input in a
+    # non-trainable variable and builds the dynamic-RNN benchmark graph. Takes nothing, returns
+    # nothing.
     with session.Session(config=config, graph=ops_lib.Graph()):
       inputs_t = variables_lib.Variable(inputs, trainable=False).value()
       _static_vs_dynamic_rnn_benchmark_dynamic(inputs_t, sequence_length)
@@ -435,6 +592,10 @@ def graph_creation_static_vs_dynamic_rnn_benchmark(max_time):
 
 
 def _timer(sess, ops):
+  # [FUNCTION DOC]
+  # HELPER: shared timing routine for the benchmark functions.
+  # Inputs: a session and an op to run. Runs the op twice as warm-up, then twenty timed runs
+  # using wall-clock time. Returns the average seconds per run. Side effect: executes the op.
   # Warm in
   for _ in range(2):
     sess.run(ops)
@@ -449,6 +610,13 @@ def _timer(sess, ops):
 
 
 def static_vs_dynamic_rnn_benchmark(batch_size, max_time, num_units, use_gpu):
+  # [FUNCTION DOC]
+  # Benchmark helper comparing run time of a statically unrolled RNN with a dynamic RNN.
+  # Inputs: batch size, number of time steps, units (input depth), and a flag allowing GPU
+  # placement (otherwise ops are pinned to the CPU). Seeds the global random generator, creates
+  # random lengths and inputs, builds each graph in its own session with variables initialised,
+  # times each with the timing helper, prints a row of results. Returns a pair of average seconds
+  # per run for the static and dynamic versions.
   config = config_pb2.ConfigProto()
   config.allow_soft_placement = True
 
@@ -489,6 +657,11 @@ def static_vs_dynamic_rnn_benchmark(batch_size, max_time, num_units, use_gpu):
 
 
 def _half_seq_len_vs_unroll_half_rnn_benchmark(inputs_list_t, sequence_length):
+  # [FUNCTION DOC]
+  # HELPER: builds the graph for the half-sequence-length versus half-unroll benchmark.
+  # Inputs: list of per-step input tensors and a sequence-length value. Identical in construction
+  # to the static-RNN benchmark helper: peephole LSTM, static RNN, gradients over all trainable
+  # variables, returns a grouped op over final state, gradients and outputs.
   (_, input_size) = inputs_list_t[0].get_shape().as_list()
   initializer = init_ops.random_uniform_initializer(-0.01, 0.01, seed=127)
   cell = rnn_cell_impl.LSTMCell(
@@ -512,6 +685,13 @@ def _half_seq_len_vs_unroll_half_rnn_benchmark(inputs_list_t, sequence_length):
 
 def half_seq_len_vs_unroll_half_rnn_benchmark(batch_size, max_time, num_units,
                                               use_gpu):
+  # [FUNCTION DOC]
+  # Benchmark helper comparing a full static unroll with halved sequence lengths against a
+  # half-length static unroll.
+  # Inputs: batch size, number of time steps, units, and a flag allowing GPU placement (otherwise
+  # CPU). Seeds the global random generator, uses full-length sequence lengths halved in both
+  # runs, times each graph in its own session, prints a row of results. Returns a pair of average
+  # seconds per run: half sequence length, then half unroll.
   config = config_pb2.ConfigProto()
   config.allow_soft_placement = True
 
@@ -555,6 +735,12 @@ def half_seq_len_vs_unroll_half_rnn_benchmark(batch_size, max_time, num_units,
 
 def _concat_state_vs_tuple_state_rnn_benchmark(inputs_list_t, sequence_length,
                                                state_is_tuple):
+  # [FUNCTION DOC]
+  # HELPER: builds the graph for the concatenated-state versus tuple-state benchmark.
+  # Inputs: list of per-step input tensors, sequence lengths, and a flag choosing tuple state for
+  # the peephole LSTM cell. Runs the static RNN, flattens the final state into a list, takes
+  # gradients over all trainable variables, and returns a grouped op over final state, gradients
+  # and outputs.
   (_, input_size) = inputs_list_t[0].get_shape().as_list()
   initializer = init_ops.random_uniform_initializer(-0.01, 0.01, seed=127)
   cell = rnn_cell_impl.LSTMCell(
@@ -580,6 +766,13 @@ def _concat_state_vs_tuple_state_rnn_benchmark(inputs_list_t, sequence_length,
 
 def concat_state_vs_tuple_state_rnn_benchmark(batch_size, max_time, num_units,
                                               use_gpu):
+  # [FUNCTION DOC]
+  # Benchmark helper comparing a static unrolled LSTM using concatenated state with one using
+  # tuple state.
+  # Inputs: batch size, number of time steps, units, and a flag allowing GPU placement (otherwise
+  # CPU). Seeds the global random generator, builds each variant in its own session with full
+  # sequence lengths, times them, prints a row of results. Returns a pair of average seconds per
+  # run: concatenated state, then tuple state.
   config = config_pb2.ConfigProto()
   config.allow_soft_placement = True
 
@@ -622,6 +815,11 @@ def concat_state_vs_tuple_state_rnn_benchmark(batch_size, max_time, num_units,
 
 
 def _dynamic_rnn_swap_memory_benchmark(inputs_t, sequence_length, swap_memory):
+  # [FUNCTION DOC]
+  # HELPER: builds the dynamic-RNN graph for the memory-swap benchmarks.
+  # Inputs: a batch-by-time-by-depth input tensor, sequence lengths, and a flag passed to the
+  # dynamic RNN to allow swapping tensors to host memory. Same peephole LSTM setup as the other
+  # helpers; returns a grouped op over final state, outputs and gradients.
   (unused_0, unused_1, input_size) = inputs_t.get_shape().as_list()
   initializer = init_ops.random_uniform_initializer(-0.01, 0.01, seed=127)
   cell = rnn_cell_impl.LSTMCell(
@@ -645,6 +843,11 @@ def _dynamic_rnn_swap_memory_benchmark(inputs_t, sequence_length, swap_memory):
 
 
 def dynamic_rnn_swap_memory_benchmark(batch_size, max_time, num_units):
+  # [FUNCTION DOC]
+  # Benchmark helper comparing a dynamic LSTM with and without memory swapping.
+  # Inputs: batch size, number of time steps, units. Seeds the global random generator, builds the
+  # graph twice (swap off, swap on) in separate sessions, times each, prints a row including the
+  # ratio. Returns a pair of average seconds per run: no swap, then swap.
   config = config_pb2.ConfigProto()
   config.allow_soft_placement = True
 
@@ -680,6 +883,13 @@ def dynamic_rnn_swap_memory_benchmark(batch_size, max_time, num_units):
 
 def rnn_long_sequence_benchmark(batch_size, seqlen, num_units, dynamic,
                                 swap_memory, nn):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the static branch ignores the swap flag, and the sequence lengths are a plain
+  # list rather than an array; results are only printed, nothing is returned.
+  # Benchmark helper for long sequences. Inputs: batch size, sequence length, units, a flag
+  # choosing dynamic (true) or static RNN, the memory-swap flag (dynamic only), and the number of
+  # repetitions. Seeds the global random generator, then repeatedly builds the chosen graph in a
+  # fresh session, times it, and prints a row with elapsed time and time per step.
   config = config_pb2.ConfigProto()
   config.allow_soft_placement = True
 
@@ -717,8 +927,16 @@ def rnn_long_sequence_benchmark(batch_size, seqlen, num_units, dynamic,
 
 
 class BenchmarkRNN(test.Benchmark):
+  # [CLASS DOC]
+  # Benchmark class that drives the module-level benchmark helpers over parameter grids and
+  # reports wall times to the benchmark framework: graph creation time, static versus dynamic
+  # run time, memory swapping, half sequence length versus half unroll, and concatenated versus
+  # tuple LSTM state. Stateless.
 
   def benchmarkGraphCreationStaticVsDynamicLSTM(self):
+    # [FUNCTION DOC]
+    # Benchmark: for 1, 25 and 50 time steps, measures graph-creation time for static and dynamic
+    # RNNs, prints a table, and reports two named results (static and dynamic) per step count.
     print("Graph Creation: Static Unroll vs. Dynamic Unroll LSTM")
     print("max_t \t dt(static) \t dt(dynamic) \t dt(dynamic)/dt(static)")
     for max_time in (1, 25, 50):
@@ -733,6 +951,9 @@ class BenchmarkRNN(test.Benchmark):
           wall_time=d_dt)
 
   def benchmarkStaticUnrollVsDynamicFlowLSTM(self):
+    # [FUNCTION DOC]
+    # Benchmark: batch 256, 50 steps, units 512/256/128, with and without GPU placement; compares
+    # run time of static unrolling with dynamic RNN and reports two named results per setting.
     print("Calculation: Static Unroll with Dynamic Flow LSTM "
           "vs. Dynamic Unroll LSTM")
     print("batch \t max_t \t units \t gpu \t dt(static) \t dt(dynamic) "
@@ -755,6 +976,9 @@ class BenchmarkRNN(test.Benchmark):
                 wall_time=d_dt)
 
   def benchmarkDynamicLSTMNoMemorySwapVsMemorySwap(self):
+    # [FUNCTION DOC]
+    # Benchmark: batch 256 and 512, 100 steps, units 512/256/128; compares dynamic LSTM run time
+    # without and with memory swapping and reports two named results per setting.
     print("Calculation: Dynamic LSTM No Memory Swap vs. Memory Swap")
     print("batch \t max_t \t units \t no_swap \t swap \t swap/no_swap")
     for batch_size in (256, 512):
@@ -774,6 +998,10 @@ class BenchmarkRNN(test.Benchmark):
               wall_time=swap)
 
   def benchmarkStaticUnrollHalfSequenceLengthVsHalfUnroll(self):
+    # [FUNCTION DOC]
+    # Benchmark: batch 128, 50 steps, 256 units, with and without GPU placement; compares halved
+    # sequence length on a full unroll against a half-length unroll and reports two named results
+    # per setting.
     print("Calculation: Static Unroll with Halved Sequence Length "
           "vs. Half Static Unroll")
     print("batch \t full_t \t units \t gpu \t dt(half_seq_len) "
@@ -798,6 +1026,10 @@ class BenchmarkRNN(test.Benchmark):
                 wall_time=d_dt)
 
   def benchmarkStaticUnrollStateConcatVsStateTuple(self):
+    # [FUNCTION DOC]
+    # Benchmark: batch 16 and 128, 50 steps, units 16 and 128, with and without GPU placement;
+    # compares static unrolled LSTM with concatenated state versus tuple state and reports two
+    # named results per setting.
     print("Calculation: Static Unroll with Concatenated State "
           "vs. Tuple State")
     print("batch \t time \t units \t gpu \t dt(concat_state) "
@@ -826,6 +1058,11 @@ class BenchmarkRNN(test.Benchmark):
                 wall_time=t_dt)
 
   def _benchmarkDynamicLSTMMemorySwapLongSeq(self):
+    # [FUNCTION DOC]
+    # HELPER: disabled benchmark (underscore prefix keeps it from being discovered) for long
+    # sequences with memory swapping, originally for a research paper. Uses batch 512, 512 units,
+    # dynamic RNN with swapping; does two warm-up repetitions at length 800, then three
+    # repetitions for each length from 100 to 1000 in steps of 100. Prints results; reports none.
     """The memory swapping test for the SOSP submission."""
     print("Calculation: Long LSTM Sequence")
     print("batch \t len \t units \t dynamic \t elapsed_t \t elapsed_t/len")

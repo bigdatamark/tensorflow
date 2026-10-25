@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# HELPER: shared base test case for the softmax-cross-entropy-with-logits op, reused by the
+# regular xent test module and the deterministic-ops test module.
+# Defines XentOpTestBase with a NumPy reference implementation, helpers that run the op forward
+# and backward, and the common value, broadcast, gradient, second-gradient, rank-3 and
+# zero-dimension tests. Subclasses can override the single-class and labels-broadcast tests via the
+# underscore-prefixed helper methods. Importing nn_grad's cross-entropy gradient registers the
+# gradient function. The module has no script entry point.
 # Copyright 2015-2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,8 +41,19 @@ from tensorflow.python.platform import test
 
 
 class XentOpTestBase(test.TestCase):
+  # [CLASS DOC]
+  # Base test case holding the shared tests for the softmax cross-entropy op: value checks for
+  # several dtypes, shape mismatch, broadcasting of labels, first and second order gradient
+  # accuracy, rank-3 inputs along every axis, and zero-sized input. Concrete subclasses reuse it
+  # to run the same checks under different conditions (for example deterministic mode) and may
+  # override the single-class and labels-broadcast tests. Stateless.
 
   def _opFwdBwd(self, labels, logits, axis=-1):
+    # [FUNCTION DOC]
+    # HELPER: runs the op under test forward and backward for the tests.
+    # Inputs: labels (array-like), logits (array-like, converted to a tensor), and the class axis
+    # (default last). Computes the softmax cross-entropy loss under a gradient tape that watches
+    # the logits and returns a pair of the loss and its gradient with respect to the logits.
     """ Runs the op-under-test both forwards and backwards."""
     logits = ops.convert_to_tensor(logits)  # needed for the gradient tape
     with backprop.GradientTape() as tape:
@@ -44,6 +63,12 @@ class XentOpTestBase(test.TestCase):
     return loss, tape.gradient(loss, logits)
 
   def _npXent(self, labels, logits, dim=-1):
+    # [FUNCTION DOC]
+    # HELPER: NumPy reference for softmax cross-entropy.
+    # Inputs: label and logit arrays of equal shape and the class axis (default last; minus one
+    # means the last axis). Computes stable softmax probabilities, then returns a pair: the loss
+    # (negative sum of labels times log of probabilities plus a tiny constant, reduced over the
+    # axis) and the backprop value (probabilities minus labels). No side effects.
     if dim == -1:
       dim = len(logits.shape) - 1
     one_only_on_dim = list(logits.shape)
@@ -61,6 +86,13 @@ class XentOpTestBase(test.TestCase):
                   np_logits,
                   with_placeholders=False,
                   expected_gradient=None):
+    # [FUNCTION DOC]
+    # HELPER: shared checker for rank-2 inputs.
+    # Inputs: NumPy label and logit matrices, a flag (default false) to feed them through
+    # placeholders (needed because XLA constant-folds values), and an optional expected gradient
+    # that replaces the reference gradient. Runs the op forward and backward in a cached session
+    # and asserts loss (with looser half-precision tolerance) and gradient match the reference
+    # according to dtype. Returns nothing.
     np_loss, np_gradient = self._npXent(labels=np_labels, logits=np_logits)
     if expected_gradient is not None:
       np_gradient = expected_gradient
@@ -81,6 +113,11 @@ class XentOpTestBase(test.TestCase):
     self.assertAllCloseAccordingToType(np_gradient, tf_gradient)
 
   def _testXentND(self, np_labels, np_logits, dim=-1):
+    # [FUNCTION DOC]
+    # HELPER: shared checker for inputs of any rank.
+    # Inputs: label and logit arrays and the class axis (default last). Computes the reference
+    # loss, evaluates the public cross-entropy function with that axis, and asserts closeness
+    # according to dtype. Only the loss is checked, not the gradient. Returns nothing.
     np_loss, _ = self._npXent(np_labels, np_logits, dim=dim)
     loss = nn_ops.softmax_cross_entropy_with_logits(
         labels=np_labels, logits=np_logits, dim=dim)
@@ -88,6 +125,15 @@ class XentOpTestBase(test.TestCase):
     self.assertAllCloseAccordingToType(np_loss, tf_loss)
 
   def _testSingleClass(self, expected_gradient=[[2.0], [1.0], [0.0], [0.0]]):
+    # [FUNCTION DOC]
+    # HELPER: single-class scenario with a parameterisable expected gradient, so subclasses can
+    # override the test.
+    # KNOWN ISSUE: the default for the expected gradient is a mutable list shared across calls
+    # (harmless here because it is only read).
+    # Input: expected gradient with respect to logits (default is the non-deterministic result).
+    # For float16, float32 and bfloat16, runs the op forward and backward on four rows with one
+    # class each (labels minus one, zero, one, one) and asserts every loss is zero and the gradient
+    # equals the expected one.
     for dtype in np.float16, np.float32, dtypes.bfloat16.as_numpy_dtype:
       loss, gradient = self._opFwdBwd(
           labels=np.array([[-1.], [0.], [1.], [1.]]).astype(dtype),
@@ -96,10 +142,17 @@ class XentOpTestBase(test.TestCase):
       self.assertAllClose(expected_gradient, gradient)
 
   def testSingleClass(self):
+    # [FUNCTION DOC]
+    # Runs the single-class check with the default expected gradient. Kept as a thin wrapper so a
+    # subclass can override just this test.
     """This method is structured to be easily overridden by a child class."""
     self._testSingleClass()
 
   def testNpXent(self):
+    # [FUNCTION DOC]
+    # Scenario: validates the NumPy reference on two batches of four logits (uniform logits with a
+    # hard target, and one-to-four logits with a soft target). Asserts the reference gradients and
+    # losses equal hand-computed constants within 1e-3.
     # We create 2 batches of logits for testing.
     # batch 0 is the boring uniform distribution: 1, 1, 1, 1, with target 3.
     # batch 1 has a bit of difference: 1, 2, 3, 4, with soft targets (1, 2).
@@ -139,6 +192,15 @@ class XentOpTestBase(test.TestCase):
   # are needed.
   @test_util.run_deprecated_v1
   def _testLabelsBroadcast(self, uniform_labels_gradient):
+    # [FUNCTION DOC]
+    # HELPER: labels-broadcast scenario with a parameterisable expected gradient, so subclasses
+    # can override the test.
+    # KNOWN ISSUE: despite being a helper, it carries the deprecated-v1 (graph mode only)
+    # decorator, which forces every caller into graph mode.
+    # Input: expected logits gradient for the third case. Runs placeholder-based rank-2 checks in
+    # float16 for (a) one label row against two logit rows, (b) a single-class case, and (c) three
+    # label rows with a single class against three logit rows, using the supplied gradient for the
+    # last case. Returns nothing.
     labels = np.array([[0., 0., 0., 1.]]).astype(np.float16)
     logits = np.array([[1., 1., 1., 1.], [1., 2., 3., 4.]]).astype(np.float16)
     self._testXent2D(labels, logits, with_placeholders=True)
@@ -155,6 +217,9 @@ class XentOpTestBase(test.TestCase):
         expected_gradient=uniform_labels_gradient)
 
   def testLabelsBroadcast(self):
+    # [FUNCTION DOC]
+    # Runs the labels-broadcast check with the non-deterministic expected gradient values. Kept as
+    # a thin wrapper so a subclass can override just this test.
     """This method is structured to be easily overridden by a child class."""
     self._testLabelsBroadcast(uniform_labels_gradient=[[
         0.25, 0.25, 0.25, 0.25
@@ -162,17 +227,24 @@ class XentOpTestBase(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testShapeMismatch(self):
+    # [FUNCTION DOC]
+    # Scenario: labels of shape 2x3 with logits of shape 2x2. Expects a value error. Graph-mode
+    # only (deprecated v1).
     with self.cached_session():
       with self.assertRaises(ValueError):
         self._opFwdBwd(
             labels=[[0., 1., 0.], [1., 0., 0.]], logits=[[0., 1.], [2., 3.]])
 
   def testHalf(self):
+    # [FUNCTION DOC]
+    # Scenario: rank-2 value and gradient check on a 2x4 float16 pair (hard and soft labels).
     labels = np.array([[0., 0., 0., 1.], [0., .5, .5, 0.]]).astype(np.float16)
     logits = np.array([[1., 1., 1., 1.], [1., 2., 3., 4.]]).astype(np.float16)
     self._testXent2D(labels, logits)
 
   def testBfloat16(self):
+    # [FUNCTION DOC]
+    # Scenario: rank-2 value and gradient check on the same 2x4 data as the half test, in bfloat16.
     labels = np.array([[0., 0., 0., 1.],
                        [0., .5, .5, 0.]]).astype(dtypes.bfloat16.as_numpy_dtype)
     logits = np.array([[1., 1., 1., 1.],
@@ -180,17 +252,26 @@ class XentOpTestBase(test.TestCase):
     self._testXent2D(labels, logits)
 
   def testFloat(self):
+    # [FUNCTION DOC]
+    # Scenario: rank-2 value and gradient check on a 2x4 float32 pair.
     labels = np.array([[0., 0., 0., 1.], [0., .5, .5, 0.]]).astype(np.float32)
     logits = np.array([[1., 1., 1., 1.], [1., 2., 3., 4.]]).astype(np.float32)
     self._testXent2D(labels, logits)
 
   def testDouble(self):
+    # [FUNCTION DOC]
+    # Scenario: rank-2 value and gradient check on a 2x4 float64 pair.
     labels = np.array([[0., 0., 0., 1.], [0., .5, .5, 0.]]).astype(np.float64)
     logits = np.array([[1., 1., 1., 1.], [1., 2., 3., 4.]]).astype(np.float64)
     self._testXent2D(labels, logits)
 
   @test_util.run_deprecated_v1
   def testGradient(self):
+    # [FUNCTION DOC]
+    # Scenario: float64 3x4 labels and logits; computes the numeric versus analytic gradient error
+    # of the loss with respect to the logits and asserts it is below 5e-8. Also inspects the graph
+    # and asserts no batch matrix-multiply op exists, i.e. the second derivative is not built when
+    # only the first is requested. Graph-mode only (deprecated v1).
     with self.cached_session() as sess:
       labels = constant_op.constant(
           [0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.0, 0.5],
@@ -220,6 +301,10 @@ class XentOpTestBase(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testGradientLabelWithV2(self):
+    # [FUNCTION DOC]
+    # Scenario: float64 3x4 data using the version-2 cross-entropy function; checks the numeric
+    # versus analytic gradient error with respect to the labels is below 5e-8. Graph-mode only
+    # (deprecated v1).
     with self.cached_session():
       labels = constant_op.constant(
           [0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.0, 0.5],
@@ -239,6 +324,12 @@ class XentOpTestBase(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testSecondGradient(self):
+    # [FUNCTION DOC]
+    # Scenario: float64 rank-1 data of 12 values (labels scaled to sum less than one); reduces the
+    # loss by sum, takes its gradient with respect to the logits, and checks the numeric versus
+    # analytic error of that gradient is below 5e-8. When op determinism is not enabled it also
+    # asserts the graph contains a batch matrix-multiply op, showing the second derivative uses
+    # it. Graph-mode only (deprecated v1).
     with self.cached_session() as sess:
       labels = constant_op.constant([
           0.0, 0.0, 1.0 / 3, 0.0, 1.0 / 3, 0.0, 0.0, 0.0, 0.0, 0.5 / 3, 0.0,
@@ -273,6 +364,9 @@ class XentOpTestBase(test.TestCase):
     self.assertLess(err, 5e-8)
 
   def test3D(self):
+    # [FUNCTION DOC]
+    # Scenario: 3x2x4 float32 labels and logits; checks the loss against the reference for class
+    # axes zero, one and minus one.
     labels = np.array([[[0., 0., 0., 1.], [0., 1., 0., 0.]],
                        [[0., 0.5, 0.5, 0.], [0.5, 0.5, 0., 0.]],
                        [[0., 1., 0., 0.], [0., 0., 1., 0.]]]).astype(np.float32)
@@ -284,6 +378,9 @@ class XentOpTestBase(test.TestCase):
     self._testXentND(labels, logits, dim=-1)
 
   def testZeroDimension(self):
+    # [FUNCTION DOC]
+    # Scenario: zero-by-two-by-four float32 labels and logits; asserts the loss equals the
+    # reference (an empty array).
     labels = np.zeros([0, 2, 4]).astype(np.float32)
     logits = np.zeros([0, 2, 4]).astype(np.float32)
     np_loss, _ = self._npXent(labels=labels, logits=logits)

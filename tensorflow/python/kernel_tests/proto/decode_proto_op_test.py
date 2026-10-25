@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Concrete test module for the decode_proto op exposed through the proto_ops Python module.
+# It only binds the shared test-case base class (decode_proto_op_test_base) to proto_ops, so every
+# test defined in the base class runs against the decode_proto wrappers in proto_ops. Running the
+# file as a script starts the TensorFlow test runner. No registrations or flags at import time.
 # =============================================================================
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
@@ -22,8 +27,16 @@ from tensorflow.python.platform import test
 
 
 class DecodeProtoOpTest(test_base.DecodeProtoOpTestBase):
+  # [CLASS DOC]
+  # Test case that runs all decode_proto tests inherited from the shared base class, using the
+  # proto_ops module as the provider of the decode functions. Holds no state of its own; the
+  # module under test is passed to the base constructor.
 
   def __init__(self, methodName='runTest'):  # pylint: disable=invalid-name
+    # [FUNCTION DOC]
+    # Constructor. Takes the name of the test method to run (optional, defaults to the standard
+    # run-test name) and forwards it to the base class together with the proto_ops module, which
+    # the base class uses as the decode/encode implementation. Returns nothing; no side effects.
     super(DecodeProtoOpTest, self).__init__(proto_ops, methodName)
 
 

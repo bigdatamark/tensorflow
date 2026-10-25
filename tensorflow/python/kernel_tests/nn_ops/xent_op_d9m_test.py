@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Tests for deterministic behaviour of the softmax-cross-entropy-with-logits op. One test case
+# checks that the raw GPU kernel raises an unimplemented error when determinism is enabled; the
+# other re-runs the shared base tests and checks that forward and backward results are bitwise
+# reproducible, overriding two base tests whose expected gradients differ in the deterministic
+# path. Running as a script first enables op determinism globally, then starts the test runner.
+# Importing nn_grad's cross-entropy gradient registers the gradient function.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,6 +38,9 @@ from tensorflow.python.platform import test
 
 
 class XentOpDeterminismExceptionsTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case verifying that the raw GPU softmax-cross-entropy kernel refuses to run when
+  # deterministic ops are enabled. Stateless.
   """Test d9m-unimplemented exceptions from SoftmaxXentWithLogitsOp.
 
   Test that tf.errors.UnimplementedError is thrown, as appropriate, by the GPU
@@ -45,6 +55,12 @@ class XentOpDeterminismExceptionsTest(test.TestCase):
   @test_util.run_gpu_only
   @test_util.run_in_graph_and_eager_modes
   def testExceptionThrowing(self):
+    # [FUNCTION DOC]
+    # Scenario (GPU only; runs in graph and eager modes): for float16, float32 and float64, forces
+    # GPU placement and calls the raw cross-entropy op on 2x2 features and labels. Expects an
+    # unimplemented error whose message says the GPU implementation is not deterministic and that
+    # the Python API uses an alternative deterministic path. Relies on determinism having been
+    # enabled by the script entry point.
     with self.session(), test_util.force_gpu():
       for dtype in [dtypes.float16, dtypes.float32, dtypes.float64]:
         features = constant_op.constant([[0.3, 0.5], [0.5, 0.6]], dtype=dtype)
@@ -61,6 +77,11 @@ class XentOpDeterminismExceptionsTest(test.TestCase):
 
 
 class XentOpDeterministicTest(xent_op_test_base.XentOpTestBase):
+  # [CLASS DOC]
+  # Test case that inherits all functional tests from the shared base class (so they run on the
+  # deterministic code path), adds forward and backward reproducibility tests using large random
+  # inputs, and overrides the single-class and labels-broadcast tests with the different
+  # gradients the deterministic implementation yields for invalid label distributions.
   """Test that SoftmaxCrossEntropyWithLogits operates reproducibly.
 
   Inheriting from xent_op_test_base.XentTestBase ensures that regular op
@@ -72,11 +93,21 @@ class XentOpDeterministicTest(xent_op_test_base.XentOpTestBase):
   """
 
   def _randomFloats(self, shape, dtype, normalized_rows=False):
+    # [FUNCTION DOC]
+    # HELPER: builds random input tensors for the reproducibility tests.
+    # Inputs: a shape, a NumPy dtype, and a flag (default false) asking each row to be divided by
+    # its sum. Draws uniform values in minus one to one from the global NumPy random state, casts
+    # to the dtype, optionally normalises rows, and returns a constant tensor. Consumes global
+    # random state.
     a = (2 * np.random.random_sample(shape) - 1).astype(dtype)
 
     if normalized_rows:
 
       def normalize(row):
+        # [FUNCTION DOC]
+        # HELPER: divides a one-dimensional row by the sum of its elements and returns the result.
+        # Note the sum of the random signed values can be near zero, so the result is only
+        # nominally a distribution.
         return row / row.sum()
 
       a = np.apply_along_axis(normalize, 1, a)
@@ -84,6 +115,12 @@ class XentOpDeterministicTest(xent_op_test_base.XentOpTestBase):
     return constant_op.constant(a)
 
   def _generateInputs(self, dtype, seed=123, forward_not_backward=False):
+    # [FUNCTION DOC]
+    # HELPER: produces a (labels, logits) pair of tensors for the reproducibility tests.
+    # Inputs: NumPy dtype, random seed (default 123) and a flag selecting the forward test. Batch
+    # size is 1024; classes count is 3000, or 20000 when the flag is set and dtype is float16 (to
+    # expose the internal float32 computation). Seeds the global NumPy generator, draws normalised
+    # labels and unnormalised logits, and returns them as a pair.
     batch_size = 1024
     if forward_not_backward and dtype == np.float16:
       # Generate more noise to expose the internal float32 implementation.
@@ -99,6 +136,10 @@ class XentOpDeterministicTest(xent_op_test_base.XentOpTestBase):
 
   @test_util.run_in_graph_and_eager_modes
   def testForward(self):
+    # [FUNCTION DOC]
+    # Scenario: for float16, float32, float64 and bfloat16, and five seeds each, generates large
+    # random labels and logits, runs the public cross-entropy function twice on the same inputs,
+    # and asserts the two results are exactly equal (bitwise determinism of the forward pass).
     with self.cached_session():
       for dtype in [np.float16, np.float32, np.float64,  \
         dtypes.bfloat16.as_numpy_dtype]:
@@ -115,6 +156,11 @@ class XentOpDeterministicTest(xent_op_test_base.XentOpTestBase):
 
   @test_util.run_in_graph_and_eager_modes
   def testBackward(self):
+    # [FUNCTION DOC]
+    # Scenario: for each of four dtypes, generates random labels and logits, then for five seeds
+    # computes gradients of the loss (weighted by random upstream gradients drawn per seed) with
+    # respect to labels and logits twice, and asserts the two sets of gradients are exactly equal
+    # (bitwise determinism of the backward pass).
     with self.cached_session():
       for dtype in [np.float16, np.float32, np.float64,  \
         dtypes.bfloat16.as_numpy_dtype]:
@@ -122,6 +168,12 @@ class XentOpDeterministicTest(xent_op_test_base.XentOpTestBase):
         output_shape = labels.shape[0]
 
         def gradients(seed):
+          # [FUNCTION DOC]
+          # HELPER: computes loss gradients for the enclosing backward test.
+          # Input: integer seed for the global random generator, used to draw the upstream
+          # gradient weights. Records the loss multiplied by those weights on a persistent
+          # gradient tape that watches labels and logits, and returns the gradients with respect
+          # to labels and logits as a list. Re-seeds global random state.
           np.random.seed(seed)
           upstream_gradients = self._randomFloats(output_shape, dtype)
           with backprop.GradientTape(persistent=True) as tape:
@@ -142,6 +194,10 @@ class XentOpDeterministicTest(xent_op_test_base.XentOpTestBase):
   # Modifications to the parent class (xent_op_test_base.XentOpTestBase) follow
 
   def testSingleClass(self):
+    # [FUNCTION DOC]
+    # Override of the base test: runs the shared single-class gradient check but expects all-zero
+    # gradients, because the deterministic implementation differs for label vectors that are not
+    # valid probability distributions. Takes no inputs and returns nothing.
     """Modify testing of gradient for single-class case.
 
     The deterministic implementation does not produce the gradients expected by
@@ -164,6 +220,10 @@ class XentOpDeterministicTest(xent_op_test_base.XentOpTestBase):
     self._testSingleClass(expected_gradient=[[0.0], [0.0], [0.0], [0.0]])
 
   def testLabelsBroadcast(self):
+    # [FUNCTION DOC]
+    # Override of the base test: runs the shared labels-broadcast check but supplies the expected
+    # logits gradient of the deterministic implementation (zeros for the first row, different
+    # values for the second, unchanged third row). Takes no inputs and returns nothing.
     """Modify testing of gradient for labels-broadcast case.
 
     The deterministic implementation does not produce the gradients expected by
