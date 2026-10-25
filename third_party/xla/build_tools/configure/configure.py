@@ -1,4 +1,14 @@
 #!/usr/bin/env python3
+# [MODULE DOC]
+# Command line configuration script for building XLA with Bazel. It parses flags (backend, host
+# and device compilers, operating system, python path, compute capabilities, optional tool
+# paths and versions), discovers missing tool paths and versions on the host, and writes a
+# bazelrc file named xla_configure.bazelrc next to this script containing the matching Bazel
+# build/test options. Exposes enum types for the choices, a dataclass of discoverable paths and
+# versions, a dataclass of configuration options that renders bazelrc lines, and main.
+# Import-time side effects: computes a few module constants only. Running as a script writes the
+# bazelrc file, configures logging and exits with the return value of main.
+# Not a library helper; it is a standalone entry point (the test module covers it).
 # Copyright 2024 The OpenXLA Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -49,6 +59,11 @@ _KW_ONLY_IF_PYTHON310 = {"kw_only": True} if sys.version_info >= (3, 10) else {}
 
 
 def _find_executable(executable: str) -> Optional[str]:
+  # [FUNCTION DOC]
+  # HELPER: locates tools on the search path for the configuration logic.
+  # Looks up the named executable on the system search path, logging the attempt. Input is the
+  # executable name (string). Returns the absolute path with symbolic links resolved (needed to
+  # find system headers), or nothing/null value if it is not found. Raises nothing itself.
   logging.info("Trying to find path to %s...", executable)
   # Resolving the symlink is necessary for finding system headers.
   if unresolved_path := shutil.which(executable):
@@ -59,6 +74,16 @@ def _find_executable(executable: str) -> Optional[str]:
 def _find_executable_or_die(
     executable_name: str, executable_path: Optional[str] = None
 ) -> str:
+  # [FUNCTION DOC]
+  # HELPER: resolves compiler/tool locations for DiscoverablePathsAndVersions.
+  # KNOWN ISSUE: the error message is built from adjacent string pieces without a space, so it
+  # reads "like`--name_path=..." and has an unbalanced backtick; cosmetic only.
+  # Returns the resolved absolute path of a required executable. Inputs: executable_name (string
+  # used for the search path lookup and in messages) and optional executable_path (explicit
+  # path). If an explicit path is given it is resolved strictly, so a missing file raises a
+  # file-not-found error from the path library. Otherwise searches the path and raises a runtime
+  # error telling the user to change the search path or pass the path flag if nothing is found.
+  # Logs the found location. No other side effects.
   """Finds executable and resolves symlinks or raises RuntimeError.
 
   Resolving symlinks is sometimes necessary for finding system headers.
@@ -87,6 +112,15 @@ def _find_executable_or_die(
 
 
 def _get_cuda_compute_capabilities_or_die() -> list[str]:
+  # [FUNCTION DOC]
+  # HELPER: autodetects GPU compute capabilities for the CUDA configuration.
+  # KNOWN ISSUE: the docstring misspells "raises" and says the list is of strings "representing
+  # compute capabilities:" with a trailing colon; behavior is as described otherwise.
+  # Takes no inputs. Finds the nvidia-smi tool (required), runs it to query the compute
+  # capability of each GPU in csv form, and returns the sorted list of unique capability strings
+  # (e.g. one per distinct GPU model). Side effects: runs a subprocess and logs. Exceptions: a
+  # runtime error if nvidia-smi is not found, or a called-process error if it fails; both are
+  # logged with a hint to use the capabilities flag and then re-raised unchanged.
   """Finds compute capabilities via nvidia-smi or rasies exception.
 
   Returns:
@@ -117,6 +151,13 @@ def _get_cuda_compute_capabilities_or_die() -> list[str]:
 
 
 def _get_clang_major_version(path_to_clang: str) -> int:
+  # [FUNCTION DOC]
+  # HELPER: version detection for the host clang compiler.
+  # Runs the given clang executable as a preprocessor (preprocess only, no line markers), feeding
+  # it text for the compiler major-version macro on standard input, and parses its output as an
+  # integer. Input: path to a clang executable. Returns the major version integer. Raises a
+  # called-process error if clang exits non-zero and a value error if the output is not an
+  # integer. Logs the command and the result.
   """Gets the major version of the clang at `path_to_clang`.
 
   Args:
@@ -140,6 +181,12 @@ def _get_clang_major_version(path_to_clang: str) -> int:
 
 
 def _get_gcc_major_version(path_to_gcc: str) -> int:
+  # [FUNCTION DOC]
+  # HELPER: version detection for the host gcc compiler.
+  # Same technique as the clang variant: runs gcc as a preprocessor with input text for the GNU
+  # compiler major-version macro and parses the output as an integer. Input: path to a gcc
+  # executable. Returns the major version. Raises a called-process error on failure of gcc and a
+  # value error if the output is not an integer. Logs the command and result.
   """Gets the major version of the gcc at `path_to_gcc`.
 
   Args:
@@ -163,6 +210,11 @@ def _get_gcc_major_version(path_to_gcc: str) -> int:
 
 
 class ArgparseableEnum(enum.Enum):
+  # [CLASS DOC]
+  # HELPER: base class for the choice enums in this script so they work as command line values.
+  # Enumeration base that prints as its member name and can be built from a case-insensitive
+  # string through from_str, which makes it usable as an argument type and with a choices list.
+  # Subclasses only define members.
   """Enum base class with helper methods for working with argparse.
 
   Example usage:
@@ -181,10 +233,17 @@ class ArgparseableEnum(enum.Enum):
   """
 
   def __str__(self):
+    # [FUNCTION DOC]
+    # Returns the member name (e.g. upper-case name), used for display and in argparse messages.
     return self.name
 
   @classmethod
   def from_str(cls, s):
+    # [FUNCTION DOC]
+    # Class method converting a user string to an enum member. Input: string, matched
+    # case-insensitively by upper-casing it and looking it up by member name. Returns the member.
+    # Raises a value error (deliberately, so argparse reports a friendly message) if no member
+    # matches; the original lookup error is intentionally not chained.
     s = s.upper()
     try:
       return cls[s]
@@ -195,6 +254,9 @@ class ArgparseableEnum(enum.Enum):
 
 
 class Backend(ArgparseableEnum):
+  # [CLASS DOC]
+  # Enumeration of the supported target backends: CPU, CUDA, ROCM and SYCL. Selected with the
+  # backend flag and drives which bazelrc options are emitted.
   CPU = enum.auto()
   CUDA = enum.auto()
   ROCM = enum.auto()
@@ -202,24 +264,36 @@ class Backend(ArgparseableEnum):
 
 
 class HostCompiler(ArgparseableEnum):
+  # [CLASS DOC]
+  # Enumeration of host (CPU code) compilers: CLANG and GCC.
   CLANG = enum.auto()
   GCC = enum.auto()
 
 
 class CudaCompiler(ArgparseableEnum):
+  # [CLASS DOC]
+  # Enumeration of compilers for CUDA device code: CLANG and NVCC.
   CLANG = enum.auto()
   NVCC = enum.auto()
 
 
 class RocmCompiler(ArgparseableEnum):
+  # [CLASS DOC]
+  # Enumeration of compilers for ROCm device code; only HIPCC exists.
   HIPCC = enum.auto()
 
 
 class SyclCompiler(ArgparseableEnum):
+  # [CLASS DOC]
+  # Enumeration of compilers for SYCL device code; only ICPX exists.
   ICPX = enum.auto()
 
 
 class OS(ArgparseableEnum):
+  # [CLASS DOC]
+  # Enumeration of host operating systems: LINUX, DARWIN, WINDOWS. Member names mirror the values
+  # the platform system query returns (upper-cased by from_str, so the default string from that
+  # query parses correctly).
   """Modeled after the values returned by `platform.system()`."""
   LINUX = enum.auto()
   DARWIN = enum.auto()
@@ -228,6 +302,12 @@ class OS(ArgparseableEnum):
 
 @dataclasses.dataclass(**_KW_ONLY_IF_PYTHON310)
 class DiscoverablePathsAndVersions:
+  # [CLASS DOC]
+  # Mutable dataclass (keyword-only on Python 3.10+) holding tool paths and versions: clang, gcc,
+  # lld, library path, CUDA version, compute capabilities, cuDNN version and local CUDA, cuDNN and
+  # NCCL paths. All fields default to nothing. Users may preset fields; the method
+  # get_relevant_paths_and_versions fills missing ones by probing the environment. This is the
+  # only place that should read the environment or search the path.
   """Paths to various tools and libraries needed to build XLA.
 
   This class is where all 'stateful' activity should happen, like trying to read
@@ -252,6 +332,17 @@ class DiscoverablePathsAndVersions:
   local_nccl_path: Optional[str] = None
 
   def get_relevant_paths_and_versions(self, config: "XLAConfigOptions"):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: for hermetic clang builds with no clang path given, the major version is
+    # hardcoded to 18 regardless of the real toolchain (see the TODO in the body).
+    # Fills in unset fields of this object, in place, according to the configuration. Input:
+    # config, the options object. Sets the library path from the environment if unset. With the
+    # clang host compiler: if a clang path was given or the build is not hermetic, finds clang
+    # (or dies), determines its major version if unset, and finds the lld linker if unset (may stay
+    # null); otherwise assumes major version 18. With gcc: finds gcc and its version. For the CUDA
+    # backend with CUDA clang and a non-hermetic or explicit clang path, finds clang, and if no
+    # compute capabilities are set, queries them from the GPUs. Returns nothing. Raises a runtime
+    # error when a required tool is missing, plus errors from the version and GPU queries.
     """Gets paths and versions as needed by the config.
 
     Args:
@@ -298,6 +389,12 @@ class DiscoverablePathsAndVersions:
 
 @dataclasses.dataclass(frozen=True, **_KW_ONLY_IF_PYTHON310)
 class XLAConfigOptions:
+  # [CLASS DOC]
+  # Immutable (frozen) dataclass of the user-chosen options: backend, host operating system,
+  # python binary path, host compiler, list of extra compiler options, CUDA compiler, whether NCCL
+  # is used, ROCm compiler and SYCL compiler. Its method to_bazelrc_lines renders them (combined
+  # with discovered paths) into bazelrc lines. Note the compiler options list itself is mutated by
+  # that method despite the frozen dataclass.
   """Represents XLA configuration options."""
 
   backend: Backend
@@ -320,6 +417,21 @@ class XLAConfigOptions:
       self,
       dpav: DiscoverablePathsAndVersions,
   ) -> list[str]:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring mentions a helper named for relevant paths on self; the actual
+    # call is dpav.get_relevant_paths_and_versions. Also the method appends to the shared
+    # compiler_options list, so calling it twice duplicates flags.
+    # Builds the list of bazelrc lines. Input: dpav, a paths-and-versions object, which is first
+    # completed in place by probing the host. Output: list of option strings (not newline
+    # terminated). Adds tag filters starting from the default exclusion of no_oss (plus no_mac on
+    # Darwin, gpu exclusion for CPU, cross exclusions for CUDA/ROCm/SYCL). Emits host compiler
+    # configs and environment variables (clang local config, compiler paths, lld linker path or
+    # gcc path), backend specific configs (CUDA compiler pairs, hermetic CUDA, cuDNN, local
+    # paths, nonccl when NCCL is off; ROCm; SYCL), library path, python path, test environment and
+    # size filters, one copt per compiler option and the tag filter lines. Mutates compiler_options
+    # to add warning suppressions depending on clang version. Raises not-implemented errors for
+    # unsupported compiler combinations (CUDA clang with gcc host, ROCm or SYCL with unsupported
+    # host) and a type error if CUDA compute capabilities remain null.
     """Creates a bazelrc given an XLAConfigOptions.
 
     Necessary paths are provided by the user, or retrieved via
@@ -473,6 +585,15 @@ class XLAConfigOptions:
 
 
 def _parse_args():
+  # [FUNCTION DOC]
+  # HELPER: command line parsing for main.
+  # Builds the argument parser (abbreviations disallowed) with flags for backend (required), os
+  # (default current platform), host, CUDA, ROCm and SYCL compilers, compute capabilities,
+  # python path (default current interpreter), compiler options (comma separated), NCCL switch,
+  # and optional path/version overrides for clang, gcc, library path, lld, CUDA, cuDNN, and local
+  # CUDA/cuDNN/NCCL. Parses the process command line and returns the namespace; invalid values
+  # make argparse print usage and exit.
+  # (Comma-separated values are trimmed and split by an inline helper.)
   """Creates an argparse.ArgumentParser and parses arguments."""
   # pylint: disable=C3001
   comma_separated_list = lambda l: [s.strip() for s in l.split(",")]
@@ -572,6 +693,12 @@ def _parse_args():
 
 
 def main():
+  # [FUNCTION DOC]
+  # Entry point. Configures logging at info level, parses the command line, builds the options and
+  # discoverable-paths objects from the arguments, renders bazelrc lines, and writes them (joined
+  # with newlines, plus a trailing newline) to the bazelrc file next to this script, overwriting
+  # any existing file. Returns nothing (so the script exits with success). Errors from discovery
+  # or unsupported combinations propagate as exceptions.
   # Setup logging
   logging.basicConfig()
   logging.getLogger().setLevel(logging.INFO)
@@ -614,6 +741,10 @@ def main():
 
 
 def is_hermetic_build(backend: Backend, os_host: OS):
+  # [FUNCTION DOC]
+  # Decides whether the build uses the hermetic toolchain. Inputs: the backend and the host
+  # operating system. Returns true when the backend is not ROCm and the host is Linux, otherwise
+  # false. No side effects.
   return (
       backend != Backend.ROCM
       and os_host == OS.LINUX

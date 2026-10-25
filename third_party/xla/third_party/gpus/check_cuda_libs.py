@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Deprecated helper script used by the legacy CUDA configure repository rule to verify that
+# given shared libraries exist on disk and (optionally) that their SONAME matches the file name.
+# Run as a script with pairs of arguments: library path and the word True or False for whether
+# to check the SONAME. Exposes a configuration error type, a per-library check and main, which
+# prints the verified paths one per line on success or writes the error to standard error and
+# exits with status 1. No import-time side effects.
+# HELPER: support script for the legacy CUDA configure rule.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,14 +41,28 @@ import sys
 
 
 class ConfigError(Exception):
+  # [CLASS DOC]
+  # Exception type signalling a configuration problem: a missing library, a SONAME mismatch or a
+  # wrong argument count. Carries only the message.
   pass
 
 
 def _is_windows():
+  # [FUNCTION DOC]
+  # HELPER: platform test for check_cuda_lib.
+  # Returns true if the platform system name reports Windows, otherwise false.
   return platform.system() == "Windows"
 
 
 def check_cuda_lib(path, check_soname=True):
+  # [FUNCTION DOC]
+  # Verifies one library. Inputs: path (string) of the library file and check_soname (boolean,
+  # default true). Raises ConfigError if the path is not an existing regular file. If SONAME
+  # checking is requested, the objdump tool is found on the search path and the platform is not
+  # Windows, runs objdump to print the private headers, collects the last token of each SONAME
+  # line, and raises ConfigError if none equals the file's base name. If objdump is missing or on
+  # Windows, the SONAME check is silently skipped. Returns nothing; side effect: runs a
+  # subprocess (which may raise a called-process error on failure).
   """Tests if a library exists on disk and whether its soname matches the filename.
 
   Args:
@@ -64,6 +86,13 @@ def check_cuda_lib(path, check_soname=True):
 
 
 def main():
+  # [FUNCTION DOC]
+  # Script entry point. Reads the process arguments (excluding the program name), which must come
+  # in pairs of library path and a flag word; the flag enables the SONAME check only when it is
+  # exactly the word True. Checks each library in order and, if all pass, prints the paths joined
+  # by line separators to standard output. On a configuration error (including an odd number of
+  # arguments) writes the message (no trailing newline) to standard error and exits with status 1.
+  # Returns nothing otherwise.
   try:
     args = [argv for argv in sys.argv[1:]]
     if len(args) % 2 == 1:

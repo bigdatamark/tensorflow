@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Lint tool verifying that every Bazel tag used in XLA build rules is documented. Holds a
+# mapping from known tag names to a documentation string or link, a line parser that extracts
+# tags from a rule's tag-list line of Bazel query build output, and a main entry point that reads
+# the query output from standard input. Raises an error listing undocumented tags and logs
+# documented-but-unused tags. Import-time side effects: defines the mapping only.
 # Copyright 2024 The OpenXLA Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -105,6 +111,14 @@ _TAGS_TO_DOCUMENTATION_MAP = {
 
 
 def get_tags_from_line(line: str) -> Set[str]:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: parsing uses fixed character offsets (skipping the first 10 characters and last 3)
+  # that assume a specific indentation and trailing punctuation of the query output; other
+  # layouts would produce wrong tags.
+  # Extracts tag names from one line of query output. Input: a text line. If the stripped line
+  # starts with the tags assignment, takes the inner portion by the fixed offsets and, when it is
+  # non-blank, splits on comma-space and strips quote and dash characters from each piece.
+  # Returns the set of tags; an empty set for any other line or an empty list. No side effects.
   if line.strip().startswith("tags = "):
     tags_list = line[10:-3]  # "tag1", "tag2"
     if tags_list.strip():
@@ -116,6 +130,13 @@ def get_tags_from_line(line: str) -> Set[str]:
 
 
 def main():
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: if standard input is empty, the union is called with no arguments and fails with
+  # a type error instead of reporting no tags.
+  # Entry point. Sets up info-level logging, reads standard input line by line, unions the tags
+  # found, and logs them. Raises a value error naming any tags missing from the documentation
+  # mapping (asking to document them in this module). Logs an informational message listing
+  # documented tags that were not seen. Returns nothing.
   logging.basicConfig()
   logging.getLogger().setLevel(logging.INFO)
 

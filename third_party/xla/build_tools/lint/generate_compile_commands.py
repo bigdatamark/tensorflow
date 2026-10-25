@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Command line tool that reads the JSON output of a Bazel action query for C++ compile actions
+# from standard input and writes a compile commands database (compile_commands.json) into the XLA
+# source root, for use by language servers and clang-tidy. Exposes the CompileCommand record and
+# extract_compile_commands, plus a main entry point. Requires prior builds so generated headers
+# exist. Import-time side effects: defines constants (root directory, disallowed argument set).
+# Running as a script may create an external symlink in the source root and writes the database.
 # Copyright 2023 The OpenXLA Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -39,6 +46,10 @@ _XLA_SRC_ROOT = pathlib.Path(__file__).absolute().parent.parent.parent
 
 @dataclasses.dataclass
 class CompileCommand:
+  # [CLASS DOC]
+  # Dataclass for one compilation: file is the source file path being compiled and arguments is
+  # the full list of command arguments. Built by the from_args_list alternative constructor from
+  # query output; serialized by to_dumpable_json into an entry of the database.
   """Represents a compilation command with options on a specific file."""
 
   file: str
@@ -46,6 +57,15 @@ class CompileCommand:
 
   @classmethod
   def from_args_list(cls, args_list: list[str]) -> "CompileCommand":
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it returns a ClangTidyCommand, but it returns an instance of
+    # this class; and if no argument ends with the C++ source suffix, the file is silently null.
+    # Alternative constructor. Input: args_list, the list of argument strings of a compile action.
+    # Drops arguments listed as disallowed (a flag that breaks clang-tidy). Records the last
+    # argument ending in the C++ source suffix as the file. Each remaining argument is split on
+    # spaces and the pieces appended individually (so generated commands containing spaces are not
+    # passed as one quoted word). Returns a new instance with the file and filtered arguments.
+    # Pure function.
     """Alternative constructor which uses the args_list from `bazel aquery`.
 
     This collects arguments and the file being run on from the output of
@@ -76,6 +96,10 @@ class CompileCommand:
     return cls(cc_file, filtered_args)
 
   def to_dumpable_json(self, directory: str) -> _JSONDict:
+    # [FUNCTION DOC]
+    # Converts the command to a mapping suitable for the JSON database. Input: directory, the
+    # working directory string to record. Returns a mapping with the keys for directory, file and
+    # arguments. No side effects.
     return {
         "directory": directory,
         "file": self.file,
@@ -86,6 +110,11 @@ class CompileCommand:
 def extract_compile_commands(
     parsed_aquery_output: _JSONDict,
 ) -> list[CompileCommand]:
+  # [FUNCTION DOC]
+  # Builds compile command records from parsed query output. Input: a mapping (parsed JSON) with
+  # an actions list, each having an arguments list. Returns one command per action in order.
+  # Raises a key error if the actions key or an action's arguments key is missing. No side
+  # effects.
   """Gathers compile commands to run from `bazel aquery` JSON output.
 
   Arguments:
@@ -105,6 +134,12 @@ def extract_compile_commands(
 
 
 def main():
+  # [FUNCTION DOC]
+  # Entry point. Configures info-level logging; if the source root has no external entry, creates
+  # a symbolic link to the Bazel output external directory so headers resolve. Reads all of
+  # standard input as JSON, extracts the commands and writes the database file in the source root
+  # (overwriting), with each entry's directory set to the source root. Returns nothing. Raises a
+  # JSON decode error for bad input, key errors for unexpected shape, or file errors on failures.
   # Setup logging
   logging.basicConfig()
   logging.getLogger().setLevel(logging.INFO)

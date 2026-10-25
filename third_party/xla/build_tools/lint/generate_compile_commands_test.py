@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit tests for CompileCommand construction in the generate_compile_commands tool: extracting the
+# source file and filtering disallowed arguments. Runs under the absl test runner (note this file
+# has no direct main block, so it relies on the build system runner).
 # Copyright 2024 The OpenXLA Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,8 +24,13 @@ CompileCommand = generate_compile_commands.CompileCommand
 
 
 class CompileCommandsTest(absltest.TestCase):
+  # [CLASS DOC]
+  # Tests for the from_args_list constructor of CompileCommand. No shared fixtures.
 
   def test_command_from_args_list(self):
+    # [FUNCTION DOC]
+    # Scenario: a typical gcc compile argument list including a source file. Asserts the file is
+    # the source path and the arguments are unchanged.
     arguments = [
         "/usr/bin/gcc",
         "-DTEST_DEFINE",
@@ -38,6 +47,9 @@ class CompileCommandsTest(absltest.TestCase):
     self.assertEqual(command.arguments, arguments)
 
   def test_command_from_args_list_with_disallowed_option(self):
+    # [FUNCTION DOC]
+    # Scenario: an argument list containing the disallowed canonical-system-headers flag. Asserts
+    # the file is still found and the flag is removed from the arguments, leaving the rest.
     arguments = [
         "/usr/bin/gcc",
         "-DTEST_DEFINE",

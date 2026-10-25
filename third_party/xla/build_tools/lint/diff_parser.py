@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Helper module for the lint tools that turns unified git diff text into structured hunk records.
+# Exposes the Hunk record (file, start line, length, raw lines) with an added-lines iterator,
+# a generic batching utility, a diff parser (parse_hunks) and a function that runs git diff
+# against the main branch (get_git_diff_stdout). Used by the check_contents lint tool.
+# Import-time side effects: defines a type variable only.
+# HELPER: support module for the lint command line tools.
 # Copyright 2023 The OpenXLA Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +30,11 @@ _T = TypeVar("_T")
 
 @dataclasses.dataclass(frozen=True)
 class Hunk:
+  # [CLASS DOC]
+  # Immutable (frozen dataclass) record of one diff hunk: file is the path of the changed file in
+  # the new version, start is the first line number in the new file, length is the number of new
+  # file lines the header reports, and lines is the list of raw hunk lines (each prefixed with a
+  # plus, minus or space marker). Created by parse_hunks; consumed by check_contents.
   """Represents a hunk of a diff."""
 
   file: str
@@ -31,6 +43,12 @@ class Hunk:
   lines: list[str]
 
   def added_lines(self) -> Generator[tuple[int, str], None, None]:
+    # [FUNCTION DOC]
+    # Generator over the lines added by this hunk. Takes no inputs. Walks the raw lines tracking
+    # the line number in the new file, starting at the hunk start: a line beginning with a plus
+    # yields a pair of its number and its text without the plus, then advances the counter; lines
+    # beginning with a minus are skipped without advancing; all other (context) lines advance the
+    # counter. No side effects.
     current_line_no = self.start
     for line in self.lines:
       if line.startswith("+"):
@@ -45,6 +63,13 @@ class Hunk:
 def batch(
     iterable: Iterable[_T], n: int
 ) -> Generator[tuple[_T, ...], None, None]:
+  # [FUNCTION DOC]
+  # HELPER: chunking utility for parse_hunks (stand-in for a standard library batching function).
+  # KNOWN ISSUE: a final partial chunk (fewer than n items) is silently dropped, because the
+  # failure of the inner list construction ends the generator before yielding it.
+  # Generator splitting an iterable into tuples of exactly n items. Inputs: iterable and n (chunk
+  # size, positive integer). Yields tuples in order; stops when the iterable runs out. Consumes
+  # the iterable. No exceptions are expected for n of at least one.
   """Splits an iterable into chunks of size n.
 
   TODO(ddunleavy): once python 3.12 is available, use itertools.batch.
@@ -70,6 +95,16 @@ def batch(
 
 
 def parse_hunks(diff: str) -> list[Hunk]:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the hunk split call passes the multiline flag as the third positional argument,
+  # which is the maximum number of splits, not flags; so at most 8 splits happen per file
+  # (limiting how many hunks per file are parsed) and the flag has no regex effect.
+  # Parses unified git diff text into hunk records. Input: diff, the raw git diff output string.
+  # Splits the text by per-file header patterns (capturing the new file name, tolerating an
+  # optional file mode line), then splits each file's text by hunk headers capturing the new
+  # start line and length. Each hunk body is split on newlines (dropping one trailing empty
+  # element) to form the lines. Returns a list of Hunk records in order (empty if no diff found).
+  # Pure function; raises a value error if captured numbers fail integer conversion.
   """Parses a diff into hunks.
 
   Arguments:
@@ -106,6 +141,11 @@ def parse_hunks(diff: str) -> list[Hunk]:
 
 
 def get_git_diff_stdout() -> str:
+  # [FUNCTION DOC]
+  # Runs the version control diff command comparing the origin main branch to HEAD, in the current
+  # working directory, and returns its standard output as text. No inputs. Raises a
+  # called-process error if the command fails (for example no such remote branch or not a
+  # repository). Side effect: spawns a subprocess.
   """Run git diff with appropriate arguments and capture stdout as a str."""
   proc = subprocess.run(
       ["git", "diff", "origin/main", "HEAD"],

@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Command line lint tool that inspects the current git diff and fails if a prohibited regular
+# expression appears on an added line. Exposes a result record type (RegexLocation), a path
+# filter for diff hunks (filter_hunks_by_path), the matcher (check_diffs) and a main entry point.
+# It relies on the sibling diff_parser module to obtain and parse the diff. Uses only the
+# standard library so it can run on a vanilla CI runner. No import-time side effects; running as
+# a script exits with status 1 when violations are found, otherwise 0.
 # Copyright 2023 The OpenXLA Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +36,10 @@ from build_tools.lint import diff_parser
 
 @dataclasses.dataclass
 class RegexLocation:
+  # [CLASS DOC]
+  # Simple dataclass record describing one prohibited match: the file path, line number of the
+  # added line, the full line text and the exact text matched. Instances are created by
+  # check_diffs and compared by value (dataclass equality) in tests.
   """Path and line where a prohibited regex was found.
 
   Attributes:
@@ -50,6 +61,15 @@ def filter_hunks_by_path(
     path_regexes: list[str],
     path_regex_exclusions: list[str],
 ) -> list[diff_parser.Hunk]:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the result is a list of file diffs, but it returns a list of
+  # hunk objects; it also claims every path is matched by default, which is true only when the
+  # inclusion list is empty.
+  # Filters diff hunks by file path. Inputs (keyword-only lists): path_regexes, patterns of which
+  # at least one must match the hunk's file path (an empty list means match everything), and
+  # path_regex_exclusions, patterns of which none may match. Matching is a search anywhere in the
+  # path. Returns a new list of the hunks that pass, in original order. No side effects; bad
+  # patterns raise a regex compile error.
   """Filters files according to path_regexes.
 
   If a file matches both a path_regex and a path_regex_exclusion, then
@@ -74,11 +94,17 @@ def filter_hunks_by_path(
   path_regexes = [re.compile(regex) for regex in path_regexes]
 
   def should_include(path: str) -> bool:
+    # [FUNCTION DOC]
+    # HELPER: inclusion test for filter_hunks_by_path.
+    # Returns true if any compiled inclusion pattern matches somewhere in the path.
     return any(regex.search(path) for regex in path_regexes)
 
   path_regex_exclusions = [re.compile(regex) for regex in path_regex_exclusions]
 
   def should_exclude(path: str) -> bool:
+    # [FUNCTION DOC]
+    # HELPER: exclusion test for filter_hunks_by_path.
+    # Returns true if any compiled exclusion pattern matches somewhere in the path.
     return any(regex.search(path) for regex in path_regex_exclusions)
 
   return [
@@ -94,6 +120,13 @@ def check_diffs(
     prohibited_regex: str,
     suppression_regex: str | None = None,
 ) -> list[RegexLocation]:
+  # [FUNCTION DOC]
+  # Scans added lines of diff hunks for a prohibited pattern. Inputs: hunks (iterable of parsed
+  # hunk objects), prohibited_regex (pattern string) and optional suppression_regex (pattern
+  # string or nothing). For each added line (with its line number) not containing the suppression
+  # pattern, every non-overlapping match of the prohibited pattern yields a location record.
+  # Returns the list of RegexLocation in encounter order (empty when clean). Raises a regex
+  # compile error for invalid patterns. No other side effects.
   """Checks FileDiffs for prohibited regexes.
 
   Arguments:
@@ -112,6 +145,9 @@ def check_diffs(
     suppression_regex = re.compile(suppression_regex)
 
   def should_not_suppress(line) -> bool:
+    # [FUNCTION DOC]
+    # HELPER: suppression test for check_diffs.
+    # Returns true if there is no suppression pattern or it does not occur in the given line text.
     if suppression_regex:
       return not suppression_regex.search(line)
     return True
@@ -131,6 +167,14 @@ def check_diffs(
 
 
 def main(argv: Sequence[str]):
+  # [FUNCTION DOC]
+  # Command line entry point. Input: argv, the full argument list whose first element (program
+  # name) is ignored. Flags: optional lists of path patterns and exclusion patterns, a required
+  # prohibited pattern, an optional suppression pattern and a required failure message. Gets the
+  # git diff output, parses it into hunks, filters by path and checks for prohibited matches. On
+  # matches, logs an error per match (location, matched text and line) plus the failure message
+  # and exits the process with status 1; otherwise logs an info message and exits with status 0.
+  # Never returns normally. Invalid arguments make argparse exit with an error.
   parser = argparse.ArgumentParser(
       description="Check `git diff` for prohibited regexes."
   )
