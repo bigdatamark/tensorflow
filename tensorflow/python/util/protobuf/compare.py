@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# HELPER: test-support utilities for comparing protocol buffer messages.
+# Exposes: a float closeness check treating equal infinities and any two NaNs as equal; a routine
+# that replaces approximately equal floats of the actual message by the expected ones so a text
+# comparison ignores tiny differences; a test assertion function (assertProtoEqual) that
+# compares two messages (or a text-format string and a message) and fails the test with a readable
+# multi-line diff; a normalizer for numeric field types and precision; a structural equality
+# function for messages (ProtoEq) with ordered list semantics for repeated fields; and a mixin
+# class that exposes the assertion as a test-case method. No import-time side effects beyond
+# importing the protobuf libraries.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -70,6 +80,12 @@ from google.protobuf import text_format
 
 # TODO(alankelly): Distinguish between signalling and quiet NaNs.
 def isClose(x, y, relative_tolerance):  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says relative_tolerance is optional and that strings are compared
+  # when it is missing; the function requires it and never compares strings.
+  # Inputs: x and y, floats; relative_tolerance, float multiplier. Returns true if both are NaN
+  # (a NaN and a non-NaN give false), if either is infinite and they are equal, or otherwise when
+  # the absolute difference is at most the tolerance times the larger absolute value. Pure.
   """Returns True if x is close to y given the relative tolerance or if x and y are both inf, both -inf, or both NaNs.
 
   This function does not distinguish between signalling and non-signalling NaN.
@@ -93,6 +109,14 @@ def isClose(x, y, relative_tolerance):  # pylint: disable=invalid-name
 
 
 def checkFloatEqAndReplace(self, expected, actual, relative_tolerance):  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # HELPER: pre-processing step for proto comparison with a float tolerance.
+  # Inputs: self, the test case (unused except for passing along); expected and actual, protobuf
+  # messages; relative_tolerance, float. Walks the set fields of both messages pairwise (assumes the
+  # same fields are set in the same order), and for float and double fields (single or repeated)
+  # overwrites the actual value with the expected one whenever they are close. Recurses into
+  # nested messages, groups and map values that are messages. Returns nothing. Side effect:
+  # mutates the actual message in place; values that are not close are left untouched.
   """Recursively replaces the floats in actual with those in expected iff they are approximately equal.
 
   This is done because string equality will consider values such as 5.0999999999
@@ -170,6 +194,18 @@ def assertProtoEqual(
     msg=None,
     relative_tolerance=None,
 ):  # pylint: disable=invalid-name(
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the signature line ends with a stray opening parenthesis inside the lint comment.
+  # Test assertion: fails the test with a readable diff if two protos differ.
+  # Inputs: self, the test case; a, a message or a text-format string (parsed using the class of b
+  # and the default descriptor pool); b, a message; check_initialized, whether to fail when either
+  # message has missing required fields (default true); normalize_numbers, whether to normalize
+  # numeric field types and precision first (default false, mutates both messages); msg, optional
+  # failure message; relative_tolerance, optional float enabling tolerant float comparison (mutates
+  # a). Compares the text-format renderings: a multi-line equality assertion when both are short,
+  # otherwise a unified diff of the lines; a failure is raised when the diff is non-empty.
+  # Returns nothing; raises the test failure exception on initialization errors or differences.
+  # Parse errors from the text parser propagate.
   """Fails with a useful error if a and b aren't equal.
 
   Comparison of repeated fields matches the semantics of
@@ -222,6 +258,14 @@ def assertProtoEqual(
 
 
 def NormalizeNumberFields(pb):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says floats are normalized to five digits of precision; the code
+  # rounds single-precision floats to six digits and doubles to seven, and 64-bit integers are
+  # converted with the same plain integer conversion as 32-bit ones (no long type distinction).
+  # Input: pb, a protobuf message. Converts the set integer, enumeration, float and double fields
+  # (single or repeated) to normalized Python numbers, rewriting the field values, and recurses into
+  # nested messages, groups and map fields whose values are messages. Returns the same message
+  # object, modified in place.
   """Normalizes types and precisions of number fields in a protocol buffer.
 
   Due to subtleties in the python protocol buffer implementation, it is possible
@@ -290,10 +334,17 @@ def NormalizeNumberFields(pb):
 
 
 def _IsMap(value):
+  # [FUNCTION DOC]
+  # HELPER: structural check used by ProtoEq. Input: value, any object. Returns true if it is a
+  # mapping (including protobuf map containers), else false.
   return isinstance(value, collections_abc.Mapping)
 
 
 def _IsRepeatedContainer(value):
+  # [FUNCTION DOC]
+  # HELPER: structural check used by ProtoEq. Input: value, any object. Returns false for text
+  # strings and for anything that cannot be iterated; true for any other iterable (including
+  # repeated protobuf fields, lists, and byte strings).
   if isinstance(value, str):
     return False
   try:
@@ -304,6 +355,12 @@ def _IsRepeatedContainer(value):
 
 
 def ProtoEq(a, b):
+  # [FUNCTION DOC]
+  # Recursive equality of protobuf messages. Inputs: a and b, messages, maps, repeated containers
+  # or primitive values. Messages are viewed as mappings from field number to value, repeated
+  # fields as mappings from element index to value; equal when both have exactly the same keys and
+  # all values are equal recursively; non-container values are compared with plain equality.
+  # Returns true or false. Pure, no side effects.
   """Compares two proto2 objects for equality.
 
   Recurses into nested messages. Uses list (not set) semantics for comparing
@@ -317,6 +374,11 @@ def ProtoEq(a, b):
     `True` if the messages are equal.
   """
   def Format(pb):
+    # [FUNCTION DOC]
+    # HELPER: nested helper of ProtoEq that converts a value to a comparable form. Input: pb, a
+    # message, map, repeated container or primitive. Returns a mapping from field number to value
+    # for messages (set fields only), a plain mapping copy for maps, a mapping from index to value
+    # for repeated containers, otherwise the input unchanged.
     """Returns a dictionary or unchanged pb bases on its type.
 
     Specifically, this function returns a dictionary that maps tag
@@ -359,6 +421,9 @@ def ProtoEq(a, b):
 
 
 class ProtoAssertions(object):
+  # [CLASS DOC]
+  # Mixin for unit test classes (placed before the test-case base class) that adds a proto equality
+  # assertion method delegating to the module-level assertion function. No state of its own.
   """Mix this into a googletest.TestCase class to get proto2 assertions.
 
   Usage:
@@ -374,4 +439,9 @@ class ProtoAssertions(object):
 
   # pylint: disable=invalid-name
   def assertProtoEqual(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Method form of the module-level assertion. Inputs: any positional and keyword arguments,
+    # passed through unchanged with the test case as the first argument (so the arguments are the
+    # expected/actual messages and options described for the module-level function). Returns
+    # nothing; fails the test on difference, exactly like the function it delegates to.
     return assertProtoEqual(self, *args, **kwargs)

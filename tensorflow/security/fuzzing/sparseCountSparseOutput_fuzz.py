@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Atheris-based Python API fuzzer for the raw operation SparseCountSparseOutput. Standalone fuzz
+# target script: the entry function builds random sparse-tensor components (indices, values,
+# dense shape, weights) plus fuzzed options and calls the operation, ignoring invalid-argument
+# errors. The main function registers the entry function with Atheris and starts fuzzing.
+# Importing instruments the imports of sys, the sibling helper module python_fuzzing and TensorFlow.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +28,12 @@ with atheris.instrument_imports():
 
 @atheris.instrument_func
 def TestOneInput(input_bytes):
+  # [FUNCTION DOC]
+  # Fuzz entry function called by Atheris. Input: input_bytes, the raw fuzzer bytes. Draws four
+  # small shapes and a seed, builds random int64 tensors for indices, values, dense shape and
+  # weights, draws a binary-output flag, min and max lengths and a name, then calls
+  # SparseCountSparseOutput, discarding the outputs. Invalid-argument errors are swallowed; others
+  # propagate as findings. Returns nothing.
   """Test randomized integer fuzzing input for tf.raw_ops.SparseCountSparseOutput."""
   fh = FuzzingHelper(input_bytes)
 
@@ -59,6 +71,11 @@ def TestOneInput(input_bytes):
 
 
 def main():
+  # [FUNCTION DOC]
+  # Fuzz program entry point: registers the fuzz entry function with Atheris, with Python coverage
+  # collection enabled and the process command-line arguments passed through, then starts the
+  # fuzzing loop. Takes no inputs and returns nothing; the fuzzing loop normally runs until stopped
+  # or a crash is found, and the process exit is controlled by Atheris.
   atheris.Setup(sys.argv, TestOneInput, enable_python_coverage=True)
   atheris.Fuzz()
 

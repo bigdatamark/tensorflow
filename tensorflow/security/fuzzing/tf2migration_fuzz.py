@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Atheris-based Python API fuzzer that compares version 1 and version 2 variants of the same
+# public APIs (angle and assert-integer) for identical results or identical errors. Standalone
+# fuzz target script; the entry function re-raises on mismatches after printing diagnostics.
+# The main function registers the entry function with Atheris and starts fuzzing. Importing
+# instruments the imports of sys, the sibling helper module python_fuzzing and TensorFlow.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +28,17 @@ with atheris.instrument_imports():
 
 @atheris.instrument_func
 def TestOneInput(input_bytes):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the final type/argument comparison only runs when both results are truthy, so a
+  # case where just one of the two versions raises is not detected.
+  # Fuzz entry function called by Atheris. Input: input_bytes, the raw fuzzer bytes. Two
+  # differential checks. (1) Builds a random float32 or float64 tensor and compares the version 2
+  # angle function with the version 1 one under the same name; on any mismatch it prints the
+  # inputs and outputs and re-raises. (2) Builds a tensor of a random dtype (strings are replaced
+  # by a constant string tensor if random generation fails), calls version 2 and version 1
+  # assert-integer capturing any exception as the result, and asserts that when both results are
+  # truthy they have the same type and arguments. Side effect: prints diagnostics. Raises an
+  # assertion error on divergence. Returns nothing.
   """Test randomized integer fuzzing input for v1 vs v2 APIs."""
   fh = FuzzingHelper(input_bytes)
 
@@ -76,6 +93,11 @@ def TestOneInput(input_bytes):
 
 
 def main():
+  # [FUNCTION DOC]
+  # Fuzz program entry point: registers the fuzz entry function with Atheris, with Python coverage
+  # collection enabled and the process command-line arguments passed through, then starts the
+  # fuzzing loop. Takes no inputs and returns nothing; the fuzzing loop normally runs until stopped
+  # or a crash is found, and the process exit is controlled by Atheris.
   atheris.Setup(sys.argv, TestOneInput, enable_python_coverage=True)
   atheris.Fuzz()
 

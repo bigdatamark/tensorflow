@@ -1,3 +1,15 @@
+# [MODULE DOC]
+# KNOWN ISSUE: the Python 2 branch (the else branch of the interpreter-version check) is dead code
+# because it is only reached when the major version is not 3; only the Python 3 tables are used.
+# Provides PythonObjectToProtoVisitor, a visitor that is called for every module/class found while
+# walking the public TensorFlow Python API, and records a description of each one as an API-object
+# protocol buffer (module with members, class with base classes and members, or message class with
+# its descriptor). The collected protos are used to generate and compare golden API files.
+# Also holds module-private tables that normalize Python-version-specific type names, a table of
+# special-case objects that are skipped or hard-coded, and helpers that produce address-free
+# argument-spec strings, parse pybind11-style docstring signatures and trim method resolution
+# orders. Import-time side effect: builds the normalization tables, depending on the interpreter
+# version.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -72,6 +84,11 @@ if sys.version_info.major == 3:
   }
 
   def _SkipMember(cls, member):
+    # [FUNCTION DOC]
+    # HELPER: filter used while adding members to a proto (Python 3 variant).
+    # Inputs: cls, the object whose members are being listed; member, a member name. Returns true
+    # when the member should be left out: the name of the exception-chaining method, or the name or
+    # value attribute when cls is an enumeration class. Returns false otherwise. No side effects.
     return (member == 'with_traceback' or member in ('name', 'value') and
             isinstance(cls, type) and issubclass(cls, enum.Enum))
 else:
@@ -85,6 +102,11 @@ else:
   }
 
   def _SkipMember(cls, member):  # pylint: disable=unused-argument
+    # [FUNCTION DOC]
+    # HELPER: member filter (Python 2 variant).
+    # KNOWN ISSUE: dead code, only reached if the interpreter major version is not 3.
+    # Inputs: cls and member are ignored. Always returns
+    # false, so no member is skipped.
     return False
 
 
@@ -110,14 +132,33 @@ if sys.version_info.major == 3 and sys.version_info.minor >= 8:
 
 
 def _NormalizeType(ty):
+  # [FUNCTION DOC]
+  # HELPER: maps a type description string to its canonical golden-file spelling.
+  # Input: ty, a string such as the text form of a type. Returns the replacement from the type
+  # normalization table when present, otherwise ty unchanged. No side effects.
   return _NORMALIZE_TYPE.get(ty, ty)
 
 
 def _NormalizeIsInstance(ty):
+  # [FUNCTION DOC]
+  # HELPER: maps a class description string used in an is-instance list to its canonical spelling.
+  # Input: ty, a string. Returns the replacement from the is-instance normalization table when
+  # present (for example, nested classes reported under their public names), else ty unchanged.
   return _NORMALIZE_ISINSTANCE.get(ty, ty)
 
 
 def _SanitizedArgSpec(obj):
+  # [FUNCTION DOC]
+  # HELPER: builds a stable text form of a routine's argument specification for golden files.
+  # KNOWN ISSUE: the docstring says it returns a sanitized list of base classes and calls the
+  # parameter something to create an argspec of; it actually returns one string describing the
+  # argument names, variadic and keyword argument names, and defaults of a routine.
+  # Input: obj, a Python function or method. Output: a string of the form listing the argument
+  # names, the variadic-argument name, the keyword-argument name, and the defaults (as a list of
+  # strings, or the word None when there are none, in which case the text has no trailing comma).
+  # Defaults whose text contains a memory address are shortened to the part before the address
+  # followed by an instance marker so output is reproducible. May propagate errors from the
+  # argument inspection when obj is not introspectable.
   """Get an ArgSpec string that is free of addresses.
 
   We have callables as function arg defaults. This results in addresses in
@@ -156,6 +197,14 @@ def _SanitizedArgSpec(obj):
 
 
 def _GenerateArgsSpec(doc):
+  # [FUNCTION DOC]
+  # HELPER: extracts quoted argument names from a signature at the start of a docstring.
+  # Input: doc, a docstring text. Finds the first parenthesized group, splits it on commas and
+  # takes the first word of each part as an argument name. Returns the names, each in single
+  # quotes, joined by comma and space; returns nothing/null if there is no parenthesized group or
+  # any part has no word characters.
+  # KNOWN ISSUE: an empty parameter list yields a single empty part, so zero-argument signatures
+  # return null; commas inside nested brackets or default values are also split incorrectly.
   """Generate args spec from a method docstring."""
   args_spec = []
   doc = re.search(r'\(.*\)', doc)
@@ -173,6 +222,14 @@ def _GenerateArgsSpec(doc):
 
 
 def _ParseDocstringArgSpec(doc):
+  # [FUNCTION DOC]
+  # HELPER: builds an argument-spec string for native-extension functions from their docstring.
+  # KNOWN ISSUE: the docstring says null is returned on failure, but the function raises a value
+  # error instead; it also raises a type error (not handled by its caller) if doc is null.
+  # Input: doc, a docstring that should begin with a function signature in pybind11 style.
+  # Output: a string naming the argument names with no variadic, keyword or default information.
+  # Raises a value error when the docstring does not start with a signature or the names cannot
+  # be extracted. No side effects.
   """Get an ArgSpec string from a method docstring.
 
   This method is used to generate argspec for C extension functions that follow
@@ -201,6 +258,14 @@ def _ParseDocstringArgSpec(doc):
 
 
 def _SanitizedMRO(obj):
+  # [FUNCTION DOC]
+  # HELPER: computes a version-robust list of base class names for a class.
+  # KNOWN ISSUE: the docstring describes obj as a routine whose argspec is wanted; it is actually
+  # a class whose method resolution order is listed.
+  # Input: obj, a class. Walks its method resolution order, skipping classes created by the
+  # deprecated-alias decorator, appending the normalized text of each class, and stopping after
+  # the first class that is neither a TensorFlow nor a Keras class, or after the test stub-out
+  # class. Returns the list of strings. No side effects.
   """Get a list of superclasses with minimal amount of non-TF classes.
 
   Based on many parameters like python version, OS, protobuf implementation
@@ -237,30 +302,63 @@ def _SanitizedMRO(obj):
 
 
 def _IsProtoClass(obj):
+  # [FUNCTION DOC]
+  # HELPER: tells whether an object is a protocol buffer message class. Input: obj, any object.
+  # Returns true when it is a class deriving from the protobuf message base class, else false.
   """Returns whether the passed obj is a Protocol Buffer class."""
   return isinstance(obj, type) and issubclass(obj, message.Message)
 
 
 class PythonObjectToProtoVisitor:
+  # [CLASS DOC]
+  # Visitor object for the API traversal utility: instances are called once per visited module or
+  # class with its path, the object and its children, and accumulate one API-object proto per
+  # visited path. State: a mapping from library path (with the default root prefix) to proto, and
+  # the root prefix (default is the TensorFlow package name). Retrieve results with GetProtos.
   """A visitor that summarizes given python objects as protobufs."""
 
   def __init__(self, default_path='tensorflow'):
+    # [FUNCTION DOC]
+    # Constructor. Input: default_path, the root path prefix prepended to every visited object's
+    # path (default is the TensorFlow package name). Creates an empty mapping of protos keyed by
+    # path. Returns nothing.
     # A dict to store all protocol buffers.
     # Keyed by "path" to the object.
     self._protos = {}
     self._default_path = default_path
 
   def GetProtos(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it returns a list, but it returns the mapping from path to
+    # API-object proto, and it is the live internal mapping (not a copy).
+    # No inputs. Returns everything recorded so far by visits.
     """Return the list of protos stored."""
     return self._protos
 
   def __call__(self, path, parent, children):
+    # [FUNCTION DOC]
+    # Visit callback. Inputs: path, dotted path of the visited object relative to the root (may be
+    # empty for the root); parent, the visited module or class (unwrapped from decorators);
+    # children, a list of (name, object) pairs. Builds the full library path, then, unless the path
+    # is a fully-skipped special case, records into the protos mapping: a module proto with its
+    # public members, a message-class proto with the message descriptor, or a class proto with its
+    # normalized base classes and members. Special-case tables can drop or hard-code members.
+    # Anything else logs an error and records nothing. Returns nothing; mutates the mapping.
     # The path to the object.
     lib_path = self._default_path + '.' + path if path else self._default_path
     _, parent = tf_decorator.unwrap(parent)
 
     # A small helper method to construct members(children) protos.
     def _AddMember(member_name, member_obj, proto):
+      # [FUNCTION DOC]
+      # HELPER: adds one child to the proto under construction (nested helper of the visit callback).
+      # Inputs: member_name, the child name; member_obj, the child object (decorators are
+      # unwrapped); proto, the module or class proto to extend. Skips members rejected by the
+      # version-specific filter and hidden-API attributes. Only public names and the constructor
+      # are kept. Routines get a method entry with an argument spec (from code inspection, or parsed
+      # from the docstring for native functions, left empty on parse failure); other objects get a
+      # member entry with a normalized type text (modules get a fixed module type text). Returns
+      # nothing; mutates proto.
       """Add the child object to the object being constructed."""
       _, member_obj = tf_decorator.unwrap(member_obj)
       if (_SkipMember(parent, member_name) or

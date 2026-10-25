@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: type-annotation helper module.
+# Provides a marker base class for dtype annotations and a private factory that creates one
+# marker class per TensorFlow dtype (e.g. floating point, integer, quantized, float8, int4, bool,
+# string, resource, variant), each carrying the wrapped dtype in a class attribute. The created
+# classes are exposed as module-level names so they can be used in function annotations.
+# Import-time side effect: builds all the classes eagerly; it imports TensorFlow's dtypes module.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,10 +24,19 @@ from tensorflow.python.framework import dtypes as _dtypes
 
 
 class DTypeAnnotation:
+  # [CLASS DOC]
+  # Marker base class for dtype annotations. Has no behavior or state of its own; classes created
+  # by the private factory below derive from it and expose the wrapped TensorFlow dtype through a
+  # class attribute, so annotated code can tell them apart from ordinary types.
   pass
 
 
 def _create_dtype_wrapper(name, underlying_dtype: _dtypes.DType):
+  # [FUNCTION DOC]
+  # HELPER: factory used to build the module-level dtype marker classes.
+  # Inputs: name, the new class name as text; underlying_dtype, the TensorFlow dtype object to wrap.
+  # Returns a newly created class with that name, deriving from the marker base class, whose class
+  # attribute underlying_dtype holds the given dtype. No other side effects.
   return type(name, (DTypeAnnotation,), {"underlying_dtype": underlying_dtype})
 
 

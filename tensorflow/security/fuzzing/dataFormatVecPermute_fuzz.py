@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Atheris-based Python API fuzzer for the raw operation DataFormatVecPermute. Standalone fuzz
+# target script: the entry function builds a random tensor and random source/destination format
+# strings from the fuzzer bytes and calls the operation, tolerating expected argument errors.
+# The main function registers the entry function with Atheris and starts fuzzing. Importing
+# instruments the imports of sys, the sibling helper module python_fuzzing and TensorFlow.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +28,12 @@ with atheris.instrument_imports():
 
 @atheris.instrument_func
 def TestOneInput(input_bytes):
+  # [FUNCTION DOC]
+  # Fuzz entry function called by Atheris. Input: input_bytes, the raw fuzzer bytes. Chooses a
+  # random dtype and a short random shape (up to eight dimensions each of size up to eight), builds
+  # a random tensor from a fuzzed seed, then calls DataFormatVecPermute with fuzzed digit strings
+  # as source and destination formats and a fuzzed op name. Invalid-argument, value and type errors
+  # are swallowed; others propagate as findings. Returns nothing.
   """Test randomized integer fuzzing input for tf.raw_ops.DataFormatVecPermute."""
   fh = FuzzingHelper(input_bytes)
 
@@ -44,6 +56,11 @@ def TestOneInput(input_bytes):
 
 
 def main():
+  # [FUNCTION DOC]
+  # Fuzz program entry point: registers the fuzz entry function with Atheris, with Python coverage
+  # collection enabled and the process command-line arguments passed through, then starts the
+  # fuzzing loop. Takes no inputs and returns nothing; the fuzzing loop normally runs until stopped
+  # or a crash is found, and the process exit is controlled by Atheris.
   atheris.Setup(sys.argv, TestOneInput, enable_python_coverage=True)
   atheris.Fuzz()
 
