@@ -1,3 +1,21 @@
+# [MODULE DOC]
+# Python-level API for sparse tensors in TensorFlow: the functions behind the public sparse
+# namespace (from_dense, to_dense, concat, add, reorder, reshape, split, slice, retain,
+# fill_empty_rows, reduce_max, reduce_sum, softmax, maximum, minimum, transpose, cross,
+# bincount, map_values, serialization helpers, sparse-by-dense matrix multiply and others)
+# plus their older v1 endpoints. Most functions validate or convert their SparseTensor
+# arguments, then call the generated low level sparse kernels and wrap the resulting indices,
+# values and dense shape into a new SparseTensor.
+# Many functions come in a v1 form and a v2 form (names ending in v2) that differ in argument
+# names and deprecation handling; the exports are chosen with the export decorators.
+# Import-time side effects: it pulls in every generated sparse op via a wildcard import,
+# copies the concat documentation onto the v2 concat function, and at the very bottom
+# registers a unary-op dispatcher for a fixed list of math functions (absolute value,
+# negation, trigonometric and special functions) so they accept SparseTensor inputs by
+# applying the function to the values only. It also appends a note about this to those
+# functions' documentation strings.
+# This is a public implementation module; names starting with an underscore are internal
+# helpers.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -59,6 +77,14 @@ from tensorflow.python.util.tf_export import tf_export
 
 
 def _convert_to_sparse_tensor(sp_input):
+  # [FUNCTION DOC]
+  # HELPER: input normalizer used by almost every public sparse function in this module.
+  # KNOWN ISSUE: the docstring says a ValueError is raised for unsupported inputs, but the code
+  # raises a TypeError.
+  # Converts a SparseTensorValue (the plain numpy-backed value form) into a SparseTensor and
+  # returns a SparseTensor argument unchanged. Takes one argument, sp_input. Raises a type
+  # error with the message that the input must be a SparseTensor for any other object. No
+  # side effects.
   """Convert `sp_input` to `SparseTensor` and return it.
 
   Args:
@@ -78,6 +104,15 @@ def _convert_to_sparse_tensor(sp_input):
 
 
 def _convert_to_sparse_tensors(sp_inputs):
+  # [FUNCTION DOC]
+  # HELPER: bulk version of the single-tensor converter, used by the concat function.
+  # KNOWN ISSUE: the docstring promises a ValueError for bad items, but a TypeError is raised
+  # (by the single-item converter, or for a non list/tuple container). Also, for a tuple input
+  # the code returns a lazy generator rather than a tuple, so callers that take its length or
+  # index it would fail.
+  # Converts every item of a list or tuple of SparseTensor / SparseTensorValue objects to
+  # SparseTensor. A list yields a list; a tuple yields a generator. Any other container type
+  # raises a type error saying inputs must be a list or tuple. No side effects.
   """Convert `sp_inputs` to `SparseTensor` objects and return them.
 
   Args:
@@ -99,6 +134,12 @@ def _convert_to_sparse_tensors(sp_inputs):
 
 
 def _make_int64_tensor(value, name):
+  # [FUNCTION DOC]
+  # HELPER: argument coercion for the sparse identity-matrix builder.
+  # Turns value into a 64-bit integer tensor. A Python or numpy integer is converted to a
+  # constant tensor named by name; an existing tensor of another dtype is cast to 64-bit
+  # integer; a tensor that is already 64-bit is returned as is. Any other kind of value
+  # raises a type error saying that name must be an integer value. No other side effects.
   if isinstance(value, compat.integral_types):
     return ops.convert_to_tensor(value, name=name, dtype=dtypes.int64)
   if not isinstance(value, tensor_lib.Tensor):
@@ -110,6 +151,13 @@ def _make_int64_tensor(value, name):
 
 @tf_export("sparse.from_dense")
 def from_dense(tensor, name=None):
+  # [FUNCTION DOC]
+  # Public conversion from a dense tensor to a SparseTensor. Input: tensor (anything
+  # convertible to a tensor) and an optional op name scope (default name is the dense to
+  # sparse scope). Finds every position whose element differs from zero, gathers those
+  # elements as the values, and records the full shape as a 64-bit dense shape. Returns a
+  # SparseTensor with the same dtype and shape as the input; entries are in row-major order.
+  # No exceptions of its own and no side effects beyond graph ops.
   """Converts a dense tensor into a sparse tensor.
 
   Only elements not equal to zero will be present in the result. The resulting
@@ -142,6 +190,17 @@ def from_dense(tensor, name=None):
 
 @tf_export("sparse.expand_dims")
 def sparse_expand_dims(sp_input, axis=None, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring describes name as the name of the output SparseTensor; it is
+  # only used as the name scope for the ops. Also the SparseTensor is not run through the
+  # input converter, so a SparseTensorValue is not accepted.
+  # Inserts a new dimension of size 1 into a SparseTensor. Inputs: sp_input (a SparseTensor),
+  # axis (a Python integer or integer tensor; None means -1, i.e. append an innermost
+  # dimension; negative values count from the end, valid range is minus rank minus one up to
+  # rank), and an optional name. A negative axis is normalized using the rank. A new column of
+  # zeros is spliced into the indices at the axis position and a 1 is spliced into the dense
+  # shape; values are unchanged. Returns the new SparseTensor. Raises a type error if axis is
+  # neither an integer nor a tensor. No side effects.
   """Returns a tensor with an length 1 axis inserted at index `axis`.
 
   Given a tensor `input`, this operation inserts a dimension of length 1 at the
@@ -251,6 +310,14 @@ def sparse_eye(num_rows,
                num_columns=None,
                dtype=dtypes.float32,
                name=None):
+  # [FUNCTION DOC]
+  # Builds a rank-2 SparseTensor with ones on the main diagonal. Inputs: num_rows (non
+  # negative integer or integer scalar tensor), num_columns (optional, same kinds; defaults to
+  # num_rows), dtype of the values (default 32-bit float) and an optional name (default scope
+  # name is eye). Both sizes are coerced to 64-bit integers (a type error is raised for
+  # non-integer, non-tensor input). The number of stored entries is the smaller of the two
+  # sizes; indices are the pairs (i, i) and values are ones. Returns the SparseTensor of
+  # shape rows by columns. No side effects.
   """Creates a two-dimensional sparse tensor with ones along the diagonal.
 
   Args:
@@ -291,6 +358,15 @@ def sparse_concat(axis,
                   expand_nonconcat_dim=False,
                   concat_dim=None,
                   expand_nonconcat_dims=None):
+  # [FUNCTION DOC]
+  # Version 1 endpoint for concatenating a list of SparseTensors along a dimension. It only
+  # resolves deprecated argument names and delegates to the version 2 function.
+  # Inputs: axis (dimension to concatenate along), sp_inputs (list of SparseTensors), name
+  # (optional), expand_nonconcat_dim (allow other dimensions to differ, default false),
+  # concat_dim (deprecated alias of axis) and expand_nonconcat_dims (alias of
+  # expand_nonconcat_dim; when not nothing it overrides it). Passing both axis and its alias
+  # raises through the deprecation lookup helper. Returns the concatenated SparseTensor.
+  # Using the deprecated concat_dim argument logs a deprecation warning.
   """Concatenates a list of `SparseTensor` along the specified dimension.
 
   Concatenation is with respect to the dense versions of each sparse input.
@@ -399,6 +475,20 @@ def sparse_concat(axis,
 
 @tf_export("sparse.concat", v1=[])
 def sparse_concat_v2(axis, sp_inputs, expand_nonconcat_dims=False, name=None):  # pylint: disable=missing-docstring
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: when expand_nonconcat_dims is true the shape-padding logic only handles axis
+  # equal to -1 or a non-negative axis; other negative axes (such as -2) slice the maximum
+  # shape incorrectly although the documented range allows them. A single input is returned
+  # unchanged, so name and axis validation are skipped in that case.
+  # Version 2 public concatenation of SparseTensors along axis (its docstring is assigned
+  # after the definition by copying the v1 text minus the deprecated arguments).
+  # Inputs: axis, sp_inputs (list or tuple of SparseTensor-like objects, converted first),
+  # expand_nonconcat_dims (when true the non-concat dimensions are padded to the largest
+  # size among inputs, otherwise they must match), and name. Calls the generated concat
+  # kernel with indices, values and shapes, then computes a static output shape: with known
+  # ranks the sizes along axis are summed; if all input shapes are fully defined the dense
+  # shape becomes a constant, otherwise the static shape is set on the result as best effort.
+  # Returns a SparseTensor. No side effects.
   sp_inputs = _convert_to_sparse_tensors(sp_inputs)
 
   if len(sp_inputs) == 1:  # Degenerate case of one tensor.
@@ -462,6 +552,13 @@ sparse_concat_v2.__doc__ = sparse_concat.__doc__.replace(
 @deprecation.deprecated_args(
     None, "thresh is deprecated, use threshold instead", "thresh")
 def sparse_add(a, b, threshold=None, thresh=None):
+  # [FUNCTION DOC]
+  # Version 1 endpoint for adding two tensors, at least one of which is sparse. Resolves the
+  # deprecated thresh argument into threshold (an unset result becomes zero) and delegates to
+  # the version 2 add. Inputs: a and b (SparseTensor or dense Tensor), threshold, thresh.
+  # Returns a SparseTensor when both are sparse, or a dense Tensor when one is dense. Raises a
+  # type error (through the v2 function) when neither operand is sparse. Using thresh logs a
+  # deprecation warning.
   """Adds two tensors, at least one of each is a `SparseTensor`.
 
   If one `SparseTensor` and one `Tensor` are passed in, returns a `Tensor`.  If
@@ -523,6 +620,16 @@ def sparse_add(a, b, threshold=None, thresh=None):
 
 @tf_export("sparse.add", v1=[])
 def sparse_add_v2(a, b, threshold=0):
+  # [FUNCTION DOC]
+  # Version 2 public addition where at least one operand is sparse. Inputs: a and b
+  # (SparseTensor, SparseTensorValue or dense Tensor) and threshold (scalar magnitude below
+  # which a summed entry is dropped; converted to the real dtype of the values; default 0 keeps
+  # everything). If neither operand is sparse it raises a type error suggesting plain add.
+  # If both are sparse, runs the sparse-sparse add kernel, checks the static shapes are
+  # compatible (raises a shape error otherwise), and uses a static shape when fully defined;
+  # returns a SparseTensor. If one is dense, it swaps so the sparse operand comes first and
+  # returns a dense Tensor from the sparse-dense add kernel. Threshold is ignored in the
+  # mixed case. No side effects.
   """Adds two tensors, at least one of each is a `SparseTensor`.
 
   If one `SparseTensor` and one `Tensor` are passed in, returns a `Tensor`.  If
@@ -607,6 +714,13 @@ def sparse_add_v2(a, b, threshold=0):
 
 @tf_export("sparse.cross")
 def sparse_cross(inputs, name=None, separator=None):
+  # [FUNCTION DOC]
+  # Creates the feature cross of a list of sparse and dense tensors as strings. Inputs: inputs
+  # (list or tuple of Tensors and SparseTensors), name (optional) and separator (string put
+  # between joined items, default underscore X underscore). Non-string inputs are cast to
+  # 64-bit integers by the internal helper and then joined. Returns a string SparseTensor.
+  # Raises a type error (from the helper) if inputs is not a list/tuple or contains other
+  # types. No side effects.
   """Generates sparse cross from a list of sparse and dense tensors.
 
   For example, if the inputs are
@@ -665,6 +779,13 @@ _sparse_cross = sparse_cross
 
 @tf_export("sparse.cross_hashed")
 def sparse_cross_hashed(inputs, num_buckets=0, hash_key=None, name=None):
+  # [FUNCTION DOC]
+  # Hashed variant of the feature cross. Inputs: inputs (list or tuple of Tensors and
+  # SparseTensors), num_buckets (non-negative; when positive the hash is reduced modulo this
+  # value, zero leaves the raw hash), hash_key (optional integer key for the fingerprint
+  # combination; a default key is used when not given) and name. Delegates to the internal
+  # cross helper with hashed output enabled. Returns a 64-bit integer SparseTensor. Raises a
+  # type error for invalid inputs (from the helper).
   """Generates hashed sparse cross from a list of sparse and dense tensors.
 
   For example, if the inputs are
@@ -716,6 +837,12 @@ _DEFAULT_HASH_KEY = 0xDECAFCAFFE
 
 
 def _sparse_cross_internal_v2(inputs):
+  # [FUNCTION DOC]
+  # HELPER: input preparation for the string cross function.
+  # Validates that inputs is a list or tuple of Tensors and SparseTensors (raises a type error
+  # otherwise), splits them into sparse and dense groups, casts every non-string value or
+  # dense tensor to 64-bit integers, and returns four lists: indices, values, dense shapes of
+  # the sparse inputs, and the dense inputs, ready for the cross kernel. No side effects.
   """See gen_sparse_ops.sparse_cross_v2."""
   if not isinstance(inputs, (tuple, list)):
     raise TypeError("Inputs must be a list")
@@ -747,6 +874,15 @@ def _sparse_cross_internal(inputs,
                            num_buckets=0,
                            hash_key=None,
                            name=None):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation of the hashed cross function.
+  # KNOWN ISSUE: the type error raised when an element is neither a SparseTensor nor a Tensor
+  # says all inputs must be SparseTensors, although dense tensors are accepted as well.
+  # Inputs: inputs (list or tuple), hashed_output (produce 64-bit hashes when true, strings
+  # when false), num_buckets, hash_key (falls back to a module default key when missing or
+  # zero) and name. Splits sparse and dense inputs, casts non-string ones to 64-bit integers
+  # and picks the internal type (integer if any input was cast, otherwise string), then calls
+  # the cross kernel. Returns a SparseTensor of integers (hashed) or strings.
   """See gen_sparse_ops.sparse_cross."""
   if not isinstance(inputs, (tuple, list)):
     raise TypeError("Inputs must be a list")
@@ -794,6 +930,14 @@ def _sparse_cross_internal(inputs,
 
 
 def sparse_dense_cwise_add(sp_t, dense_t):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: this function is not exported and has no conversion or type checks; the
+  # docstring calls the result a SparseTensor, which is true, but it only holds the summed
+  # values at the sparse positions (the dense side is broadcast and sampled there).
+  # Adds a dense tensor (broadcast to the sparse shape) to the stored entries of a SparseTensor
+  # using the sparse-dense component-wise add kernel. Inputs: sp_t (SparseTensor) and dense_t
+  # (dense tensor of the same dtype with a compatible shape). Returns a new SparseTensor
+  # sharing the original indices and dense shape with the new values. No side effects.
   """Adds up a SparseTensor and a dense Tensor, using these special rules:
 
   (1) Broadcasts the dense side to have the same shape as the sparse side, if
@@ -821,6 +965,13 @@ def sparse_dense_cwise_add(sp_t, dense_t):
 @tf_export("sparse.reorder", v1=["sparse.reorder", "sparse_reorder"])
 @deprecation.deprecated_endpoints("sparse_reorder")
 def sparse_reorder(sp_input, name=None):
+  # [FUNCTION DOC]
+  # Sorts the entries of a SparseTensor into canonical row-major order without changing its
+  # shape. Inputs: sp_input (SparseTensor or SparseTensorValue) and optional name. Runs the
+  # reorder kernel on indices and values. If the static shape is fully known, the dense shape
+  # is passed as a constant list; otherwise the dynamic shape is copied with an identity op and
+  # the static shape is propagated onto the result. Returns the reordered SparseTensor. Raises
+  # a type error for non-sparse input. No side effects.
   """Reorders a `SparseTensor` into the canonical, row-major ordering.
 
   Note that by convention, all sparse ops preserve the canonical ordering
@@ -877,6 +1028,16 @@ def sparse_reorder(sp_input, name=None):
 @deprecation.deprecated_endpoints("sparse_reshape")
 @dispatch.add_dispatch_support
 def sparse_reshape(sp_input, shape, name=None):
+  # [FUNCTION DOC]
+  # Reshapes a SparseTensor to a new dense shape, recomputing the indices; value order is
+  # unchanged. Inputs: sp_input, shape (1-D integer vector, cast to 64-bit; at most one entry
+  # may be minus one meaning inferred), name. Calls the reshape kernel. When the new shape is
+  # statically known and the input shape is fully defined, it also validates on the Python
+  # side: raises a value error if the user shape has more than one minus-one entry, or if the
+  # element counts differ; it fills in a single inferred dimension (skipped if the shape has a
+  # zero) and uses the resolved constant as the output dense shape. Otherwise the kernel's
+  # dynamic shape is used. Returns a SparseTensor with copied values. Raises a type error for
+  # non-sparse input. No side effects.
   """Reshapes a `SparseTensor` to represent values in a new dense shape.
 
   This operation has the same semantics as `reshape` on the represented dense
@@ -982,8 +1143,17 @@ def sparse_reshape(sp_input, shape, name=None):
 
 # TODO(aselle): Remove keyword required once for 1.0 final
 class KeywordRequired:
+  # [CLASS DOC]
+  # HELPER: sentinel default value used by the v1 split function to force callers to pass
+  # keyword arguments (a leftover from the Python 2 argument reordering). Stateless; its only
+  # instance is created once as a default argument value, and any other value in that slot
+  # makes the split function raise.
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # HELPER: keeps generated documentation readable by printing the sentinel as a short
+    # fixed string (the class name followed by empty parentheses) instead of an address.
+    # Takes no inputs, returns that string, no side effects.
     # This is needed to make documentation without fully qualified module paths
     return "KeywordRequired()"
 
@@ -998,6 +1168,16 @@ def sparse_split(keyword_required=KeywordRequired(),
                  axis=None,
                  name=None,
                  split_dim=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the deprecated split_dim argument cannot actually be used on its own: the
+  # code raises "axis is required" when axis is nothing before it looks at split_dim, so only
+  # the check that both are not given can ever be reached through the alias lookup.
+  # Version 1 split of a SparseTensor into num_split pieces along an axis. All arguments must
+  # be passed by keyword: the first positional slot is a sentinel and a value error is raised
+  # if anything else fills it. Also raises a value error if sp_input, num_split or axis is
+  # missing. Resolves the deprecated alias, converts the input, calls the split kernel and
+  # wraps each returned (indices, values, shape) triple in a SparseTensor. Returns a Python
+  # list of num_split SparseTensors. Using split_dim logs a deprecation warning.
   """Split a `SparseTensor` into `num_split` tensors along `axis`.
 
   If the `sp_input.dense_shape[axis]` is not an integer multiple of `num_split`
@@ -1069,6 +1249,12 @@ def sparse_split_v2(sp_input=None,
                     num_split=None,
                     axis=None,
                     name=None):
+  # [FUNCTION DOC]
+  # Version 2 public split of a SparseTensor. Inputs: sp_input, num_split (Python integer),
+  # axis (scalar integer; negative counts from the end) and name. Simply forwards everything
+  # by keyword to the v1 split with no deprecated alias. Returns a list of num_split
+  # SparseTensors; value errors from the v1 function are raised when any of sp_input,
+  # num_split or axis is left as nothing.
   """Split a `SparseTensor` into `num_split` tensors along `axis`.
 
   If the `sp_input.dense_shape[axis]` is not an integer multiple of `num_split`
@@ -1136,6 +1322,12 @@ def sparse_split_v2(sp_input=None,
 @tf_export("sparse.slice", v1=["sparse.slice", "sparse_slice"])
 @deprecation.deprecated_endpoints("sparse_slice")
 def sparse_slice(sp_input, start, size, name=None):
+  # [FUNCTION DOC]
+  # Extracts a rectangular block from a SparseTensor. Inputs: sp_input (SparseTensor or value
+  # form), start (1-D vector of start offsets per dimension) and size (1-D vector of block
+  # sizes), both converted to 64-bit tensors, and name. Calls the slice kernel. Returns a
+  # SparseTensor holding only the entries inside the block, with indices relative to start
+  # and the given size as dense shape. Raises a type error for non-sparse input.
   """Slice a `SparseTensor` based on the `start` and `size`.
 
   For example, if the input is
@@ -1194,6 +1386,15 @@ def sparse_to_dense(sparse_indices,
                     default_value=0,
                     validate_indices=True,
                     name=None):
+  # [FUNCTION DOC]
+  # Deprecated version 1 builder of a dense tensor from raw index and value tensors (no
+  # SparseTensor object). Inputs: sparse_indices (scalar, vector or matrix of integer
+  # coordinates), output_shape (1-D shape of the result), sparse_values (scalar broadcast to
+  # all indices, or one value per index), default_value (fill for all other positions, default
+  # zero), validate_indices (when true the kernel checks the indices are sorted and unique,
+  # raising an invalid-argument error at run time) and name. Passes everything straight to the
+  # generated kernel and returns the dense tensor with the dtype of sparse_values. Calling it
+  # logs a deprecation warning pointing to the sparse to-dense function.
   """Converts a sparse representation into a dense tensor.
 
   Builds an array `dense` with shape `output_shape` such that
@@ -1246,6 +1447,14 @@ def sparse_to_dense(sparse_indices,
 @tf_export("sparse.reduce_max", v1=[])
 def sparse_reduce_max_v2(
     sp_input, axis=None, keepdims=None, output_is_sparse=False, name=None):
+  # [FUNCTION DOC]
+  # Version 2 public maximum reduction of a SparseTensor over given axes; only stored values
+  # take part, so implicit zeros are ignored (an empty reduction yields zero). Inputs: sp_input,
+  # axis (list or scalar, None reduces everything, negatives allowed), keepdims (None means
+  # false), output_is_sparse (return a SparseTensor instead of a dense tensor) and name.
+  # Axes are normalized with the math module's reduction-dimension helper. Returns a dense
+  # tensor, or a SparseTensor when output_is_sparse is true. Not differentiable. Unlike the
+  # other functions here it does not convert its input first.
   """Computes `tf.sparse.maximum` of elements across dimensions of a SparseTensor.
 
   This is the reduction operation for the elementwise `tf.sparse.maximum` op.
@@ -1347,6 +1556,12 @@ def sparse_reduce_max_v2(
     "reduction_axes")
 def sparse_reduce_max(sp_input, axis=None, keepdims=None,
                       reduction_axes=None, keep_dims=None):
+  # [FUNCTION DOC]
+  # Version 1 maximum reduction returning a dense tensor. Resolves the deprecated aliases
+  # keep_dims (for keepdims) and reduction_axes (for axis); using either logs a deprecation
+  # warning and giving both old and new forms raises through the lookup helper. keepdims None
+  # means false. Calls the dense-output sparse reduce-max kernel with normalized axes and
+  # returns a dense tensor. There is no name argument. Not differentiable.
   """Computes `tf.sparse.maximum` of elements across dimensions of a SparseTensor.
 
   This is the reduction operation for the elementwise `tf.sparse.maximum` op.
@@ -1433,6 +1648,11 @@ def sparse_reduce_max_sparse(sp_input,
                              keepdims=None,
                              reduction_axes=None,
                              keep_dims=None):
+  # [FUNCTION DOC]
+  # Version 1 maximum reduction that keeps the result sparse. Same alias resolution as the
+  # dense v1 form (keep_dims and reduction_axes are deprecated, keepdims None means false).
+  # Runs the sparse-output reduce-max kernel and wraps the indices, values and shape in a
+  # SparseTensor which it returns. Not differentiable.
   """Computes the max of elements across dimensions of a SparseTensor.
 
   This Op takes a SparseTensor and is the sparse counterpart to
@@ -1480,6 +1700,12 @@ def sparse_reduce_max_sparse(sp_input,
 @tf_export("sparse.reduce_sum", v1=[])
 def sparse_reduce_sum_v2(
     sp_input, axis=None, keepdims=None, output_is_sparse=False, name=None):
+  # [FUNCTION DOC]
+  # Version 2 public sum reduction of a SparseTensor over given axes. Inputs: sp_input, axis
+  # (list, scalar or None for all axes), keepdims (None means false), output_is_sparse (return
+  # a SparseTensor instead of a dense tensor) and name. Axes are normalized with the math
+  # module helper. Returns a dense tensor, or a SparseTensor when output_is_sparse is true
+  # (no gradient in that case). The input is not converted first.
   """Computes `tf.sparse.add` of elements across dimensions of a SparseTensor.
 
   This is the reduction operation for the elementwise `tf.sparse.add` op.
@@ -1565,6 +1791,11 @@ def sparse_reduce_sum_v2(
     "reduction_axes")
 def sparse_reduce_sum(sp_input, axis=None, keepdims=None,
                       reduction_axes=None, keep_dims=None):
+  # [FUNCTION DOC]
+  # Version 1 sum reduction returning a dense tensor. Resolves the deprecated aliases keep_dims
+  # and reduction_axes (deprecation warnings are logged when used), treats keepdims None as
+  # false, and calls the dense-output sparse reduce-sum kernel with normalized axes. Returns a
+  # dense tensor. No name argument.
   """Computes `tf.sparse.add` of elements across dimensions of a SparseTensor.
 
   This is the reduction operation for the elementwise `tf.sparse.add` op.
@@ -1634,6 +1865,10 @@ def sparse_reduce_sum_sparse(sp_input,
                              keepdims=None,
                              reduction_axes=None,
                              keep_dims=None):
+  # [FUNCTION DOC]
+  # Version 1 sum reduction that keeps the result sparse. Same alias handling as the dense v1
+  # form. Runs the sparse-output reduce-sum kernel and returns the result wrapped as a
+  # SparseTensor. Not differentiable.
   """Computes the sum of elements across dimensions of a SparseTensor.
 
   This Op takes a SparseTensor and is the sparse counterpart to
@@ -1684,6 +1919,12 @@ def sparse_tensor_to_dense(sp_input,
                            default_value=None,
                            validate_indices=True,
                            name=None):
+  # [FUNCTION DOC]
+  # Public conversion of a SparseTensor to a dense tensor. Inputs: sp_input (SparseTensor or
+  # value form), default_value (scalar for unspecified positions; None means a zero of the
+  # values' dtype), validate_indices (when true the kernel checks ordering and uniqueness and
+  # fails at run time otherwise) and name. Returns a dense tensor with the sparse dense shape.
+  # Raises a type error for non-sparse input.
   """Converts a `SparseTensor` into a dense tensor.
 
   For this sparse tensor with three non-empty values:
@@ -1738,6 +1979,13 @@ def sparse_tensor_to_dense(sp_input,
     "sparse.to_indicator", v1=["sparse.to_indicator", "sparse_to_indicator"])
 @deprecation.deprecated_endpoints("sparse_to_indicator")
 def sparse_to_indicator(sp_input, vocab_size, name=None):
+  # [FUNCTION DOC]
+  # Turns a SparseTensor of integer ids into a dense boolean indicator tensor whose last
+  # dimension has size vocab_size. Inputs: sp_input (ids in its values, row-major order),
+  # vocab_size (scalar integer or tensor) and name. Builds a companion SparseTensor of true
+  # values, merges ids into the last coordinate with the internal merge implementation, then
+  # densifies with default false and index validation off (duplicate ids are allowed).
+  # Returns a boolean dense tensor. Raises a type error for non-sparse input.
   """Converts a `SparseTensor` of ids into a dense bool indicator tensor.
 
   The last dimension of `sp_input.indices` is discarded and replaced with
@@ -1803,6 +2051,14 @@ def sparse_to_indicator(sp_input, vocab_size, name=None):
 @deprecation.deprecated(None, "No similar op available at this time.")
 def sparse_merge(sp_ids, sp_values, vocab_size, name=None,
                  already_sorted=False):
+  # [FUNCTION DOC]
+  # Deprecated public wrapper that combines batches of feature ids and values into one
+  # SparseTensor. Inputs: sp_ids (a SparseTensor of integer ids or a list of them), sp_values
+  # (SparseTensor of values), vocab_size (scalar or list matching sp_ids), name and
+  # already_sorted (skip the final reordering). Delegates to the internal implementation
+  # (which exists to avoid emitting the deprecation warning internally) and returns its
+  # SparseTensor. Raises type or value errors from that implementation. Calling it logs a
+  # deprecation warning.
   """Combines a batch of feature ids and values into a single `SparseTensor`.
 
   The most common use case for this function occurs when feature ids and
@@ -1902,6 +2158,15 @@ def sparse_merge_impl(sp_ids,
                       vocab_size,
                       name=None,
                       already_sorted=False):
+  # [FUNCTION DOC]
+  # HELPER: undeprecated core of the merge function, also used by the indicator function.
+  # Normalizes sp_ids and vocab_size into lists (a single SparseTensor must be paired with a
+  # tensor or integer vocab size, otherwise iterables are required; raises a type error for
+  # wrong kinds and a value error if the list lengths differ). Converts the inputs, casts ids
+  # and vocab sizes to 64-bit integers, replaces the last index column of the first ids tensor
+  # by one column per id tensor, takes values from sp_values and builds the dense shape as the
+  # leading dimensions plus the vocab sizes. Unless already_sorted is true the result is
+  # reordered (the shape is kept as computed). Returns a SparseTensor.
   """Internal implementation for sparse_merge to avoid deprecation warnings."""
   if isinstance(sp_ids, sparse_tensor.SparseTensorValue) or isinstance(
       sp_ids, sparse_tensor.SparseTensor):
@@ -1957,6 +2222,13 @@ def sparse_merge_impl(sp_ids,
 @tf_export("sparse.retain", v1=["sparse.retain", "sparse_retain"])
 @deprecation.deprecated_endpoints("sparse_retain")
 def sparse_retain(sp_input, to_retain):
+  # [FUNCTION DOC]
+  # Keeps only selected stored entries of a SparseTensor. Inputs: sp_input (with N stored
+  # entries) and to_retain (boolean vector of length N). Checks that to_retain has rank one and
+  # that its static length is compatible with the number of values (raises a shape error
+  # otherwise). Gathers the indices and values at the true positions. Returns a SparseTensor
+  # with the same dense shape (copied through an identity op). Raises a type error for
+  # non-sparse input.
   """Retains specified non-empty values within a `SparseTensor`.
 
   For example, if `sp_input` has shape `[4, 5]` and 4 non-empty string values:
@@ -2005,6 +2277,15 @@ def sparse_retain(sp_input, to_retain):
     "sparse.reset_shape", v1=["sparse.reset_shape", "sparse_reset_shape"])
 @deprecation.deprecated_endpoints("sparse_reset_shape")
 def sparse_reset_shape(sp_input, new_shape=None):
+  # [FUNCTION DOC]
+  # Replaces the dense shape of a SparseTensor while keeping indices and values. Inputs:
+  # sp_input and new_shape (optional 1-D vector). With no new_shape the shape becomes the
+  # tight bounding box (largest index plus one per dimension, never below zero). With a
+  # new_shape it is cast to 64-bit, must be rank one with the same length as the old shape
+  # and no smaller in any dimension: when everything is statically known violations raise a
+  # value error at graph build time; otherwise equality-of-rank and less-or-equal assertions
+  # are attached as control dependencies and fail at run time. Returns a SparseTensor built
+  # from identity copies of the inputs. Raises a type error for non-sparse input.
   """Resets the shape of a `SparseTensor` with indices and values unchanged.
 
   If `new_shape` is None, returns a copy of `sp_input` with its shape reset
@@ -2111,6 +2392,12 @@ def sparse_reset_shape(sp_input, new_shape=None):
     v1=["sparse.fill_empty_rows", "sparse_fill_empty_rows"])
 @deprecation.deprecated_endpoints("sparse_fill_empty_rows")
 def sparse_fill_empty_rows(sp_input, default_value, name=None):
+  # [FUNCTION DOC]
+  # Adds a default entry at column zero for every row of a 2-D SparseTensor that has none.
+  # Inputs: sp_input, default_value (converted to the dtype of the values) and name. Calls the
+  # fill-empty-rows kernel and discards its reverse index map output. Returns a pair: the
+  # filled SparseTensor (same dense shape, row-major order) and a boolean vector marking which
+  # rows were empty. Raises a type error for non-sparse input.
   """Fills empty rows in the input 2-D `SparseTensor` with a default value.
 
   This op adds entries with the specified `default_value` at index
@@ -2177,6 +2464,11 @@ def sparse_fill_empty_rows(sp_input, default_value, name=None):
 @dispatch.add_dispatch_support
 @deprecation.deprecated_endpoints("serialize_sparse")
 def serialize_sparse(sp_input, name=None, out_type=dtypes.string):
+  # [FUNCTION DOC]
+  # Version 1 endpoint that serializes one SparseTensor into a length-3 vector holding the
+  # encoded indices, values and shape. Inputs: sp_input, name, out_type (string or variant
+  # dtype). Only reorders the arguments and delegates to the v2 function; returns its result
+  # and raises a type error for non-sparse input.
   """Serialize a `SparseTensor` into a 3-vector (1-D `Tensor`) object.
 
   Args:
@@ -2197,6 +2489,11 @@ def serialize_sparse(sp_input, name=None, out_type=dtypes.string):
 @tf_export("io.serialize_sparse", v1=[])
 @dispatch.add_dispatch_support
 def serialize_sparse_v2(sp_input, out_type=dtypes.string, name=None):
+  # [FUNCTION DOC]
+  # Version 2 public serialization of a single SparseTensor. Converts the input (type error if
+  # not sparse) and calls the serialize kernel with its indices, values and dense shape,
+  # producing a vector of three encoded elements of dtype out_type (default string). Returns
+  # that tensor; no side effects.
   """Serialize a `SparseTensor` into a 3-vector (1-D `Tensor`) object.
 
   Args:
@@ -2225,6 +2522,11 @@ def serialize_sparse_v2(sp_input, out_type=dtypes.string, name=None):
 @dispatch.add_dispatch_support
 @deprecation.deprecated_endpoints("serialize_many_sparse")
 def serialize_many_sparse(sp_input, name=None, out_type=dtypes.string):
+  # [FUNCTION DOC]
+  # Version 1 endpoint that serializes a minibatch SparseTensor (first dimension is the batch)
+  # into a matrix with one row of three encoded elements per batch item. Reorders the
+  # arguments and delegates to the v2 function. Returns an N-by-3 tensor of dtype out_type.
+  # Raises a type error for non-sparse input.
   """Serialize `N`-minibatch `SparseTensor` into an `[N, 3]` `Tensor`.
 
   The `SparseTensor` must have rank `R` greater than 1, and the first dimension
@@ -2254,6 +2556,11 @@ def serialize_many_sparse(sp_input, name=None, out_type=dtypes.string):
 @tf_export("io.serialize_many_sparse", v1=[])
 @dispatch.add_dispatch_support
 def serialize_many_sparse_v2(sp_input, out_type=dtypes.string, name=None):
+  # [FUNCTION DOC]
+  # Version 2 public serialization of a minibatch SparseTensor of rank at least two whose
+  # entries are sorted by the first dimension. Converts the input (type error if not sparse),
+  # calls the serialize-many kernel and returns an N-by-3 tensor (N is the batch size taken
+  # from the first dimension of the dense shape) of dtype out_type, default string.
   """Serialize `N`-minibatch `SparseTensor` into an `[N, 3]` `Tensor`.
 
   The `SparseTensor` must have rank `R` greater than 1, and the first dimension
@@ -2288,6 +2595,14 @@ def serialize_many_sparse_v2(sp_input, out_type=dtypes.string, name=None):
 
 
 def deserialize_sparse(serialized_sparse, dtype, rank=None, name=None):
+  # [FUNCTION DOC]
+  # Rebuilds SparseTensors from serialized triples. Inputs: serialized_sparse (string tensor
+  # whose last dimension has three elements; leading dimensions form a batch), dtype of the
+  # original values, rank (optional integer, the rank of the original tensors, used only to
+  # set static shapes) and name. Calls the deserialize kernel, then sets the static shape of
+  # the indices and dense shape from rank when given. Returns a SparseTensor whose rank is the
+  # original rank plus the number of batch dimensions. Not exported under its own public name
+  # here; no side effects.
   """Deserialize `SparseTensor` objects.
 
   The input `serialized_sparse` must have the shape `[?, ?, ..., ?, 3]` where
@@ -2359,6 +2674,14 @@ def deserialize_sparse(serialized_sparse, dtype, rank=None, name=None):
 @dispatch.add_dispatch_support
 @deprecation.deprecated_endpoints("deserialize_many_sparse")
 def deserialize_many_sparse(serialized_sparse, dtype, rank=None, name=None):
+  # [FUNCTION DOC]
+  # Deserializes and concatenates a minibatch of serialized SparseTensors. Inputs:
+  # serialized_sparse (N-by-3 string matrix), dtype of the values, rank (optional Python
+  # integer of the original tensors, used to set static shapes) and name. Calls the
+  # deserialize-many kernel, sets static shapes from rank when given and returns one
+  # SparseTensor whose rank is one higher than the originals and whose first dimension is N.
+  # All serialized tensors must share rank and dtype (not checked here). Dispatch support
+  # lets other types override it.
   """Deserialize and concatenate `SparseTensors` from a serialized minibatch.
 
   The input `serialized_sparse` must be a string matrix of shape `[N x 3]` where
@@ -2436,6 +2759,19 @@ def sparse_tensor_dense_matmul(sp_a,
                                adjoint_a=False,
                                adjoint_b=False,
                                name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring summary line is split by a blank line and says A or B may be
+  # the sparse one, but the Returns section just describes dense output; in the branch where b
+  # is the sparse argument the name argument is ignored (the swapped recursive call gets no
+  # name) and the result is computed as a transposed product, which for complex inputs
+  # transposes without conjugating.
+  # Multiplies a rank-2 SparseTensor by a dense matrix (or, when b is the sparse one, a dense
+  # matrix by a SparseTensor). Inputs: sp_a, b, adjoint_a and adjoint_b (use the conjugate
+  # transpose of the respective operand, default false) and name. If b is a SparseTensor or
+  # value form, the product is rewritten as the transpose of the swapped product with
+  # appropriately flipped adjoint flags and the recursion is applied. Otherwise sp_a is
+  # converted (type error if not sparse), b is converted to a tensor and the sparse-dense
+  # matmul kernel is called inside a name scope. Returns a dense matrix.
   # pylint: disable=line-too-long
   """Multiply SparseTensor (or dense Matrix) (of rank 2) "A" by dense matrix
 
@@ -2671,6 +3007,13 @@ def sparse_tensor_dense_matmul(sp_a,
 @tf_export("sparse.softmax", v1=["sparse.softmax", "sparse_softmax"])
 @deprecation.deprecated_endpoints("sparse_softmax")
 def sparse_softmax(sp_input, name=None):
+  # [FUNCTION DOC]
+  # Applies softmax over the innermost dimension of a batched N-D (N at least 2) SparseTensor,
+  # considering only stored entries (implicit zeros do not take part). Input: sp_input with
+  # canonically ordered indices, and optional name. Calls the sparse softmax kernel and
+  # returns a SparseTensor with identical indices and dense shape and the normalized values.
+  # The input is used directly with no conversion, so non-SparseTensor inputs fail with an
+  # attribute error rather than a type error.
   """Applies softmax to a batched N-D `SparseTensor`.
 
   The inputs represent an N-D SparseTensor with logical shape `[..., B, C]`
@@ -2734,6 +3077,11 @@ def sparse_softmax(sp_input, name=None):
 @tf_export("sparse.maximum", v1=["sparse.maximum", "sparse_maximum"])
 @deprecation.deprecated_endpoints("sparse_maximum")
 def sparse_maximum(sp_a, sp_b, name=None):
+  # [FUNCTION DOC]
+  # Element-wise maximum of two SparseTensors of the same shape and real dtype with ordered
+  # indices (no broadcasting). Calls the sparse-sparse maximum kernel; entries missing from
+  # one operand are treated as zero. Returns a SparseTensor with the union of the indices and
+  # the dense shape of sp_a (the shapes are not compared here). No input conversion is done.
   """Returns the element-wise max of two SparseTensors.
 
   Assumes the two SparseTensors have the same shape, i.e., no broadcasting.
@@ -2780,6 +3128,11 @@ def sparse_maximum(sp_a, sp_b, name=None):
 @tf_export("sparse.minimum", v1=["sparse.minimum", "sparse_minimum"])
 @deprecation.deprecated_endpoints("sparse_minimum")
 def sparse_minimum(sp_a, sp_b, name=None):
+  # [FUNCTION DOC]
+  # Element-wise minimum of two SparseTensors of the same shape and real dtype with ordered
+  # indices (no broadcasting). Calls the sparse-sparse minimum kernel; missing entries count as
+  # zero. Returns a SparseTensor over the union of the indices with the dense shape of sp_a.
+  # No input conversion or shape comparison is done here.
   """Returns the element-wise min of two SparseTensors.
 
   Assumes the two SparseTensors have the same shape, i.e., no broadcasting.
@@ -2824,6 +3177,14 @@ def sparse_minimum(sp_a, sp_b, name=None):
 @tf_export("sparse.transpose", v1=["sparse.transpose", "sparse_transpose"])
 @deprecation.deprecated_endpoints("sparse_transpose")
 def sparse_transpose(sp_input, perm=None, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says a type error is raised for non-sparse input, but no
+  # conversion or check is performed; a wrong type fails with an attribute error instead.
+  # Permutes the dimensions of a SparseTensor. Inputs: sp_input, perm (permutation vector;
+  # None means reverse all dimensions, computed statically from the rank when known and
+  # dynamically otherwise) and name. Permutes the columns of the indices, computes the new
+  # dense shape (constant when perm and shape are statically known, otherwise gathered at run
+  # time) and reorders the result into canonical order. Returns the transposed SparseTensor.
   """Transposes a `SparseTensor`.
 
   Permutes the dimensions according to the value of `perm`.  This is the sparse
@@ -2932,6 +3293,14 @@ def sparse_transpose(sp_input, perm=None, name=None):
 @tf_export("sparse.map_values", v1=[])
 @dispatch.add_dispatch_support
 def map_values(op, *args, **kwargs):
+  # [FUNCTION DOC]
+  # Applies an arbitrary shape-preserving function to the stored values of one or more
+  # SparseTensors. Inputs: op (callable) plus any positional and keyword arguments for it;
+  # every SparseTensor found in them (including nested structures) is replaced by its values.
+  # Raises a value error if no SparseTensor is present. Adds assertions that all sparse
+  # arguments have equal indices and dense shapes as control dependencies, calls op on the
+  # substituted arguments and returns a SparseTensor with the indices and shape of the first
+  # sparse argument and the op result as values. Implicit zeros are left unchanged.
   """Applies `op` to the `.values` tensor of one or more `SparseTensor`s.
 
   Replaces any `SparseTensor` in `args` or `kwargs` with its `values`
@@ -3005,6 +3374,19 @@ def bincount(arr: sparse_tensor.SparseTensor,
              name=None,
              axis=None,
              binary_output=False):
+  # [FUNCTION DOC]
+  # Dispatch implementation that makes the generic math bincount accept a SparseTensor input.
+  # Only stored values are counted; implicit zeros are ignored. Inputs: arr (SparseTensor of
+  # non-negative integers; other dtypes are cast to 32-bit integer), weights (optional
+  # SparseTensor with the same indices and shape), minlength and maxlength (optional bounds on
+  # the output length), dtype (output type when no weights), name (default is bincount), axis
+  # (0 or -1; None means 0) and binary_output (emit 1 per present value; cannot be combined
+  # with weights). Raises a value error for weights plus binary_output or for an unsupported
+  # axis; negative input values cause an invalid-argument error at run time. The output size is
+  # the max value plus one (zero for an empty input), clipped by minlength and maxlength. For
+  # axis 0 the values are flattened and counted with the dense bincount kernel; for axis -1 the
+  # sparse bincount kernel counts each row separately. Returns a dense tensor (vector for axis
+  # 0, matrix for axis -1).
   """Counts the number of occurrences of each value in an integer array.
 
   Only the values in the SparseTensor's `values` tensor are counted,
@@ -3211,6 +3593,18 @@ def sparse_bincount(values,
                     maxlength=None,
                     binary_output=False,
                     name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring describes weights as having the same shape as arr, and refers
+  # to a tensor called arr, but the parameter is called values; it also says only N equal to 0
+  # and -1 are supported where it means axis values.
+  # Public bincount returning a SparseTensor of counts. Inputs: values (dense Tensor, ragged
+  # tensor or SparseTensor of non-negative integers; non-sparse inputs are converted),
+  # weights (optional, same shape or same sparse structure; converted unless it is a composite
+  # tensor), axis (0 or -1, None means 0), minlength and maxlength (optional; passed as -1 when
+  # absent), binary_output (cannot be combined with weights) and name. Raises a value error for
+  # weights with binary_output, for an unsupported axis, or when sparse weights are required
+  # but another type is given. For axis 0 values (and weights) are flattened first. Calls the
+  # sparse-output count kernel (dense or sparse flavor). Returns a SparseTensor.
   """Count the number of times an integer value appears in a tensor.
 
   This op takes an N-dimensional `Tensor`, `RaggedTensor`, or `SparseTensor`,
@@ -3413,6 +3807,15 @@ def sparse_bincount(values,
 
 
 def validate_sparse_weights(values, weights, dtype=None):
+  # [FUNCTION DOC]
+  # HELPER: weight checking for the bincount functions with SparseTensor values.
+  # KNOWN ISSUE: the docstring only mentions validation, but the function also unwraps the
+  # weights, and the identity comparison of indices and dense shape objects means equal-valued
+  # but distinct tensors are checked with run-time assertions instead.
+  # With no weights, returns an empty constant of dtype (or the values' dtype). Otherwise the
+  # weights must be a SparseTensor (value error if not). Adds assertions that dense shape and
+  # indices equal those of values (skipped when they are the very same tensor objects) and
+  # returns the weights' values tensor, wrapped to depend on the assertions.
   """Validates the passed weight tensor or creates an empty one."""
   if weights is None:
     if dtype:
@@ -3449,6 +3852,13 @@ def validate_sparse_weights(values, weights, dtype=None):
 
 
 def _assert_sparse_compatible(sparse_tensors):
+  # [FUNCTION DOC]
+  # HELPER: consistency check used by the map-values function.
+  # KNOWN ISSUE: the docstring says it returns an op, but it returns a list of assertion ops
+  # (empty when there is one tensor).
+  # Compares every SparseTensor after the first against the first and builds equality
+  # assertions on dense shape ("Mismatched shapes") and indices ("Mismatched indices"). The
+  # caller uses the returned list as control dependencies; failures occur at execution time.
   """Check that all of `sparse_tensors` have same `indices` and `dense_shape`.
 
   Args:
@@ -3470,6 +3880,12 @@ def _assert_sparse_compatible(sparse_tensors):
 
 
 def _replace_sparse_with_values(value, sparse_list):
+  # [FUNCTION DOC]
+  # HELPER: argument rewriting for the map-values function.
+  # Flattens the nested structure value without expanding composites, swaps each SparseTensor
+  # for its values tensor, appends the replaced SparseTensors to sparse_list (an output
+  # argument that is mutated) and repacks the structure with the original nesting. Returns the
+  # rewritten structure.
   """Replace `SparseTensor`s with their values in `value`
 
   Each `SparseTensor` in `value` is replaced by its `values` tensor, and
@@ -3498,6 +3914,12 @@ def _add_sparse_to_tensors_map(sp_input,
                                container=None,
                                shared_name=None,
                                name=None):
+  # [FUNCTION DOC]
+  # HELPER: internal wrapper of the add-to-map kernel, used by queue and batching code.
+  # Converts sp_input (type error if not sparse) and stores it in a SparseTensorsMap resource
+  # identified by container and shared_name (both optional; the shared name defaults to the
+  # op name). Returns a one-element string vector with the handle. Side effect: the sparse
+  # tensor is kept in the shared map until taken out.
   """Add a `SparseTensor` to a `SparseTensorsMap` and return its handle.
 
   Args:
@@ -3530,6 +3952,12 @@ def _add_many_sparse_to_tensors_map(sp_input,
                                     container=None,
                                     shared_name=None,
                                     name=None):
+  # [FUNCTION DOC]
+  # HELPER: internal wrapper of the add-many-to-map kernel.
+  # Converts sp_input (a rank-two-or-higher SparseTensor sorted by its first dimension; type
+  # error if not sparse) and stores each batch row as a separate SparseTensor in the map named
+  # by container and shared_name. Returns an N-by-1 string matrix of handles. Side effect:
+  # entries live in the shared map until taken.
   """Add a minibatch `SparseTensor` to a `SparseTensorsMap`, return `N` handles.
 
   The `SparseTensor` must have rank `R` greater than 1, and the first dimension
@@ -3570,6 +3998,16 @@ def _take_many_sparse_from_tensors_map(sparse_map_op,
                                        sparse_handles,
                                        rank=None,
                                        name=None):
+  # [FUNCTION DOC]
+  # HELPER: internal reader for handles created by the add-to-map wrappers.
+  # KNOWN ISSUE: the error message for an operation of the wrong type names the single-item
+  # operation twice instead of listing the many-items operation, and the first message reads
+  # "sparse_map_op be an Operation".
+  # Inputs: sparse_map_op (the creating operation; type error if it is not an operation of
+  # kind add-sparse-to-map or add-many-sparse-to-map), sparse_handles (N-by-1 string matrix),
+  # rank (optional integer for static shapes) and name. Colocates with the map op, reuses its
+  # container, shared name (or op name) and dtype attributes, reads and removes the stored
+  # tensors, concatenates them along a new first dimension and returns the SparseTensor.
   """Read `SparseTensors` from a `SparseTensorsMap` and concatenate them.
 
   The input `sparse_handles` must be a string matrix of shape `[N, 1]` where
@@ -3653,9 +4091,22 @@ def _take_many_sparse_from_tensors_map(sparse_map_op,
 
 
 class _UnaryMapValueDispatcher(dispatch.OpDispatcher):
+  # [CLASS DOC]
+  # HELPER: dispatcher registered at import time for a list of unary math functions so they
+  # accept SparseTensor arguments. Holds the original function and the name of its first
+  # argument. When the first argument is a SparseTensor it applies the function to the values
+  # only and rebuilds a SparseTensor with the same indices and shape; for anything else it
+  # declines so other dispatch rules or the normal path run. Subclass of the generic op
+  # dispatcher; registration happens in the module-level loop at the bottom of the file.
   """OpDispatcher for unary ops that maps base function across sparse values."""
 
   def __init__(self, original_func):
+    # [FUNCTION DOC]
+    # HELPER: constructor of the unary dispatcher.
+    # Stores original_func, finds its canonical public name and the name of its first
+    # parameter. Side effect: if the function has a docstring, that docstring is modified in
+    # place by appending a note saying that a SparseTensor argument is mapped value-wise.
+    # Returns nothing.
     self._original_func = original_func
     func_name = get_canonical_name_for_symbol(original_func)
     arg_names = tf_inspect.getfullargspec(original_func)[0]
@@ -3669,6 +4120,13 @@ class _UnaryMapValueDispatcher(dispatch.OpDispatcher):
          "{x}.dense_shape)`").format(x=self._x, func=func_name))
 
   def handle(self, args, kwargs):
+    # [FUNCTION DOC]
+    # HELPER: dispatch hook called with the positional and keyword arguments of a call to the
+    # wrapped function. Takes the first positional argument (or removes the first parameter by
+    # name from a copy of the keyword mapping). If it is a SparseTensor, calls the original
+    # function on its values with the remaining arguments and returns a new SparseTensor with
+    # the same indices and dense shape. Otherwise returns the dispatcher's marker for "not
+    # supported" so the next handler is tried. The caller's mapping is not mutated.
     if args:
       x, args = args[0], args[1:]
     else:
