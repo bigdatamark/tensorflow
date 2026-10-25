@@ -1,3 +1,16 @@
+# [MODULE DOC]
+# Defines StructuredTensor, the public experimental type for a multi-dimensional (possibly
+# ragged) collection of structures sharing one schema, plus its type spec and many private
+# helpers. Storage is "field-major": a mapping from field names to tensors, ragged tensors,
+# nested structured tensors or extension-type values, plus a dynamic ragged shape describing the
+# outer dimensions. The module provides construction (from fields, from fields and rank, from
+# nested python values, from a bare shape), functional updates, field promotion, indexing,
+# partitioning and merging of outer dimensions, conversion back to python values, a spec class,
+# a legacy-compatible spec factory function, and helpers for dtype unification, row partition
+# bookkeeping and python value parsing.
+# Import-time effects: the class is exported publicly under the experimental namespace, a
+# field-name alias is attached to the class, and a field name regular expression is compiled.
+# Several helpers (row count/row partition merging) are currently unused.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -58,6 +71,16 @@ FieldName = Union[str, Sequence[str]]
 
 @tf_export('experimental.StructuredTensor')
 class StructuredTensor(extension_type.BatchableExtensionType):
+  # [CLASS DOC]
+  # Public experimental composite type holding a multi-dimensional collection of structures with
+  # one schema. State: a mapping from field name to field value (dense tensor, ragged tensor,
+  # nested structured tensor or other extension type) and a dynamic ragged shape giving the outer
+  # dimensions shared by all fields. Instances are created through the factory class methods
+  # (from fields, from fields and rank, from shape, from python values) rather than directly, and
+  # are immutable: updates return new instances. It is a batchable extension type, so it works
+  # with datasets and tf.function; its nested Spec class is its type specification. Provides
+  # field access, indexing, updating, promotion, partitioning/merging of dimensions and
+  # conversion back to python values.
   """A multidimensional collection of structures with the same schema.
 
   A **`StructuredTensor`** is a multi-dimensional collection of ***structures***
@@ -111,11 +134,23 @@ class StructuredTensor(extension_type.BatchableExtensionType):
   #=============================================================================
   def __init__(self, fields: Mapping[str, _FieldValue],
                ragged_shape: dynamic_ragged_shape.DynamicRaggedShape):
+    # [FUNCTION DOC]
+    # Low-level constructor. Inputs: fields (mapping from field names to field values) and
+    # ragged_shape (the dynamic ragged shape of the outer dimensions). It stores both without
+    # copying or validating them, so callers must supply consistent values; the factory methods
+    # are the intended entry points. Returns nothing and has no other side effects.
     self._fields = fields
     self._ragged_shape = ragged_shape
 
   @classmethod
   def _old_init(cls, fields, shape, nrows, row_partitions, internal=False):
+    # [FUNCTION DOC]
+    # HELPER: Compatibility constructor for internal code that still has shape, nrows and row
+    # partitions instead of a ragged shape.
+    # Inputs: fields (a plain dict of field values, kept without copying), shape (a static tensor
+    # shape of known rank), nrows (a scalar integer tensor or nothing), row_partitions (nothing or
+    # a tuple of row partitions) and internal (ignored). The argument types are checked with
+    # assertions. Builds the dynamic ragged shape and returns a new structured tensor.
     """Private constructor -- use factory methods to create StructuredTensors.
 
     This constructor builds a `StructuredTensor` from the given attributes,
@@ -147,6 +182,9 @@ class StructuredTensor(extension_type.BatchableExtensionType):
   def from_shape(
       cls, ragged_shape: dynamic_ragged_shape.DynamicRaggedShape
   ) -> 'StructuredTensor':
+    # [FUNCTION DOC]
+    # Factory for an empty structure collection. Input: ragged_shape, a dynamic ragged shape.
+    # Returns a new structured tensor with that shape and an empty field mapping. No validation.
     """Creates a `StructuredTensor` with no fields and ragged_shape.
 
     Args:
@@ -164,6 +202,23 @@ class StructuredTensor(extension_type.BatchableExtensionType):
                   nrows=None,
                   row_partitions=None,
                   validate=False):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the validate argument is documented as adding runtime validation ops, but it
+    # is never used here, so no validation ever happens.
+    # KNOWN ISSUE: the step that replaces the row partitions of all fields is indented inside the
+    # loop over fields, so it re-runs for every field (redundant work) and never runs when there
+    # are no fields.
+    # Factory building a structured tensor from a mapping of fields. Inputs: fields (dict from
+    # string names to tensors, ragged tensors or structured tensors; plain python values are
+    # converted), shape (static shape, default scalar; must have known rank), nrows (optional
+    # scalar row count, only for rank above 0), row_partitions (optional list of row partitions,
+    # length rank minus one, only for rank above 1) and validate (see above). Copies the field
+    # dict, builds the ragged shape from shape/nrows/partitions/fields, checks every key is a
+    # string matching the allowed field-name pattern, converts values, and makes all fields share
+    # the same row partitions. Raises a value error for unknown rank, partitions given with
+    # rank below 2, nrows given for rank 0, a wrong partition count, or a disallowed field name;
+    # raises a type error if fields is not a dict or a key is not a string or a value cannot be
+    # converted. Runs inside a name scope. Returns the new structured tensor.
     """Creates a `StructuredTensor` from a dictionary of fields.
 
     Args:
@@ -254,6 +309,16 @@ class StructuredTensor(extension_type.BatchableExtensionType):
       rank: int,
       validate: bool = False,
       dtype: Optional[dtypes.DType] = None) -> 'StructuredTensor':
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the validate argument is accepted and documented but never used.
+    # Factory building a structured tensor from a non-empty field mapping and an explicit rank.
+    # Inputs: fields (mapping from names to field values; plain values are converted), rank
+    # (non-negative integer number of outer dimensions), validate (unused) and dtype (optional
+    # index dtype; if absent it is inferred from the fields, preferring 64-bit). The fields are
+    # cast to the chosen shape dtype, the shape is merged from all fields truncated to rank, row
+    # partitions are made shared, and the result is returned. Raises a value error if fields is
+    # empty, rank is not an integer or is negative, or a field has an incompatible shape. Field
+    # names are not checked against the allowed pattern, unlike the plain fields factory.
     """Creates a `StructuredTensor` from a nonempty dictionary of fields.
 
     Note that if the shape dtype is not specified, the shape dtype will be
@@ -317,6 +382,16 @@ class StructuredTensor(extension_type.BatchableExtensionType):
   def with_updates(self,
                    updates: Dict[FieldName, Union[_FieldValue, _FieldFn, None]],
                    validate: bool = False) -> 'StructuredTensor':
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: validate is documented as adding validation ops but is only forwarded to the
+    # fields factory, which ignores it.
+    # Returns a copy with fields added, replaced, transformed or removed. Input: updates, a
+    # mapping from field names (a string or a sequence of strings naming a nested path) to a new
+    # value, a function transforming the old value, or nothing (delete the field); validate
+    # (optional). Normalizes names to tuples, sorts them and rejects an update that targets both
+    # a node and one of its descendants (value error), then applies them recursively. The shape
+    # is unchanged. Other errors come from the recursive implementation. The original is not
+    # modified.
     """Creates a new `StructuredTensor` with the updated fields.
 
     If this `StructuredTensor` is a scalar, and `k` is the `FieldName` being
@@ -407,17 +482,36 @@ class StructuredTensor(extension_type.BatchableExtensionType):
                          updates: List[Tuple[FieldName, Union[_FieldValue,
                                                               _FieldFn]]],
                          validate: bool) -> 'StructuredTensor':
+    # [FUNCTION DOC]
+    # HELPER: Recursive worker behind the public update method.
+    # Inputs: error_prefix (tuple of field names already descended, used in messages), updates
+    # (list of pairs of a name tuple and a value, function or nothing, sorted by name) and
+    # validate (passed on). Copies the fields, then for each update: a one-element name sets,
+    # transforms or deletes a field; a longer name recurses into the nested structured tensor
+    # named by its first element. Rebuilds the result with the same shape, row partitions and row
+    # count. Raises a value error for empty names, deleting or transforming a missing field,
+    # creating a sub-field below a missing or non-structured parent, or failures while rebuilding
+    # (re-raised with the field path).
     """Recursive part of `with_updates` implementation."""
     # Get current fields.
     new_fields = dict(self._fields)
 
     # Convert field name to string with full path for error messages.
     def name_fullpath(name: Sequence[str]) -> str:
+      # [FUNCTION DOC]
+      # HELPER: Message formatter for the update implementation.
+      # Takes a field name (or name part) and returns text of the enclosing error prefix with
+      # the name appended; used only in error messages.
       return str(error_prefix + (name,))
 
     # Apply value if a function or the value itself.
     def apply_value(name: str, value: Union[_FieldValue,
                                             _FieldFn]) -> _FieldValue:
+      # [FUNCTION DOC]
+      # HELPER: Resolves one update value in the update implementation.
+      # Inputs: name (the field name) and value (a new field value or a callable). If value is
+      # callable it is called with the existing field value and its result returned; a value
+      # error is raised if the field does not already exist. Otherwise value is returned as is.
       if callable(value):
         # `value` is actually a transforming function.
         if name not in new_fields:
@@ -489,6 +583,13 @@ class StructuredTensor(extension_type.BatchableExtensionType):
       raise ValueError(msg) from e
 
   def _promote_helper(self, source_path, new_parent_path):
+    # [FUNCTION DOC]
+    # HELPER: Computes the value that the promote method adds.
+    # Inputs: source_path (path of the field to promote) and new_parent_path (path of the
+    # destination parent, a prefix of source_path). If the destination parent has the same rank
+    # as the current parent, the field is returned unchanged. Otherwise the dimensions between
+    # them are merged (when the field has enough dimensions). Raises a value error if the field
+    # rank is unknown. Does not modify this tensor.
     """Creates a promoted field without adding it to the structure.
 
     Args:
@@ -515,6 +616,14 @@ class StructuredTensor(extension_type.BatchableExtensionType):
     return _merge_dims_generic(current_field, new_parent_rank, inner_dim)
 
   def promote(self, source_path, new_name):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: source_path is accepted as a list or tuple, but the new path is built by
+    # joining the sliced path with a tuple, which fails with a type error when a list is given.
+    # Adds a copy of a nested field at the level of its grandparent, merging the dimensions in
+    # between. Inputs: source_path (list or tuple of at least two field names) and new_name
+    # (string name of the new field). Raises a value error if new_name is not a string,
+    # source_path is not a list or tuple, it is shorter than two, or the rank is unknown. Returns
+    # a new structured tensor from the update method; the original is not changed.
     """Promotes a field, merging dimensions between grandparent and parent.
 
     >>> d = [
@@ -560,11 +669,17 @@ class StructuredTensor(extension_type.BatchableExtensionType):
 
   @property
   def rank(self):
+    # [FUNCTION DOC]
+    # Property returning the number of outer (structure) dimensions as an integer, taken from the
+    # ragged shape. Never nothing. Does not count dimensions inside field values.
     """The rank of this StructuredTensor.  Guaranteed not to be `None`."""
     return self._ragged_shape.rank
 
   @property
   def shape(self):
+    # [FUNCTION DOC]
+    # Property returning the static shape as a tensor shape of known rank, converted from the
+    # ragged shape; ragged or unknown dimensions appear as unknown sizes.
     """The static shape of this StructuredTensor.
 
     The returned `TensorShape` is guaranteed to have a known rank, but the
@@ -578,6 +693,9 @@ class StructuredTensor(extension_type.BatchableExtensionType):
   # TODO(martinz): for backwards compatibility
   @property
   def _row_partitions(self):
+    # [FUNCTION DOC]
+    # HELPER: Backwards-compatibility alias.
+    # Property returning the same tuple of row partitions as the public property of similar name.
     """Deprecated form of row_partitions."""
     return self.row_partitions
 
@@ -585,6 +703,10 @@ class StructuredTensor(extension_type.BatchableExtensionType):
   # a property instead of a func?  Seems like these should be consistent.
   @property
   def row_partitions(self):
+    # [FUNCTION DOC]
+    # Property returning a tuple of row partitions that describe the (possibly ragged) outer
+    # dimensions. Empty when rank is below 2; otherwise the partitions are derived from the
+    # ragged shape, with length rank minus one. Computed on each access; no side effects.
     """A tuple of `RowPartition`s defining the shape of this `StructuredTensor`.
 
     When `self.rank <= 1`, this tuple will be empty.
@@ -642,6 +764,9 @@ class StructuredTensor(extension_type.BatchableExtensionType):
     return self._ragged_shape._as_row_partitions()  # pylint:disable=protected-access
 
   def nrows(self):
+    # [FUNCTION DOC]
+    # Returns the size of the outermost dimension, taken from the ragged shape (a scalar integer
+    # tensor or integer), or nothing when the rank is 0. No inputs, no side effects.
     """The number of rows in this StructuredTensor (if rank>0).
 
     This means the length of the outer-most dimension of the StructuredTensor.
@@ -660,6 +785,11 @@ class StructuredTensor(extension_type.BatchableExtensionType):
     return self._ragged_shape[0]
 
   def with_shape_dtype(self, dtype: dtypes.DType) -> 'StructuredTensor':
+    # [FUNCTION DOC]
+    # Returns a structured tensor whose shape index dtype (and that of the ragged and nested
+    # structured fields) is the given dtype. Input: dtype, normally a 32-bit or 64-bit integer
+    # type. If the dtype already matches, returns this same object; otherwise builds a new one
+    # with converted fields and shape. Has no docstring of its own.
     if dtype == self._ragged_shape.dtype:
       return self
     return StructuredTensor(
@@ -667,6 +797,10 @@ class StructuredTensor(extension_type.BatchableExtensionType):
         ragged_shape=self._ragged_shape.with_dtype(dtype))
 
   def _is_eager(self):
+    # [FUNCTION DOC]
+    # HELPER: Used by the python conversion method to check it is running eagerly.
+    # Flattens this composite into its component tensors and returns true only if all of them are
+    # eager tensors (also true if there are none).
     """True if all fields are composed of eager tensors."""
     tensors = nest.flatten(self, expand_composites=True)
     return all(isinstance(t, ops.EagerTensor) for t in tensors)
@@ -676,10 +810,18 @@ class StructuredTensor(extension_type.BatchableExtensionType):
   #=============================================================================
 
   def field_names(self):
+    # [FUNCTION DOC]
+    # Returns a tuple of the names of the fields directly owned by this tensor, in the order of
+    # the internal mapping. Nested fields are not included.
     """Returns the string field names for this `StructuredTensor`."""
     return tuple(self._fields.keys())
 
   def field_value(self, field_name):
+    # [FUNCTION DOC]
+    # Looks up a field. Input: field_name, a string naming a direct field, or a list or tuple of
+    # strings giving a path through nested structured tensors. Returns the stored tensor, ragged
+    # tensor or structured tensor. Raises a key error if the name is missing, or if an
+    # intermediate path element is not a structured tensor. No side effects.
     """Returns the tensor value for the specified field or path.
 
     If `field_name` is a `string`, then it names a field directly owned by this
@@ -719,6 +861,13 @@ class StructuredTensor(extension_type.BatchableExtensionType):
 
   # TODO(edloper): Add support for ellipsis and/or newaxis?
   def __getitem__(self, key):
+    # [FUNCTION DOC]
+    # Item access. Input: key, a field name string, an integer, scalar integer tensor, slice, or
+    # a list or tuple combining them (a list is treated as a tuple; an empty key returns this
+    # tensor itself). A scalar structured tensor (rank 0) dispatches to the scalar lookup, which
+    # accepts a field name or the full slice first; any other rank uses the tensor lookup, where
+    # leading elements index the outer dimensions and the element after them names a field. Returns
+    # a tensor, ragged tensor or structured tensor; raises a value error for unsupported keys.
     """Returns the specified piece of this StructuredTensor.
 
     * If `struct_tensor` is scalar (i.e., a single structure), then
@@ -764,6 +913,12 @@ class StructuredTensor(extension_type.BatchableExtensionType):
       return self._tensor_getitem(key)
 
   def _scalar_getitem(self, key):
+    # [FUNCTION DOC]
+    # HELPER: Item access for rank-0 tensors, called by the item-access method.
+    # Input: key, a non-empty tuple. If its first element is the full slice, applies the rest of
+    # the key to every field and returns a new structured tensor with the same shape. If the first
+    # element is a string, returns that field indexed with the rest of the key. Any other first
+    # element raises a value error; a missing field name raises a key error.
     if (isinstance(key[0], slice) and key[0].start is None and
         key[0].stop is None and key[0].step is None):
       fields = dict((field_name, field_value.__getitem__(key[1:]))
@@ -777,6 +932,14 @@ class StructuredTensor(extension_type.BatchableExtensionType):
     return self._fields[key[0]].__getitem__(key[1:])
 
   def _tensor_getitem(self, key):
+    # [FUNCTION DOC]
+    # HELPER: Item access for tensors with rank above 0, called by the item-access method.
+    # Input: key, a non-empty tuple. If it has at most rank elements, every field is indexed with
+    # the whole key and the static result shape is computed: slices make their dimension unknown,
+    # integers and scalar tensors remove it; the result is a new structured tensor. Ellipsis or a
+    # new-axis marker raise a value error. If the key is longer, the element after the first rank
+    # ones must be a string naming a field (otherwise value error), and that field is indexed with
+    # the remaining elements.
     rank = self.rank
     if len(key) <= rank:
       new_fields = dict((field_name, field_value.__getitem__(key))
@@ -804,6 +967,9 @@ class StructuredTensor(extension_type.BatchableExtensionType):
       return self._fields[key[rank]].__getitem__(key[:rank] + key[rank + 1:])
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns a multi-line text description: the fields sorted by name, each value rendered
+    # with its string form and indented, followed by the shape. No side effects.
     fields = sorted(self._fields.items())
     fields = ((k, str(v).replace('\n', '\n            ')) for k, v in fields)
     fields = ('"{}": {}'.format(k, v) for k, v in fields)
@@ -818,6 +984,12 @@ class StructuredTensor(extension_type.BatchableExtensionType):
   #=============================================================================
 
   def to_pyval(self):
+    # [FUNCTION DOC]
+    # Converts to nested python values: a dict for rank 0, or nested lists of dicts for higher
+    # rank. Each field is converted to python (tensors to numbers/lists, ragged tensors to nested
+    # lists, nested structured tensors recursively). Raises a value error unless all components
+    # are eager tensors. Empty structures (no fields) of rank above 0 give lists of empty dicts
+    # shaped by the row partitions. Returns the python value; no side effects.
     """Returns this StructuredTensor as a nested Python dict or list of dicts.
 
     Converts this `StructuredTensor` to a nested python value:
@@ -877,6 +1049,12 @@ class StructuredTensor(extension_type.BatchableExtensionType):
 
   @classmethod
   def from_pyval(cls, pyval, typespec=None):
+    # [FUNCTION DOC]
+    # Public factory converting a nested python value (dicts, lists, tuples, scalars) into a
+    # structured tensor. Inputs: pyval and typespec (optional spec describing the expected type
+    # of each field; when absent, dicts become structured tensors and lists become dense or
+    # ragged tensors). Delegates to the recursive private converter starting with an empty path.
+    # Raises a value error when the value does not match the spec or cannot be parsed.
     """Constructs a StructuredTensor from a nested Python structure.
 
     >>> tf.experimental.StructuredTensor.from_pyval(
@@ -904,6 +1082,13 @@ class StructuredTensor(extension_type.BatchableExtensionType):
 
   @classmethod
   def _from_pyval(cls, pyval, typespec, path_so_far):
+    # [FUNCTION DOC]
+    # HELPER: Recursive dispatcher behind the python-value factory.
+    # Inputs: pyval, typespec (or nothing) and path_so_far (tuple of field names, for messages).
+    # A dict goes to the dict converter; a list or tuple goes to the list-of-dict converter if
+    # dictionaries are found inside (consistent depth required, else value error), otherwise to
+    # the list-of-value converter; anything else to the scalar converter. Returns the converted
+    # tensor, ragged tensor or structured tensor.
     """Helper function for from_pyval.
 
 
@@ -934,6 +1119,12 @@ class StructuredTensor(extension_type.BatchableExtensionType):
 
   @classmethod
   def _from_pydict(cls, pyval, typespec, path_so_far):
+    # [FUNCTION DOC]
+    # HELPER: Converts one python dict into a rank-0 structured tensor.
+    # Inputs: pyval (dict), typespec (nothing, or a rank-0 structured spec whose field names must
+    # equal the dict keys) and path_so_far (for messages). Each value is converted recursively
+    # with its own field spec. Raises a value error if the spec is not a matching rank-0
+    # structured spec. Returns the new structured tensor.
     """Converts python dictionary `pyval` to a StructuredTensor with rank=0."""
     if typespec is None:
       fields = dict((k, cls._from_pyval(v, None, path_so_far + (k,)))
@@ -951,6 +1142,16 @@ class StructuredTensor(extension_type.BatchableExtensionType):
 
   @classmethod
   def _from_pylist_of_dict(cls, pyval, keys, rank, typespec, path_so_far):
+    # [FUNCTION DOC]
+    # HELPER: Converts a nested list of dicts into a structured tensor of the given rank.
+    # KNOWN ISSUE: the docstring says rank above 1, but the code also handles rank 1 (a flat
+    # list of dicts) and rank equal to the nesting depth.
+    # Inputs: pyval (nested list/tuple of dicts), keys (set of all field names found), rank
+    # (nesting depth), typespec (nothing or a structured spec) and path_so_far. It regroups the
+    # values field-major (one nested list per key), converts each, and builds the tensor from
+    # fields with a shape of unknown sizes (or the spec's shape). Missing keys get empty lists.
+    # Raises a value error if the spec has unexpected fields or too small a rank, or wraps any
+    # failure with the path. Empty dicts without a spec give an empty structure.
     """Converts python list `pyval` to a StructuredTensor with rank>1."""
     fields = dict((key, []) for key in keys)
     for child in pyval:
@@ -984,6 +1185,12 @@ class StructuredTensor(extension_type.BatchableExtensionType):
 
   @classmethod
   def _from_pylist_of_empty_dict(cls, pyval, rank):
+    # [FUNCTION DOC]
+    # HELPER: Builds a field-less structured tensor from a nested list of empty dicts.
+    # KNOWN ISSUE: a negative rank matches no branch and the function silently returns nothing.
+    # Inputs: pyval (nested list of empty dicts) and rank (nesting depth). Rank 0 gives a scalar
+    # structure; rank 1 uses the list length as row count; higher rank builds row partitions from
+    # a ragged constant of zeros made from the list structure. Returns the structured tensor.
     """Converts a pylist of empty dictionaries to StructuredTensors."""
     if rank == 0:
       return StructuredTensor.from_fields(fields={}, shape=(), validate=False)
@@ -1003,6 +1210,17 @@ class StructuredTensor(extension_type.BatchableExtensionType):
 
   @classmethod
   def _from_pylist_of_value(cls, pyval, typespec, path_so_far):
+    # [FUNCTION DOC]
+    # HELPER: Converts a python list without dicts to a field value.
+    # KNOWN ISSUE: the docstring says it returns a Tensor or RaggedTensor of rank above 1, but it
+    # also accepts rank 1 lists and returns a structured tensor when the spec is a structured spec.
+    # Inputs: pyval, typespec (nothing, tensor spec, ragged spec or structured spec) and
+    # path_so_far. Without a spec it makes a ragged constant; with a tensor spec a dense constant
+    # of that dtype whose shape must be compatible; with a ragged spec a ragged constant using
+    # the spec's dtype, ragged rank and splits dtype; with a structured spec it requires pyval to
+    # be nested empty lists and builds an empty structured tensor. Raises a value error for parse
+    # failures (with path), shape mismatch, non-empty values for a structured spec, or an
+    # unsupported spec type.
     """Converts python list `pyval` to a Tensor or RaggedTensor with rank>1."""
     if typespec is None:
       try:
@@ -1043,6 +1261,13 @@ class StructuredTensor(extension_type.BatchableExtensionType):
 
   @classmethod
   def _from_pyscalar(cls, pyval, typespec, path_so_far):
+    # [FUNCTION DOC]
+    # HELPER: Converts a python scalar to a constant tensor.
+    # KNOWN ISSUE: when a spec is given, only its rank (0) and dtype are used; its static shape is
+    # not compared (the code has a TODO for this).
+    # Inputs: pyval, typespec (nothing or a rank-0 tensor spec) and path_so_far. Without a spec the
+    # dtype is inferred; with one the constant uses its dtype. Raises a value error if parsing
+    # fails or the spec is not a rank-0 tensor spec. Returns a scalar tensor.
     """Converts python scalar value `pyval` to a Tensor."""
     if typespec is None:
       try:
@@ -1065,6 +1290,11 @@ class StructuredTensor(extension_type.BatchableExtensionType):
   # TODO(edloper): Unify nomenclature with RaggedTensor.  Should RaggedTensor
   # have a partition_outer_dimension method?
   def partition_outer_dimension(self, row_partition):
+    # [FUNCTION DOC]
+    # Splits the outermost dimension into two using a row partition. Input: row_partition, which
+    # must be a row partition object (otherwise type error); this tensor must have rank at least 1
+    # (otherwise value error). Returns a new structured tensor of rank one higher whose fields are
+    # partitioned the same way. The original is not modified.
     """Partitions the outer dimension of this StructuredTensor.
 
     Returns a new `StructuredTensor` with the same values as `self`, where
@@ -1094,6 +1324,14 @@ class StructuredTensor(extension_type.BatchableExtensionType):
     return _partition_outer_dimension(self, row_partition)
 
   def merge_dims(self, outer_axis, inner_axis):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it returns a copy of "this RaggedTensor"; it is a
+    # structured tensor. Also equal axes are accepted here but the private worker asserts the
+    # outer axis is strictly less than the inner axis, so equal axes fail with an assertion error.
+    # Flattens a range of outer dimensions into one. Inputs: outer_axis and inner_axis (integers,
+    # negative values count from the end). Raises a value error if outer_axis is greater than
+    # inner_axis or an axis is out of range. Returns a new structured tensor with merged fields;
+    # the original is unchanged.
     """Merges outer_axis...inner_axis into a single dimension.
 
     Returns a copy of this RaggedTensor with the specified range of dimensions
@@ -1135,13 +1373,27 @@ class StructuredTensor(extension_type.BatchableExtensionType):
     return _merge_dims(self, outer_axis, inner_axis)
 
   class Spec:
+    # [CLASS DOC]
+    # Nested type specification of StructuredTensor, extended by the extension-type machinery
+    # (which supplies the stored attributes: a ragged shape spec and a mapping of field specs).
+    # This class adds validation, constructors from fields-and-rank or from a shape, and
+    # backward-compatible read-only properties for shape, rank, field specs and static shape.
     """A spec for StructuredTensor."""
 
     def __validate__(self):
+      # [FUNCTION DOC]
+      # Validation hook run when a spec is created: asserts that the ragged shape spec is
+      # present (an assertion error otherwise). Returns nothing.
       assert self._ragged_shape is not None
 
     @classmethod
     def _from_fields_and_rank(cls, fields, rank):
+      # [FUNCTION DOC]
+      # HELPER: Builds a spec from field specs and a rank (internal factory).
+      # Inputs: fields (mapping from names to type specs) and rank (number of outer dimensions).
+      # For each field it obtains the shape spec, truncates to rank and merges them all together.
+      # Raises a value error if a field's spec cannot be converted to a shape or has a rank
+      # smaller than rank. With no fields the shape stays nothing. Returns the new spec.
       """Creates a spec of a StructuredTensor with fields and rank."""
       shape = None
       for (k, v) in fields.items():
@@ -1163,27 +1415,40 @@ class StructuredTensor(extension_type.BatchableExtensionType):
     def _from_shape(
         cls, shape: dynamic_ragged_shape.DynamicRaggedShape
     ) -> 'StructuredTensor.Spec':
+      # [FUNCTION DOC]
+      # HELPER: Internal factory. Input: shape, a dynamic ragged shape spec. Returns a spec with
+      # that shape and no fields.
       """Creates the spec of an empty StructuredTensor."""
       return StructuredTensor.Spec(_ragged_shape=shape, _fields={})
 
     # For backwards compatibility
     @property
     def _shape(self) -> tensor_shape.TensorShape:
+      # [FUNCTION DOC]
+      # HELPER: Backwards-compatibility property. Returns the static tensor shape converted from
+      # the stored ragged shape spec.
       return self._ragged_shape._to_tensor_shape()  # pylint: disable=protected-access
 
     # For backwards compatibility
     @property
     def _field_specs(self) -> Dict[str, type_spec.TypeSpec]:
+      # [FUNCTION DOC]
+      # HELPER: Backwards-compatibility property. Returns the mapping from field names to type
+      # specs (the stored fields attribute).
       return self._fields
 
     # For backwards compatibility
     @property
     def shape(self) -> tensor_shape.TensorShape:
+      # [FUNCTION DOC]
+      # Backwards-compatibility property returning the static tensor shape of the spec.
       return self._shape
 
     # For backwards compatibility
     @property
     def rank(self):
+      # [FUNCTION DOC]
+      # Backwards-compatibility property returning the rank of the spec's ragged shape.
       return self._ragged_shape.rank
 
 
@@ -1204,6 +1469,11 @@ _FIELD_NAME_RE = re.compile('^[a-zA-Z][a-zA-Z0-9_]*$')
 
 
 def _convert_to_structured_field_value(value):
+  # [FUNCTION DOC]
+  # HELPER: Normalizes a user-supplied field value for the factory functions.
+  # Tensors, ragged tensors, structured tensors and other extension types are returned unchanged;
+  # ragged-like values become ragged tensors (or tensors); anything else is converted to a
+  # tensor. Raises a type error if conversion fails.
   """Converts `value` to a Tensor, RaggedTensor, or StructuredTensor."""
   if isinstance(value,
                 (tensor.Tensor, ragged_tensor.RaggedTensor, StructuredTensor)):
@@ -1223,6 +1493,11 @@ def _convert_to_structured_field_value(value):
 def _find_shape_dtype(
     fields: Mapping[str, _FieldValue], nrows: Optional[tensor.Tensor],
     row_partitions: Optional[Sequence[RowPartition]]) -> dtypes.DType:
+  # [FUNCTION DOC]
+  # HELPER: Picks the shape index dtype for the shape-building code.
+  # Collects dtypes of ragged/structured fields, of nrows (if a tensor) and of the row
+  # partitions. Returns 64-bit if any is 64-bit, else 32-bit if any is 32-bit, else 64-bit by
+  # default. Pure function; no errors raised.
   """Return a consistent dtype for fields, nrows, & row_partitions.
 
   In the future, the default will switch from int64 to int32, but for now,
@@ -1255,6 +1530,14 @@ def _find_shape_dtype(
 
 
 def _merge_nrows(nrows, static_nrows, value, dtype, validate):
+  # [FUNCTION DOC]
+  # HELPER: Row-count reconciliation (legacy shape code).
+  # KNOWN ISSUE: this function is not called anywhere in the module (dead code).
+  # Inputs: nrows (scalar integer tensor or nothing), static_nrows (static dimension), value
+  # (tensor, ragged or structured tensor), dtype and validate. Computes the row count of value
+  # and merges it: if nrows is missing it is taken from value; if both static sizes are known they
+  # must be compatible (else value error); otherwise with validate an equality assertion op is
+  # attached. Returns a pair of the row count and the merged static dimension.
   """Merges `nrows` with `nrows(value)`.
 
   Checks that `value` has the expected number of rows (`nrows`), and returns
@@ -1292,6 +1575,13 @@ def _merge_nrows(nrows, static_nrows, value, dtype, validate):
 
 
 def _merge_row_partitions(row_partitions, value, rank, dtype, validate):
+  # [FUNCTION DOC]
+  # HELPER: Row partition reconciliation (legacy shape code).
+  # KNOWN ISSUE: this function is not called anywhere in the module (dead code).
+  # Inputs: row_partitions (tuple or nothing), value (tensor, ragged or structured tensor), rank,
+  # dtype and validate. Gets value's first rank minus one row partitions (derived from its shape
+  # for dense and ragged tensors) and merges them pairwise with the given ones (using validation
+  # if requested); with no given partitions returns value's. Returns a tuple of partitions.
   """Merges `row_partitions` with `row_partitions(value)`."""
   if isinstance(value, tensor.Tensor):
     value_row_partitions = _row_partitions_for_tensor(value, rank, dtype)
@@ -1314,12 +1604,21 @@ def _merge_row_partitions(row_partitions, value, rank, dtype, validate):
 
 
 def _row_partitions_for_tensor(value, rank, dtype):
+  # [FUNCTION DOC]
+  # HELPER: Uniform row partitions of a dense tensor (used only by the unused merge code).
+  # Takes the tensor's dynamic shape (as the given dtype) and returns the uniform partitions for
+  # its first rank dimensions.
   """Returns the row partitions for a tf.Tensor."""
   shape = array_ops.shape(value, out_type=dtype)
   return _row_partitions_for_uniform_shape(shape, rank)
 
 
 def _row_partitions_for_ragged_tensor(value, rank, dtype):
+  # [FUNCTION DOC]
+  # HELPER: Row partitions of a ragged tensor, padded with uniform ones (used only by the unused
+  # merge code). Requires rank above 1 (assertion). Takes up to rank minus one nested partitions
+  # of the ragged tensor and, if it has fewer, appends uniform partitions computed from its flat
+  # values. Returns the sequence of exactly rank minus one partitions.
   """Returns the row partitions for a tf.RaggedTensor."""
   assert rank > 1
   value_row_partitions = value._nested_row_partitions[:rank - 1]  # pylint: disable=protected-access
@@ -1331,6 +1630,11 @@ def _row_partitions_for_ragged_tensor(value, rank, dtype):
 
 
 def _row_partitions_for_uniform_shape(shape, rank):
+  # [FUNCTION DOC]
+  # HELPER: Builds uniform row partitions from a shape vector.
+  # Inputs: shape (1-D integer tensor) and rank (number of dimensions to cover). Uses the running
+  # product of the first rank sizes to give each of the rank minus one partitions its row count,
+  # value count and uniform row length. Returns a tuple of row partitions.
   """Returns row partitions for the given shape Tensor.
 
   Args:
@@ -1351,6 +1655,12 @@ def _row_partitions_for_uniform_shape(shape, rank):
 
 
 def _pyval_field_major_to_node_major(keys, values, depth):
+  # [FUNCTION DOC]
+  # HELPER: Used by the python conversion method to regroup field-major lists into dicts.
+  # Inputs: keys (non-empty list of field names), values (list of nested lists, one per key, of
+  # equal length at each level) and depth (nesting depth at which dicts are created). At depth 0
+  # it zips keys with values into a dict; otherwise it recurses over the zipped elements.
+  # Asserts keys is non-empty and lengths match. Returns nested lists of dicts.
   """Regroup each field (k, v) from dict-of-list to list-of-dict.
 
   Given a "field-major" encoding of the StructuredTensor (which maps each key to
@@ -1378,6 +1688,12 @@ def _pyval_field_major_to_node_major(keys, values, depth):
 
 
 def _empty_dict_pylist_from_row_partitions(row_partitions, nrows):
+  # [FUNCTION DOC]
+  # HELPER: Used by the python conversion method for structures without fields.
+  # Inputs: row_partitions (tuple of partitions) and nrows (outer row count). With no partitions
+  # returns a list of nrows empty dicts; otherwise recurses on the inner partitions using the
+  # last outer row split as the inner count, then slices the result by the outer row splits.
+  # Returns a nested python list.
   """Returns a python list of empty dicts from the given row partitions.
 
   Args:
@@ -1399,6 +1715,11 @@ def _empty_dict_pylist_from_row_partitions(row_partitions, nrows):
 
 
 def _pyval_find_struct_keys_and_depth(pyval, keys):
+  # [FUNCTION DOC]
+  # HELPER: Scanner used by the python-value factory.
+  # Inputs: pyval (nested lists/tuples/dicts) and keys (a set, mutated: all dict keys found are
+  # added). Returns the nesting depth of dicts (0 for a dict itself) or nothing if there are
+  # none. Raises a value error if dicts occur at inconsistent depths.
   """Finds the keys & depth of nested dictionaries in `pyval`.
 
   Args:
@@ -1430,6 +1751,13 @@ def _pyval_find_struct_keys_and_depth(pyval, keys):
 
 
 def _pyval_update_fields(pyval, fields, depth):
+  # [FUNCTION DOC]
+  # HELPER: Regroups python values field-major for the list-of-dict converter.
+  # Inputs: pyval (a dict or nested list/tuple of dicts), fields (mapping from key to nested
+  # list, mutated by appending) and depth (nesting level). For each key a value from a dict
+  # (or an empty list for a list element) is appended at the right depth, recursing into list
+  # children. Raises a value error if pyval is not a dict, list or tuple. A key missing from a
+  # dict raises a key error. Returns nothing.
   """Append the field values from `pyval` to `fields`.
 
   Args:
@@ -1453,6 +1781,11 @@ def _pyval_update_fields(pyval, fields, depth):
 
 
 def _pyval_empty_list_depth(pyval):
+  # [FUNCTION DOC]
+  # HELPER: Used when a structured spec is applied to a python list.
+  # Input: pyval, nested python lists. An empty list has depth 1; a list of lists has one more
+  # than the maximum child depth. Returns nothing if pyval is not a list or contains anything
+  # other than nested empty lists, else the maximum depth.
   """Find the max depth for nested empty lists.
 
   Args:
@@ -1475,6 +1808,13 @@ def _pyval_empty_list_depth(pyval):
 
 
 def _replace_row_partitions(value, new_partitions):
+  # [FUNCTION DOC]
+  # HELPER: Makes all fields share identical row partition objects (used by the factories).
+  # Inputs: value (tensor, ragged tensor or structured tensor) and new_partitions (partitions
+  # equivalent to the value's current outer ones). Dense tensors or empty partitions return the
+  # value as is; ragged tensors are rebuilt recursively with the partitions; structured tensors
+  # have all their fields replaced and are rebuilt with the new partitions followed by their
+  # remaining inner ones. Returns an equivalent value.
   """Updates `value` to use `new_partitions` as its (outer) row partitions.
 
   This is used to ensure that all fields in a `StructuredTensor` use identical
@@ -1513,6 +1853,13 @@ def _replace_row_partitions(value, new_partitions):
 
 
 def _partition_outer_dimension(value, row_partition):
+  # [FUNCTION DOC]
+  # HELPER: Worker of the structured tensor's partition method.
+  # Inputs: value (tensor, ragged tensor or structured tensor) and row_partition. A dense tensor
+  # with a uniform partition is reshaped; a dense or ragged tensor otherwise becomes a ragged
+  # tensor over the partition; a structured tensor has every field partitioned recursively and is
+  # rebuilt with a shape of the partition's static sizes followed by the old inner dimensions.
+  # Returns a value of one higher rank.
   """Partitions the outer dimension of `value` using `row_partitions`.
 
   Examples:
@@ -1562,6 +1909,13 @@ def _partition_outer_dimension(value, row_partition):
 
 
 def _merge_dims(value, outer_axis, inner_axis):
+  # [FUNCTION DOC]
+  # HELPER: Worker of the structured tensor's merge method.
+  # KNOWN ISSUE: asserts the outer axis is strictly less than the inner axis, although the public
+  # merge method accepts equal axes, so equal axes fail with an assertion error.
+  # Inputs: value (tensor, ragged tensor or structured tensor) and non-negative axis numbers.
+  # Dense and ragged tensors use the ragged merge function; structured tensors merge each field
+  # recursively and the ragged shape, then rebuild. Returns the merged value.
   """Merges `outer_axis...inner_axis` of `value` into a single dimension."""
   assert outer_axis < inner_axis
   if isinstance(value, (tensor.Tensor, ragged_tensor.RaggedTensor)):
@@ -1583,6 +1937,11 @@ def _dynamic_ragged_shape_spec_from_spec(
                 ragged_tensor.RaggedTensorSpec, StructuredTensor.Spec,
                 tensor.TensorSpec]
 ) -> dynamic_ragged_shape.DynamicRaggedShape.Spec:
+  # [FUNCTION DOC]
+  # HELPER: Gets the ragged shape spec of a field spec for the spec constructors.
+  # Input: spec, a ragged shape spec, ragged tensor spec, structured spec or tensor spec. A
+  # structured spec returns its stored ragged shape spec; anything else is converted by the
+  # shape spec class. Returns the shape spec (possibly nothing if conversion fails).
   if isinstance(spec, StructuredTensor.Spec):
     return spec._ragged_shape  # pylint: disable=protected-access
   else:
@@ -1590,6 +1949,9 @@ def _dynamic_ragged_shape_spec_from_spec(
 
 
 def _normalize_field_name_to_tuple(name: 'FieldName') -> Sequence[str]:
+  # [FUNCTION DOC]
+  # HELPER: Used by the update method. Turns a field name given as a string into a one-element
+  # tuple, a list into a tuple, and returns a tuple unchanged. Any other type fails an assertion.
   """FieldName can be given also as string, this normalizes it to a tuple."""
   if isinstance(name, str):
     return (name,)
@@ -1600,6 +1962,10 @@ def _normalize_field_name_to_tuple(name: 'FieldName') -> Sequence[str]:
 
 
 def _dicts_to_zeros(pyval):
+  # [FUNCTION DOC]
+  # HELPER: Used for nested lists of empty dicts. Replaces every dict in a nested list with the
+  # number zero, keeping the list structure, so a ragged constant with the same layout can be
+  # built. Iterating a non-list, non-dict value raises a type error.
   """Replaces dictionaries zeros in a pylist."""
   if isinstance(pyval, dict):
     return 0
@@ -1607,6 +1973,10 @@ def _dicts_to_zeros(pyval):
 
 
 def _merge_dims_generic(source, outer, inner):
+  # [FUNCTION DOC]
+  # HELPER: Used by the field promotion code. Merges dimensions of a tensor, ragged tensor or
+  # structured tensor: structured tensors use their own merge method, others the ragged merge
+  # function. Inputs: source, outer and inner non-negative axis numbers. Returns the merged value.
   """Merges outer_axis...inner_axis into a single dimension.
 
   If outer == inner, this is a NOOP. If inner < outer, then this fails.
@@ -1630,6 +2000,12 @@ def _merge_dims_generic(source, outer, inner):
 
 def _dynamic_ragged_shape_from_tensor(
     field, dtype=None) -> dynamic_ragged_shape.DynamicRaggedShape:
+  # [FUNCTION DOC]
+  # HELPER: Gets the dynamic ragged shape of a field for the shape-building code.
+  # Inputs: field (tensor, ragged tensor or structured tensor) and dtype (optional index dtype).
+  # A structured tensor returns its own shape; otherwise the shape function is applied and a
+  # tensor result is wrapped as an unpartitioned ragged shape, while a ragged shape result is
+  # returned. Raises a type error for any other result type.
   """Extension of DynamicRaggedShape.from_tensor to support StructuredTensor."""
   if isinstance(field, StructuredTensor):
     return field._ragged_shape  # pylint: disable=protected-access
@@ -1649,6 +2025,9 @@ def _merge_with_optional(
     a: Optional[dynamic_ragged_shape.DynamicRaggedShape],
     b: Optional[dynamic_ragged_shape.DynamicRaggedShape]
 ) -> Optional[dynamic_ragged_shape.DynamicRaggedShape]:
+  # [FUNCTION DOC]
+  # HELPER: Combines two optional ragged shapes. If either is nothing, returns the other (both
+  # nothing gives nothing); otherwise merges them (compatibility errors come from the merge).
   if a is None:
     return b
   if b is None:
@@ -1659,6 +2038,12 @@ def _merge_with_optional(
 def _shape_from_fields(
     fields, rank: int,
     dtype: dtypes.DType) -> Optional[dynamic_ragged_shape.DynamicRaggedShape]:
+  # [FUNCTION DOC]
+  # HELPER: Infers the shape for the factory functions.
+  # Inputs: fields (mapping to field values), rank (number of outer dimensions) and dtype (index
+  # dtype). Takes the shape of each field, truncated to rank, and merges them. Raises a value
+  # error naming the field if one cannot be computed or merged. Returns the merged shape, or
+  # nothing if there are no fields.
   """Given fields, rank, and dtype, create a shape."""
 
   field_shape = None
@@ -1675,6 +2060,9 @@ def _shape_from_fields(
 
 
 def _field_shape_dtype(field: _FieldValue) -> Optional[dtypes.DType]:
+  # [FUNCTION DOC]
+  # HELPER: Reports a field's index dtype: the row splits dtype for a ragged tensor, the shape
+  # dtype for a structured tensor, and nothing for any other value.
   if isinstance(field, ragged_tensor.RaggedTensor):
     return field._row_partition.dtype  # pylint: disable=protected-access
   if isinstance(field, StructuredTensor):
@@ -1684,6 +2072,9 @@ def _field_shape_dtype(field: _FieldValue) -> Optional[dtypes.DType]:
 
 def _field_with_shape_dtype(field: _FieldValue,
                             dtype: dtypes.DType) -> _FieldValue:
+  # [FUNCTION DOC]
+  # HELPER: Casts one field's index dtype. Ragged tensors get the given row splits dtype,
+  # structured tensors the given shape dtype, and other values are returned unchanged.
   if isinstance(field, ragged_tensor.RaggedTensor):
     return field.with_row_splits_dtype(dtype)
   if isinstance(field, StructuredTensor):
@@ -1694,11 +2085,26 @@ def _field_with_shape_dtype(field: _FieldValue,
 
 def _fields_with_dtype(fields: Mapping[str, _FieldValue],
                        dtype: dtypes.DType) -> Mapping[str, _FieldValue]:
+  # [FUNCTION DOC]
+  # HELPER: Applies the per-field index dtype cast to every field. Inputs: fields (mapping) and
+  # dtype. Returns a new mapping with the same keys; the input is not mutated.
   return {k: _field_with_shape_dtype(v, dtype) for (k, v) in fields.items()}
 
 
 # pylint:disable=protected-access
 def _dynamic_ragged_shape_init(fields, shape, nrows, row_partitions):
+  # [FUNCTION DOC]
+  # HELPER: Shape builder used by the constructors in this module.
+  # KNOWN ISSUE: a second function with this same name but different, simpler behavior exists in
+  # the separate dynamic module; that one ignores fields' shapes and is only referenced by tests.
+  # Inputs: fields (dict), shape (static tensor shape of known rank; unknown rank raises a type
+  # error), nrows (nothing, integer or scalar tensor) and row_partitions (nothing or tuple).
+  # The argument types are checked with assertions. Picks a common index dtype, then merges the
+  # information available: the static shape if fully defined, shapes inferred from the fields,
+  # the row count (rank 1) and the row partitions (rank above 1). Rank 0 gives an empty inner
+  # shape. Raises a value error if no source defines the shape (rank 1 without nrows, a fully
+  # defined shape or fields; higher rank without partitions, shape or fields). Returns the
+  # dynamic ragged shape.
   """Produce a DynamicRaggedShape for StructuredTensor."""
   assert isinstance(fields, dict), fields
   assert isinstance(shape, tensor_shape.TensorShape), shape
@@ -1755,6 +2161,14 @@ def _dynamic_ragged_shape_init(fields, shape, nrows, row_partitions):
 
 # TODO(martinz): Drop this method or rename.
 def StructuredTensorSpec(shape, field_specs):  # pylint:disable=invalid-name
+  # [FUNCTION DOC]
+  # HELPER: Compatibility function standing in for the old spec class (a function named like a
+  # class).
+  # Inputs: shape (anything convertible to a tensor shape; must have known rank) and field_specs
+  # (dict from string names to type specs). Raises a type error if field_specs is not a dict, a
+  # key is not a string, a value is not a type spec, or the rank is unknown; raises a value error
+  # if a field spec has no shape or a smaller rank than shape. Builds a 32-bit ragged shape spec
+  # and merges in each field's truncated shape. Returns a new structured tensor spec.
   """A placeholder for the old StructuredTensorSpec."""
   if not isinstance(field_specs, dict):
     raise TypeError('field_specs must be a dictionary.')

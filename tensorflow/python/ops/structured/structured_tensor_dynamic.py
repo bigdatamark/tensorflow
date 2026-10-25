@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# HELPER: Helper module for StructuredTensor, which builds the shape object used to describe it.
+# KNOWN ISSUE: the main structured tensor module defines its own function of the same name with
+# richer behavior and does not use this one; this copy is only referenced by tests.
+# Provides a single private function that builds a dynamic ragged shape from the pieces a
+# structured tensor holds (field mapping, static shape, row count and row partitions). It is
+# kept in its own module and imports a private dtype-finding helper from the structured tensor
+# module. No registrations or global state are created at import time.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +31,18 @@ from tensorflow.python.ops.structured.structured_tensor import _find_shape_dtype
 
 # pylint:disable=protected-access
 def _dynamic_ragged_shape_init(fields, shape, nrows, row_partitions):
+  # [FUNCTION DOC]
+  # HELPER: Internal factory used when constructing a StructuredTensor's ragged shape.
+  # KNOWN ISSUE: duplicate of a same-named function in the main module; unlike that one it does
+  # not merge in shapes inferred from fields and requires nrows to be a tensor (not an integer).
+  # Builds a dynamic ragged shape for a structured tensor. Inputs: fields (a dict of field
+  # values), shape (a static tensor shape that must have known rank), nrows (nothing or a
+  # scalar tensor with the outer row count), row_partitions (a tuple of row partitions). The
+  # inputs are checked with assertions, so wrong types raise assertion errors. A shape with
+  # unknown rank raises a type error. The index dtype is chosen from the fields, nrows and
+  # row partitions. Rank 0 gives a shape with an empty inner shape; rank 1 uses the static
+  # first dimension when known (else nrows) as the single inner dimension; higher ranks are
+  # built from the row partitions. Returns the new shape object; no side effects.
   """Produce a DynamicRaggedShape for StructuredTensor."""
   assert isinstance(fields, dict), fields
   assert isinstance(shape, tensor_shape.TensorShape), shape

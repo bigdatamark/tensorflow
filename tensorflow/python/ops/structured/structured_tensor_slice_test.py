@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Unit tests for indexing and slicing (the item-access operation) of StructuredTensor.
+# Defines example nested structures (a scalar struct, a second one, and a vector of six), a
+# matching StructuredTensorSpec, small helpers to build slice specs and to compare structured
+# tensors, and a test case checking field selection, multi-dimensional indexing, slicing and
+# the errors raised for unsupported keys. Each check runs in graph and eager modes. Running the
+# file as a script launches the test runner.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,12 +35,21 @@ from tensorflow.python.platform import googletest
 
 # TODO(edloper): Move this to a common util package (forked from ragged).
 class _SliceBuilder:
+  # [CLASS DOC]
+  # HELPER: Test utility that lets tests write slice expressions readably.
+  # Stateless object whose item-access operation just returns the key it receives, so indexing
+  # an instance yields the raw slice spec (a key, slice, tuple of them, or a list) that Python
+  # would pass to an item-access call. A module-level instance is used throughout the tests.
   """Helper to construct arguments for __getitem__.
 
   Usage: _SliceBuilder()[<expr>] slice_spec Python generates for <expr>.
   """
 
   def __getitem__(self, slice_spec):
+    # [FUNCTION DOC]
+    # HELPER: Lets tests construct slice specs with bracket syntax.
+    # Takes slice_spec (any key, slice, ellipsis, tuple or list given inside the brackets) and
+    # returns it unchanged. No exceptions and no side effects.
     return slice_spec
 
 
@@ -43,6 +59,14 @@ SLICE_BUILDER = _SliceBuilder()
 
 # TODO(edloper): Move this to a common util package (forked from ragged).
 def _make_tensor_slice_spec(slice_spec, use_constant=True):
+  # [FUNCTION DOC]
+  # HELPER: Test utility that converts integer slice specs into tensor-valued ones.
+  # Inputs: slice_spec (a single key or slice, or a tuple of them) and use_constant (optional,
+  # default true). Every integer, including the start, stop and step of slices, is replaced by
+  # a scalar tensor: a constant when use_constant is true, otherwise a placeholder with that
+  # default value (unknown at graph construction time). Non-integer pieces such as strings are
+  # kept as they are. Returns a new spec of the same shape (a tuple if a tuple was given). The
+  # input is not mutated; tensors are created in the current graph or eager context.
   """Wraps all integers in an extended slice spec w/ a tensor.
 
   This function is used to help test slicing when the slice spec contains
@@ -58,6 +82,11 @@ def _make_tensor_slice_spec(slice_spec, use_constant=True):
   """
 
   def make_piece_scalar(piece):
+    # [FUNCTION DOC]
+    # HELPER: Inner worker of the tensor slice spec builder.
+    # Converts one piece: an integer becomes a scalar constant or a placeholder-with-default
+    # (depending on the enclosing use_constant flag); a slice is rebuilt with each of its start,
+    # stop and step converted recursively; any other value is returned unchanged.
     if isinstance(piece, int):
       scalar = constant_op.constant(piece)
       if use_constant:
@@ -161,8 +190,22 @@ EXAMPLE_STRUCT_SPEC1 = structured_tensor.StructuredTensorSpec(
 @test_util.run_all_in_graph_and_eager_modes
 class StructuredTensorSliceTest(test_util.TensorFlowTestCase,
                                 parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case covering item access (slicing) on StructuredTensor, for both scalar and vector
+  # structures, with and without an explicit type spec, plus the error cases. The whole class
+  # runs in both graph and eager modes. It overrides the equality assertion so structured
+  # tensors can be compared with each other and with plain Python lists and dicts.
 
   def assertAllEqual(self, a, b, msg=None):
+    # [FUNCTION DOC]
+    # Equality assertion extended to structured tensors. Inputs: a and b (values to compare;
+    # structured tensors, dicts, lists, tuples or ordinary array-likes) and msg (optional failure
+    # message). With no structured tensor involved it defers to the base implementation. Two
+    # structured tensors must have compatible shapes, the same field names, and equal field
+    # values (compared recursively). A structured tensor versus a python value: a scalar one is
+    # compared to a mapping field by field; otherwise the python value must be a list or tuple
+    # whose length is compatible with the first dimension, and elements are compared pairwise.
+    # Fails the test (assertion error) on any mismatch; returns nothing.
     if not (isinstance(a, structured_tensor.StructuredTensor) or
             isinstance(b, structured_tensor.StructuredTensor)):
       super(StructuredTensorSliceTest, self).assertAllEqual(a, b, msg)
@@ -190,6 +233,12 @@ class StructuredTensorSliceTest(test_util.TensorFlowTestCase,
           self.assertAllEqual(a[i], b[i])
 
   def _TestGetItem(self, struct, slice_spec, expected):
+    # [FUNCTION DOC]
+    # HELPER: Shared check used by the slicing tests.
+    # Applies the item-access operation on the given structured tensor with the slice spec in
+    # three forms (plain integers, integers wrapped as constants, integers wrapped as placeholders
+    # with unknown values) and asserts each result equals expected (a nested python value).
+    # Failure messages include the slice spec. Returns nothing.
     """Helper function for testing StructuredTensor.__getitem__.
 
     Checks that calling `struct.__getitem__(slice_spec) returns the expected
@@ -243,6 +292,12 @@ class StructuredTensorSliceTest(test_util.TensorFlowTestCase,
       (["f2", 1], EXAMPLE_STRUCT["f2"][1]),
   ])
   def testGetitemFromScalarStruct(self, slice_spec, expected):
+    # [FUNCTION DOC]
+    # Parameterized test: slicing a scalar structured tensor built from the example nested
+    # struct. Cases cover simple field lookup, multi-dimensional indexing into fields and nested
+    # structures, slices over inner dimensions, the full slice and a list-valued key. The
+    # tensor is built twice, once with inferred ragged types and once with an explicit type spec
+    # that makes dense tensors, and in both cases the result must equal the expected value.
     # By default, lists are converted to RaggedTensors.
     struct = structured_tensor.StructuredTensor.from_pyval(EXAMPLE_STRUCT)
     self._TestGetItem(struct, slice_spec, expected)
@@ -271,6 +326,13 @@ class StructuredTensorSliceTest(test_util.TensorFlowTestCase,
                                   slice_spec,
                                   expected,
                                   test_requires_typespec=False):
+    # [FUNCTION DOC]
+    # Parameterized test: slicing a vector of six example structs. Cases cover integer indices
+    # (including negative), field selection after an index, slices with start or step, and slices
+    # reaching into the nested matrix field. When test_requires_typespec (optional, default false)
+    # is true the inferred-type variant is skipped, since that case only works with explicit
+    # specs; otherwise both the inferred variant and the variant built with a batched type spec
+    # are checked against the expected value.
     # By default, lists are converted to RaggedTensors.
     if not test_requires_typespec:
       struct_vector = structured_tensor.StructuredTensor.from_pyval(
@@ -293,6 +355,11 @@ class StructuredTensorSliceTest(test_util.TensorFlowTestCase,
        r"Key for indexing a StructuredTensor must be a string"),
   ])
   def testGetItemError(self, slice_spec, error, exception=ValueError):
+    # [FUNCTION DOC]
+    # Parameterized test: invalid keys on a scalar structured tensor must raise errors. Cases:
+    # a non-full slice, an ellipsis, a new-axis marker, and a non-string key after a slice. The
+    # expected error message pattern is error, and exception (default value error) is the type.
+    # Asserts the item-access operation raises that exception with a matching message.
     struct = structured_tensor.StructuredTensor.from_pyval(EXAMPLE_STRUCT)
     with self.assertRaisesRegex(exception, error):
       struct.__getitem__(slice_spec)
@@ -302,6 +369,11 @@ class StructuredTensorSliceTest(test_util.TensorFlowTestCase,
        r"Key for indexing a StructuredTensor must be a string"),
   ])
   def testGetItemFromVectorError(self, slice_spec, error, exception=ValueError):
+    # [FUNCTION DOC]
+    # Parameterized test: invalid keys on a vector structured tensor. The case slices all rows
+    # and then uses an integer for the field key, which must raise the exception type given
+    # (default value error) with a message matching error (key must be a string). The tensor is
+    # built from the example vector of structs. Returns nothing.
     struct = structured_tensor.StructuredTensor.from_pyval(
         EXAMPLE_STRUCT_VECTOR)
     with self.assertRaisesRegex(exception, error):
