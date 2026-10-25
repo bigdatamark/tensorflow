@@ -1,4 +1,13 @@
 #!/usr/bin/python3
+# [MODULE DOC]
+# CI build driver for XLA (and the JAX and TensorFlow builds that depend on it). Defines an
+# enumeration of named build types and a frozen data class describing each build (repository,
+# target patterns, bazel configs, tag filters, environment, options). At import time it
+# constructs and registers one build object per supported build type in a class-level registry,
+# including GPU variants generated through a helper. As a script it either prints the commands
+# of all builds (dump mode, used to refresh golden files) or runs the commands of one chosen
+# build in a subprocess. Reads KOKORO_ARTIFACTS_DIR and GITHUB_WORKSPACE from the environment at
+# import time; the Build constructor asserts that no build type is registered twice.
 # Copyright 2024 The OpenXLA Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -73,6 +82,12 @@ _GITHUB_WORKSPACE = os.environ.get("GITHUB_WORKSPACE", "$GITHUB_WORKSPACE")
 def retry(
     args: List[str], delay_seconds: int = 15, retries: int = 3
 ) -> List[str]:
+  # [FUNCTION DOC]
+  # HELPER: wraps a command so it is retried on failure when run in the CI build.
+  # Inputs: command as a list of strings; delay between attempts in seconds (default 15);
+  # number of retries (default 3). Returns a new command list that runs the original through
+  # the GNU parallel tool in a mode that only retries with a delay (nothing runs in parallel).
+  # No side effects.
   # Possibly a slight abuse of `parallel` as nothing happens in parallel, just
   # retries with delay if the command fails.
   # pyformat:disable
@@ -86,21 +101,42 @@ def retry(
 
 
 def sh(args, check=True, **kwargs):
+  # [FUNCTION DOC]
+  # HELPER: subprocess runner used to execute build commands.
+  # Inputs: command as a list of strings; check flag (default true) that makes a nonzero exit
+  # status raise a called-process error; extra keyword arguments passed to the process runner.
+  # Logs the command at info level, runs it and returns the completed-process result.
   logging.info("Starting process: %s", " ".join(args))
   return subprocess.run(args, check=check, **kwargs)
 
 
 def _dict_to_cli_options(d: Dict[str, Any]) -> List[str]:
+  # [FUNCTION DOC]
+  # HELPER: converts option mappings into bazel command-line flags.
+  # Input: mapping from option names to values. Returns a list of flag strings: an option whose
+  # value is exactly boolean true becomes a bare flag; any other value becomes name=value.
+  # Note a boolean false value yields the text "false" assigned, not omission. No side effects.
   # pylint: disable=g-bool-id-comparison
   return [f"--{k}" if v is True else f"--{k}={v}" for k, v in d.items()]
 
 
 def _write_to_sponge_config(key, value) -> None:
+  # [FUNCTION DOC]
+  # HELPER: records a key and value for the Sponge result viewer.
+  # KNOWN ISSUE: never called anywhere in this module, so it is dead code.
+  # Inputs: key and value, written as a comma-separated line appended to a file named
+  # custom_sponge_config in the current directory (created if absent). Returns nothing.
   with open("custom_sponge_config.csv", "a") as f:
     f.write(f"{key},{value}\n")
 
 
 class BuildType(enum.Enum):
+  # [CLASS DOC]
+  # Enumeration of every supported CI build (XLA, JAX and TensorFlow on Linux, Windows or
+  # macOS, with CPU or GPU variants and presubmit or benchmark flavours). Members have
+  # automatically assigned values and serve as keys of the build registry and as the choices of
+  # the build command-line flag. Names follow the pattern repo, OS, host type, backend, GPU
+  # type, CI type.
   """Enum representing all types of builds.
 
   Should be named as `REPO,OS,HOST_TYPE,BACKEND,GPU_TYPE,CI_TYPE`.
@@ -136,6 +172,11 @@ class BuildType(enum.Enum):
 
   @classmethod
   def from_str(cls, s):
+    # [FUNCTION DOC]
+    # HELPER: converts command-line text into a build type for argument parsing.
+    # Input: text naming a member; spaces become underscores and case is ignored. Returns the
+    # matching member. Raises a value error (deliberately, so the argument parser reports it
+    # nicely) when no member matches.
     try:
       return cls[s.replace(" ", "_").upper()]
     except KeyError:
@@ -146,6 +187,14 @@ class BuildType(enum.Enum):
 
 @dataclasses.dataclass(frozen=True, **_KW_ONLY_IF_PYTHON310)
 class Build:
+  # [CLASS DOC]
+  # Immutable description of one CI build (keyword-only fields on newer Python versions).
+  # Fields: build type, repository under test, bazel target patterns, bazel subcommand (default
+  # test), configs, build and test tag filters, action, test and repo environment mappings,
+  # repository overrides, bazel options, bazel startup options and extra setup command lists.
+  # Every instance registers itself in a class-level registry keyed by build type on creation,
+  # so merely constructing a Build (done at module import) makes it available through the
+  # class accessor. It can produce the bazel command line and the full list of commands.
   """Class representing a build of XLA."""
 
   _builds: ClassVar[Dict[BuildType, "Build"]] = {}
@@ -166,6 +215,11 @@ class Build:
   extra_setup_commands: Tuple[List[str], ...] = ()
 
   def __post_init__(self):
+    # [FUNCTION DOC]
+    # Runs after the data class initializer. Asserts that the build type is not already
+    # registered and that the repository is either openxla/xla or a repository override was
+    # supplied; failing either raises an assertion error. Side effect: stores this instance in
+    # the class-level registry (bypassing immutability by writing to the shared mapping).
     # pylint: disable=protected-access
     assert (
         self.type_ not in self.__class__._builds
@@ -177,11 +231,22 @@ class Build:
 
   @classmethod
   def all_builds(cls):
+    # [FUNCTION DOC]
+    # Class method returning the shared registry: a mapping from build type to the registered
+    # build object. Returns the live mapping itself (not a copy). No inputs or side effects.
     return cls._builds
 
   def bazel_command(
       self, subcommand: str = "test", extra_options: Tuple[str, ...] = ()
   ) -> List[str]:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it returns a bazel test command, but the subcommand is a
+    # parameter, so the result is a build command when called with the build subcommand.
+    # Builds the bazel command as a list of strings. Inputs: subcommand (default test) and a
+    # tuple of extra option strings appended last (default empty). Output order: bazel, startup
+    # options, subcommand, build and test tag filter flags, config flags, action, test and repo
+    # environment flags, repository override flags, option flags, extra options, a double dash
+    # separator, then the target patterns. No side effects.
     """Returns a bazel test command for this build.
 
     Args:
@@ -226,6 +291,12 @@ class Build:
     ]
 
   def commands(self) -> List[List[str]]:
+    # [FUNCTION DOC]
+    # Returns the ordered list of commands (each a list of strings) that perform this build:
+    # the extra setup commands, then (except on macOS and Windows builds) a retried dry-run
+    # bazel build with the no-build flag to prefetch dependencies, then the main bazel command
+    # with this build's subcommand, then a bazel profile analysis command. No side effects;
+    # nothing is executed.
     """Returns list of commands for a build."""
     cmds = []
 
@@ -261,6 +332,12 @@ class Build:
 def _tag_filters_for_compute_capability(
     compute_capability: int,
 ) -> Tuple[str, ...]:
+  # [FUNCTION DOC]
+  # HELPER: tag filter generator for NVIDIA GPU builds.
+  # Input: GPU compute capability as an integer (for example 75 or 90). Returns a tuple of bazel
+  # tag filters: an only-this-capability tag, then for each known capability (60 to 100) a
+  # positive tag when the given capability is at least that value or negated tags otherwise,
+  # followed by exclusions of AMD and Intel GPU tests. No side effects.
   """Returns the tag filters for the given compute capability."""
   tag_filters = (f"requires-gpu-sm{compute_capability}-only",)
   for cc in (60, 70, 80, 90, 100):
@@ -294,6 +371,14 @@ def nvidia_gpu_build_with_compute_capability(
     compute_capability: int,
     multi_gpu: bool = False,
 ) -> Build:
+  # [FUNCTION DOC]
+  # HELPER: factory for the NVIDIA GPU XLA build definitions.
+  # Keyword-only inputs: build type, tuple of bazel configs, GPU compute capability integer,
+  # and multi-GPU flag (default false, selecting multi-GPU-only versus single-GPU filters).
+  # Creates and returns a Build for the XLA repository with default XLA targets, tag filters
+  # combining NVIDIA filters with capability-specific ones, the parallel GPU execution wrapper,
+  # default bazel options, the CUDA compute capability repo environment value and an nvidia-smi
+  # setup command. Side effect: registers the new build in the registry.
   extra_gpu_tags = _tag_filters_for_compute_capability(compute_capability)
   filter_tags = (
       nvidia_only_multi_gpu_filters if multi_gpu else nvidia_single_gpu_filters
@@ -865,6 +950,10 @@ Build(
 
 
 def dump_all_build_commands():
+  # [FUNCTION DOC]
+  # Prints the commands of every registered build to standard output, sorted by build type name.
+  # Each build is wrapped by begin and end marker comment lines and each command is one space
+  # joined line. Takes no inputs, returns nothing. Used to regenerate golden command files.
   """Used to generate what commands are run for each build."""
   # Awkward workaround b/c Build instances are not hashable
   for build in sorted(Build.all_builds().values(), key=lambda b: str(b.type_)):
@@ -875,6 +964,11 @@ def dump_all_build_commands():
 
 
 def _parse_args():
+  # [FUNCTION DOC]
+  # HELPER: command-line parsing for the script entry point.
+  # Defines a required mutually exclusive choice between a build option (converted to a build
+  # type) and a dump-commands switch, parses the process arguments, and returns the namespace.
+  # Abbreviated option names are not allowed. Exits with a usage error on bad input.
   """Defines flags and parses args."""
   parser = argparse.ArgumentParser(allow_abbrev=False)
   group = parser.add_mutually_exclusive_group(required=True)
@@ -892,6 +986,11 @@ def _parse_args():
 
 
 def main():
+  # [FUNCTION DOC]
+  # Script entry point; no inputs, returns nothing. Configures logging at info level, parses
+  # arguments, then either prints all build commands (dump mode) or runs each command of the
+  # selected build in order through the subprocess helper; a failing command raises and stops
+  # the sequence. Side effects: logging setup, subprocesses, output.
   logging.basicConfig()
   logging.getLogger().setLevel(logging.INFO)
 

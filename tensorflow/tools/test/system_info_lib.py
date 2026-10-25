@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# HELPER: helper library for the TensorFlow test and benchmark tooling (log-gathering scripts).
+# Library that collects a description of the machine a test runs on and fills in the
+# MachineConfiguration protocol buffer message defined in the test log proto module.
+# It gathers CPU details, platform details, memory totals, hostname, the devices visible to
+# TensorFlow and GPU device descriptions (via the sibling GPU info library).
+# Depends on the third-party cpuinfo and psutil packages, which must be installed separately.
+# Importing has no side effects beyond the imports; all work happens when the functions run.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,6 +43,14 @@ from tensorflow.tools.test import gpu_info_lib
 
 
 def gather_machine_configuration():
+  # [FUNCTION DOC]
+  # Top-level entry point: builds a complete MachineConfiguration message for this machine.
+  # Takes no inputs. Fills in CPU info, platform info, the TensorFlow-visible device list,
+  # GPU device descriptions (packed into the generic device info field), memory info and the
+  # hostname, and returns the populated message.
+  # Side effects: enumerates TensorFlow local devices (which initializes devices) and probes
+  # GPUs. The order matters: the TensorFlow device listing must run before the direct GPU
+  # probing because the latter may load the CUDA runtime directly and confuse the executor.
   """Gather Machine Configuration.  This is the top level fn of this library."""
   config = test_log_pb2.MachineConfiguration()
 
@@ -57,10 +73,15 @@ def gather_machine_configuration():
 
 
 def gather_hostname():
+  # [FUNCTION DOC]
+  # Returns the network host name of this machine as a string. Takes no inputs, no side effects.
   return socket.gethostname()
 
 
 def gather_memory_info():
+  # [FUNCTION DOC]
+  # Returns a MemoryInfo message holding total and currently available system memory in bytes,
+  # as reported by the psutil package. Takes no inputs; no side effects.
   """Gather memory info."""
   mem_info = test_log_pb2.MemoryInfo()
   vmem = psutil.virtual_memory()
@@ -70,6 +91,18 @@ def gather_memory_info():
 
 
 def gather_cpu_info():
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the core count first set from the multiprocessing module is later overwritten
+  # by the count reported by the cpuinfo package, so the first assignment is effectively dead.
+  # KNOWN ISSUE: the CPU governor files are opened without ever being closed explicitly, and
+  # a missing "hz_advertised_raw" entry from cpuinfo would raise an unhandled error.
+  # Returns a CPUInfo message. Takes no inputs. Sets the total core count, then the number of
+  # cores this process is allowed to use (parsed from the allowed-CPU bitmask in the process
+  # status file on Linux; falls back to the total count when unavailable or on an OpError),
+  # then the brand string, core count, advertised clock speed in MHz and the L2 cache size
+  # in bytes (when reported in KB) from the cpuinfo package. Finally it reads the frequency
+  # scaling governor of every CPU and records it, or the word "mixed" when they differ.
+  # Governor read failures reported as OpError are ignored. Assumes all CPUs are identical.
   """Gather CPU Information.  Assumes all CPUs are the same."""
   cpu_info = test_log_pb2.CPUInfo()
   cpu_info.num_cores = multiprocessing.cpu_count()
@@ -116,6 +149,10 @@ def gather_cpu_info():
 
 
 def gather_available_device_info():
+  # [FUNCTION DOC]
+  # Returns a list of AvailableDeviceInfo messages, one per local device TensorFlow can see,
+  # with name, device type, memory limit and physical device description copied over.
+  # Takes no inputs. Side effect: asks TensorFlow to list local devices, which may initialize them.
   """Gather list of devices available to TensorFlow.
 
   Returns:
@@ -136,6 +173,10 @@ def gather_available_device_info():
 
 
 def gather_platform_info():
+  # [FUNCTION DOC]
+  # Returns a PlatformInfo message with the interpreter architecture bits and linkage, machine
+  # type, OS release, OS system name and OS version from the standard platform module.
+  # Takes no inputs; no side effects.
   """Gather platform info."""
   platform_info = test_log_pb2.PlatformInfo()
   (platform_info.bits, platform_info.linkage) = platform.architecture()

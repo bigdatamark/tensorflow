@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Command-line script that uploads benchmark test result files to a Google Cloud Datastore.
+# Scans a data directory for result files (JSON form of the TestResults message), converts each
+# into one Test entity plus one Entry entity per benchmark entry, uploads them in a batch, and
+# moves the processed file into an archive directory. Uses non-blocking exclusive file locks so
+# several instances can run at once. Requires the credentials environment variable for the
+# datastore. Exposes small file and lock helpers plus the upload and option-parsing functions.
+# No import-time side effects other than importing the datastore client library.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -87,16 +95,28 @@ from google.cloud import datastore
 
 
 def is_real_file(dirpath, fname):
+  # [FUNCTION DOC]
+  # HELPER: file filter used when listing benchmark files to upload.
+  # Returns true when the named entry inside the directory is a regular file and not a symbolic
+  # link. Inputs: directory path and entry name. No side effects.
   fpath = os.path.join(dirpath, fname)
   return os.path.isfile(fpath) and not os.path.islink(fpath)
 
 
 def get_mtime(dirpath, fname):
+  # [FUNCTION DOC]
+  # HELPER: sort key provider for ordering benchmark files by age.
+  # Returns the last modification time (seconds since the epoch) of the named file in the
+  # directory. Raises an OS error if the file cannot be examined. No other side effects.
   fpath = os.path.join(dirpath, fname)
   return os.stat(fpath).st_mtime
 
 
 def list_files_by_mtime(dirpath):
+  # [FUNCTION DOC]
+  # Lists the regular, non-link files directly inside the given directory and returns their
+  # names sorted from oldest to newest modification time. Raises an OS error if the directory
+  # cannot be listed. No side effects.
   """Return a list of files in the directory, sorted in increasing "mtime".
 
   Return a list of files in the given directory, sorted from older to newer file
@@ -118,14 +138,29 @@ def list_files_by_mtime(dirpath):
 # locks on them.  This imposes the limitation that the data directory must be
 # local, not NFS-mounted.
 def lock(fd):
+  # [FUNCTION DOC]
+  # HELPER: file locking utility for the uploader.
+  # KNOWN ISSUE: this function is never called in this module; only the non-blocking variant
+  # is used, so it is currently dead code.
+  # Takes an open file object and blocks until an exclusive advisory lock is acquired on it.
+  # Returns nothing. The lock is tied to the descriptor and is released when it is closed.
   fcntl.flock(fd, fcntl.LOCK_EX)
 
 
 def unlock(fd):
+  # [FUNCTION DOC]
+  # HELPER: file locking utility for the uploader.
+  # KNOWN ISSUE: never called in this module (release happens implicitly when the file closes).
+  # Takes an open file object and releases the advisory lock held on it. Returns nothing.
   fcntl.flock(fd, fcntl.LOCK_UN)
 
 
 def trylock(fd):
+  # [FUNCTION DOC]
+  # HELPER: file locking utility for the uploader.
+  # Attempts to take an exclusive advisory lock on the open file object without blocking.
+  # Returns true if the lock was acquired and false on any failure (for example when another
+  # process already holds it). Never raises.
   try:
     fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     return True
@@ -134,6 +169,14 @@ def trylock(fd):
 
 
 def upload_benchmark_data(client, data):
+  # [FUNCTION DOC]
+  # Parses one benchmark result (JSON text) and uploads it to the datastore through the client.
+  # Inputs: client is a datastore client connection; data is the JSON-encoded results text.
+  # Builds one Test entity (name, start time converted from the epoch value, and the whole raw
+  # text as a non-indexed info field) and one Entry entity per benchmark entry (test name,
+  # start time, entry name, wall time as timing, and the entry JSON as non-indexed info).
+  # All entities are written in one batch call. Returns nothing. Raises on malformed JSON or
+  # missing keys (name, start time, entries), or if the datastore write fails.
   """Parse benchmark data and use the client to upload it to the datastore.
 
   Parse the given benchmark data from the serialized JSON-format used to write
@@ -179,6 +222,14 @@ def upload_benchmark_data(client, data):
 
 
 def upload_benchmark_files(opts):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the file is locked for processing, but a failed lock is
+  # silently skipped and any exception is only printed, so errors never change the exit status.
+  # Input: opts is the parsed options object with the data directory and archive directory.
+  # Creates a datastore client, then visits files in the data directory from oldest to newest.
+  # For each file it opens it, tries a non-blocking lock, and if successful uploads its
+  # contents and moves the file into the archive directory. Files locked elsewhere are skipped;
+  # any per-file error prints a message and processing continues. Returns nothing.
   """Find benchmark files, process them, and upload their data to the datastore.
 
   Locate benchmark files in the data directory, process them, and upload their
@@ -210,6 +261,11 @@ def upload_benchmark_files(opts):
 
 
 def parse_cmd_line():
+  # [FUNCTION DOC]
+  # HELPER: command line parsing for the script entry point.
+  # Defines two required string options, the archive directory and the data directory, parses
+  # the process command line and returns the parsed arguments object. Exits with a usage
+  # message if a required option is missing.
   """Parse command line options.
 
   Returns:
@@ -231,6 +287,10 @@ def parse_cmd_line():
 
 
 def main():
+  # [FUNCTION DOC]
+  # Script entry point. Parses the command line, verifies that the datastore credentials
+  # environment variable is set (raises a value error otherwise), then uploads all benchmark
+  # files. Takes no inputs and returns nothing.
   options = parse_cmd_line()
 
   # Check that credentials are specified to access the datastore.

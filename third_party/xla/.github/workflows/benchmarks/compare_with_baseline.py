@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Command-line script for the XLA benchmark GitHub workflow. Compares a benchmark results JSON
+# file with a baseline YAML file for a given configuration id and fails (exit code 1) when any
+# supported metric exceeds baseline times one plus the allowed threshold. Emits GitHub Actions
+# annotation lines (error, warning, notice) on standard output. Missing or empty baselines, or
+# missing metrics, cause a clean exit with code 0. Helpers load and validate the files and
+# compare the metrics; main wires them to command-line options. Requires the yaml library.
 # Copyright 2025 The OpenXLA Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +28,11 @@ import yaml
 
 
 def load_results_data(results_json_file):
+  # [FUNCTION DOC]
+  # HELPER: input loader for the baseline comparison script.
+  # Input: path of the results JSON file. Returns the parsed JSON content. On a parse error or
+  # an operating-system read error it prints a GitHub error annotation and exits the process
+  # with status 1.
   """Loads and parses the results JSON file."""
   try:
     with open(results_json_file, "r") as f:
@@ -37,6 +49,11 @@ def load_results_data(results_json_file):
 
 
 def load_baseline_data(baseline_yaml_file):
+  # [FUNCTION DOC]
+  # HELPER: input loader for the baseline comparison script.
+  # Input: path of the baseline YAML file. Returns the parsed content (using the safe loader).
+  # On a YAML parse error or a read error it prints a GitHub error annotation and exits the
+  # process with status 1.
   """Loads and parses the baseline YAML file."""
   try:
     with open(baseline_yaml_file, "r") as f:
@@ -55,6 +72,13 @@ def load_baseline_data(baseline_yaml_file):
 
 
 def validate_baseline_data(baseline_data_full, config_id, baseline_yaml_file):
+  # [FUNCTION DOC]
+  # HELPER: validation step of the baseline comparison script.
+  # Inputs: the full parsed baseline mapping, the configuration id to look up, and the baseline
+  # file path (used only in messages). Returns the mapping of metric names to baseline entries
+  # for that configuration id. If the data is empty or not a mapping, the id is absent, or its
+  # entry is not a mapping, it prints a warning or notice annotation and exits the process
+  # with status 0 (skip comparison, not failure).
   """Validates the loaded baseline data and extracts config-specific baselines."""
   if not baseline_data_full or not isinstance(baseline_data_full, dict):
     print(
@@ -84,6 +108,19 @@ def validate_baseline_data(baseline_data_full, config_id, baseline_yaml_file):
 def compare_metrics(
     results_data, config_baselines, results_json_file, config_id
 ):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the lookup of the baseline value uses the key without catching a missing key
+  # error, so an entry that has only the other baseline kind (for example gigabytes for a time
+  # metric) raises an unhandled key error instead of being skipped; also a non-mapping metric
+  # entry in the results would fail on the membership test.
+  # Inputs: parsed results mapping, the baseline mapping for the configuration, the results
+  # file path (for annotations) and the configuration id. Looks up the metrics container in
+  # the results (if missing or not a mapping it prints the summary and exits with status 0).
+  # For each baseline metric it skips malformed, unsupported, non-numeric or missing metrics
+  # with warning lines, otherwise compares the actual value with baseline times one plus the
+  # threshold fraction, and records an error annotation with percent difference when above it,
+  # or a pass line. Returns a pair: a flag telling whether any regression was found, and the
+  # list of summary message lines. Performs no printing itself except on the early exit.
   """Compares metrics from results to baselines and reports findings."""
   regressions_found = False
   summary_messages = ["\n--- Comparison Summary ---"]
@@ -249,6 +286,12 @@ def compare_metrics(
 
 
 def main():
+  # [FUNCTION DOC]
+  # Script entry point; takes no direct inputs and never returns normally (always exits the
+  # process). Parses three required command-line options: results JSON path, baseline YAML
+  # path and configuration id. Exits 1 if the results file is missing; exits 0 with a notice if
+  # the baseline file is missing. Otherwise loads and prints both datasets, runs the metric
+  # comparison, prints the summary, and exits 1 if any regression was found or 0 otherwise.
   parser = argparse.ArgumentParser(
       description=(
           "Compare benchmark results to baselines and fail on regression."

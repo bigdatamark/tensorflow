@@ -1,4 +1,20 @@
 #!/usr/bin/env python3
+# [MODULE DOC]
+# Command-line script (runs everything at import time, no functions) that merges failing JUnit
+# XML test result files under a directory into a single summary XML file.
+# Usage: first argument is the start directory searched recursively, second is the output file.
+# Behavior: uses a grep subprocess to find result files that report failures or errors; if none
+# are found it prints a message and exits successfully. For each file it parses the XML
+# (parse failures are printed and then ignored), tags every test suite with its source path,
+# drops empty test cases, copies captured output text into error/failure elements, and removes
+# duplicate failures (same test name ignoring hexadecimal ids plus same text) while counting
+# repeats. Afterwards it rewrites each failure text with a note giving the source file, whether
+# it is a pip-config test, the failure count, and whether it looks flaky (three failures means
+# not flaky). Finally it creates the output directory, updates statistics and writes the file.
+# KNOWN ISSUE: if parsing a file fails, the variable holding the previous parse result is
+# reused (or is undefined for the first file), so the failure is not truly skipped.
+# KNOWN ISSUE: the grep result is bytes of newline-separated paths, so paths containing
+# newlines would break; the unused exception variable and an unused failure-count variable exist.
 # pylint:disable=protected-access
 #
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.

@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Script run by an XLA GitHub workflow after a commit lands. If the head commit message says it
+# reverts earlier commits, it finds the pull requests those commits came from and comments on
+# each that it was rolled back, then sets its status to open. Uses the sibling github_api
+# helper module and reads the access token from the environment. Runs main only when executed
+# as a script; no import-time side effects.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +27,10 @@ import github_api
 
 
 def get_reverted_commit_hashes(message: str) -> list[str]:
+  # [FUNCTION DOC]
+  # Extracts commit hashes mentioned after the word "reverts" (case-insensitive, 5 to 40 hex
+  # digits) from a commit message. Input: the message text. Returns a list of hash strings
+  # (possibly empty). Side effect: prints the message and the found hashes.
   """Searches a commit message for `reverts <commit hash>` and returns the found SHAs.
 
   Arguments:
@@ -40,6 +50,14 @@ def get_associated_prs(
     api: github_api.GitHubAPI,
     commit_hashes: Sequence[str],
 ) -> Generator[int, None, None]:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it yields pairs of PR number and SHA as strings, but it
+  # actually yields only the PR number as an integer. The match is anchored at the message
+  # start, so only messages beginning with the PR marker are found.
+  # Inputs: a GitHub API client and a sequence of commit hashes. For each hash it fetches the
+  # commit from the openxla/xla repository, looks for a leading PR number in the message and
+  # yields that number. Prints progress, and a final message when done (printed even if some
+  # were found). Raises HTTP errors from the API client.
   """Finds PRs associated with commits.
 
   Arguments:
@@ -61,6 +79,13 @@ def get_associated_prs(
 
 
 def main():
+  # [FUNCTION DOC]
+  # Workflow entry point; takes no inputs and returns nothing. Builds an API client with the
+  # token from the environment, fetches the head commit of openxla/xla, finds reverted commits
+  # and their PRs, and for each PR posts a comment saying it was rolled back in the head commit
+  # and sets the status to open. Side effects: network calls, comments on GitHub, printing.
+  # KNOWN ISSUE: the status update call sends a status field with a POST, which the GitHub API
+  # likely ignores, so PRs may not actually be reopened.
   api = github_api.GitHubAPI(os.getenv("GH_TOKEN"))
   head_commit = api.get_commit("openxla/xla", "HEAD")
   commit_hashes = get_reverted_commit_hashes(head_commit["commit"]["message"])
