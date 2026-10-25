@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Defines the public tf.Module base class, a named container that discovers variables and
+# submodules held in its attributes by reflection, and provides a name scope for grouping
+# operations. Also contains helper functions for validating and deriving module names
+# (camel case to snake case) and the recursive attribute walker that implements flattening
+# (handling composite tensors, de-duplication and cycles). The Module class is exported under
+# the public API name Module through a decorator at import time. No other import-time side
+# effects beyond compiling two regular expressions.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,6 +36,13 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export("Module")
 class Module(autotrackable.AutoTrackable):
+  # [CLASS DOC]
+  # Public base class for stateful components (tf.Module). Instances have a validated name and a
+  # name scope. Properties collect variables, trainable variables, non-trainable variables and
+  # submodules by reflecting over instance attributes (sorted by name, recursing into child
+  # modules). A class-level set lists internal tracking attributes ignored when flattening, and a
+  # class method decorator enters the module name scope around a method. Inherits automatic
+  # dependency tracking from AutoTrackable. Registered for export as the public Module symbol.
   """Base neural network module class.
 
   A module is a named container for `tf.Variable`s, other `tf.Module`s and
@@ -105,6 +120,12 @@ class Module(autotrackable.AutoTrackable):
   ))
 
   def __init__(self, name=None):
+    # [FUNCTION DOC]
+    # Constructor. The optional name must be a valid identifier string; when omitted the name is
+    # derived from the class name converted to snake case. Raises a value error for an invalid
+    # name. Side effects: stores the name, and opens a name scope to record it. In TF2 behavior
+    # a reusable name scope object is stored; otherwise only the resulting scope name string is
+    # stored (the scope is re-created on each access).
     if name is None:
       name = camel_to_snake(type(self).__name__)
     else:
@@ -123,6 +144,9 @@ class Module(autotrackable.AutoTrackable):
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Property returning the module name stored at construction (supplied or derived). It does
+    # not include parent module names.
     """Returns the name of this module as passed or determined in the ctor.
 
     NOTE: This is not the same as the `self.name_scope.name` which includes
@@ -132,6 +156,11 @@ class Module(autotrackable.AutoTrackable):
 
   @property
   def name_scope(self):
+    # [FUNCTION DOC]
+    # Property returning a name scope context manager for this module. In TF2 behavior it returns
+    # the memoized scope object created in the constructor; otherwise it creates a new scope from
+    # the stored scope name string each time (not skipped in eager mode), since it is not
+    # re-entrant there. Takes no inputs.
     """Returns a `tf.name_scope` instance for this class."""
     if tf2.enabled():
       return self._name_scope
@@ -141,6 +170,10 @@ class Module(autotrackable.AutoTrackable):
 
   @property
   def variables(self):
+    # [FUNCTION DOC]
+    # Property returning a tuple of all variables found by reflection on this module and its
+    # submodules, including variables inside composite tensors (which are expanded). Own
+    # attributes come first in name order, then submodules. Recomputed on every access.
     """Sequence of variables owned by this module and its submodules.
 
     Note: this method uses reflection to find variables on the current instance
@@ -156,6 +189,10 @@ class Module(autotrackable.AutoTrackable):
 
   @property
   def trainable_variables(self):
+    # [FUNCTION DOC]
+    # Property returning a tuple of the variables, found by reflection over this module and its
+    # submodules, whose trainable flag is true (a missing flag counts as false). Composite
+    # tensors are expanded. Recomputed on every access.
     """Sequence of trainable variables owned by this module and its submodules.
 
     Note: this method uses reflection to find variables on the current instance
@@ -172,6 +209,10 @@ class Module(autotrackable.AutoTrackable):
 
   @property
   def non_trainable_variables(self):
+    # [FUNCTION DOC]
+    # Property returning a tuple of the variables, found by reflection over this module and its
+    # submodules, whose trainable flag is false or missing. Composite tensors are expanded.
+    # Recomputed on every access.
     """Sequence of non-trainable variables owned by this module and its submodules.
 
     Note: this method uses reflection to find variables on the current instance
@@ -188,6 +229,9 @@ class Module(autotrackable.AutoTrackable):
 
   @property
   def submodules(self):
+    # [FUNCTION DOC]
+    # Property returning a tuple of every Module instance reachable through attributes of this
+    # module, recursively (this module itself is not included). Composites are not expanded.
     """Sequence of all sub-modules.
 
     Submodules are modules which are properties of this module, or found as
@@ -216,6 +260,13 @@ class Module(autotrackable.AutoTrackable):
                attribute_traversal_key=None,
                with_path=False,
                expand_composites=False):
+    # [FUNCTION DOC]
+    # HELPER: shared reflection routine behind the variable and submodule properties.
+    # Inputs: recursive (descend into child modules, default true), predicate (optional filter
+    # callback; nothing means accept every leaf), attribute_traversal_key (optional sort key for
+    # attribute names), with_path (also yield the attribute path), expand_composites (expand
+    # composite tensors into components). Returns a generator of matching leaves, or of path and
+    # leaf pairs. Delegates to the module-level walker, passing the class ignore list.
     """Flattened attribute values in sorted order by attribute name.
 
     Modules are flattened by first walking their attributes in name order.
@@ -281,6 +332,11 @@ class Module(autotrackable.AutoTrackable):
 
   @classmethod
   def with_name_scope(cls, method):
+    # [FUNCTION DOC]
+    # Class method decorator. Takes a method and returns a wrapped version that enters the
+    # instance's name scope before calling the original method with all its arguments, returning
+    # its result. The wrapper preserves the original function's metadata via the decorator
+    # utility. The class argument is unused.
     """Decorator to automatically enter the module name scope.
 
     >>> class MyModule(tf.Module):
@@ -307,6 +363,9 @@ class Module(autotrackable.AutoTrackable):
       The original method wrapped such that it enters the module's name scope.
     """
     def method_with_name_scope(self, *args, **kwargs):
+      # [FUNCTION DOC]
+      # Wrapper: enters the module's name scope and forwards all positional and keyword arguments
+      # to the wrapped method, returning its result.
       with self.name_scope:
         return method(self, *args, **kwargs)
 
@@ -314,18 +373,28 @@ class Module(autotrackable.AutoTrackable):
 
 
 def _is_variable(obj):
+  # [FUNCTION DOC]
+  # HELPER: predicate for Module flattening. Returns true if the object is a variable instance.
   return isinstance(obj, variables.Variable)
 
 
 def _is_trainable_variable(obj):
+  # [FUNCTION DOC]
+  # HELPER: predicate for Module flattening. True if the object is a variable whose trainable
+  # attribute is true (missing counts as false).
   return _is_variable(obj) and getattr(obj, "trainable", False)
 
 
 def _is_non_trainable_variable(obj):
+  # [FUNCTION DOC]
+  # HELPER: predicate for Module flattening. True if the object is a variable whose trainable
+  # attribute is false or missing.
   return _is_variable(obj) and not getattr(obj, "trainable", False)
 
 
 def _is_module(obj):
+  # [FUNCTION DOC]
+  # HELPER: predicate for Module flattening. True if the object is an instance of Module.
   return isinstance(obj, Module)
 
 _CAMEL_TO_SNAKE_R = re.compile(r"((?<=[a-z0-9])[A-Z]|(?!^)[A-Z](?=[a-z]))")
@@ -333,14 +402,28 @@ _VALID_IDENTIFIER = re.compile(r"^[a-zA-Z_]([a-zA-Z0-9_])*$")
 
 
 def valid_identifier(name):
+  # [FUNCTION DOC]
+  # HELPER: name validation for Module. Returns true if the string matches the pattern of a
+  # Python identifier made of letters, digits and underscores not starting with a digit.
+  # Note the end-of-line anchor allows a trailing newline character to pass.
   return bool(_VALID_IDENTIFIER.match(name))
 
 
 def camel_to_snake(value):
+  # [FUNCTION DOC]
+  # HELPER: derives default module names. Converts a camel case string to lower snake case by
+  # inserting an underscore before capital letters that follow a lowercase letter or digit, or
+  # that start a new word before a lowercase letter, then lowercasing. Returns the new string.
   return _CAMEL_TO_SNAKE_R.sub(r"_\1", value).lower()
 
 
 def _flatten_non_variable_composites_with_tuple_path(structure, path_prefix=()):
+  # [FUNCTION DOC]
+  # HELPER: expansion step for the Module walker (when composite expansion is requested).
+  # Generator. Flattens a nested structure with tuple paths; every composite tensor leaf that is
+  # not a variable is replaced, recursively, by its components, with the path extended by the
+  # composite's value type name. Other leaves are yielded as path and value pairs, with the
+  # optional path_prefix (default empty) prepended. Uses private type spec methods.
   """Flattens composite tensors with tuple path expect variables."""
   for path, child in nest.flatten_with_tuple_paths(structure):
     if (isinstance(child, composite_tensor.CompositeTensor) and
@@ -365,6 +448,19 @@ def _flatten_module(module,
                     module_path=(),
                     seen=None,
                     recursion_stack=None):
+  # [FUNCTION DOC]
+  # HELPER: recursive implementation behind the Module flattening method.
+  # KNOWN ISSUE: the docstring says it implements "flatten" and that predicate is optional with
+  # a default, but the function is named with a leading underscore, predicate is a required
+  # positional argument and a nothing value would fail when called.
+  # Generator. Walks the instance attribute dictionary of the module in sorted (optionally keyed)
+  # name order, skipping ignored attribute names. Each attribute is flattened (optionally
+  # expanding composites); a failure raises a value error naming the property, chained to the
+  # cause. Without paths, leaves already seen (by identity) are skipped, using the shared seen
+  # set. Leaves matching the predicate are yielded (as path and leaf pairs when with_path is
+  # true). Module leaves are queued and processed after direct attributes, depth first, each
+  # with its own ignore list. Cycles are broken by turning off recursion for a module already
+  # on the recursion stack. Mutates the seen set and recursion stack arguments.
   """Implementation of `flatten`.
 
   Args:
