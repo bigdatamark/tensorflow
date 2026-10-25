@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Tests for deterministic-mode behavior of the sparse-times-dense matrix multiplication op. One
+# test class checks that, when op determinism is enabled, the GPU path raises an unimplemented
+# error; another checks that repeated CPU evaluations give identical results. Contains a
+# module-level data generator helper. When run as a script, it enables op determinism globally
+# before starting the TensorFlow test runner.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,6 +34,18 @@ from tensorflow.python.platform import test
 
 
 def _gen_data(m, k, n, nnz, row_occupied_rate, data_type, seed):
+  # [FUNCTION DOC]
+  # HELPER: generates reproducible random operands for the deterministic matmul tests.
+  # KNOWN ISSUE: the docstring lists only some parameters (data_type and seed are undocumented),
+  # has a typo ("col could"), and calls row_occupied_rate a probability although it is used as the
+  # fraction of rows that are sampled to hold entries. It also says the matmul "returns" but this
+  # function returns the two operands.
+  # Inputs: m, k, n, the dimensions (sparse operand m by k, dense operand k by n); nnz, number of
+  # coordinates generated; row_occupied_rate, fraction of the m rows allowed to contain entries;
+  # data_type, numpy element type; seed, used to seed both the python and numpy random generators.
+  # Coordinates are drawn at random from the occupied rows and any column, so duplicates are
+  # possible. Values are standard normal; complex types get a matching imaginary part. Returns a
+  # pair: the sparse tensor and the dense constant tensor. Side effect: reseeds global generators.
   """Generate valid input data for tf.sparse.sparse_dense_matmul
 
   returns sparse matrix a (type SparseTensor), dense matrix b (type Tensor)
@@ -51,6 +69,10 @@ def _gen_data(m, k, n, nnz, row_occupied_rate, data_type, seed):
     indices.append([row, col])
 
   def maybe_complex(x):
+    # [FUNCTION DOC]
+    # HELPER: gives complex arrays a non-zero imaginary part. Input x is a numpy array. If it has
+    # a complex type, returns the array scaled to have imaginary part equal to its real part
+    # (divided by two); otherwise returns x unchanged. No side effects.
     if x.dtype.kind == "c":  # complex
       return (x + 1j * x) / 2
     return x
@@ -66,6 +88,10 @@ def _gen_data(m, k, n, nnz, row_occupied_rate, data_type, seed):
 
 
 class SparseTensorDenseMatmulOpDeterminismExceptionsTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case verifying that the GPU kernel of the sparse-dense matmul op reports an
+  # unimplemented-deterministic-implementation error when op determinism is enabled. Holds no
+  # state.
   """Test d9m-unimplemented exceptions from SparseTensorDenseMatmulOp.
 
   Test that tf.errors.UnimplementedError is thrown, as appropriate, by the
@@ -80,6 +106,13 @@ class SparseTensorDenseMatmulOpDeterminismExceptionsTest(test.TestCase):
   @test_util.run_gpu_only
   @test_util.run_in_graph_and_eager_modes
   def testExceptionThrowing(self):
+    # [FUNCTION DOC]
+    # Scenario: only runs when a GPU exists, in graph and eager modes. For half, single, double,
+    # complex64 and complex128 data, generate a 5x10 sparse operand with 20 entries and a 10x7
+    # dense operand, force GPU placement, multiply and evaluate.
+    # Expected: an unimplemented error stating that a deterministic GPU implementation of the op
+    # is not currently available. Relies on determinism having been enabled by the script entry
+    # point (when run through other runners the error may not occur).
     with self.session(), test_util.force_gpu():
       for data_type in [
           np.float16, np.float32, np.float64, np.complex64, np.complex128
@@ -102,10 +135,20 @@ class SparseTensorDenseMatmulOpDeterminismExceptionsTest(test.TestCase):
 
 
 class SparseTensorDenseMatmulOpDeterministicTest(test.TestCase):
+  # [CLASS DOC]
+  # KNOWN ISSUE: the docstring has a typo in the op name (SparseTensorDenseMatul).
+  # Test case verifying that the sparse-dense matmul op gives bit-identical results on repeated
+  # CPU runs. Holds no state.
   """Test that SparseTensorDenseMatul operates reproducibly (on CPU only)."""
 
   @test_util.run_in_graph_and_eager_modes
   def testForward(self):
+    # [FUNCTION DOC]
+    # Scenario: for half, single, double, complex64 and complex128 data (integer and bfloat16 are
+    # skipped), generate a large sparse operand (2430 by 615 with 65779 entries in about 2 percent
+    # of the rows) and a dense operand with 857 columns, force CPU placement, multiply once and
+    # then five more times.
+    # Expected: each of the five repeated results is exactly equal to the first one.
     for data_type in [
         np.float16, np.float32, np.float64, np.complex64, np.complex128
     ]:  # skipping int32 and bfloat16

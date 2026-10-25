@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# KNOWN ISSUE: the benchmark code uses the nn_ops module, but this file never imports nn_ops
+# (only the gradient module of nn_ops is imported), so running the benchmark mode fails with a
+# name error when the dense or sparse benchmark helper runs.
+# Entry module for the sparse softmax cross entropy with logits op tests. It re-exports the shared
+# base test class under the name SparseXentOpTest so the test runner discovers those cases, and
+# adds a benchmark comparing the sparse op with a sparse-to-dense conversion followed by the dense
+# softmax cross entropy op, forward and backward. Importing it registers the op's gradient
+# function. Run as a script with the benchmarks switch it runs the benchmark through the
+# application runner; otherwise it starts the normal TensorFlow test runner.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -38,6 +48,15 @@ SparseXentOpTest = sparse_xent_op_test_base.SparseXentOpTestBase
 
 
 def _sparse_vs_dense_xent_benchmark_dense(labels, logits):
+  # [FUNCTION DOC]
+  # HELPER: benchmark helper that builds the dense-target loss graph.
+  # KNOWN ISSUE: calls the dense softmax cross entropy through the nn_ops module, which is not
+  # imported in this file, so it raises a name error when called.
+  # Inputs: labels, integer class numbers per example; logits, matrix of scores (batch by classes).
+  # Copies both through identity ops, then (on CPU, since sparse-to-dense must be there) turns the
+  # labels into flat positions, scatters ones into a dense vector, reshapes it into a one-hot
+  # target matrix, computes the dense cross entropy, sums it, and takes the gradient of the sum
+  # with respect to the logits. Returns a pair: the summed loss and the gradient tensors.
   labels = array_ops.identity(labels)
   logits = array_ops.identity(logits)
   with ops_lib.device("/cpu:0"):  # Sparse-to-dense must be on CPU
@@ -57,6 +76,14 @@ def _sparse_vs_dense_xent_benchmark_dense(labels, logits):
 
 
 def _sparse_vs_dense_xent_benchmark_sparse(labels, logits):
+  # [FUNCTION DOC]
+  # HELPER: benchmark helper that builds the sparse-label loss graph.
+  # KNOWN ISSUE: calls the sparse cross entropy through the nn_ops module, which is not imported
+  # in this file, so it raises a name error when called.
+  # Inputs: labels, numpy array of class numbers (converted to 64-bit integers); logits, matrix of
+  # scores. Copies both through identity ops, computes the sparse softmax cross entropy, sums it,
+  # and takes the gradient of the sum with respect to the logits. Returns a pair: the summed loss
+  # and the gradient tensors.
   # Using sparse_softmax_cross_entropy_with_logits
   labels = labels.astype(np.int64)
   labels = array_ops.identity(labels)
@@ -70,6 +97,15 @@ def _sparse_vs_dense_xent_benchmark_sparse(labels, logits):
 
 
 def sparse_vs_dense_xent_benchmark(batch_size, num_entries, use_gpu):
+  # [FUNCTION DOC]
+  # Benchmark driver (not a test): times the dense-target approach against the sparse op for one
+  # size and prints one result line.
+  # Inputs: batch_size, number of examples; num_entries, number of classes; use_gpu, boolean; when
+  # false the graph is built under CPU placement (otherwise default placement with soft placement
+  # allowed). Uses random labels and single-precision logits (global numpy randomness, unseeded).
+  # Creates a session configured to use about 30 percent of GPU memory, runs each graph 20 times
+  # as warm-up and 20 times timed, and prints the batch, depth, GPU flag, both average times and
+  # their ratio. Returns nothing.
   config = config_pb2.ConfigProto()
   config.allow_soft_placement = True
   config.gpu_options.per_process_gpu_memory_fraction = 0.3
@@ -77,6 +113,10 @@ def sparse_vs_dense_xent_benchmark(batch_size, num_entries, use_gpu):
   logits = np.random.randn(batch_size, num_entries).astype(np.float32)
 
   def _timer(sess, ops):
+    # [FUNCTION DOC]
+    # HELPER: measures average run time per run. Inputs: sess, a session; ops, the tensors to
+    # run. Runs them 20 times to warm up, then times 20 runs, and returns the elapsed wall-clock
+    # seconds divided by 20.
     # Warm in
     for _ in range(20):
       sess.run(ops)
@@ -113,6 +153,11 @@ def sparse_vs_dense_xent_benchmark(batch_size, num_entries, use_gpu):
 
 
 def main(_):
+  # [FUNCTION DOC]
+  # Entry point for the benchmark mode. The single argument is the unused command-line argument
+  # list. Prints a table header, then for CPU and then GPU runs the benchmark driver for batch
+  # sizes 32, 64 and 128 with depths 100, 1000 and 10000, plus two very deep cases (32 by
+  # 100000 and 8 by 1000000). Returns nothing.
   print("Sparse Xent vs. SparseToDense + Xent")
   print("batch \t depth \t gpu \t dt(dense) \t dt(sparse) "
         "\t dt(sparse)/dt(dense)")
