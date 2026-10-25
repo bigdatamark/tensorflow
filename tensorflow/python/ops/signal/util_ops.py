@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# HELPER: utility module shared by the signal ops (the docstring still mentions the old contrib
+# location). Provides gcd, a greatest-common-divisor op used by shape_ops.frame to pick the
+# subframe size. Has no import-time side effects beyond imports.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +30,15 @@ from tensorflow.python.ops import while_loop
 
 
 def gcd(a, b, name=None):
+  # [FUNCTION DOC]
+  # HELPER: greatest common divisor for frame size computations.
+  # KNOWN ISSUE: the branch for old Python 2 versions (using the fractions module) is dead code in
+  # a Python 3 only codebase. In the dynamic path the two inputs are assumed positive: a zero
+  # second value ends the loop immediately returning the first.
+  # Inputs: a and b, scalar integer tensors or values. Raises a value error (or shape error) if
+  # either is non-scalar or non-integer. If both are statically known, returns a constant tensor
+  # computed in Python; otherwise builds a graph loop with Euclid's algorithm (no backprop) and
+  # returns the scalar result.
   """Returns the greatest common divisor via Euclid's algorithm.
 
   Args:

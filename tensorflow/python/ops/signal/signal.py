@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Aggregation module for the signal-processing ops; it only re-exports names.
+# It imports the signal package and re-exports the discrete cosine transforms (dct, idct), FFT
+# family (fft, fft2d, fft3d, ifft*, rfft*, irfft*, fftshift, ifftshift), mel weight matrix, MFCC,
+# overlap_and_add, frame, STFT / inverse STFT (with window function factory) and the Hamming and
+# Hann windows. The N-dimensional FFT ops are not re-exported here. Importing it has no behavior
+# of its own besides loading those submodules; this is a helper module for the public namespace.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

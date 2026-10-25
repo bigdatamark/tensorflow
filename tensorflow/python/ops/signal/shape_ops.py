@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Shape ops for splitting signals into frames.
+# Exposes the public op signal.frame, which turns an axis of a tensor into overlapping (or
+# gapped) frames, plus a private helper that infers the static result shape. Depends on util_ops
+# for the greatest common divisor. Used by mel_ops and spectral_ops. Import-time side effect:
+# registers the op with the public API exporter and dispatch support.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,6 +33,14 @@ from tensorflow.python.util.tf_export import tf_export
 
 
 def _infer_frame_shape(signal, frame_length, frame_step, pad_end, axis):
+  # [FUNCTION DOC]
+  # HELPER: static shape inference for frame.
+  # Inputs: the signal tensor, and frame length, frame step and axis (scalar tensors, evaluated to
+  # constants if possible), and the pad_end flag. Returns nothing/null if the signal rank is
+  # unknown; a list of unknown entries (rank plus one) if the axis is not constant; otherwise a
+  # list with the outer dimensions, number of frames (known only when the axis size and needed
+  # parameters are static, using ceiling division if padding else floor-based counting, floored at
+  # zero), the frame length, and the inner dimensions. No side effects.
   """Infers the shape of the return value of `frame`."""
   frame_length = tensor_util.constant_value(frame_length)
   frame_step = tensor_util.constant_value(frame_step)
@@ -56,6 +70,18 @@ def _infer_frame_shape(signal, frame_length, frame_step, pad_end, axis):
 @dispatch.add_dispatch_support
 def frame(signal, frame_length, frame_step, pad_end=False, pad_value=0, axis=-1,
           name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says a value error is raised if pad_value is not a scalar, but that
+  # check only happens when pad_end is true. The code also never checks that frame_length and
+  # frame_step are positive.
+  # Public op signal.frame. Inputs: signal (rank at least one); frame_length and frame_step
+  # (integer scalars); pad_end (default false); pad_value (scalar used for padding, default zero);
+  # axis (scalar integer, default last, negative allowed); optional name. Output: tensor where the
+  # chosen axis is replaced by two dimensions, number of frames and frame length.
+  # Raises a value error for wrong ranks. Implementation: optionally pads the end with pad_value,
+  # splits the axis into subframes of the greatest common divisor of length and step, gathers
+  # subframes with computed selector indices, reshapes, and sets the inferred static shape.
+  # Handles static and dynamic shapes. Adds only graph ops.
   """Expands `signal`'s `axis` dimension into frames of `frame_length`.
 
   Slides a window of size `frame_length` over `signal`'s `axis` dimension
@@ -127,6 +153,9 @@ def frame(signal, frame_length, frame_step, pad_end=False, pad_value=0, axis=-1,
                                       axis)
 
     def maybe_constant(val):
+      # [FUNCTION DOC]
+      # HELPER: returns a pair for the frame function: the constant value of the given tensor and
+      # true if it can be evaluated statically, otherwise the tensor itself and false.
       val_static = tensor_util.constant_value(val)
       return (val_static, True) if val_static is not None else (val, False)
 

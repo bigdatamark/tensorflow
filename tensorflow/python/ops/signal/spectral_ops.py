@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Spectral operations for the signal package: short-time Fourier transform and its inverse, the
+# modified discrete cosine transform (MDCT) and its inverse, and the helper that builds a matching
+# inverse window. Combines framing (shape_ops), windowing (window_ops), real FFTs (fft_ops), DCTs
+# (dct_ops) and overlap-add reconstruction (reconstruction_ops).
+# Import-time side effect: registers stft, inverse_stft_window_fn, inverse_stft, mdct and
+# inverse_mdct with the public API exporter and dispatch support. Default window functions are
+# bound at import time as default argument values.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,6 +44,16 @@ from tensorflow.python.util.tf_export import tf_export
 def stft(signals, frame_length, frame_step, fft_length=None,
          window_fn=window_ops.hann_window,
          pad_end=False, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says fft_length is an integer scalar, but unlike inverse_stft this
+  # function does not check that it is a scalar; it is passed as a one-element list to the FFT.
+  # Public op signal.stft. Inputs: signals (real float tensor, rank at least one, last axis is
+  # time); frame_length and frame_step (integer scalars); fft_length (optional, default the
+  # smallest power of two not below frame_length); window_fn (callable taking a length and a dtype
+  # and returning a window, default Hann; null disables windowing); pad_end (default false);
+  # optional name. Frames the signal, multiplies by the window, applies a real FFT of fft_length
+  # (padding or cropping the frames accordingly). Returns a complex tensor shaped batch dims,
+  # frames, fft_length / 2 + 1. Raises a value error for rank below one or non-scalar lengths.
   """Computes the [Short-time Fourier Transform][stft] of `signals`.
 
   Implemented with TPU/GPU-compatible ops and supports gradients.
@@ -97,6 +115,12 @@ def stft(signals, frame_length, frame_step, fft_length=None,
 def inverse_stft_window_fn(frame_step,
                            forward_window_fn=window_ops.hann_window,
                            name=None):
+  # [FUNCTION DOC]
+  # Public op signal.inverse_stft_window_fn. Inputs: frame_step (integer scalar), forward_window_fn
+  # (window callable used by the forward transform, default Hann), optional name. Returns a
+  # callable that, given a frame length and dtype, produces the forward window divided by the sum
+  # of squared overlapping windows (Griffin and Lim), so overlap-add reconstructs the signal.
+  # The outer function itself does no tensor work; checks happen when the callable runs.
   """Generates a window function that can be used in `inverse_stft`.
 
   Constructs a window that is equal to the forward window with a further
@@ -117,6 +141,14 @@ def inverse_stft_window_fn(frame_step,
       inverse_stft.
   """
   def inverse_stft_window_fn_inner(frame_length, dtype):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring lists errors about the window callable and a non-scalar step,
+    # which are not checked; only the scalar-rank checks on frame step and frame length are made,
+    # and the Raises text is garbled (frame_step repeated).
+    # Returned callable of the factory. Inputs: frame_length (scalar integer) and dtype of the
+    # waveform. Builds the forward window, squares it, folds it into blocks of frame_step samples
+    # (zero padded), sums the overlapping blocks, tiles back, and truncates to frame_length.
+    # Returns the forward window divided by that sum, with zero where the sum is zero.
     """Computes a window that can be used in `inverse_stft`.
 
     Args:
@@ -165,6 +197,14 @@ def inverse_stft(stfts,
                  fft_length=None,
                  window_fn=window_ops.hann_window,
                  name=None):
+  # [FUNCTION DOC]
+  # Public op signal.inverse_stft. Inputs: stfts (complex tensor, rank at least two, last axis the
+  # fft_length / 2 + 1 unique bins); frame_length and frame_step (integer scalars); fft_length
+  # (optional scalar, default smallest power of two not below frame_length); window_fn (callable,
+  # default Hann; null disables windowing; use the inverse window factory for exact inversion);
+  # optional name. Applies an inverse real FFT, pads or crops each frame to frame_length, restores
+  # static shape info, windows, and overlap-adds frames with frame_step. Returns the real
+  # reconstructed signal. Raises a value error for rank below two or non-scalar arguments.
   """Computes the inverse [Short-time Fourier Transform][stft] of `stfts`.
 
   To reconstruct an original waveform, a complementary window function should
@@ -280,6 +320,13 @@ def inverse_stft(stfts,
 
 
 def _enclosing_power_of_two(value):
+  # [FUNCTION DOC]
+  # HELPER: default fft_length computation for stft and inverse_stft.
+  # KNOWN ISSUE: the power is computed as the ceiling of a floating-point ratio of natural logs,
+  # which can round slightly above an integer for exact powers of two and then return the next
+  # power; the result is also only meaningful for positive values.
+  # Input: a scalar integer tensor. Returns a scalar tensor of the same dtype holding the smallest
+  # power of two not below it (a constant when the input is statically known, else graph ops).
   """Return 2**N for integer N such that 2**N >= value."""
   value_static = tensor_util.constant_value(value)
   if value_static is not None:
@@ -297,6 +344,16 @@ def _enclosing_power_of_two(value):
 @dispatch.add_dispatch_support
 def mdct(signals, frame_length, window_fn=window_ops.vorbis_window,
          pad_end=False, norm=None, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring promises a value error when frame_length is not a multiple of four,
+  # but that is only checked when frame_length is statically known; norm values other than null
+  # and ortho are not validated here.
+  # Public op signal.mdct. Inputs: signals (real tensor, rank at least one); frame_length (integer
+  # scalar divisible by four); window_fn (default Vorbis window; null means a rectangular window
+  # scaled by one over root two); pad_end (default false); norm (null for unnormalized or ortho);
+  # optional name. Frames with hop of half the frame length, windows, folds the four quarters into
+  # a half-length sequence, and applies a type-4 DCT. Returns frames shaped frames by
+  # frame_length / 2. Raises a value error for bad rank or non-multiple of four.
   """Computes the [Modified Discrete Cosine Transform][mdct] of `signals`.
 
   Implemented with TPU/GPU-compatible ops and supports gradients.
@@ -375,6 +432,16 @@ def inverse_mdct(mdcts,
                  window_fn=window_ops.vorbis_window,
                  norm=None,
                  name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: any norm value other than null or ortho leaves the intermediate result undefined
+  # and fails with an unbound-variable error instead of a clear value error. It also reads the
+  # static last dimension of the input, so that dimension must be known.
+  # Public op signal.inverse_mdct. Inputs: mdcts (real tensor, rank at least two, last axis is half
+  # the frame length); window_fn (default Vorbis window; null means scale by one over root two);
+  # norm (null: type-4 DCT scaled by one half over the bin count; ortho: orthonormal DCT);
+  # optional name. Applies the DCT, unfolds into full frames by mirroring and negating halves,
+  # windows, and overlap-adds with hop of half the frame length. Returns the signal of length
+  # (frames - 1) * half + frame_length. Raises a value error for rank below two.
   """Computes the inverse modified DCT of `mdcts`.
 
   To reconstruct an original waveform, the same window function should

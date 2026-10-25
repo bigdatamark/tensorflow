@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Window function ops for the signal package: Kaiser, Kaiser-Bessel-derived, Vorbis, Hann and
+# Hamming windows, built from graph ops so they work with dynamic lengths. Includes private
+# helpers for argument checking and the shared raised-cosine window. These are used as window
+# callables by spectral_ops (stft, mdct). Import-time side effect: registers the public windows
+# with the API exporter and dispatch support.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,6 +36,10 @@ from tensorflow.python.util.tf_export import tf_export
 
 
 def _check_params(window_length, dtype):
+  # [FUNCTION DOC]
+  # HELPER: argument validation shared by the Kaiser, KBD and Vorbis windows.
+  # Raises a value error if dtype is not floating point or window_length is not a scalar.
+  # Returns window_length converted to a 32-bit integer tensor.
   """Check window_length and dtype params.
 
   Args:
@@ -53,6 +63,13 @@ def _check_params(window_length, dtype):
 @tf_export('signal.kaiser_window')
 @dispatch.add_dispatch_support
 def kaiser_window(window_length, beta=12., dtype=dtypes.float32, name=None):
+  # [FUNCTION DOC]
+  # Public op signal.kaiser_window. Inputs: window_length (scalar integer or tensor), beta (shape
+  # parameter, default 12), dtype (floating type, default float32), optional name. Raises a value
+  # error for a non-float dtype or non-scalar length (undocumented in the docstring). A length of
+  # one yields a single one. Otherwise computes the symmetric Kaiser window with a scaled
+  # exponentially weighted Bessel function of order zero, working in float32 for the range.
+  # Returns a tensor of the given length and dtype.
   """Generate a [Kaiser window][kaiser].
 
   Args:
@@ -93,6 +110,12 @@ def kaiser_window(window_length, beta=12., dtype=dtypes.float32, name=None):
 @dispatch.add_dispatch_support
 def kaiser_bessel_derived_window(window_length, beta=12.,
                                  dtype=dtypes.float32, name=None):
+  # [FUNCTION DOC]
+  # Public op signal.kaiser_bessel_derived_window. Inputs: window_length (scalar integer, expected
+  # even), beta (default 12), dtype (floating, default float32), optional name. Raises a value
+  # error for bad dtype or non-scalar length. Builds a Kaiser window of half length plus one,
+  # takes the square root of its normalized cumulative sum without the last element, and mirrors
+  # it to form the full window. Odd lengths produce a window one sample short. Returns the tensor.
   """Generate a [Kaiser Bessel derived window][kbd].
 
   Args:
@@ -120,6 +143,11 @@ def kaiser_bessel_derived_window(window_length, beta=12.,
 @tf_export('signal.vorbis_window')
 @dispatch.add_dispatch_support
 def vorbis_window(window_length, dtype=dtypes.float32, name=None):
+  # [FUNCTION DOC]
+  # Public op signal.vorbis_window. Inputs: window_length (scalar integer), dtype (floating,
+  # default float32), optional name. Raises a value error for bad dtype or non-scalar length.
+  # Returns the power-complementary window: sine of pi/2 times the squared sine of pi times
+  # (index + 0.5) over the length.
   """Generate a [Vorbis power complementary window][vorbis].
 
   Args:
@@ -145,6 +173,11 @@ def vorbis_window(window_length, dtype=dtypes.float32, name=None):
 @tf_export('signal.hann_window')
 @dispatch.add_dispatch_support
 def hann_window(window_length, periodic=True, dtype=dtypes.float32, name=None):
+  # [FUNCTION DOC]
+  # Public op signal.hann_window. Inputs: window_length (scalar), periodic (boolean, default true:
+  # periodic window for spectral analysis, false: symmetric), dtype (floating), optional name.
+  # Delegates to the shared raised-cosine routine with coefficients one half and one half.
+  # Raises a value error for a non-float dtype or non-scalar arguments. Returns the window tensor.
   """Generate a [Hann window][hann].
 
   Args:
@@ -172,6 +205,11 @@ def hann_window(window_length, periodic=True, dtype=dtypes.float32, name=None):
 @dispatch.add_dispatch_support
 def hamming_window(window_length, periodic=True, dtype=dtypes.float32,
                    name=None):
+  # [FUNCTION DOC]
+  # Public op signal.hamming_window. Inputs: window_length (scalar), periodic (boolean, default
+  # true for a periodic window, false for symmetric), dtype (floating), optional name.
+  # Delegates to the shared raised-cosine routine with coefficients 0.54 and 0.46. Raises a value
+  # error for a non-float dtype or non-scalar arguments. Returns the window tensor.
   """Generate a [Hamming][hamming] window.
 
   Args:
@@ -198,6 +236,13 @@ def hamming_window(window_length, periodic=True, dtype=dtypes.float32,
 
 def _raised_cosine_window(name, default_name, window_length, periodic,
                           dtype, a, b):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation of the Hann and Hamming windows.
+  # Inputs: name and default_name for the scope, window_length, periodic flag, floating dtype and
+  # coefficients a and b. Window value is a minus b times cosine of 2 pi n over N where N is the
+  # length (plus one for periodic windows of even length, minus one otherwise). Raises a value
+  # error for a non-float dtype or non-scalar length/periodic. A length of one gives a single one.
+  # With dynamic length, a conditional graph op handles the length-one case. Returns the tensor.
   """Helper function for computing a raised cosine window.
 
   Args:

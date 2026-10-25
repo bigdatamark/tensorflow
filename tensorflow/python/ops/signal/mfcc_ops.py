@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Mel-frequency cepstral coefficient (MFCC) op for the signal package.
+# Exposes signal.mfccs_from_log_mel_spectrograms, which applies a scaled DCT-II (from dct_ops)
+# over the last axis of log mel spectrograms. Import-time side effect: registers the op with the
+# public API exporter and dispatch support.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +30,14 @@ from tensorflow.python.util.tf_export import tf_export
 @tf_export('signal.mfccs_from_log_mel_spectrograms')
 @dispatch.add_dispatch_support
 def mfccs_from_log_mel_spectrograms(log_mel_spectrograms, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says a value error is raised when the number of mel bins is not
+  # positive, but the code only rejects exactly zero when the last dimension is statically known.
+  # Public op computing MFCCs. Input: float tensor of log-magnitude mel spectrograms whose last
+  # axis is the mel bins, plus an optional name. Takes the type-2 DCT along the last axis (no
+  # orthogonal normalization) and scales by the reciprocal square root of twice the bin count
+  # (static or dynamic). Returns a tensor of the same shape holding all coefficients. Raises a value
+  # error for a statically empty last axis. Adds only graph ops.
   """Computes [MFCCs][mfcc] of `log_mel_spectrograms`.
 
   Implemented with GPU-compatible ops and supports gradients.

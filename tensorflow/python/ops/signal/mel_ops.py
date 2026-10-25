@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Mel-scale conversion ops for the signal package.
+# Exposes the public op signal.linear_to_mel_weight_matrix, which builds a triangular filterbank
+# matrix that maps linear-frequency spectrogram bins to mel bands (HTK convention). Also holds
+# private helpers converting between hertz and mel and validating arguments, and two module
+# constants for the mel scale (break frequency 700 Hz and scale factor 1127).
+# Uses shape_ops.frame to build band edge triples. Import-time side effect: registers the public
+# op with the API exporter and dispatch machinery.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,6 +39,11 @@ _MEL_HIGH_FREQUENCY_Q = 1127.0
 
 
 def _mel_to_hertz(mel_values, name=None):
+  # [FUNCTION DOC]
+  # HELPER: unit conversion for the mel weight matrix code (currently not called in this module).
+  # Converts mel-scale values (tensor or array-like) to hertz using the exponential inverse of the
+  # HTK mel formula: 700 times (exp(mel / 1127) minus one). Optional name for the name scope.
+  # Returns a tensor of the same shape and type. No side effects beyond graph ops.
   """Converts frequencies in `mel_values` from the mel scale to linear scale.
 
   Args:
@@ -49,6 +62,11 @@ def _mel_to_hertz(mel_values, name=None):
 
 
 def _hertz_to_mel(frequencies_hertz, name=None):
+  # [FUNCTION DOC]
+  # HELPER: unit conversion used by the mel weight matrix function.
+  # Converts frequencies in hertz (tensor or array-like) to the mel scale: 1127 times the natural
+  # log of one plus frequency over 700. Optional name for the name scope. Returns a tensor of the
+  # same shape and type. No side effects beyond graph ops.
   """Converts frequencies in `frequencies_hertz` in Hertz to the mel scale.
 
   Args:
@@ -67,6 +85,12 @@ def _hertz_to_mel(frequencies_hertz, name=None):
 
 def _validate_arguments(num_mel_bins, sample_rate,
                         lower_edge_hertz, upper_edge_hertz, dtype):
+  # [FUNCTION DOC]
+  # HELPER: argument validation for linear_to_mel_weight_matrix.
+  # Raises a value error if: num_mel_bins is not positive; lower_edge_hertz is negative; lower edge
+  # is not below upper edge; (only when sample_rate is a plain number, not a tensor) sample_rate is
+  # not positive or upper_edge_hertz exceeds half the sample rate; or dtype is not floating point.
+  # Returns nothing.
   """Checks the inputs to linear_to_mel_weight_matrix."""
   if num_mel_bins <= 0:
     raise ValueError('num_mel_bins must be positive. Got: %s' % num_mel_bins)
@@ -96,6 +120,20 @@ def linear_to_mel_weight_matrix(num_mel_bins=20,
                                 upper_edge_hertz=3800.0,
                                 dtype=dtypes.float32,
                                 name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says num_spectrogram_bins is validated to be positive, but this
+  # function does not check it itself (it relies on the linspace op), and sample-rate checks are
+  # skipped when the sample rate is a non-constant tensor. The docstring also gives a base-10
+  # formula; the code uses the equivalent natural-log form with factor 1127.
+  # Public op signal.linear_to_mel_weight_matrix. Builds a matrix of shape
+  # [num_spectrogram_bins, num_mel_bins] with triangular filters (peak 1) that are linear in the
+  # mel domain. Inputs: num_mel_bins (default 20), num_spectrogram_bins (default 129), sample_rate
+  # (default 8000, number or tensor), lower_edge_hertz (default 125), upper_edge_hertz (default
+  # 3800), dtype (float type, default float32), optional name. Raises a value error on invalid
+  # arguments. Steps: a constant sample rate is extracted from tensors; values are cast to dtype;
+  # linear bin frequencies (excluding the DC bin) are converted to mel; band edges are split into
+  # lower, center and upper triples; slopes are intersected and clipped at zero; a zero row is
+  # padded back for the DC bin. Returns the matrix tensor; adds only graph ops.
   r"""Returns a matrix to warp linear scale spectrograms to the [mel scale][mel].
 
   Returns a weight matrix that can be used to re-weight a `Tensor` containing

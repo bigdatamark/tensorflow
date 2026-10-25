@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Signal reconstruction by overlapped addition of frames.
+# Exposes the public op signal.overlap_and_add, the inverse of framing: it sums frames that are
+# offset by a hop size into one longer signal. Import-time side effect: registers the op with the
+# public API exporter and dispatch support. Used by the inverse STFT in spectral_ops.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +31,17 @@ from tensorflow.python.util.tf_export import tf_export
 @tf_export("signal.overlap_and_add")
 @dispatch.add_dispatch_support
 def overlap_and_add(signal, frame_step, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says frame_step must be at most the frame length, but no such check
+  # is made, so larger values are not rejected by this function.
+  # Public op signal.overlap_and_add. Inputs: signal, a tensor of rank at least two shaped
+  # outer dimensions, frames, frame_length; frame_step, an integer scalar (python or tensor); and
+  # an optional name. Output: tensor of shape outer dimensions plus one output dimension of length
+  # (frames - 1) * frame_step + frame_length, where overlapping frames are summed.
+  # Raises a value error if the rank is below two, frame_step is not a scalar (shape error) or not
+  # an integer type. When frame_step equals the frame length it just reshapes. Otherwise it pads,
+  # reshapes and transposes the frames into segments, reduces by summation, flattens and truncates.
+  # Uses static values where possible. Adds only graph ops.
   """Reconstructs a signal from a framed representation.
 
   Adds potentially overlapping frames of a signal with shape
@@ -75,6 +91,9 @@ def overlap_and_add(signal, frame_step, name=None):
       outer_rank = outer_rank_static
 
     def full_shape(inner_shape):
+      # [FUNCTION DOC]
+      # HELPER: shape builder for overlap_and_add. Concatenates the captured outer (batch)
+      # dimensions with the given inner shape list and returns the full shape tensor.
       return array_ops.concat([outer_dimensions, inner_shape], 0)
 
     frame_length = signal_shape[-1]
