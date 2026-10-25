@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# Logging, printing and legacy summary operations. Provides the TF1 Print op, the TF2 print
+# function (formats arbitrary nested inputs, including tensors and sparse tensors, into a
+# string tensor and sends it to stdout, stderr, a logging level or a file), and the
+# deprecated summary creators (histogram, image, audio, scalar, merge, merge-all, get summary
+# op) that add their results to graph collections. Re-exports all generated logging ops via
+# a wildcard import. Import-time side effects: when running inside an interactive notebook
+# environment, interactive Python logging is enabled so printed output reaches the notebook
+# cell; the gradient for the Print op is registered; several summary ops are marked as not
+# differentiable. Not a helper module; it is part of the public API surface.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -44,6 +54,10 @@ from tensorflow.python.util.tf_export import tf_export
 
 
 def enable_interactive_logging():
+  # [FUNCTION DOC]
+  # Turns on routing of print operator output to the interactive (notebook cell) output by
+  # calling the native eager runtime hook. Takes no inputs and returns nothing. Side effect:
+  # changes global runtime state. Called at import time when an interactive shell is detected.
   pywrap_tfe.TFE_Py_EnableInteractivePythonLogging()
 
 # Register printing to the cell output if we are in a Colab or Jupyter Notebook.
@@ -75,6 +89,14 @@ except NameError:
 @tf_export(v1=["Print"])
 @dispatch.add_dispatch_support
 def Print(input_, data, message=None, first_n=None, summarize=None, name=None):
+  # [FUNCTION DOC]
+  # Deprecated graph-mode print: an identity operation on input_ that prints the tensors in
+  # data when evaluated. Inputs: input_ (tensor passed through), data (list of tensors to
+  # print), message (optional prefix string), first_n (optional; only print this many times,
+  # negative means always), summarize (optional number of entries per tensor, default three),
+  # name (optional). Returns a tensor with the same type and contents as input_. Forwards to
+  # the raw print op; printing goes to standard error as a run-time side effect. The deprecation
+  # decorator emits a warning on use.
   """Prints a list of tensors.
 
   This is an identity op (behaves like `tf.identity`) with the side effect
@@ -125,6 +147,12 @@ def Print(input_, data, message=None, first_n=None, summarize=None, name=None):
 
 
 def _generate_placeholder_string(x, default_placeholder="{}"):
+  # [FUNCTION DOC]
+  # HELPER: picks the placeholder token used by print_v2 templates.
+  # Starts from default_placeholder (default is a pair of braces) and, while the candidate
+  # occurs inside the string x, appends a pseudo-random digit generated from a fixed seed, so
+  # the result is deterministic and does not appear in x. Returns the placeholder string.
+  # Uses a private random generator, so global random state is untouched.
   """Generate and return a string that does not appear in `x`."""
   placeholder = default_placeholder
   rng = random.Random(5)
@@ -134,6 +162,10 @@ def _generate_placeholder_string(x, default_placeholder="{}"):
 
 
 def _is_filepath(output_stream):
+  # [FUNCTION DOC]
+  # HELPER: tells print_v2 whether the requested output stream is a file target.
+  # Returns true only when the argument is a string beginning with the file URI prefix;
+  # false for anything else (streams, logging functions). Pure function.
   """Returns True if output_stream is a file path."""
   return isinstance(output_stream, str) and output_stream.startswith("file://")
 
@@ -147,6 +179,24 @@ def _is_filepath(output_stream):
 @tf_export("print")
 @dispatch.add_dispatch_support
 def print_v2(*inputs, **kwargs):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the table mapping output streams to native constants lists the info logging
+  # level key twice (duplicate dictionary key, harmless). The docstring says a summarize of
+  # none prints three elements, but the code only defaults to three when the argument is
+  # absent; an explicit none is passed on to the string formatting op unchanged.
+  # Public tf.print. Positional inputs may be python values, tensors, sparse tensors or nested
+  # structures of them. Keyword arguments (popped from the mapping): output_stream (default
+  # standard error; standard output, tf or absl logging functions at info, warning or error
+  # level, or a string starting with the file scheme prefix), name, summarize (default 3),
+  # sep (default single space), end (default platform line separator).
+  # Behavior: raises a value error for unknown keyword arguments or an unsupported output
+  # stream. A single scalar string tensor is printed directly. Otherwise each input is turned
+  # into a text template using pretty printing, with a unique placeholder for every tensor
+  # (ordered dictionaries are sorted by key for consistency with flattening, sparse tensors
+  # expand into indices, values and dense shape); templates are joined with sep and the
+  # string formatting op fills in the tensors. Finally the raw print op writes the string.
+  # Returns nothing when running eagerly, or the print operator when tracing a graph.
+  # Side effect: output is written to the chosen stream, log or file.
   """Print the specified inputs.
 
   A TensorFlow operator that prints the specified inputs to a desired
@@ -400,10 +450,18 @@ def print_v2(*inputs, **kwargs):
 
 @ops.RegisterGradient("Print")
 def _PrintGrad(op, *grad):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient for the Print op. Passes the incoming gradients through for
+  # the first (identity) input and returns null gradients for the remaining data inputs.
+  # Returns a list with one entry per op input.
   return list(grad) + [None] * (len(op.inputs) - 1)
 
 
 def _Collect(val, collections, default_collections):
+  # [FUNCTION DOC]
+  # HELPER: shared by the legacy summary creators to register their output op.
+  # Adds val to each named graph collection; if collections is none, uses default_collections.
+  # Side effect: mutates the default graph's collections. Returns nothing.
   if collections is None:
     collections = default_collections
   for key in collections:
@@ -416,6 +474,12 @@ def _Collect(val, collections, default_collections):
     "This means that TensorFlow will automatically de-duplicate summary "
     "names based on the scope they are created in.")
 def histogram_summary(tag, values, collections=None, name=None):
+  # [FUNCTION DOC]
+  # Deprecated creator of a histogram summary. Inputs: tag (scalar string tensor), values (real
+  # tensor of any shape), collections (optional list of collection keys, default summaries
+  # collection), name (optional). Returns a scalar string tensor with the serialized summary;
+  # at run time fails with an invalid-argument error for non-finite values. Side effect: adds
+  # the op to the chosen graph collections. Emits a deprecation warning.
   # pylint: disable=line-too-long
   """Outputs a `Summary` protocol buffer with a histogram.
 
@@ -456,6 +520,12 @@ def histogram_summary(tag, values, collections=None, name=None):
     "names based on the scope they are created in. Also, the max_images "
     "argument was renamed to max_outputs.")
 def image_summary(tag, tensor, max_images=3, collections=None, name=None):
+  # [FUNCTION DOC]
+  # Deprecated creator of an image summary. Inputs: tag (scalar string tensor), tensor (4-D
+  # tensor of batch, height, width and 1, 3 or 4 channels; uint8 or float32), max_images
+  # (default 3, maximum batch elements rendered), collections (optional keys, default summaries
+  # collection), name (optional). Returns a scalar string tensor holding the serialized
+  # summary. Side effect: adds the op to the graph collections. Emits a deprecation warning.
   # pylint: disable=line-too-long
   """Outputs a `Summary` protocol buffer with images.
 
@@ -522,6 +592,12 @@ def audio_summary(tag,
                   max_outputs=3,
                   collections=None,
                   name=None):
+  # [FUNCTION DOC]
+  # Deprecated creator of an audio summary. Inputs: tag (scalar string tensor), tensor (float32
+  # of batch, frames, optional channels), sample_rate (scalar converted to float32 tensor, in
+  # hertz), max_outputs (default 3), collections (optional keys, default summaries collection),
+  # name (optional). Returns a scalar string tensor with the serialized summary. Side effect:
+  # adds the op to graph collections. Emits a deprecation warning.
   # pylint: disable=line-too-long
   """Outputs a `Summary` protocol buffer with audio.
 
@@ -574,6 +650,13 @@ def audio_summary(tag,
 
 @deprecated("2016-11-30", "Please switch to tf.summary.merge.")
 def merge_summary(inputs, collections=None, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the default collection is the summaries collection, but the
+  # code passes an empty default so the merged op is not added anywhere unless asked.
+  # Deprecated merge of several serialized summaries into one. Inputs: inputs (list of string
+  # tensors), collections (optional keys; unlike other summary creators the default is no
+  # collection at all), name (optional). Returns a scalar string tensor; at run time an
+  # invalid-argument error occurs if tags repeat.
   # pylint: disable=line-too-long
   """Merges summaries.
 
@@ -608,6 +691,10 @@ def merge_summary(inputs, collections=None, name=None):
 
 @deprecated("2016-11-30", "Please switch to tf.summary.merge_all.")
 def merge_all_summaries(key=ops.GraphKeys.SUMMARIES):
+  # [FUNCTION DOC]
+  # Deprecated: merges every summary op stored in the default graph collection named by key
+  # (default summaries collection). Returns nothing/null if the collection is empty, otherwise
+  # the merged scalar string tensor made by merge_summary. Side effect: creates a merge op.
   """Merges all summaries collected in the default graph.
 
   This op is deprecated. Please switch to tf.compat.v1.summary.merge_all, which
@@ -631,6 +718,12 @@ def merge_all_summaries(key=ops.GraphKeys.SUMMARIES):
 
 
 def get_summary_op():
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the check that the collection result is not null is dead code, because
+  # getting a collection always returns a list.
+  # Returns the first op in the summary-op collection if there is one; otherwise merges all
+  # summaries and, if any exist, stores the merged op in that collection (side effect on the
+  # default graph) before returning it. Returns nothing/null when no summaries exist.
   """Returns a single Summary op that would run all summaries.
 
   Either existing one from `SUMMARY_OP` collection or merges all existing
@@ -662,6 +755,12 @@ def get_summary_op():
     "tensor or list of tags to a scalar summary op is no longer "
     "supported.")
 def scalar_summary(tags, values, collections=None, name=None):
+  # [FUNCTION DOC]
+  # Deprecated creator of scalar summaries. Inputs: tags (string tensor), values (real tensor
+  # of the same shape as tags), collections (optional keys, default summaries collection),
+  # name (optional). Returns a scalar string tensor with the serialized summary containing one
+  # value per tag/value pair. Side effect: adds the op to graph collections. Emits a
+  # deprecation warning.
   # pylint: disable=line-too-long
   """Outputs a `Summary` protocol buffer with scalar values.
 

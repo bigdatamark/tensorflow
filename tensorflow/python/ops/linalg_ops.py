@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# Public linear algebra operations of TensorFlow (tf.linalg and legacy root endpoints).
+# Exposes triangular and Cholesky solvers, identity matrix construction, least squares,
+# eigen decompositions (general and self-adjoint), singular value decomposition and
+# vector/matrix norms. Most functions are thin wrappers that open a name scope and call the
+# generated raw ops (gen_linalg_ops); eye delegates to linalg_ops_impl; least squares and
+# norm contain composite implementations built from math and array ops.
+# The module also re-exports every name from the generated linalg ops through a wildcard
+# import. Import-time side effects: the public functions are registered for the public API
+# via the export decorator and for type dispatch via the dispatch decorator; some endpoints
+# are deprecated aliases. Not a helper module, it is part of the public surface.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -41,6 +52,18 @@ from tensorflow.python.util.tf_export import tf_export
 
 
 def _RegularizedGramianCholesky(matrix, l2_regularizer, first_kind):
+  # [FUNCTION DOC]
+  # HELPER: internal building block of the composite least squares solver (matrix_solve_ls).
+  # KNOWN ISSUE: the docstring says l2_regularizer is ignored if fast is false, but this
+  # function has no fast argument and always applies the regularizer when it is non-zero.
+  # Builds the gramian of the input matrices (adjoint of matrix times matrix when first_kind
+  # is true, otherwise matrix times its adjoint) using batched matrix multiplication. When
+  # l2_regularizer is a tensor or a non-zero number, adds the regularizer times an identity
+  # matrix of the smaller dimension (static shape is set explicitly on the identity so shape
+  # inference is preserved). Returns the batched Cholesky factor of the regularized gramian.
+  # Inputs: matrix (tensor of shape batch, M, N), l2_regularizer (scalar number or tensor),
+  # first_kind (boolean selecting which gramian is factored). Raises nothing itself, but the
+  # Cholesky op fails at run time if the gramian is not positive definite. No side effects.
   r"""Computes Cholesky factorization of regularized gramian matrix.
 
   Below we will use the following notation for each pair of matrix and
@@ -86,6 +109,18 @@ def _RegularizedGramianCholesky(matrix, l2_regularizer, first_kind):
     v1=['linalg.triangular_solve', 'matrix_triangular_solve'])
 @dispatch.add_dispatch_support
 def matrix_triangular_solve(matrix, rhs, lower=True, adjoint=False, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring describes the adjoint flag backwards. It states that the plain
+  # equation holds when adjoint is true and the adjoint equation when it is false; the code
+  # simply forwards the flag to the raw op, which solves with the adjoint of matrix when
+  # adjoint is true.
+  # Solves batched linear systems whose coefficient matrices are triangular. Inputs: matrix
+  # (tensor of shape batch, M, M, floating or complex), rhs (tensor of same type, shape
+  # batch, M, N), lower (boolean, default true: use the lower triangle, otherwise the upper
+  # one; the other triangle is not read), adjoint (boolean, default false: solve with the
+  # adjoint of matrix), name (optional). Returns the solution tensor with the shape of rhs.
+  # Opens a name scope and calls the raw triangular solve op; invalid shapes or dtypes raise
+  # errors from the raw op. No other side effects.
   """Solve systems of linear equations with upper or lower triangular matrices.
 
   `matrix` is a tensor of shape `[..., M, M]` whose inner-most 2 dimensions form
@@ -149,6 +184,14 @@ def matrix_triangular_solve(matrix, rhs, lower=True, adjoint=False, name=None):
 @dispatch.add_dispatch_support
 @deprecation.deprecated_endpoints('cholesky_solve')
 def cholesky_solve(chol, rhs, name=None):
+  # [FUNCTION DOC]
+  # Solves systems A X = RHS given the lower triangular Cholesky factor of A. Performs two
+  # triangular solves: first with the lower factor itself, then with its adjoint, so only the
+  # lower triangle of chol is read. Inputs: chol (tensor of shape batch, M, M, float32 or
+  # float64 per the docs), rhs (same type, shape batch, M, K), name (optional, scope name
+  # defaulting to cholesky_solve). Returns the solution tensor of shape batch, M, K.
+  # Errors for bad shapes or types come from the raw triangular solve op. Opens a name scope;
+  # no other side effects.
   """Solves systems of linear eqns `A X = RHS`, given Cholesky factorizations.
 
   Specifically, returns `X` from `A X = RHS`, where `A = L L^T`, `L` is the
@@ -200,6 +243,14 @@ def eye(num_rows,
         batch_shape=None,
         dtype=dtypes.float32,
         name=None):
+  # [FUNCTION DOC]
+  # Public entry point for building an identity matrix, or a batch of them. Simply forwards
+  # all arguments unchanged to the implementation in linalg_ops_impl. Inputs: num_rows
+  # (non-negative integer scalar or tensor), num_columns (optional, defaults to num_rows,
+  # giving a rectangular matrix with ones on the main diagonal), batch_shape (optional list,
+  # tuple or 1-D integer tensor of leading batch dimensions), dtype (element type, default
+  # float32), name (optional). Returns a tensor of shape batch_shape followed by rows and
+  # columns. Errors for invalid arguments come from the implementation. No side effects.
   """Construct an identity matrix, or a batch of matrices.
 
   See also `tf.ones`, `tf.zeros`, `tf.fill`, `tf.one_hot`.
@@ -245,6 +296,18 @@ def eye(num_rows,
 @dispatch.add_dispatch_support
 @deprecation.deprecated_endpoints('matrix_solve_ls')
 def matrix_solve_ls(matrix, rhs, l2_regularizer=0.0, fast=True, name=None):
+  # [FUNCTION DOC]
+  # Solves batched linear least-squares problems (exposed as linalg.lstsq). Inputs: matrix
+  # (tensor convertible, shape batch, M, N), rhs (shape batch, M, K), l2_regularizer (scalar,
+  # default 0, ignored by the slow path), fast (boolean, default true: normal equations via
+  # Cholesky; false: complete orthogonal decomposition kernel), name (optional).
+  # Behavior: converts matrix to a tensor; chooses between the composite implementation (built
+  # from Cholesky solves, works on GPU, picks the over- or under-determined formula from the
+  # static shape or via a run-time conditional) and the specialized raw op, using a heuristic
+  # on tensor size and batch size. Returns the solution of shape batch, N, K.
+  # Raises not-implemented error when the matrix is complex128 and the regularizer is not
+  # zero. Note the comparison with the regularizer is done on the Python value, so a tensor
+  # regularizer is also compared. No other side effects.
   r"""Solves one or more linear least-squares problems.
 
   `matrix` is a tensor of shape `[..., M, N]` whose inner-most 2 dimensions
@@ -302,6 +365,16 @@ def matrix_solve_ls(matrix, rhs, l2_regularizer=0.0, fast=True, name=None):
 
   # pylint: disable=long-lambda
   def _use_composite_impl(fast, tensor_shape):
+    # [FUNCTION DOC]
+    # HELPER: decides which backend matrix_solve_ls uses.
+    # KNOWN ISSUE: the batch and matrix sub-shapes are sliced before the check that the shape
+    # is fully defined, which is wasteful and may misbehave for unknown rank shapes. It also
+    # reads the dtype size from the enclosing matrix variable rather than from its arguments.
+    # Returns false when fast mode was not requested (only fast mode has a composite
+    # implementation) and false when the tensor is fully defined, larger than a guessed cache
+    # size of 256000 bytes and the batch element count exceeds the smaller matrix dimension
+    # (I/O bound case, where the per-matrix CPU kernel is better). Otherwise returns true,
+    # including when the shape is not fully defined. Pure function, no side effects.
     """Determines whether to use the composite or specialized CPU kernel.
 
     When the total size of the tensor is larger than the cache size and the
@@ -336,18 +409,33 @@ def matrix_solve_ls(matrix, rhs, l2_regularizer=0.0, fast=True, name=None):
       return True
 
   def _overdetermined(matrix, rhs, l2_regularizer):
+    # [FUNCTION DOC]
+    # HELPER: least squares formula for tall matrices (rows >= columns) in matrix_solve_ls.
+    # Factors the regularized gramian of the first kind, then solves against the adjoint of
+    # matrix times rhs using Cholesky solve. Returns the solution tensor. No side effects.
     """Computes (A^H*A + l2_regularizer)^{-1} * A^H * rhs."""
     chol = _RegularizedGramianCholesky(
         matrix, l2_regularizer=l2_regularizer, first_kind=True)
     return cholesky_solve(chol, math_ops.matmul(matrix, rhs, adjoint_a=True))
 
   def _underdetermined(matrix, rhs, l2_regularizer):
+    # [FUNCTION DOC]
+    # HELPER: least squares formula for wide matrices (rows < columns) in matrix_solve_ls.
+    # Factors the regularized gramian of the second kind, solves it against rhs with Cholesky
+    # solve and multiplies by the adjoint of matrix, giving the minimum norm solution when the
+    # regularizer is zero. Returns the solution tensor. No side effects.
     """Computes A^H * (A*A^H + l2_regularizer)^{-1} * rhs."""
     chol = _RegularizedGramianCholesky(
         matrix, l2_regularizer=l2_regularizer, first_kind=False)
     return math_ops.matmul(matrix, cholesky_solve(chol, rhs), adjoint_a=True)
 
   def _composite_impl(matrix, rhs, l2_regularizer):
+    # [FUNCTION DOC]
+    # HELPER: composite (GPU capable) backend of matrix_solve_ls.
+    # Opens a name scope using the outer name. If the last two dimensions of the matrix are
+    # statically known, picks the over- or under-determined formula directly; otherwise
+    # builds a run-time conditional comparing the dynamic row and column counts so that the
+    # right branch executes. Returns the solution tensor. Adds ops to the current graph.
     """Composite implementation of matrix_solve_ls that supports GPU."""
     with ops.name_scope(name, 'matrix_solve_ls', [matrix, rhs, l2_regularizer]):
       matrix_shape = matrix.get_shape()[-2:]
@@ -382,6 +470,16 @@ def matrix_solve_ls(matrix, rhs, l2_regularizer=0.0, fast=True, name=None):
 @tf_export('linalg.eig', 'eig', v1=[])
 @dispatch.add_dispatch_support
 def eig(tensor, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says only the lower triangular part is referenced (copied from
+  # the self-adjoint version); the general eigen solver reads the whole matrix. Also, if the
+  # input dtype is not float32, float64, complex64 or complex128 the output type variable is
+  # never assigned and an unbound-local error is raised instead of a clear message.
+  # Computes eigenvalues and right eigenvectors of batched square matrices. The output type
+  # is complex64 for single precision input and complex128 for double precision input.
+  # Inputs: tensor (batch of N by N matrices), name (optional). Returns a pair: eigenvalues
+  # (shape batch, N, unordered) and eigenvectors (shape batch, N, N, columns are vectors).
+  # No side effects beyond adding an op.
   """Computes the eigen decomposition of a batch of matrices.
 
   The eigenvalues
@@ -414,6 +512,15 @@ def eig(tensor, name=None):
 @tf_export('linalg.eigvals', 'eigvals', v1=[])
 @dispatch.add_dispatch_support
 def eigvals(tensor, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: same dtype gap as eig: an unsupported dtype leaves the output type unset and
+  # causes an unbound-local error. The docstring's input description is fine, but it points
+  # to a gradient function by name only.
+  # Computes only the eigenvalues of batched square matrices by calling the raw eigen op with
+  # eigenvector computation disabled. Output is complex64 for float32 or complex64 input and
+  # complex128 for float64 or complex128 input. Inputs: tensor (batch of N by N matrices),
+  # name (optional). Returns the eigenvalue tensor of shape batch, N. Discards the unused
+  # second raw output. No other side effects.
   """Computes the eigenvalues of one or more matrices.
 
   Note: If your program backpropagates through this function, you should replace
@@ -442,6 +549,12 @@ def eigvals(tensor, name=None):
 @dispatch.add_dispatch_support
 @deprecation.deprecated_endpoints('self_adjoint_eig')
 def self_adjoint_eig(tensor, name=None):
+  # [FUNCTION DOC]
+  # Eigen decomposition of batched self-adjoint (Hermitian) matrices, exposed as linalg.eigh.
+  # Only the lower triangle of each matrix is read. Inputs: tensor (batch of N by N matrices),
+  # name (optional). Returns a pair: eigenvalues (shape batch, N, ascending order) and
+  # eigenvectors (shape batch, N, N, one per column). Calls the raw self-adjoint eigen op
+  # with vector computation enabled. No other side effects.
   """Computes the eigen decomposition of a batch of self-adjoint matrices.
 
   Computes the eigenvalues and eigenvectors of the innermost N-by-N matrices
@@ -466,6 +579,12 @@ def self_adjoint_eig(tensor, name=None):
 @dispatch.add_dispatch_support
 @deprecation.deprecated_endpoints('self_adjoint_eigvals')
 def self_adjoint_eigvals(tensor, name=None):
+  # [FUNCTION DOC]
+  # Eigenvalues only of batched self-adjoint matrices (linalg.eigvalsh); only the lower
+  # triangle is read. Calls the raw self-adjoint eigen op with vector computation disabled
+  # and drops the unused second output. Inputs: tensor (batch of N by N matrices), name
+  # (optional). Returns the eigenvalue tensor of shape batch, N in ascending order.
+  # No other side effects.
   """Computes the eigenvalues of one or more self-adjoint matrices.
 
   Note: If your program backpropagates through this function, you should replace
@@ -490,6 +609,14 @@ def self_adjoint_eigvals(tensor, name=None):
 @dispatch.add_dispatch_support
 @deprecation.deprecated_endpoints('svd')
 def svd(tensor, full_matrices=False, compute_uv=True, name=None):
+  # [FUNCTION DOC]
+  # Singular value decomposition of each inner matrix. Inputs: tensor (batch of M by N
+  # matrices), full_matrices (boolean, default false: only the leading min(M,N) singular
+  # vectors; ignored when compute_uv is false), compute_uv (boolean, default true: also
+  # compute vectors), name (optional). Returns three values in the order singular values,
+  # left vectors, right vectors when compute_uv is true (note: not the numpy order), or just
+  # the singular values otherwise. The singular values are passed through a real-part
+  # operation so complex input yields real values. No other side effects.
   r"""Computes the singular value decompositions of one or more matrices.
 
   Computes the SVD of each inner matrix in `tensor` such that
@@ -565,6 +692,16 @@ def norm_v2(tensor,
             axis=None,
             keepdims=None,
             name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the compatibility note says the matrix 2-norm is not supported, but the
+  # implementation it delegates to does compute it (via singular values) for a two-element
+  # axis.
+  # Version 2 API for computing vector, matrix and tensor norms. Delegates all work to the
+  # version 1 norm function without the deprecated keep_dims argument. Inputs: tensor (real
+  # or complex), ord (default euclidean; also fro, 1, 2, infinity or a positive real),
+  # axis (none, an integer or a pair of integers), keepdims (optional boolean; none is treated
+  # as false), name (optional). Returns the norm tensor. Raises a value error for invalid
+  # ord or axis (raised by the delegate). No side effects.
   r"""Computes the norm of vectors, matrices, and tensors.
 
   This function can compute several different vector norms (the 1-norm, the
@@ -640,6 +777,21 @@ def norm(tensor,
          keepdims=None,
          name=None,
          keep_dims=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the 2-norm for matrices is not supported, yet the code
+  # implements it (maximum singular value after moving the two axes last). The error message
+  # for an invalid vector ord check also accepts only positive values although the condition
+  # reads in a confusing way (non-real or non-positive and not in the supported list).
+  # Computes vector norms (1, 2, infinity, general positive p), and matrix norms (fro,
+  # euclidean, 1, 2, infinity) of a tensor. Inputs: tensor (converted to a tensor), ord,
+  # axis (none: treat the whole tensor as one vector; integer: batch of vectors; list or
+  # tuple of two distinct integers: batch of matrices), keepdims (default false), name,
+  # keep_dims (deprecated alias, reported through the deprecation helper which also warns).
+  # Returns the norm tensor, squeezing the reduced axes unless keepdims is true.
+  # Raises value error when axis is not none, an integer or two distinct integers, or when
+  # ord is unsupported for the vector or matrix case. Euclidean is computed with explicit
+  # multiply and square root, because the dedicated reduce op is unsupported on XLA/TPU.
+  # Adds ops to the current graph; no other side effects.
   r"""Computes the norm of vectors, matrices, and tensors.
 
   This function can compute several different vector norms (the 1-norm, the

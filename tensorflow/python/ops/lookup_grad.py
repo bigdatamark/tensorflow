@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# HELPER: registration-only module for lookup table gradients.
+# Defines no functions or classes. At import time it marks all lookup table related ops
+# (find, insert, size, initialization, and the hash table, mutable hash table and dense
+# hash table variants, in both V1 and V2 forms) as not differentiable, so gradient
+# computation through them yields no gradient instead of an error about a missing gradient
+# function. Must be imported for the registrations to take effect; it modifies global
+# gradient registry state in the framework ops module.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

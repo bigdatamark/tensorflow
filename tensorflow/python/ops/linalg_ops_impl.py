@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: implementation module behind the public identity matrix function in linalg_ops.
+# Holds the graph and eager construction logic for batched identity (or rectangular
+# "identity") matrices, kept separate so other modules can use it without importing the full
+# linear algebra module. No import-time side effects other than imports.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,6 +37,20 @@ def eye(num_rows,
         batch_shape=None,
         dtype=dtypes.float32,
         name=None):
+  # [FUNCTION DOC]
+  # HELPER: implementation of the public eye function in linalg_ops.
+  # Builds an identity matrix, or a batch of them, optionally rectangular. Inputs: num_rows
+  # (integer or integer tensor), num_columns (optional, defaults to num_rows), batch_shape
+  # (optional list, tuple or integer tensor of leading dimensions, default empty), dtype
+  # (default float32), name (optional scope name, default eye).
+  # Behavior: if either dimension is a tensor the diagonal length is computed dynamically as
+  # the minimum; otherwise both must be Python-style integers and the diagonal length and
+  # squareness are computed statically. If batch shape or diagonal size is dynamic, shapes
+  # are assembled by concatenating tensors; otherwise plain lists are used. A square result is
+  # produced by turning a tensor of ones into a diagonal matrix; a non-square result sets the
+  # diagonal of a zero matrix to ones. Returns the resulting tensor.
+  # Raises a type error when a statically known row or column count is not an integer.
+  # Opens a name scope; no other side effects.
   """Construct an identity matrix, or a batch of matrices.
 
   See `linalg_ops.eye`.
