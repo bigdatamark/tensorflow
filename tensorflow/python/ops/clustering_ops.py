@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Graph-building k-means clustering operations. Defines the KMeans class, which builds training
+# and inference graph pieces (full-batch Lloyd iterations or mini-batch updates, with squared
+# Euclidean or cosine distance), plus an internal factory that builds the op choosing initial
+# cluster centers (random, kmeans plus plus, k-MC2, a user function, or explicit values). Also
+# defines string constants naming distance metrics, initialization methods and the cluster
+# variable name, and re-exports every generated clustering op via a wildcard import. Import-time
+# side effects: none beyond importing the generated op module.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -51,6 +59,13 @@ CLUSTERS_VAR_NAME = 'clusters'
 
 
 class KMeans:
+  # [CLASS DOC]
+  # Builds the TensorFlow graph for k-means clustering. Holds the (list of) input tensors, number
+  # of clusters, initialization choice, distance metric, mini-batch settings, a derived random
+  # seed and the settings for the kmeans plus plus and k-MC2 initializers. The main entry point is
+  # the training graph method, which creates variables for the centers and returns scores, cluster
+  # indices, an initialization op and a training op. Supports full-batch and mini-batch variants.
+  # Private helpers compute distances and build update ops.
   """Creates the graph for k-means clustering."""
 
   def __init__(self,
@@ -63,6 +78,16 @@ class KMeans:
                random_seed=0,
                kmeans_plus_plus_num_retries=2,
                kmc2_chain_length=200):
+    # [FUNCTION DOC]
+    # Validates and stores the clustering configuration; builds no graph ops. inputs is a tensor
+    # or list of tensors (a single tensor is wrapped in a list). num_clusters is the cluster count.
+    # initial_clusters is a method name string, a function, or initial center values. Only string
+    # values are validated against the allowed method names. distance_metric must be squared
+    # Euclidean or cosine. use_mini_batch selects the mini-batch variant;
+    # mini_batch_steps_per_iteration is converted to an integer. random_seed is turned into an
+    # operation-level seed through the framework seed helper (reads graph-level seed state). The
+    # kmeans plus plus retry count and k-MC2 chain length are stored. Raises a value error for an
+    # unsupported initialization name or distance metric.
     """Creates an object for generating KMeans clustering graph.
 
     This class implements the following variants of K-means algorithm:
@@ -151,6 +176,12 @@ class KMeans:
 
   @classmethod
   def _distance_graph(cls, inputs, clusters, distance_metric):
+    # [FUNCTION DOC]
+    # HELPER: dispatcher that picks the distance computation for KMeans graphs.
+    # Class method. inputs must be a list of tensors (asserted); clusters is the center matrix.
+    # Returns, for squared Euclidean, the list from the Euclidean helper; for cosine, the list from
+    # the cosine helper assuming normalized inputs. Any other metric trips an assertion failure
+    # rather than a value error.
     """Computes distance between each input and each cluster center.
 
     Args:
@@ -174,6 +205,13 @@ class KMeans:
 
   @classmethod
   def _compute_euclidean_distance(cls, inputs, clusters):
+    # [FUNCTION DOC]
+    # HELPER: squared Euclidean distance computation for KMeans.
+    # KNOWN ISSUE: the docstring says Euclidean distance, but the values returned are squared
+    # distances (no square root is taken).
+    # For each input matrix, computes the matrix of squared distances from every row to every
+    # cluster center using the expansion of squared norms minus twice the dot product, on the
+    # device of that input. Returns a list with one distance matrix per input. Class method.
     """Computes Euclidean distance between each input and each cluster center.
 
     Args:
@@ -201,6 +239,12 @@ class KMeans:
 
   @classmethod
   def _compute_cosine_distance(cls, inputs, clusters, inputs_normalized=True):
+    # [FUNCTION DOC]
+    # HELPER: cosine distance computation for KMeans.
+    # Class method. For each input matrix computes one minus the dot product with the cluster
+    # centers. If inputs_normalized is false, the clusters and each input are first L2-normalized
+    # along rows; otherwise they are assumed already normalized. Returns a list with one distance
+    # matrix per input. Computations are placed on the device of the respective tensor.
     """Computes cosine distance between each input and each cluster center.
 
     Args:
@@ -226,6 +270,14 @@ class KMeans:
     return output
 
   def _infer_graph(self, inputs, clusters):
+    # [FUNCTION DOC]
+    # HELPER: builds the nearest-center inference sub-graph for the training graph.
+    # KNOWN ISSUE: the docstring says a list of tuples is returned, but the code returns a lazy
+    # zip transposition, i.e. three sequences (all scores, closest distances, closest indices).
+    # inputs is a list of tensors (asserted); clusters is the center matrix. Computes pairwise
+    # distances, and for cosine distance with centers not kept normalized, normalizes the centers.
+    # Then, per input, finds the nearest center using the nearest-neighbors op, halves distances
+    # for cosine, and squeezes the last dimension. Returns the transposed per-input results.
     """Maps input to closest cluster and the score.
 
     Args:
@@ -265,12 +317,24 @@ class KMeans:
     return zip(*output)
 
   def _clusters_l2_normalized(self):
+    # [FUNCTION DOC]
+    # HELPER: predicate telling whether stored cluster centers are kept L2-normalized.
+    # Returns true only for the cosine metric when not in mini-batch mode, or when mini-batch
+    # mode syncs more than one step per iteration; false otherwise. No side effects.
     """Returns True if clusters centers are kept normalized."""
     return (self._distance_metric == COSINE_DISTANCE and
             (not self._use_mini_batch or
              self._mini_batch_steps_per_iteration > 1))
 
   def _create_variables(self, num_clusters):
+    # [FUNCTION DOC]
+    # HELPER: creates the state variables used by the training graph.
+    # num_clusters is an integer tensor. Creates a shape-unvalidated variable for the cluster
+    # centers (initially empty) and a boolean initialized flag. In mini-batch mode with more than
+    # one step per iteration, also creates an updated copy of the centers, a step countdown and
+    # zero-initialized counts. Otherwise the updated copy aliases the centers, the countdown is
+    # nothing, and counts are ones in mini-batch mode or nothing otherwise. Returns a five-tuple:
+    # centers, initialized flag, counts, updated centers, steps-left. Side effect: adds variables.
     """Creates variables.
 
     Args:
@@ -319,6 +383,9 @@ class KMeans:
 
   @classmethod
   def _l2_normalize_data(cls, inputs):
+    # [FUNCTION DOC]
+    # HELPER: row-wise L2 normalization of every input tensor in a list.
+    # Class method; returns a new list of normalized tensors, each computed on its input's device.
     """Normalized the input data."""
     output = []
     for inp in inputs:
@@ -327,6 +394,15 @@ class KMeans:
     return output
 
   def training_graph(self):
+    # [FUNCTION DOC]
+    # Builds the full k-means graph. No arguments. Resolves the initial clusters (strings and
+    # functions keep the configured cluster count as a tensor; explicit values are converted to a
+    # tensor and define the count). Creates the variables, builds the initialization op through
+    # the internal factory, normalizes the data for cosine distance, builds the inference graph,
+    # and then builds either the mini-batch training op (gated by the sync-updates op through a
+    # control dependency) or the full-batch training op. Returns a six-tuple: all scores, cluster
+    # indices, closest scores, initialized flag variable, init op, training op. Side effects:
+    # creates variables and ops in the current graph.
     """Generate a training graph for kmeans algorithm.
 
     This returns, among other things, an op that chooses initial centers
@@ -398,11 +474,25 @@ class KMeans:
 
   def _mini_batch_sync_updates_op(self, update_in_steps, cluster_centers_var,
                                   cluster_centers_updated, total_counts):
+    # [FUNCTION DOC]
+    # HELPER: builds the op that periodically syncs the per-step updated centers back to the main
+    # center variable in mini-batch mode.
+    # If mini-batch mode is on with more than one step per iteration, returns a conditional op: when
+    # the countdown reaches zero, it resets the countdown, copies (normalizing for cosine) the
+    # updated centers into the center variable and zeroes the counts; otherwise it decrements the
+    # countdown. In every other configuration returns a no-op. Inherently racy across workers
+    # (best effort).
     if self._use_mini_batch and self._mini_batch_steps_per_iteration > 1:
       assert update_in_steps is not None
       with ops.colocate_with(update_in_steps, ignore_existing=True):
 
         def _f():
+          # [FUNCTION DOC]
+          # HELPER: branch of the sync condition taken when the countdown has expired.
+          # Resets the countdown to the steps-per-iteration minus one, then copies the updated
+          # centers (L2-normalized for cosine) into the center variable, then zeroes the
+          # counts, ordered by control dependencies. Returns the countdown value after those
+          # side effects. Mutates the countdown, centers and counts variables.
           # Note that there is a race condition here, so we do a best effort
           # updates here. We reset update_in_steps first so that other workers
           # don't duplicate the updates. Also we update cluster_center_vars
@@ -438,6 +528,14 @@ class KMeans:
 
   def _mini_batch_training_op(self, inputs, cluster_idx_list, cluster_centers,
                               total_counts):
+    # [FUNCTION DOC]
+    # HELPER: builds the mini-batch k-means update op.
+    # For each input and its cluster assignment vector: deduplicates assigned cluster ids, gathers
+    # old counts and centers, aggregates new point counts and point sums per cluster, and computes
+    # the per-cluster increment as the sum minus count times old center, scaled by one over
+    # (old count plus new count). Then scatter-adds the counts and the center increments into the
+    # variables. total_counts must not be nothing (asserted). Returns a grouped op running all
+    # updates. Mutates the counts and centers variables when run.
     """Creates an op for training for mini batch case.
 
     Args:
@@ -505,6 +603,13 @@ class KMeans:
 
   def _full_batch_training_op(self, inputs, num_clusters, cluster_idx_list,
                               cluster_centers):
+    # [FUNCTION DOC]
+    # HELPER: builds the full-batch Lloyd iteration update op.
+    # KNOWN ISSUE: the docstring says it returns an op for mini-batch k-means, but this builds the
+    # full-batch update (cluster means replacing the centers).
+    # Sums the points and counts the points assigned to each cluster across all input shards,
+    # divides sums by counts plus a small epsilon, L2-normalizes the new centers if centers are
+    # kept normalized, and returns an assignment op writing them into the center variable.
     """Creates an op for training for full batch case.
 
     Args:
@@ -541,6 +646,13 @@ class KMeans:
 
 
 class _InitializeClustersOpFactory:
+  # [CLASS DOC]
+  # HELPER: internal factory used by the k-means training graph.
+  # Builds the single op that adds up to the remaining number of initial cluster centers to the
+  # center variable and sets the initialized flag once enough centers exist. Holds the inputs,
+  # target cluster count, initialization choice, seed, retry settings, and the center, updated
+  # center and initialized variables, plus derived tensors for selected, remaining and data counts.
+  # Supports random, kmeans plus plus, k-MC2, user function and explicit center initialization.
   """Internal class to create the op to initialize the clusters.
 
     The op performs this algorithm (see constructor args):
@@ -567,6 +679,12 @@ class _InitializeClustersOpFactory:
                random_seed, kmeans_plus_plus_num_retries, kmc2_chain_length,
                cluster_centers, cluster_centers_updated,
                cluster_centers_initialized):
+    # [FUNCTION DOC]
+    # Stores all configuration (see the KMeans constructor for the shared parameters) plus the
+    # center, updated-center and initialized variables, and derives tensors: the number of centers
+    # already selected (rows of the center variable), the number remaining, and the total number
+    # of data points across input shards. Adds shape and arithmetic ops to the graph; raises
+    # nothing itself.
     """Creates an op factory.
 
     Args:
@@ -603,6 +721,11 @@ class _InitializeClustersOpFactory:
         [array_ops.shape(i)[0] for i in self._inputs])
 
   def _random(self):
+    # [FUNCTION DOC]
+    # HELPER: random sampling initializer.
+    # Draws as many uniform random indices (with the stored seed) as centers remain, over the total
+    # data size, and looks up those rows across the input shards using the division partition
+    # strategy. Returns the sampled rows. Sampling is with replacement.
     indices = random_ops.random_uniform(
         array_ops.reshape(self._num_remaining, [-1]),
         minval=0,
@@ -612,6 +735,12 @@ class _InitializeClustersOpFactory:
     return embedding_lookup(self._inputs, indices, partition_strategy='div')
 
   def _kmeans_plus_plus(self):
+    # [FUNCTION DOC]
+    # HELPER: kmeans plus plus initializer.
+    # KNOWN ISSUE: only the first input shard is used to pick centers (acknowledged in a TODO).
+    # Normalizes the first shard for cosine distance, then calls the kmeans plus plus
+    # initialization op for the remaining count with the stored seed and retry count. Returns the
+    # chosen centers.
     # Points from only the first shard are used for initializing centers.
     # TODO(ands): Use all points.
     inp = self._inputs[0]
@@ -622,6 +751,14 @@ class _InitializeClustersOpFactory:
         self._kmeans_plus_plus_num_retries)
 
   def _kmc2_multiple_centers(self):
+    # [FUNCTION DOC]
+    # HELPER: k-MC2 initializer.
+    # KNOWN ISSUE: the docstring says it returns an op that adds centers, but the returned value
+    # is the tensor of centers still remaining after the loop; the center variables are assigned
+    # as a side effect inside the loop.
+    # Uses only the first shard. Computes how many centers to add this call (at least one, at most
+    # the remaining count, at most batch size over chain length) and runs a while loop that adds
+    # one center per iteration, assigning the center variable (and updated copy if distinct).
     """Adds new initial cluster centers using the k-MC2 algorithm.
 
     In each call to the op, the provided batch is split into subsets based on
@@ -648,13 +785,24 @@ class _InitializeClustersOpFactory:
         math_ops.minimum(self._num_remaining, max_to_sample), 1)
 
     def _cond(i, _):
+      # [FUNCTION DOC]
+      # HELPER: loop condition. Returns true while the iteration counter is below the number of
+      # centers to sample; the second loop variable is ignored.
       """Stopping condition for the while loop."""
       return math_ops.less(i, num_to_sample)
 
     def _body(i, _):
+      # [FUNCTION DOC]
+      # HELPER: loop body. Adds one new center: a random first point if none are selected, else a
+      # k-MC2 chain sample from the i-th subset, then assigns the center variable (and updated
+      # copy). Returns the next counter and the new remaining-centers count; the incoming second
+      # loop variable is ignored.
       """Body that adds a single new center based on a subset."""
 
       def _sample_random():
+        # [FUNCTION DOC]
+        # HELPER: branch used when no centers exist. Returns the first data point of the first
+        # shard as a one-row matrix (normalized for cosine), relying on the batch being shuffled.
         """Returns a random point as a cluster center."""
         # By assumption the batch is reshuffled and _sample_random is always
         # called for i=0. Hence, we simply return the first point.
@@ -664,6 +812,11 @@ class _InitializeClustersOpFactory:
         return new_center
 
       def _sample_kmc2_chain():
+        # [FUNCTION DOC]
+        # HELPER: branch used when centers exist. Takes the i-th chain-length slice of the first
+        # shard, computes its distances to current centers, samples one index with the k-MC2
+        # initialization op, and returns existing centers with the new (normalized for cosine)
+        # center appended as a new row.
         """Returns previous centers as well as a new center sampled using k-MC2."""
         # Extract the subset from the underlying batch.
         start = i * self._kmc2_chain_length
@@ -705,6 +858,10 @@ class _InitializeClustersOpFactory:
     return num_remaining
 
   def _greedy_batch_sampler(self, sampler):
+    # [FUNCTION DOC]
+    # HELPER: wraps a sampler callback. If the data size is at most the number of remaining
+    # centers, returns the concatenation of all inputs; otherwise calls the sampler callback.
+    # Returns a conditional tensor.
     # If the input dataset size is smaller than the number of centers
     # remaining, choose the entire input dataset as centers. This can happen
     # with mini-batch. Otherwise, sample the batch according to the provided
@@ -714,6 +871,10 @@ class _InitializeClustersOpFactory:
                      sampler)
 
   def _single_batch_sampler(self, sampler):
+    # [FUNCTION DOC]
+    # HELPER: wraps a sampler callback with an assertion op requiring the data size to be at least
+    # the number of remaining centers (fails at run time otherwise), then returns the sampler
+    # callback's result.
     # Enforce that there are at least as many data points as centers
     # remaining. This gives the provided sampler the chance to select all
     # remaining centers from a single batch.
@@ -722,6 +883,11 @@ class _InitializeClustersOpFactory:
       return sampler()
 
   def _choose_initial_centers(self):
+    # [FUNCTION DOC]
+    # HELPER: dispatches on the initialization choice. Random uses the greedy sampler; any other
+    # string is treated as kmeans plus plus with the single-batch sampler; a callable is invoked
+    # with the inputs and remaining count; otherwise explicit values are returned after asserting
+    # their row count equals the remaining count. Returns the new center rows.
     if isinstance(self._initial_clusters, str):
       if self._initial_clusters == RANDOM_INIT:
         return self._greedy_batch_sampler(self._random)
@@ -737,6 +903,12 @@ class _InitializeClustersOpFactory:
         return self._initial_clusters
 
   def _add_new_centers(self):
+    # [FUNCTION DOC]
+    # HELPER: appends newly chosen centers to the center variable.
+    # Chooses centers, normalizes them for cosine, concatenates with existing ones (or uses just
+    # the new ones when none exist), assigns the center variable (and updated copy if distinct)
+    # without shape validation, and returns the number of centers still missing. Duplicates are not
+    # removed (see TODO).
     """Adds some centers and returns the number of centers remaining."""
     new_centers = self._choose_initial_centers()
     if self._distance_metric == COSINE_DISTANCE:
@@ -754,6 +926,10 @@ class _InitializeClustersOpFactory:
     return self._num_clusters - array_ops.shape(a)[0]
 
   def _initialize(self):
+    # [FUNCTION DOC]
+    # HELPER: initialization branch. Asserts that centers remain to be chosen, then adds centers
+    # via the k-MC2 path or the generic path, and returns a conditional op that sets the
+    # initialized flag to true when none remain, else a no-op.
     with ops.control_dependencies([
         check_ops.assert_positive(self._num_remaining),
     ]):
@@ -767,6 +943,9 @@ class _InitializeClustersOpFactory:
           control_flow_ops.no_op)
 
   def op(self):
+    # [FUNCTION DOC]
+    # Public entry point of the factory. Returns a conditional op: if no centers remain it
+    # asserts the initialized flag is already true; otherwise it runs the initialization branch.
     """Returns the cluster initializer op."""
     return cond.cond(
         math_ops.equal(self._num_remaining, 0),

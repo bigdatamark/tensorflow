@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Thin Python wrappers over the generated collective ops used for cross-device communication:
+# all-reduce, all-gather, broadcast send and receive, all-to-all, group assignment, and
+# communicator initialization. Version one functions validate group sizes and pass static keys to
+# the kernel; version two and three functions take tensors for keys or a communicator resource.
+# Communication hints are lower-cased before use. No import-time side effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +31,14 @@ def all_reduce(t,
                subdiv_offsets=(0,),
                communication_hint='auto',
                timeout=0):
+  # [FUNCTION DOC]
+  # Creates a collective reduce op combining tensor t with the tensors of the other group members.
+  # group_size must be at least one, otherwise a value error is raised. group_key and instance_key
+  # are integers naming the device group and the op instance. merge_op and final_op are names of
+  # the binary and final unary ops (defaults add and identity). subdiv_offsets lists subdivision
+  # offsets (default a single zero). communication_hint (default auto) is lower-cased. timeout is
+  # a number of seconds, zero meaning none. Returns the op's output tensor; blocks at run time until
+  # all members participate.
   """Reduces tensors collectively, across devices.
 
   Args:
@@ -69,6 +83,12 @@ def all_reduce(t,
 
 
 def assign_group_v2(group_assignment, device_index, base_key):
+  # [FUNCTION DOC]
+  # Computes, for the current device, its group size and group key from a two-dimensional integer
+  # group assignment matrix (each row lists device indices in one group). device_index is this
+  # device's index and must match its position in the device assignment, otherwise behavior is
+  # undefined; base_key offsets the resulting key. Returns a pair: group size and group key
+  # tensors. No validation is done in Python.
   """Assign group key based on group_assignment.
 
   Args:
@@ -103,6 +123,13 @@ def all_reduce_v2(t,
                   ordering_token=None,
                   max_subdivs_per_device=-1,
                   name=None):
+  # [FUNCTION DOC]
+  # Version two of all-reduce taking tensors for group size and keys, so the values can be
+  # computed at run time. An optional ordering_token resource is wrapped in a one-element list (or
+  # an empty list) to order collectives per device. Also takes merge and final op names,
+  # lower-cased communication hint, timeout in seconds, max_subdivs_per_device (-1 disables
+  # subdivision, 0 uses defaults) and an op name. Builds a non-stateless reduce op and returns its
+  # output. No Python-side validation.
   """Reduces tensors collectively, across devices.
 
   Args:
@@ -163,6 +190,12 @@ def all_gather(t,
                instance_key,
                communication_hint='auto',
                timeout=0):
+  # [FUNCTION DOC]
+  # Creates a collective gather op concatenating the tensors of all group members along the first
+  # dimension. group_size must be at least one, otherwise a value error is raised. group_key and
+  # instance_key identify the group and the op instance; communication_hint (default auto) is
+  # lower-cased; timeout is in seconds (zero for none). The output shape argument is passed as a
+  # placeholder of a single zero. Returns the gathered tensor; blocks until all members arrive.
   """Accumulates tensors collectively, across devices, along first dimension.
 
   Args:
@@ -205,6 +238,11 @@ def all_gather_v2(t,
                   timeout=0,
                   ordering_token=None,
                   name=None):
+  # [FUNCTION DOC]
+  # Version two of all-gather taking tensors for group size and keys. Wraps an optional
+  # ordering_token resource into a one-element list (else an empty list), lower-cases the
+  # communication hint, passes the timeout in seconds, and builds a non-stateless gather op with
+  # the optional op name. Returns the gathered tensor. No Python-side validation.
   """Accumulates tensors collectively, across devices, along first dimension.
 
   Args:
@@ -255,6 +293,12 @@ def broadcast_send(t,
                    instance_key,
                    communication_hint='auto',
                    timeout=0):
+  # [FUNCTION DOC]
+  # Creates the sending side of a collective broadcast of tensor t. Raises a value error if
+  # group_size is not greater than one, if the shape of t differs from the declared shape, or if
+  # the dtype of t differs from the declared dtype. Other arguments: group and instance keys,
+  # communication hint (lower-cased, default auto) and timeout in seconds. Returns the broadcast
+  # send op output. The dtype is checked but not passed to the kernel (inferred from t).
   """Broadcasts one tensor to a group of others, across devices.
 
   Args:
@@ -317,6 +361,10 @@ def broadcast_send_v2(t,
                       instance_key,
                       communication_hint='auto',
                       timeout=0):
+  # [FUNCTION DOC]
+  # Version two of broadcast send taking tensors for group size and keys. Performs no shape, dtype
+  # or group size validation. Lower-cases the communication hint, passes the timeout in seconds
+  # and returns the broadcast send op output.
   """Broadcasts one tensor to a group of others, across devices.
 
   Args:
@@ -352,6 +400,12 @@ def broadcast_recv(shape,
                    instance_key,
                    communication_hint='auto',
                    timeout=0):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the group size error message names broadcast_send instead of broadcast_recv.
+  # Creates the receiving side of a collective broadcast producing a tensor of the given shape and
+  # dtype. Raises a value error if group_size is not greater than one. Also takes group and
+  # instance keys, a communication hint (lower-cased) and timeout in seconds. Returns the received
+  # tensor; blocks until the sender participates.
   """Receives a broadcasts tensor, across devices.
 
   Args:
@@ -396,6 +450,10 @@ def broadcast_recv_v2(shape,
                       instance_key,
                       communication_hint='auto',
                       timeout=0):
+  # [FUNCTION DOC]
+  # Version two of broadcast receive taking tensors for shape, group size and keys. No Python-side
+  # validation. Lower-cases the communication hint and returns the received tensor of the given
+  # dtype.
   """Receives a broadcasts tensor, across devices.
 
   Args:
@@ -431,6 +489,13 @@ def initialize_communicator(group_key,
                             group_size,
                             communication_hint='auto',
                             timeout_seconds=0):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: unlike the other wrappers, the communication hint is passed through without being
+  # lower-cased.
+  # Creates a communicator for a collective group: group_key and group_size are int32 tensors,
+  # rank is this device's rank (unique in the group), communication_hint defaults to auto, and
+  # timeout_seconds defaults to zero. Blocks until all members run the op; initializing an existing
+  # group key is an error at run time. Returns a resource tensor handle.
   """Initializes a collective communicator.
 
   This creates a collective communicator, which represents membership to a
@@ -470,6 +535,12 @@ def all_reduce_v3(communicator,
                   reduction='Add',
                   group_assignment=None,
                   timeout_seconds=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring lists lower-case reduction names while the default is capitalized
+  # add; the Python code does no validation of the name either way.
+  # Reduces tensor t across the group of an initialized communicator using the named reduction.
+  # group_assignment is an optional int32 matrix of rank groups; nothing becomes an empty list.
+  # timeout_seconds is optional. Returns the reduced tensor.
   """Reduces tensors mutually.
 
   Args:
@@ -508,6 +579,12 @@ def all_to_all_v2(
     ordering_token=None,
     name=None,
 ):
+  # [FUNCTION DOC]
+  # All-to-all exchange taking tensors for group size and keys: the first dimension of t is split
+  # so slice i goes to rank i. Wraps an optional ordering_token resource into a one-element list
+  # (else empty), lower-cases the communication hint, passes timeout in seconds and builds a
+  # non-stateless op with the optional name. Returns the exchanged tensor. No Python-side
+  # validation.
   """Exchanges tensors mutually.
 
   Args:
@@ -552,6 +629,11 @@ def all_to_all_v2(
 
 
 def all_to_all_v3(communicator, t, group_assignment=None, timeout_seconds=None):
+  # [FUNCTION DOC]
+  # All-to-all exchange using an initialized communicator resource. t is split along its first
+  # dimension, slice i sent to rank i. group_assignment is an optional int32 matrix of rank
+  # groups (nothing becomes an empty list); timeout_seconds is optional. Returns the exchanged
+  # tensor.
   """Exchanges tensors mutually.
 
   Args:

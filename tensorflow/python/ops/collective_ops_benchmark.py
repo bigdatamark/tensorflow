@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Local CPU benchmark for the all-reduce collective op. Defines a benchmark class that, for several
+# group sizes and tensor sizes, builds an all-reduce across virtual CPU devices in a session and
+# reports the median wall time per step. Run via the standard test main entry point.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,9 +31,20 @@ from tensorflow.python.platform import test
 
 
 class CollectiveOpBenchmark(test.Benchmark):
+  # [CLASS DOC]
+  # Benchmark class holding a single benchmark method for local CPU collective execution; keeps
+  # no state.
   """Benchmarks for local CPU collective op execution."""
 
   def benchmark_collective(self):
+    # [FUNCTION DOC]
+    # Sweeps group sizes 2, 4, 8 and tensor sizes of 10, 1000 and one million elements. For each
+    # combination it creates a session with that many CPU devices, builds one all-reduce (add,
+    # then divide) per device using a distinct group key per group size, and makes a native
+    # callable running them. After five warm-up runs, it times batches of 100 steps until at least
+    # five batches and five seconds have elapsed, then reports the number of iterations and the
+    # median per-step wall time under a name encoding element and device counts. Side effects:
+    # opens sessions and reports benchmark results; no assertions.
     """Measures the performance of local CPU collective execution."""
     shapes = [(10,), (1000,), (1000000,)]
     devices = [2, 4, 8]

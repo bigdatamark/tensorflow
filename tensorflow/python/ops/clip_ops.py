@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Public clipping operations for tensors: clip by elementwise value range, by L2 norm (optionally
+# along given axes), by the global norm of a list of tensors, and the deprecated clip by average
+# norm. Also registers the gradient function for the ClipByValue op. All functions accept dense
+# tensors or sparse gradient slices (indexed slices) and preserve that container type. Exported
+# under the public TensorFlow namespace through the export decorators; the only import-time side
+# effect is the gradient registration.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,6 +43,18 @@ from tensorflow.python.util.tf_export import tf_export
 @dispatch.add_dispatch_support
 def clip_by_value(t, clip_value_min, clip_value_max,
                   name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: dead commented-out code and a stale TODO follow the return statement; the
+  # intended switch to the native clip-by-value kernel never happened, so this still composes a
+  # minimum and a maximum op.
+  # Clips every element of t into the range from clip_value_min to clip_value_max by applying an
+  # elementwise minimum with the max and then a maximum with the min. t may be a tensor or an
+  # indexed-slices object (only its values are clipped; indices and dense shape are kept and a new
+  # indexed-slices is returned). The bounds may be scalars or broadcastable to t. After each
+  # step the result shape is checked to be compatible with the input shape so broadcasting cannot
+  # enlarge the output; a mismatch raises an invalid-argument error. Mixing integer input with
+  # float bounds raises a type error. name is an optional op name scope. Returns the clipped
+  # tensor or indexed-slices. No side effects other than graph ops. Min above max is not checked.
   """Clips tensor values to a specified min and max.
 
   Given a tensor `t`, this operation returns a tensor of the same type and
@@ -127,6 +146,13 @@ def clip_by_value(t, clip_value_min, clip_value_max,
 
 @ops.RegisterGradient("ClipByValue")
 def _clip_by_value_grad(op, grad):
+  # [FUNCTION DOC]
+  # HELPER: gradient function registered for the ClipByValue op, used by automatic differentiation.
+  # Given the forward op (inputs x, min y, max z) and the upstream gradient, returns three
+  # gradients. The gradient for x is passed through where x lies inside the range and is zero
+  # elsewhere. The gradient for the min is the upstream gradient where x is below it, and for the
+  # max where x is above it; both are summed over the broadcast dimensions and reshaped to the
+  # shape of the corresponding input. Returns a tuple of three tensors. No side effects.
   """Returns grad of clip_by_value."""
   x = op.inputs[0]
   y = op.inputs[1]
@@ -152,6 +178,16 @@ def _clip_by_value_grad(op, grad):
 @tf_export("clip_by_norm")
 @dispatch.add_dispatch_support
 def clip_by_norm(t, clip_norm, axes=None, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says a value error is raised when clip_norm is not a scalar, but
+  # this code performs no such check; a non-scalar clip_norm is simply cast and broadcast, and the
+  # shape-compatibility assertion would be what fails.
+  # Rescales t so its L2 norm (over the given axes, or over all dimensions when axes is nothing)
+  # is at most clip_norm. Negative clip_norm is treated as zero. Zero-norm slices are handled with a
+  # safe substitution so gradients do not become NaN. t may be a tensor or indexed-slices (values
+  # clipped, indices and dense shape preserved). Raises a type error for non-float input via the
+  # underlying ops. Returns the clipped tensor or indexed-slices; the result shape must stay
+  # compatible with the input. name is an optional name scope. No other side effects.
   """Clips tensor values to a maximum L2-norm.
 
   Given a tensor `t`, and a maximum clip value `clip_norm`, this operation
@@ -246,6 +282,13 @@ def clip_by_norm(t, clip_norm, axes=None, name=None):
 @dispatch.add_dispatch_support
 @deprecation.deprecated_endpoints("global_norm")
 def global_norm(t_list, name=None):
+  # [FUNCTION DOC]
+  # Computes the square root of the sum of squared L2 norms of all tensors in t_list, which must
+  # be a list or tuple (not a string) of tensors, indexed-slices or nothing/null entries; null
+  # entries are skipped and indexed-slices contribute only their values. Each tensor's half
+  # squared norm is computed on the device of that tensor, then they are stacked, summed, doubled
+  # and square-rooted. Raises a type error if t_list is not a sequence. Returns a scalar float
+  # tensor. name is an optional name scope. The endpoint is deprecated under an old name.
   """Computes the global norm of multiple tensors.
 
   Given a tuple or list of tensors `t_list`, this operation returns the
@@ -298,6 +341,15 @@ def global_norm(t_list, name=None):
 @tf_export("clip_by_global_norm")
 @dispatch.add_dispatch_support
 def clip_by_global_norm(t_list, clip_norm, use_norm=None, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: when use_norm is not given, the same name is passed to the global norm
+  # computation and then reused for the clipping name scope, so the name is applied twice.
+  # Scales every tensor in t_list by clip_norm divided by the larger of the global norm and
+  # clip_norm. t_list is a list or tuple of tensors, indexed-slices or null entries (nulls stay
+  # null in the output). use_norm optionally supplies a precomputed global norm scalar. If the norm
+  # is infinite or NaN the scale becomes NaN so all outputs become NaN. Raises a type error when
+  # t_list is not a sequence. Returns a pair: the list of clipped tensors (indexed-slices
+  # preserved) and the global norm used. Each clipped value is produced on its input's device.
   """Clips values of multiple tensors by the ratio of the sum of their norms.
 
   Given a tuple or list of tensors `t_list`, and a clipping ratio `clip_norm`,
@@ -400,6 +452,12 @@ def clip_by_global_norm(t_list, clip_norm, use_norm=None, name=None):
 @tf_export(v1=["clip_by_average_norm"])
 @dispatch.add_dispatch_support
 def clip_by_average_norm(t, clip_norm, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the element count is cast to 32-bit float regardless of the dtype of t, so
+  # non-float32 inputs may hit a dtype mismatch when multiplied with the tensor.
+  # Deprecated version 1 only op. Converts t to a tensor and scales it so its average L2 norm
+  # (L2 norm divided by element count) does not exceed clip_norm, leaving it unchanged if already
+  # smaller. Returns the clipped tensor. name is an optional name scope. No other side effects.
   """Clips tensor values to a maximum average L2-norm.
 
   Given a tensor `t`, and a maximum clip value `clip_norm`, this operation
