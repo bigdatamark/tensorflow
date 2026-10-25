@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Unit tests for variable_utils. Defines two minimal composite tensor test doubles (one that
+# converts its inner variable to a tensor when asked and one that does not) and checks that
+# resource variables inside plain structures and composite tensors are converted to tensors,
+# and that replacing variables with atoms leaves other leaves untouched and yields structures
+# that flatten to the expected values. Tests run in both graph and eager modes.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,31 +34,61 @@ from tensorflow.python.util import variable_utils
 
 
 class CT(composite_tensor.CompositeTensor):
+  # [CLASS DOC]
+  # HELPER: minimal composite tensor test double with no components and no conversion override.
+  # Used to check that composite tensors without variable conversion pass through unchanged.
   """A generic CompositeTensor, used for constructing tests."""
 
   @property
   def _type_spec(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: returns the null value instead of a real type specification, so this test
+    # double is not a fully valid composite tensor (acceptable here as it is never specialised).
+    # Property required by the composite tensor interface; does nothing.
     pass
 
 
 class CT2(composite_tensor.CompositeTensor):
+  # [CLASS DOC]
+  # HELPER: composite tensor test double holding a single component and overriding the
+  # variable-conversion hook to return a new instance whose component is a tensor.
   """Another CompositeTensor, used for constructing tests."""
 
   def __init__(self, component):
+    # [FUNCTION DOC]
+    # Constructor. Input: component, any object (typically a resource variable); stored as the
+    # component attribute.
     self.component = component
 
   @property
   def _type_spec(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: returns the null value instead of a real type specification, so this test
+    # double is not a fully valid composite tensor.
+    # Property required by the composite tensor interface; does nothing.
     pass
 
   def _convert_variables_to_tensors(self):
+    # [FUNCTION DOC]
+    # Conversion hook used by the variable utilities. Returns a new instance of the same class
+    # whose component is the tensor obtained by converting the current component. Takes no
+    # inputs; does not modify this instance.
     return CT2(ops.convert_to_tensor(self.component))
 
 
 @test_util.run_all_in_graph_and_eager_modes
 class VariableUtilsTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the variable utilities, run in both graph and eager modes via the class
+  # decorator. Uses the two composite tensor test doubles defined above as fixtures.
 
   def test_convert_variables_to_tensors(self):
+    # [FUNCTION DOC]
+    # Builds a list of two resource variables, a constant, a nested list, an integer and a
+    # plain composite tensor (initializing variables first in graph mode). Converts it and
+    # asserts the first three entries are tensors, the list and integer keep their types, the
+    # composite tensor is the identical object, and after evaluating the tensors the whole
+    # result equals the expected values.
     ct = CT()
     data = [resource_variable_ops.ResourceVariable(1),
             resource_variable_ops.ResourceVariable(2),
@@ -76,6 +112,9 @@ class VariableUtilsTest(test.TestCase):
     self.assertAllEqual(results, expected_results)
 
   def test_convert_variables_in_composite_tensor(self):
+    # [FUNCTION DOC]
+    # Wraps a resource variable in the converting composite tensor double, asserts its component
+    # is a variable, converts it, and asserts the result's component is a tensor equal to one.
     ct2 = CT2(resource_variable_ops.ResourceVariable(1))
     if not context.executing_eagerly():
       self.evaluate(variables.global_variables_initializer())
@@ -87,6 +126,11 @@ class VariableUtilsTest(test.TestCase):
     self.assertAllEqual(result.component, 1)
 
   def test_replace_variables_with_atoms(self):
+    # [FUNCTION DOC]
+    # Builds a list of two resource variables, a constant, a nested list and an integer, replaces
+    # variables with atoms, and asserts the first two entries become integers while the rest keep
+    # their types and values. Finally flattens the result expanding composites and asserts the
+    # zero atoms are kept as single leaves (flat values zero, zero, three, four, five).
     data = [resource_variable_ops.ResourceVariable(1),
             resource_variable_ops.ResourceVariable(2),
             constant_op.constant(3),

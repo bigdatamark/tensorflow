@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Unit tests for the type_annotations helper module. Checks the generic union, tuple and mapping
+# predicates over parameterized and bare typing forms and plain values, the extraction of type
+# arguments from generic annotations (including ellipsis and nested forms), and the forward
+# reference predicate. Uses parameterized test cases; runs as a test binary.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +28,9 @@ from tensorflow.python.util import type_annotations
 
 
 class TypeAnnotationsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case for the type annotation helpers: generic-type predicates, generic
+  # argument extraction and forward-reference detection. No shared fixtures.
 
   @parameterized.parameters([
       (typing.Union[int, float], 'Union'),
@@ -38,6 +46,11 @@ class TypeAnnotationsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       (12, None),
   ])
   def testGenericTypePredicates(self, tp, expected):
+    # [FUNCTION DOC]
+    # Parameterized over (annotation, expected kind) pairs: parameterized union, tuple and mapping
+    # forms, nested union, bare forms, a plain class and an integer (the last group expect no
+    # kind). Asserts that each of the union, tuple and mapping predicates returns true exactly
+    # when the expected kind names it.
     self.assertEqual(
         type_annotations.is_generic_union(tp), expected == 'Union')
     self.assertEqual(
@@ -60,9 +73,17 @@ class TypeAnnotationsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
                                                                          ...])),
   ])
   def testGetGenericTypeArgs(self, tp, expected):
+    # [FUNCTION DOC]
+    # Parameterized over (annotation, expected arguments) pairs covering unions, variable-length
+    # and fixed tuples, mappings and a union of tuples. Asserts the generic argument accessor
+    # returns the expected tuple of arguments.
     self.assertEqual(type_annotations.get_generic_type_args(tp), expected)
 
   def testIsForwardRef(self):
+    # [FUNCTION DOC]
+    # Builds a union of a string forward reference and an integer type, extracts its arguments
+    # and asserts the forward-reference predicate is true for the first argument and false for
+    # the second.
     tp = typing.Union['B', int]
     tp_args = type_annotations.get_generic_type_args(tp)
     self.assertTrue(type_annotations.is_forward_ref(tp_args[0]))

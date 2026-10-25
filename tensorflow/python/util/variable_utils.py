@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Utilities for manipulating resource variables inside nested structures. Offers one function to
+# convert resource variables (also those inside composite tensors that support it) into plain
+# tensors, and one to replace resource variables with a placeholder atom so structure
+# comparisons between variables and tensors keep working. Both are built on the nest
+# structure-mapping utility and the native resource-variable check. No import-time side effects.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +27,13 @@ from tensorflow.python.util import nest
 
 
 def convert_variables_to_tensors(values):
+  # [FUNCTION DOC]
+  # Input: values, a nested structure (lists, tuples, mappings and so on) holding resource
+  # variables and arbitrary other objects. Returns a new structure of the same shape in which
+  # each resource variable is converted to a tensor (reading its current value), each composite
+  # tensor is passed to the composite-tensor conversion (which converts variables inside it if
+  # it supports that), and all other leaves are returned unchanged. Side effects: converting a
+  # variable adds a read operation in graph mode or reads the value in eager mode.
   """Converts `ResourceVariable`s in `values` to `Tensor`s.
 
   If an object is a `CompositeTensor` and overrides its
@@ -35,6 +48,10 @@ def convert_variables_to_tensors(values):
     A new structure with `ResourceVariable`s in `values` converted to `Tensor`s.
   """
   def _convert_resource_variable_to_tensor(x):
+    # [FUNCTION DOC]
+    # HELPER: leaf mapper for the variable-to-tensor conversion. Input: x, one leaf. Returns a
+    # tensor if x is a resource variable, the composite-tensor conversion of x if x is a
+    # composite tensor, otherwise x itself.
     if _pywrap_utils.IsResourceVariable(x):
       return ops.convert_to_tensor(x)
     elif isinstance(x, composite_tensor.CompositeTensor):
@@ -46,6 +63,12 @@ def convert_variables_to_tensors(values):
 
 
 def replace_variables_with_atoms(values):
+  # [FUNCTION DOC]
+  # Input: values, a nested structure holding resource variables and other objects. Returns a
+  # new structure of the same shape in which every resource variable is replaced by the integer
+  # zero (a nest atom) and everything else, including composite tensors and their contents, is
+  # left unchanged. Mainly for backward compatibility with structure assertions. No other side
+  # effects.
   """Replaces `ResourceVariable`s in `values` with tf.nest atoms.
 
   This function is mostly for backward compatibility. Historically,
@@ -75,6 +98,9 @@ def replace_variables_with_atoms(values):
     A new structure with `ResourceVariable`s in `values` converted to atoms.
   """
   def _replace_resource_variable_with_atom(x):
+    # [FUNCTION DOC]
+    # HELPER: leaf mapper for the variable-to-atom replacement. Input: x, one leaf. Returns the
+    # integer zero if x is a resource variable, otherwise x itself.
     if _pywrap_utils.IsResourceVariable(x):
       return 0  # tf.nest treats 0 or tf.constant(0) as an atom.
     else:

@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Utilities for prettifying exception stack traces by hiding TensorFlow-internal frames.
+# Keeps a thread-local switch (default: filtering enabled) and a tuple of excluded directory
+# paths (the TensorFlow python package directory). Exposes, as public TensorFlow API under the
+# debugging namespace, functions to query, enable and disable the filtering; plus a frame
+# inclusion test, a traceback rebuilding helper, and the decorator that re-raises exceptions of
+# a wrapped function with a filtered traceback. Import-time side effects: creates the
+# thread-local state and computes the excluded path from this file's location, and registers
+# the three public functions for export.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,6 +40,10 @@ _EXCLUDED_PATHS = (
 
 @tf_export('debugging.is_traceback_filtering_enabled')
 def is_traceback_filtering_enabled():
+  # [FUNCTION DOC]
+  # Reports whether traceback filtering is on for the calling thread. Takes no inputs. Reads the
+  # thread-local flag, defaulting to true if the thread never set it. Returns a boolean. No side
+  # effects.
   """Check whether traceback filtering is currently enabled.
 
   See also `tf.debugging.enable_traceback_filtering()` and
@@ -50,6 +63,12 @@ def is_traceback_filtering_enabled():
 
 @tf_export('debugging.enable_traceback_filtering')
 def enable_traceback_filtering():
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the minimum-version check (Python 3.7) is effectively dead code on supported
+  # interpreters, and the first part of the error message is an f-string with no placeholders.
+  # Turns filtering on for the calling thread only (the flag is thread-local, so other threads
+  # keep their own setting). Takes no inputs, returns nothing. Raises a runtime error if the
+  # interpreter is not Python 3.7 or newer.
   """Enable filtering out TensorFlow-internal frames in exception stack traces.
 
   Raw TensorFlow stack traces involve many internal frames, which can be
@@ -75,6 +94,10 @@ def enable_traceback_filtering():
 
 @tf_export('debugging.disable_traceback_filtering')
 def disable_traceback_filtering():
+  # [FUNCTION DOC]
+  # Turns filtering off for the calling thread only (thread-local flag), so subsequent exceptions
+  # from filtered functions carry full tracebacks including internal frames. Takes no inputs,
+  # returns nothing, raises nothing.
   """Disable filtering out TensorFlow-internal frames in exception stack traces.
 
   Raw TensorFlow stack traces involve many internal frames, which can be
@@ -97,6 +120,12 @@ def disable_traceback_filtering():
 
 
 def include_frame(fname):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the test is a substring match, not a path-prefix match, so any file name that
+  # merely contains the excluded directory text anywhere is treated as internal.
+  # Decides whether a frame from the given file should be kept in a filtered traceback. Input:
+  # fname (string file name of the frame's code). Returns false if any excluded directory path
+  # occurs inside it, true otherwise. No side effects.
   """Determines whether a frame should be included in filtered tracebacks.
 
   This function checks if the given filename contains any of the excluded
@@ -118,6 +147,13 @@ def include_frame(fname):
 
 
 def _process_traceback_frames(tb):
+  # [FUNCTION DOC]
+  # HELPER: used by the traceback-filtering decorator to rebuild a traceback.
+  # Input: tb, a traceback object (may be the null value). Walks all frames, keeps those whose
+  # code file passes the frame-inclusion test, and links new traceback entries in the original
+  # order. If every frame was excluded but the traceback was not empty, keeps only the innermost
+  # frame so the error location is not lost. Returns the new traceback (null if the input had
+  # no frames). Does not modify the input.
   new_tb = None
   tb_list = list(traceback.walk_tb(tb))
   for f, line_no in reversed(tb_list):
@@ -130,6 +166,13 @@ def _process_traceback_frames(tb):
 
 
 def filter_traceback(fn):
+  # [FUNCTION DOC]
+  # Decorator that makes exceptions escaping fn carry a traceback without TensorFlow-internal
+  # frames. Input: fn, the callable to decorate. Returns fn unchanged on pythons older than 3.7;
+  # otherwise returns a wrapper (created through the tf decorator maker so the target is
+  # recorded). The wrapper calls fn directly when filtering is disabled for the thread;
+  # otherwise calls fn and, on any ordinary exception, re-raises the same exception object with
+  # a filtered traceback and with the original cause suppressed.
   """Decorator to filter out TF-internal stack trace frames in exceptions.
 
   Raw TensorFlow stack traces involve many internal frames, which can be
@@ -150,6 +193,15 @@ def filter_traceback(fn):
     return fn
 
   def error_handler(*args, **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: when filtering is disabled the call to fn happens inside a try block that
+    # catches name errors; a name error raised by fn itself would therefore cause fn to be
+    # called a second time.
+    # HELPER: wrapper returned by the traceback-filtering decorator. Takes any positional and
+    # keyword arguments and forwards them to the decorated function, returning its result. If
+    # filtering is enabled, any exception from the call is re-raised with filtered traceback
+    # frames (original cause suppressed); the stored filtered traceback is deleted afterwards
+    # to avoid reference cycles.
     try:
       if not is_traceback_filtering_enabled():
         return fn(*args, **kwargs)

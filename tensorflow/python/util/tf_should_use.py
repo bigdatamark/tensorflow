@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# Implements the "should use result" facility: a decorator that wraps the return value of a
+# function in a thin proxy object which remembers whether anything was done with it (attribute
+# read or write, operator, or an explicit mark-used call). If the proxy is destroyed without
+# having been used, an error is logged (or, for values created during function tracing when
+# requested, a runtime error is raised when tracing ends), pointing at the creation stack.
+# Exposes the public decorator should_use_result and the internal wrapping function
+# add-should-use-warning, plus the usage-tracking helper class and the proxy-building
+# machinery. Keeps a module-level cache of generated proxy classes keyed by wrapped type.
+# Used by TensorFlow code that returns ops or tensors that callers must not silently drop.
+# No import-time side effects other than creating the empty cache and the operator name set.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +37,14 @@ from tensorflow.python.util import tf_decorator
 
 
 class _TFShouldUseHelper(object):
+  # [CLASS DOC]
+  # HELPER: usage tracker held by the proxy objects created for the should-use-result feature.
+  # State: the wrapped value's type, its text representation, the stack frame of the creator
+  # (for the report), the flag saying whether to raise inside functions, and a "sated" flag
+  # that becomes true once the wrapped value has been used. When the helper is garbage
+  # collected while not sated it logs an error naming the creation stack. In function-tracing
+  # mode with error requested it also registers an exit callback on the default function graph
+  # that raises a runtime error if the value is still unused when tracing finishes.
   """Object stored in TFShouldUse-wrapped objects.
 
   When it is deleted it will emit a warning or error if its `sate` method
@@ -36,6 +55,15 @@ class _TFShouldUseHelper(object):
 
   def __init__(self, type_, repr_, stack_frame, error_in_function,
                warn_in_eager):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: type_ (type of the wrapped value), repr_ (its text form), stack_frame
+    # (frame object of the creator, used later to format a stack), error_in_function (bool:
+    # raise instead of log when created while tracing a function) and warn_in_eager (bool:
+    # also track in eager mode). Decides the initial sated state: in eager mode it is sated
+    # unless warn_in_eager is set; inside a function it is unsated only if error_in_function
+    # (and then an exit callback raising on unused value is registered on the default function
+    # graph; otherwise it is sated); in classic graph-building mode it starts unsated.
+    # Returns nothing; side effect is the callback registration described.
     self._type = type_
     self._repr = repr_
     self._stack_frame = stack_frame
@@ -55,6 +83,11 @@ class _TFShouldUseHelper(object):
       self._sated = False
 
   def sate(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: also assigns an attribute named logging module that is never read anywhere
+    # else in this class; it appears to be a leftover.
+    # Marks the tracked value as used: sets the sated flag and drops the stored type, text
+    # representation and creation frame so they can be freed. Takes no inputs, returns nothing.
     self._sated = True
     self._type = None
     self._repr = None
@@ -62,6 +95,14 @@ class _TFShouldUseHelper(object):
     self._logging_module = None
 
   def _check_sated(self, raise_error):
+    # [FUNCTION DOC]
+    # HELPER: internal check shared by the destructor and the function-graph exit callback.
+    # Input: raise_error (bool). If the value was already used, returns nothing immediately.
+    # Otherwise builds a text of up to five frames of the creation stack. If raise_error is
+    # true it raises a runtime error saying the object was never used (with its type, text
+    # form and creation stack) and, in all cases of that branch, marks the helper sated
+    # afterwards. If false, it logs the same information as an error message and does not
+    # change state.
     """Check if the object has been sated."""
     if self._sated:
       return
@@ -86,16 +127,30 @@ class _TFShouldUseHelper(object):
           .format(self._type, self._repr, creation_stack))
 
   def __del__(self):
+    # [FUNCTION DOC]
+    # Destructor. When the helper is collected it runs the sated check in logging mode, so an
+    # unused tracked value results in an error log (never an exception). Returns nothing.
     self._check_sated(raise_error=False)
 
 
 def _new__init__(self, wrapped_value, tf_should_use_helper):
+  # [FUNCTION DOC]
+  # HELPER: installed as the constructor of the generated proxy classes.
+  # Stores the usage tracker and the wrapped value on the proxy under private attribute names.
+  # Inputs: the proxy instance, the value being wrapped and the tracker object. Returns nothing.
   # pylint: disable=protected-access
   self._tf_should_use_helper = tf_should_use_helper
   self._tf_should_use_wrapped_value = wrapped_value
 
 
 def _new__setattr__(self, key, value):
+  # [FUNCTION DOC]
+  # HELPER: installed as the attribute-setting hook of the generated proxy classes.
+  # Inputs: proxy instance, attribute name and value. The two private bookkeeping attributes are
+  # stored on the proxy itself; any other attribute is forwarded to the wrapped value. Note that
+  # setting forwards without marking the tracker as used here (the attribute lookup used to
+  # fetch the wrapped value is the private one, which does not mark use). Returns whatever the
+  # underlying set operation returns (nothing in practice).
   if key in ('_tf_should_use_helper', '_tf_should_use_wrapped_value'):
     return object.__setattr__(self, key, value)
   return setattr(
@@ -104,6 +159,13 @@ def _new__setattr__(self, key, value):
 
 
 def _new__getattribute__(self, key):
+  # [FUNCTION DOC]
+  # HELPER: installed as the attribute-access hook of the generated proxy classes.
+  # Inputs: proxy instance and attribute name. Unless the name is one of the two private
+  # bookkeeping attributes, marks the tracker as used. Then returns the proxy's own attribute
+  # for the bookkeeping names, the mark-used method and the attribute-setting hook; for every
+  # other name returns the attribute of the wrapped value. Raises whatever attribute error the
+  # wrapped value raises for unknown names.
   if key not in ('_tf_should_use_helper', '_tf_should_use_wrapped_value'):
     object.__getattribute__(self, '_tf_should_use_helper').sate()
   if key in (
@@ -118,6 +180,14 @@ def _new__getattribute__(self, key):
 
 
 def _new_mark_used(self, *args, **kwargs):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the attribute-error handler wraps the whole call, so an attribute error raised
+  # inside the wrapped value's own mark-used method is silently swallowed and the result is
+  # nothing, not only the "method does not exist" case.
+  # HELPER: installed as the mark-used method of the generated proxy classes.
+  # Marks the tracker as used, then if the wrapped value itself has a mark-used method calls it
+  # with the same positional and keyword arguments and returns its result. If the wrapped value
+  # has none, returns nothing.
   object.__getattribute__(self, '_tf_should_use_helper').sate()
   try:
     mu = object.__getattribute__(
@@ -169,10 +239,25 @@ _WRAPPERS = {}
 
 
 class ShouldUseWrapper(object):
+  # [CLASS DOC]
+  # HELPER: empty template class. It is deep-copied and rebuilt by the proxy factory, which then
+  # replaces its constructor, attribute hooks and mark-used method and copies operator methods
+  # from the wrapped value's type. It is never instantiated directly and holds no state.
   pass
 
 
 def _get_wrapper(x, tf_should_use_helper):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the wrapper class subclasses the type of x, but the
+  # generated class is built from the bases of the empty template class (plain object) and only
+  # copies selected operator methods from the type of x, so isinstance checks against the type
+  # of x fail on the proxy.
+  # HELPER: proxy factory for add-should-use-warning.
+  # Inputs: x (value to wrap) and the usage tracker. Looks up a cached proxy class for the type
+  # of x in the module-level cache; if none, creates one by copying the template class,
+  # installing the custom constructor, attribute-access hook, attribute-set hook and mark-used
+  # method, copying every overloadable operator method that the type of x defines, and storing
+  # it in the cache (side effect on module state). Returns a new proxy instance wrapping x.
   """Create a wrapper for object x, whose class subclasses type(x).
 
   The wrapper will emit a warning if it is deleted without any of its
@@ -196,6 +281,9 @@ def _get_wrapper(x, tf_should_use_helper):
   bases = getattr(tx, '__orig_bases__', tx.__bases__)
 
   def set_body(ns):
+    # [FUNCTION DOC]
+    # HELPER: class-body callback for dynamic class creation. Fills the namespace mapping given
+    # by the class machinery with the attributes of the copied template class and returns it.
     ns.update(tx.__dict__)
     return ns
 
@@ -214,6 +302,17 @@ def _get_wrapper(x, tf_should_use_helper):
 
 
 def _add_should_use_warning(x, error_in_function=False, warn_in_eager=False):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring refers to a class named TFShouldUseWarningWrapper that does not
+  # exist in this module, and says the result subclasses the type of x, which is not true (see
+  # the proxy factory).
+  # Wraps a value so that an unused value is reported. Inputs: x (any value), error_in_function
+  # (bool, default false: raise at the end of function tracing if unused) and warn_in_eager
+  # (bool, default false: also track in eager mode). Returns x unchanged when it is nothing, an
+  # empty list, when executing eagerly without warn_in_eager, or when inside a function without
+  # error_in_function. Otherwise captures the caller's stack frame (by raising and catching an
+  # exception to read its traceback), creates the usage tracker and returns a proxy wrapping x.
+  # Side effects: possible registration of a function-graph exit callback via the tracker.
   """Wraps object x so that if it is never used, a warning is logged.
 
   Args:
@@ -255,6 +354,14 @@ def _add_should_use_warning(x, error_in_function=False, warn_in_eager=False):
 
 
 def should_use_result(fn=None, warn_in_eager=False, error_in_function=False):
+  # [FUNCTION DOC]
+  # Public decorator factory. Inputs: fn (optional function to decorate directly), warn_in_eager
+  # and error_in_function (bools, default false, forwarded to the wrapping logic). If fn is
+  # given, returns the decorated function; if not, returns a decorator to apply later. The
+  # decorated function calls the original and returns its result passed through the
+  # add-should-use-warning logic, and its documentation is the original brief line plus
+  # dedented remainder followed by a note that the output must be used. Decoration goes through
+  # the tf decorator maker so the original is recorded as the target.
   """Function wrapper that ensures the function's output is used.
 
   If the output is not used, a `logging.error` is logged.  If
@@ -283,8 +390,17 @@ def should_use_result(fn=None, warn_in_eager=False, error_in_function=False):
     The wrapped function.
   """
   def decorated(fn):
+    # [FUNCTION DOC]
+    # HELPER: actual decorator used by the public factory. Input: fn, the function to wrap.
+    # Builds the wrapper, composes the new documentation (brief line, dedented rest, plus a
+    # note that the output should be used and can be marked via the mark-used method) and
+    # returns the result of the tf decorator maker named should-use-result.
     """Decorates the input function."""
     def wrapped(*args, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: wrapper installed by the decorator. Calls the original function with all given
+      # arguments and returns its result wrapped by the unused-value tracking logic using the
+      # configured warn-in-eager and error-in-function flags. Propagates exceptions of the call.
       return _add_should_use_warning(fn(*args, **kwargs),
                                      warn_in_eager=warn_in_eager,
                                      error_in_function=error_in_function)
