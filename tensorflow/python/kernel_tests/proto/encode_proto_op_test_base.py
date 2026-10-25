@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: shared base class for the encode_proto op tests.
+# Provides a table-driven test base checking that encode_proto is a lossless inverse of decode_proto
+# for the specified fields, plus negative tests for bad arguments (unknown field, wrong dtype, wrong
+# sizes shape, inconsistent value shapes). Test cases come from the common proto op test base and are
+# run both with the plain and the packed message variants. Concrete test modules subclass it and
+# supply the ops modules. No import-time side effects beyond imports.
 # =============================================================================
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
@@ -33,9 +40,17 @@ from tensorflow.python.ops import array_ops
 
 
 class EncodeProtoOpTestBase(test_base.ProtoOpTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # HELPER: base class for encode_proto tests.
+  # Combines the shared proto op test fixtures with parameterized test support. Holds the decode and
+  # encode modules given at construction and defines the error tests and the round-trip tests.
   """Base class for testing proto encoding ops."""
 
   def __init__(self, decode_module, encode_module, methodName='runTest'):  # pylint: disable=invalid-name
+    # [FUNCTION DOC]
+    # Constructor. Takes the module providing decode_proto, the module providing encode_proto and the
+    # test method name (default runTest). Calls the base constructor with the method name and stores
+    # both modules on the instance. Returns nothing.
     """EncodeProtoOpTestBase initializer.
 
     Args:
@@ -49,6 +64,10 @@ class EncodeProtoOpTestBase(test_base.ProtoOpTestBase, parameterized.TestCase):
     self._encode_module = encode_module
 
   def testBadSizesShape(self):
+    # [FUNCTION DOC]
+    # Test: passes a scalar sizes value to encode_proto. Expects an invalid-argument error about the
+    # field shape when running eagerly, or a value error saying the shape must be at least rank 2 in
+    # graph mode.
     if context.executing_eagerly():
       expected_error = (errors.InvalidArgumentError,
                         r'Invalid shape for field double_value.')
@@ -64,6 +83,11 @@ class EncodeProtoOpTestBase(test_base.ProtoOpTestBase, parameterized.TestCase):
               field_names=['double_value']))
 
   def testBadInputs(self):
+    # [FUNCTION DOC]
+    # Test: asserts encode_proto rejects bad inputs with op errors: an unknown field name; a value of
+    # the wrong dtype for a field; sizes with the wrong rank (checked eagerly or via placeholders in
+    # graph mode); and values whose shapes disagree up to the last dimension. Each case checks the
+    # specific error message.
     # Invalid field name
     with self.assertRaisesOpError('Unknown field: non_existent_field'):
       self.evaluate(
@@ -130,6 +154,12 @@ class EncodeProtoOpTestBase(test_base.ProtoOpTestBase, parameterized.TestCase):
               }))
 
   def _testRoundtrip(self, in_bufs, message_type, fields):
+    # [FUNCTION DOC]
+    # HELPER: shared round-trip check for the parameterized round-trip tests.
+    # Takes an array of serialized messages, the message type name and a list of field specs (each
+    # with a name and dtype). Decodes with the decode module, re-encodes with the encode module in a
+    # session and asserts the output has the same shape, parses to equal messages, and is
+    # byte-identical to the input. Returns nothing.
 
     field_names = [f.name for f in fields]
     out_types = [f.dtype for f in fields]
@@ -173,6 +203,10 @@ class EncodeProtoOpTestBase(test_base.ProtoOpTestBase, parameterized.TestCase):
   @parameterized.named_parameters(
       *test_base.ProtoOpTestBase.named_parameters(extension=False))
   def testRoundtrip(self, case):
+    # [FUNCTION DOC]
+    # Parameterized test over the shared cases (without extensions). Serializes the case values into
+    # an object-dtype array reshaped to the case shapes, then runs the round-trip check against the
+    # plain test value message type. Returns the helper result (nothing).
     in_bufs = [value.SerializeToString() for value in case.values]
 
     # np.array silently truncates strings if you don't specify dtype=object.
@@ -183,6 +217,11 @@ class EncodeProtoOpTestBase(test_base.ProtoOpTestBase, parameterized.TestCase):
   @parameterized.named_parameters(
       *test_base.ProtoOpTestBase.named_parameters(extension=False))
   def testRoundtripPacked(self, case):
+    # [FUNCTION DOC]
+    # Parameterized test over the shared cases (without extensions) using packed encoding. Each value
+    # is converted to text format and re-parsed as the packed test value message (the text form is
+    # identical for packed and unpacked fields), serialized, reshaped to the case shapes, and run
+    # through the round-trip check with the packed message type. Returns the helper result (nothing).
     # Now try with the packed serialization.
     # We test the packed representations by loading the same test cases using
     # PackedTestValue instead of TestValue. To do this we rely on the text

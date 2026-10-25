@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Long-running tests for the multinomial sampling op. Checks that events with very small
+# probabilities are not over-sampled when drawing hundreds of millions of samples. Running the file
+# as a script starts the test runner.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,9 +29,16 @@ from tensorflow.python.platform import test
 
 
 class MultinomialTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case with large-dynamic-range multinomial sampling checks. Each test draws one million
+  # samples a hundred times with a fixed seed and accumulates per-index counts.
   # check that events with tiny probabilities are not over-sampled
 
   def testLargeDynamicRange(self):
+    # [FUNCTION DOC]
+    # Test: samples from logits of minus thirty and zero with fixed seeds, one hundred times one
+    # million draws, and asserts that all one hundred million draws chose index one (the tiny
+    # probability event never occurred).
     random_seed.set_random_seed(10)
     counts_by_indices = {}
     with self.test_session():
@@ -46,6 +57,9 @@ class MultinomialTest(test.TestCase):
     self.assertEqual(counts_by_indices[1], 100000000)
 
   def testLargeDynamicRange2(self):
+    # [FUNCTION DOC]
+    # Test: same as the first large dynamic range test with the logits swapped (zero and minus
+    # thirty). Asserts all one hundred million draws chose index zero.
     random_seed.set_random_seed(10)
     counts_by_indices = {}
     with self.test_session():
@@ -65,6 +79,10 @@ class MultinomialTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testLargeDynamicRange3(self):
+    # [FUNCTION DOC]
+    # Test (graph mode only): samples from logits of zero and minus seventeen, one hundred times one
+    # million draws with another seed. Asserts index one was drawn at least once, i.e. the smaller
+    # probability is not undersampled to zero. Needs large memory according to a comment in the code.
     random_seed.set_random_seed(10)
     counts_by_indices = {}
     # here the cpu undersamples and won't pass this test either

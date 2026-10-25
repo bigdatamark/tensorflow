@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: shared fixtures module for the proto decode/encode op tests.
+# Defines ProtoOpTestBase, a test case base that loads an optional compiled test example shared
+# library and provides static builders for named test cases (message values, expected batch shapes,
+# per-field sizes and expected field tensors) covering defaults, extreme values, nesting, optional
+# fields, type promotion, ragged batches, shaped batches, extensions and a simple case. Used by the
+# decode, encode and descriptor-source tests. Import-time side effects: none beyond imports.
 # =============================================================================
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
@@ -25,9 +32,18 @@ from tensorflow.python.platform import test
 
 
 class ProtoOpTestBase(test.TestCase):
+  # [CLASS DOC]
+  # HELPER: base class for proto op tests.
+  # Test case that, on construction, loads the optional test example shared library if present next
+  # to this file. Exposes static builders that return populated test case messages, and a function
+  # listing them as named parameters for parameterized tests.
   """Base class for testing proto decoding and encoding ops."""
 
   def __init__(self, methodName="runTest"):  # pylint: disable=invalid-name
+    # [FUNCTION DOC]
+    # Constructor. Takes the test method name (default runTest) and calls the base constructor. Then,
+    # if a shared library named libtestexample sits in this file directory, loads it into the process
+    # (side effect: registers the extra proto definitions it contains). Returns nothing.
     super(ProtoOpTestBase, self).__init__(methodName)
     lib = os.path.join(os.path.dirname(__file__), "libtestexample.so")
     if os.path.isfile(lib):
@@ -35,6 +51,11 @@ class ProtoOpTestBase(test.TestCase):
 
   @staticmethod
   def named_parameters(extension=True):
+    # [FUNCTION DOC]
+    # HELPER: supplies case tables for parameterized tests.
+    # Static. Takes a flag (default true) saying whether to include the extension case. Returns a list
+    # of pairs of a case name and a test case message for the defaults, minmax, nested, optional,
+    # promote, ragged, shaped batch and simple cases, plus the extension case when requested.
     parameters = [("defaults", ProtoOpTestBase.defaults_test_case()),
                   ("minmax", ProtoOpTestBase.minmax_test_case()),
                   ("nested", ProtoOpTestBase.nested_test_case()),
@@ -49,6 +70,11 @@ class ProtoOpTestBase(test.TestCase):
 
   @staticmethod
   def defaults_test_case():
+    # [FUNCTION DOC]
+    # HELPER: test data builder. Static, no inputs. Returns a test case with one empty message (no
+    # fields set), batch shape of one, and an expected size of zero and expected default value for
+    # every scalar type (floating point, signed and unsigned integers of both widths, bool, strings,
+    # enum) that has a declared default.
     test_case = test_example_pb2.TestCase()
     test_case.values.add()  # No fields specified, so we get all defaults.
     test_case.shapes.append(1)
@@ -136,6 +162,11 @@ class ProtoOpTestBase(test.TestCase):
 
   @staticmethod
   def minmax_test_case():
+    # [FUNCTION DOC]
+    # HELPER: test data builder. Static, no inputs. Returns a test case with one message holding the
+    # minimum, smallest positive and maximum values for floating point types and the extreme values
+    # for each integer width, both bools and two strings, with batch shape of one and expected field
+    # tensors and sizes matching those values.
     test_case = test_example_pb2.TestCase()
     value = test_case.values.add()
     value.double_value.append(-1.7976931348623158e+308)
@@ -259,6 +290,9 @@ class ProtoOpTestBase(test.TestCase):
 
   @staticmethod
   def nested_test_case():
+    # [FUNCTION DOC]
+    # HELPER: test data builder. Static, no inputs. Returns a test case with one message that holds a
+    # single nested message with a double value, and the expected string-typed field for it.
     test_case = test_example_pb2.TestCase()
     value = test_case.values.add()
     message_value = value.message_value.add()
@@ -274,6 +308,10 @@ class ProtoOpTestBase(test.TestCase):
 
   @staticmethod
   def optional_test_case():
+    # [FUNCTION DOC]
+    # HELPER: test data builder. Static, no inputs. Returns a test case with a message setting only a
+    # bool value; the expected fields are the bool (size one) and an absent double (size zero, zero
+    # filler value).
     test_case = test_example_pb2.TestCase()
     value = test_case.values.add()
     value.bool_value.append(True)
@@ -292,6 +330,10 @@ class ProtoOpTestBase(test.TestCase):
 
   @staticmethod
   def promote_test_case():
+    # [FUNCTION DOC]
+    # HELPER: test data builder. Static, no inputs. Returns a test case with 32-bit integer fields at
+    # their maximum values, expected to be decoded into wider 64-bit output types (signed for the
+    # signed fields, unsigned for the fixed and unsigned fields).
     test_case = test_example_pb2.TestCase()
     value = test_case.values.add()
     value.sint32_value.append(2147483647)
@@ -329,6 +371,10 @@ class ProtoOpTestBase(test.TestCase):
 
   @staticmethod
   def ragged_test_case():
+    # [FUNCTION DOC]
+    # HELPER: test data builder. Static, no inputs. Returns a test case with two messages having
+    # different counts of repeated double values (two and one) and one bool each, so the expected
+    # double tensor is padded with zero for the shorter row.
     test_case = test_example_pb2.TestCase()
     value = test_case.values.add()
     value.double_value.append(23.5)
@@ -358,6 +404,10 @@ class ProtoOpTestBase(test.TestCase):
 
   @staticmethod
   def shaped_batch_test_case():
+    # [FUNCTION DOC]
+    # HELPER: test data builder. Static, no inputs. Returns a test case with six messages arranged as
+    # a three by two batch, each with one double and one bool, with twelve sizes of one and the
+    # expected flattened field values.
     test_case = test_example_pb2.TestCase()
     value = test_case.values.add()
     value.double_value.append(23.5)
@@ -403,6 +453,10 @@ class ProtoOpTestBase(test.TestCase):
 
   @staticmethod
   def extension_test_case():
+    # [FUNCTION DOC]
+    # HELPER: test data builder. Static, no inputs. Returns a test case with one message that has a
+    # nested message stored in a proto extension field, and the expected string-typed field named by
+    # the extension full name.
     test_case = test_example_pb2.TestCase()
     value = test_case.values.add()
     message_value = value.Extensions[test_example_pb2.ext_value].add()
@@ -418,6 +472,10 @@ class ProtoOpTestBase(test.TestCase):
 
   @staticmethod
   def simple_test_case():
+    # [FUNCTION DOC]
+    # HELPER: test data builder. Static, no inputs. Returns a test case with one message holding a
+    # double, a bool and an enum value, with the three matching expected fields of size one each. Also
+    # used by the descriptor-source tests.
     test_case = test_example_pb2.TestCase()
     value = test_case.values.add()
     value.double_value.append(23.5)

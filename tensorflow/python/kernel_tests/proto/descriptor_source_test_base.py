@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# HELPER: shared base class for the descriptor-source tests of the proto decode/encode ops.
+# Defines DescriptorSourceTestBase, a test case that is parameterized by which module supplies the
+# decode_proto and encode_proto ops. It builds a descriptor set by hand for the subset of the test
+# example proto used by the simple test case, and checks that decoding then re-encoding a message
+# reproduces the original bytes when the descriptor comes from a file or an in-memory bytes string,
+# and that the local descriptor database fails. Concrete test files subclass it. No import-time
+# side effects beyond imports.
 # =============================================================================
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
@@ -27,9 +35,18 @@ from tensorflow.python.platform import test
 
 
 class DescriptorSourceTestBase(test.TestCase):
+  # [CLASS DOC]
+  # HELPER: base class reused by concrete descriptor-source test modules.
+  # Test case holding the decode and encode modules (supplied at construction) and the round-trip
+  # helpers. It defines one real test (testWithFileDescriptorSet) that runs the round trip with
+  # different descriptor sources.
   """Base class for testing descriptor sources."""
 
   def __init__(self, decode_module, encode_module, methodName='runTest'):  # pylint: disable=invalid-name
+    # [FUNCTION DOC]
+    # Constructor. Takes the module providing the decode op (decode_module), the module providing the
+    # encode op (encode_module) and the test method name (default runTest), passes the name to the
+    # base test case and stores both modules on the instance for later use. Returns nothing.
     """DescriptorSourceTestBase initializer.
 
     Args:
@@ -48,6 +65,12 @@ class DescriptorSourceTestBase(test.TestCase):
   # The generated descriptor should capture the subset of `test_example.proto`
   # used in `test_base.simple_test_case()`.
   def _createDescriptorProto(self):
+    # [FUNCTION DOC]
+    # HELPER: builds the descriptor input for testWithFileDescriptorSet.
+    # Programmatically builds a file descriptor set with two files: a types file defining a data type
+    # enum, and a test example file defining the test case, test value and field spec messages with
+    # the fields used by the simple test case. Takes no inputs and returns the descriptor set message.
+    # No side effects.
     proto = FileDescriptorSet()
 
     file_proto = proto.file.add(
@@ -120,12 +143,23 @@ class DescriptorSourceTestBase(test.TestCase):
     return proto
 
   def _writeProtoToFile(self, proto):
+    # [FUNCTION DOC]
+    # HELPER: persists a descriptor set so it can be used as a file descriptor source.
+    # Serializes the given proto and writes it to a file named descriptor.pb inside the test temp
+    # directory (overwriting any existing file). Returns the file path.
     fn = os.path.join(self.get_temp_dir(), 'descriptor.pb')
     with open(fn, 'wb') as f:
       f.write(proto.SerializeToString())
     return fn
 
   def _testRoundtrip(self, descriptor_source):
+    # [FUNCTION DOC]
+    # HELPER: round-trip check parameterized by descriptor source.
+    # Takes a descriptor source (a bytes string such as the local database marker, a file path, or a
+    # bytes-prefixed serialized descriptor). Decodes a serialized simple test case with the decode
+    # module, re-encodes the result with the encode module using the same source, runs both in a
+    # session, and asserts the output has the same shape and identical bytes as the input. Errors from
+    # the ops propagate to the caller. Returns nothing.
     # Numpy silently truncates the strings if you don't specify dtype=object.
     in_bufs = np.array(
         [test_base.ProtoOpTestBase.simple_test_case().SerializeToString()],
@@ -164,6 +198,11 @@ class DescriptorSourceTestBase(test.TestCase):
         self.assertEqual(in_buf, out_buf)
 
   def testWithFileDescriptorSet(self):
+    # [FUNCTION DOC]
+    # Test: first asserts that using the local descriptor database fails with an op error saying no
+    # descriptor was found for the message type. Then writes a hand-built descriptor set to a file and
+    # asserts the round trip succeeds with the file path, and finally with the serialized descriptor
+    # passed inline as a bytes string.
     # First try parsing with a local proto db, which should fail.
     with self.assertRaisesOpError('No descriptor found for message type'):
       self._testRoundtrip(b'local://')

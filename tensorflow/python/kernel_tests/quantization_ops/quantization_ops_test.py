@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Tests for the quantization related ops (fake quantization with min/max variables, per-channel and
+# gradient variants, quantized bias add, instance norm, pooling, requantize, add, relu, relu6, down
+# and shrink range, and quantize-and-dequantize V3). Most tests only verify that malformed range
+# arguments (non-scalar min or max, wrong ranks or sizes) are rejected with clear errors, in both
+# graph and eager modes; the last class also checks a valid quantize-and-dequantize result.
+# Running the file as a script starts the test runner.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,9 +35,17 @@ from tensorflow.python.platform import googletest
 
 
 class FakeQuantWithMinMaxVarsOpTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case named FakeQuantWithMinMaxVarsOpTest covering one quantization related op. It only
+  # checks that invalid arguments are rejected with a clear error. It has no shared fixtures; its
+  # single test method runs in both graph and eager modes.
 
   @test_util.run_in_graph_and_eager_modes
   def test_invalid_inputs(self):
+    # [FUNCTION DOC]
+    # Test: calls the fake quantization op with per-tensor min and max where one of them is a rank 2
+    # tensor instead of a scalar; both orders are tried. Expects a value error or invalid-argument
+    # error saying the argument must be rank 0.
     inputs = constant_op.constant(
         value=[[1.0], [2.0], [4.0]], dtype=dtypes.float32)
 
@@ -48,9 +63,18 @@ class FakeQuantWithMinMaxVarsOpTest(test_util.TensorFlowTestCase):
 
 
 class FakeQuantWithMinMaxVarsPerChannelOpTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case named FakeQuantWithMinMaxVarsPerChannelOpTest covering one quantization related op. It
+  # only checks that invalid arguments are rejected with a clear error. It has no shared fixtures;
+  # its single test method runs in both graph and eager modes.
 
   @test_util.run_in_graph_and_eager_modes
   def test_invalid_inputs(self):
+    # [FUNCTION DOC]
+    # Test: calls the per-channel fake quantization op with bad min and max: a rank 2 min, a min and
+    # max of different lengths, a rank 2 max, and mismatched lengths in the other direction. Expects
+    # value or invalid-argument errors saying the argument must be rank 1 or the sizes/dimensions
+    # are incorrect.
     inputs = constant_op.constant(
         value=[[1.0], [2.0], [4.0]], dtype=dtypes.float32)
 
@@ -80,9 +104,16 @@ class FakeQuantWithMinMaxVarsPerChannelOpTest(test_util.TensorFlowTestCase):
 
 
 class FakeQuantWithMinMaxVarsGradientOpTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case named FakeQuantWithMinMaxVarsGradientOpTest covering one quantization related op. It
+  # only checks that invalid arguments are rejected with a clear error. It has no shared fixtures;
+  # its single test method runs in both graph and eager modes.
 
   @test_util.run_in_graph_and_eager_modes
   def test_invalid_inputs(self):
+    # [FUNCTION DOC]
+    # Test: calls the fake quantization gradient op with float gradients and inputs but a non-scalar
+    # max (or min and max). Expects a value or invalid-argument error about equal rank or rank 0.
     gradients = constant_op.constant(
         value=[[1.0], [2.0], [4.0]], dtype=dtypes.float32)
     inputs = constant_op.constant(
@@ -109,9 +140,17 @@ class FakeQuantWithMinMaxVarsGradientOpTest(test_util.TensorFlowTestCase):
 
 class FakeQuantWithMinMaxVarsPerChannelGradientOpTest(
     test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case named FakeQuantWithMinMaxVarsPerChannelGradientOpTest covering one quantization
+  # related op. It only checks that invalid arguments are rejected with a clear error. It has no
+  # shared fixtures; its single test method runs in both graph and eager modes.
 
   @test_util.run_in_graph_and_eager_modes
   def test_invalid_inputs(self):
+    # [FUNCTION DOC]
+    # Test: calls the per-channel fake quantization gradient op with rank 2 min or max, or min and
+    # max of different lengths. Expects value or invalid-argument errors about equal ranks, rank 1,
+    # or dimension 0 mismatch / incorrect size.
     gradients = constant_op.constant(
         value=[[1.0], [2.0], [4.0]], dtype=dtypes.float32)
     inputs = constant_op.constant(
@@ -145,9 +184,17 @@ class FakeQuantWithMinMaxVarsPerChannelGradientOpTest(
 
 
 class QuantizedBiasedAddTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case named QuantizedBiasedAddTest covering one quantization related op. It only checks that
+  # invalid arguments are rejected with a clear error. It has no shared fixtures; its single test
+  # method runs in both graph and eager modes.
 
   @test_util.run_in_graph_and_eager_modes
   def test_invalid_inputs(self):
+    # [FUNCTION DOC]
+    # Test: calls the quantized bias add op with 8-bit quantized input and bias, giving each of the
+    # four range arguments (input min, input max, bias min, bias max) in turn as an empty list
+    # instead of a scalar. Expects a value or invalid-argument error saying must be rank 0.
     inputs = constant_op.constant(
         np.int8(0), shape=[3, 3, 3, 3], dtype=dtypes.qint8)
     bias = constant_op.constant(np.int8(0), shape=[3], dtype=dtypes.qint8)
@@ -202,9 +249,16 @@ class QuantizedBiasedAddTest(test_util.TensorFlowTestCase):
 
 
 class QuantizedInstanceNormOpTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case named QuantizedInstanceNormOpTest covering one quantization related op. It only checks
+  # that invalid arguments are rejected with a clear error. It has no shared fixtures; its single
+  # test method runs in both graph and eager modes.
 
   @test_util.run_in_graph_and_eager_modes
   def test_invalid_inputs(self):
+    # [FUNCTION DOC]
+    # Test: calls the quantized instance norm op with a quantized 4-D input and a non-scalar x max,
+    # then a non-scalar x min. Expects value or invalid-argument errors saying must be rank 0.
     inputs = constant_op.constant(
         np.uint8(0), shape=[3, 3, 3, 3], dtype=dtypes.quint8)
 
@@ -222,9 +276,17 @@ class QuantizedInstanceNormOpTest(test_util.TensorFlowTestCase):
 
 
 class QuantizedAvgPoolingOpTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case named QuantizedAvgPoolingOpTest covering one quantization related op. It only checks
+  # that invalid arguments are rejected with a clear error. It has no shared fixtures; its single
+  # test method runs in both graph and eager modes.
 
   @test_util.run_in_graph_and_eager_modes
   def test_invalid_inputs(self):
+    # [FUNCTION DOC]
+    # Test: calls the quantized average pooling op with unit window and strides and same padding,
+    # giving the input min and then the input max as an empty list. Expects invalid-argument or
+    # value errors saying the range must be rank 0.
     inputs = constant_op.constant(
         np.uint8(0), shape=[3, 3, 3, 3], dtype=dtypes.quint8)
     ksize = [1, 1, 1, 1]
@@ -255,9 +317,17 @@ class QuantizedAvgPoolingOpTest(test_util.TensorFlowTestCase):
 
 
 class QuantizedMaxPoolingOpTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case named QuantizedMaxPoolingOpTest covering one quantization related op. It only checks
+  # that invalid arguments are rejected with a clear error. It has no shared fixtures; its single
+  # test method runs in both graph and eager modes.
 
   @test_util.run_in_graph_and_eager_modes
   def test_invalid_inputs(self):
+    # [FUNCTION DOC]
+    # Test: calls the quantized max pooling op with unit window and strides and same padding, giving
+    # the input min and then the input max as an empty list. Expects invalid-argument or value
+    # errors saying the range must be rank 0.
     inputs = constant_op.constant(
         np.uint8(0), shape=[3, 3, 3, 3], dtype=dtypes.quint8)
     ksize = [1, 1, 1, 1]
@@ -288,9 +358,17 @@ class QuantizedMaxPoolingOpTest(test_util.TensorFlowTestCase):
 
 
 class RequantizeOpTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case named RequantizeOpTest covering one quantization related op. It only checks that
+  # invalid arguments are rejected with a clear error. It has no shared fixtures; its single test
+  # method runs in both graph and eager modes.
 
   @test_util.run_in_graph_and_eager_modes
   def test_invalid_inputs(self):
+    # [FUNCTION DOC]
+    # Test: calls the requantize op on a 32-bit quantized input, giving each of input min, input
+    # max, requested output min and requested output max in turn as an empty list. Expects value or
+    # invalid-argument errors saying must be rank 0.
     inputs = constant_op.constant(
         np.int32(0), shape=[3, 3, 3, 3], dtype=dtypes.qint32)
 
@@ -340,9 +418,16 @@ class RequantizeOpTest(test_util.TensorFlowTestCase):
 
 
 class QuantizedAddOpTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case named QuantizedAddOpTest covering one quantization related op. It only checks that
+  # invalid arguments are rejected with a clear error. It has no shared fixtures; its single test
+  # method runs in both graph and eager modes.
 
   @test_util.run_in_graph_and_eager_modes
   def test_invalid_inputs(self):
+    # [FUNCTION DOC]
+    # Test: calls the quantized add op with quantized x and a smaller y and gives the x min as an
+    # empty list. Expects a value or invalid-argument error saying must be rank 0.
     x = constant_op.constant(
         np.int8(0), shape=[3, 3, 3, 3], dtype=dtypes.quint8)
     y = constant_op.constant(np.int8(0), shape=[3], dtype=dtypes.quint8)
@@ -361,9 +446,16 @@ class QuantizedAddOpTest(test_util.TensorFlowTestCase):
 
 
 class QuantizedReluOpTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case named QuantizedReluOpTest covering one quantization related op. It only checks that
+  # invalid arguments are rejected with a clear error. It has no shared fixtures; its single test
+  # method runs in both graph and eager modes.
 
   @test_util.run_in_graph_and_eager_modes
   def test_invalid_inputs(self):
+    # [FUNCTION DOC]
+    # Test: calls the quantized relu op with an empty list as the feature minimum. Expects a value
+    # or invalid-argument error saying must be rank 0.
     inputs = constant_op.constant(
         np.int8(0), shape=[3, 3, 3, 3], dtype=dtypes.quint8)
 
@@ -378,9 +470,16 @@ class QuantizedReluOpTest(test_util.TensorFlowTestCase):
 
 
 class QuantizedRelu6OpTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case named QuantizedRelu6OpTest covering one quantization related op. It only checks that
+  # invalid arguments are rejected with a clear error. It has no shared fixtures; its single test
+  # method runs in both graph and eager modes.
 
   @test_util.run_in_graph_and_eager_modes
   def test_invalid_inputs(self):
+    # [FUNCTION DOC]
+    # Test: calls the quantized relu6 op with an empty list as the feature minimum. Expects a value
+    # or invalid-argument error saying must be rank 0.
     inputs = constant_op.constant(
         np.int8(0), shape=[3, 3, 3, 3], dtype=dtypes.quint8)
 
@@ -395,9 +494,16 @@ class QuantizedRelu6OpTest(test_util.TensorFlowTestCase):
 
 
 class QuantizeDownAndShrinkRangeOpTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case named QuantizeDownAndShrinkRangeOpTest covering one quantization related op. It only
+  # checks that invalid arguments are rejected with a clear error. It has no shared fixtures; its
+  # single test method runs in both graph and eager modes.
 
   @test_util.run_in_graph_and_eager_modes
   def test_invalid_inputs(self):
+    # [FUNCTION DOC]
+    # Test: calls the quantize down and shrink range op on a 32-bit quantized input with an empty
+    # list as the input minimum. Expects a value or invalid-argument error saying must be rank 0.
     inputs = constant_op.constant(
         np.int32(0), shape=[3, 3, 3, 3], dtype=dtypes.qint32)
 
@@ -410,9 +516,18 @@ class QuantizeDownAndShrinkRangeOpTest(test_util.TensorFlowTestCase):
 
 
 class QuantizeAndDequantizeV3OpTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case for the quantize-and-dequantize V3 op: one valid-result test and two error tests for
+  # a bad num_bits tensor and mismatched min/max shapes when an axis is given.
 
   @test_util.run_in_graph_and_eager_modes
   def test_valid(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the input value is built with a trailing comma so it is a one-element tuple of a
+    # tensor, not a tensor; the assertion compensates by indexing element zero.
+    # Test: inside a fresh graph switched to eager mode, quantizes six floats with a range of -127 to
+    # 127 and 8 bits, signed, with the range not given. Asserts the result is within 0.05 of the
+    # input element-wise.
     with ops.Graph().as_default(), context.eager_mode():
       input_value = constant_op.constant([-0.8, -0.5, 0, 0.3, 0.8, -2.0],
                                          shape=(6,),
@@ -433,6 +548,14 @@ class QuantizeAndDequantizeV3OpTest(test_util.TensorFlowTestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_invalid_num_bits(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the input value is a one-element tuple (trailing comma) rather than a tensor.
+    # KNOWN ISSUE: the failure branch for an unexpected exception formats the message using a name
+    # attribute of the exception instance, which exception instances do not have, so that branch
+    # would itself raise an attribute error instead of failing with the intended message.
+    # Test: passes an empty num_bits tensor of shape zero. Accepts either an invalid-argument error
+    # (message about num_bits needing to be a scalar) or a value error (shape must be rank 0), and
+    # fails if another exception or no exception occurs.
     input_value = constant_op.constant([-0.8, -0.5, 0, 0.3, 0.8, -2.0],
                                        shape=(6,),
                                        dtype=dtypes.float32),
@@ -465,6 +588,10 @@ class QuantizeAndDequantizeV3OpTest(test_util.TensorFlowTestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_invalid_input_min_max_with_axis_specified(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the input value is a one-element tuple (trailing comma) rather than a tensor.
+    # Test: passes a scalar min and a rank 1 max with axis zero and range given. Expects an
+    # invalid-argument or value error saying the shape must be rank 1.
     input_value = (
         constant_op.constant([1.8], shape=(1,), dtype=dtypes.float32),
     )
