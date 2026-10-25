@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: code generation script for the Transformer Engine third-party build integration.
+# Takes three required command-line flags: a template file path, a data file path and a string
+# name. Reads both files and prints the template to standard output with the string-name
+# placeholder replaced by the given name and the data placeholder replaced by the data file
+# contents. Import-time side effect: defines the three command-line flags.
 # Copyright 2025 The OpenXLA Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +35,10 @@ _STRING_NAME = flags.DEFINE_string(
 
 
 def main(_):
+  # [FUNCTION DOC]
+  # Program entry point passed to the application runner; the positional arguments are ignored.
+  # Reads the template and data files (text mode), substitutes the placeholders and prints the
+  # result. Returns nothing. Missing files raise file errors.
   with open(_TEMPLATE_FILE.value, 'rt') as f, open(_DATA_FILE.value, 'rt') as g:
     template = f.read()
     data = g.read()

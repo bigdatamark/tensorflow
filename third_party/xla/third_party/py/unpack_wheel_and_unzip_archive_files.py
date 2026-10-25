@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# HELPER: build-time script that prepares an unpacked wheel directory tree.
+# Command-line arguments (an argument file is allowed): the wheel to unpack, optional repeatable
+# lists of extra zip archives to extract and extra wheel-layout files to copy, and a required
+# output directory. On import/execution it parses the arguments, creates the output directory,
+# extracts the wheel and any extra archives into it, and copies each extra file into it,
+# preserving its path below the site-packages component. All of this runs at import time; there
+# is no main guard.
 # Copyright 2025 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -48,6 +56,14 @@ def copy_file(
     src_file: str,
     dst_dir: str,
 ) -> None:
+  # [FUNCTION DOC]
+  # HELPER: file copier used for the additional wheel files.
+  # KNOWN ISSUE: if the source path has no site-packages component, the reverse search returns
+  # minus one and the computed offset becomes the length of the marker text, so the leading
+  # characters of the directory name are cut off arbitrarily.
+  # Inputs: source file path and destination root directory. Takes the source directory, keeps the
+  # part after the last site-packages component, creates that sub-directory under the destination
+  # if needed and copies the file there. Returns nothing; creates directories and files.
   """Copy a file to the destination directory.
 
   Args:
@@ -71,6 +87,13 @@ def prepare_outputs(
     wheel_files: list[str],
     output_dir: str,
 ) -> None:
+  # [FUNCTION DOC]
+  # HELPER: main work routine run by the script body.
+  # Inputs: wheel archive path; optional list of extra zip archives (may be nothing); optional
+  # list of extra files to copy (may be nothing); output directory. Extracts the wheel, then each
+  # extra zip, into the output directory (existing files are overwritten), and copies every
+  # extra file using the site-packages-relative copier. Returns nothing. File and archive errors
+  # propagate.
   """Create the output directory and copy/extract the sources to it.
 
   Args:

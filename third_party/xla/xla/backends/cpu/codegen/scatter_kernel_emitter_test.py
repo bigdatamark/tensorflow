@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Test module for the CPU scatter kernel emitter. Provides two helpers (a scalar-add update
+# computation builder and a function that builds, wraps in a fusion, emits, compiles and returns
+# a kernel runner for a scatter instruction) and a test case class with a basic scatter test with
+# repeated indices (updates are accumulated) and an out-of-bounds test (the scatter is skipped).
+# Uses the XLA CPU test library bindings and numpy. Runs the test main when executed as a script.
 # Copyright 2024 The OpenXLA Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,6 +34,11 @@ from xla.python import xla_extension
 def create_sclar_add_computation(
     dtype: np.dtype,
 ) -> testlib_base.HloComputation:
+  # [FUNCTION DOC]
+  # HELPER: small shared test utility that builds the scatter update computation (the name has a
+  # typo, "sclar", which is kept for existing callers).
+  # Input: numpy data type of the scalars. Creates two scalar parameters of that type and an
+  # addition over them, and returns an HLO computation with the addition as root. No side effects.
   scalar_shape = xla_extension.Shape.scalar_shape(dtype)
   param_0 = testlib_base.HloInstruction.create_parameter(
       0,
@@ -58,6 +69,16 @@ def create_scatter_runner(
     updates: xla_extension.Literal,
     scatter_dimension_numbers: testlib_base.ScatterDimensionNumbers,
 ) -> testlib_cpu.KernelRunner:
+  # [FUNCTION DOC]
+  # HELPER: shared test utility that turns scatter inputs into a ready-to-run kernel.
+  # KNOWN ISSUE: the update computation always uses float32 regardless of the dtype of the given
+  # operand literal, so only float32 operands work; the parameter name for the indices is
+  # misspelled ("indicies") throughout.
+  # Inputs: operand literal, scatter indices literal, updates literal and the scatter dimension
+  # numbers. Builds parameters from the literals' shapes, a scatter instruction with the add update
+  # computation (neither indices-are-sorted nor unique-indices set), an HLO module, runs the
+  # fusion wrapper pass, annotates the module to get a buffer assignment, emits the kernel with
+  # the scatter emitter and creates a JIT compiler. Returns a kernel runner for the kernel.
   dtype = np.dtype(np.float32)
 
   operand_parameter = testlib_base.HloInstruction.create_parameter(
@@ -108,8 +129,19 @@ def create_scatter_runner(
 
 
 class ScatterKernelTest(parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case class covering the CPU scatter kernel emitter, using the shared runner-building
+  # helper above. No shared fixtures.
 
   def test_basic_scatter(self):
+    # [FUNCTION DOC]
+    # Scenario: scatter of five two-dimensional index rows with updates of window size one by
+    # three into a zero float32 operand of three by four, where one index row is repeated.
+    # Setup: operand of zeros, indices array, updates array of consecutive numbers reshaped to
+    # five by one by three. Action: build the runner and run it. Expected: operand row zero holds
+    # the first update followed by zero; row one holds the third update plus the fourth update
+    # shifted by one column; row two holds the sum of the second and fifth updates (accumulated for
+    # the repeated index) followed by zero.
     dtype = np.dtype(np.float32)
 
     scatter_dimension_numbers = testlib_base.ScatterDimensionNumbers(
@@ -156,6 +188,11 @@ class ScatterKernelTest(parameterized.TestCase):
     )
 
   def test_out_of_bounds_scatter(self):
+    # [FUNCTION DOC]
+    # Scenario: a single scatter index whose offset of two combined with a window of three columns
+    # exceeds the four-column operand. Setup: zero operand of three by four, one index row, one
+    # update of three consecutive numbers. Action: build the runner and run it. Expected: the
+    # operand is unchanged (still all zeros), since out-of-bounds updates are skipped.
     dtype = np.dtype(np.float32)
 
     scatter_dimension_numbers = testlib_base.ScatterDimensionNumbers(

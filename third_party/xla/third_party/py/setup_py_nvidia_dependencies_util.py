@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: helper module for wheel build tooling that fills in a setup file template.
+# Exposes one function that rewrites the text of a setup script by replacing placeholder lines
+# (the CUDA major version, the wheel name suffix and per-package NVIDIA wheel version lines)
+# with concrete values taken from a requirements-style text listing NVIDIA wheels. Also defines
+# a compiled pattern that splits a requirement line into a package name and a version constraint.
+# Pure text processing with no import-time side effects beyond compiling the pattern.
 # Copyright 2025 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -46,6 +53,19 @@ NVIDIA_WHEEL_VERSIONS_PATTERN = re.compile(r"^([a-z0-9_-]+)(\W*[0-9\.]*.*)$")
 def get_setup_py_content_with_nvidia_wheel_versions(
     setup_py_content: str, cuda_version: str, nvidia_wheel_versions_data: str
 ) -> str:
+  # [FUNCTION DOC]
+  # HELPER: template filler for the wheel setup script generation.
+  # KNOWN ISSUE: only CUDA versions 12 and 13 are supported; any other version string makes the
+  # lookup fail with a key error. The wheel suffix is set to the 12 suffix only for version 12 and
+  # to empty otherwise. Replacement uses exact text matching, so placeholders that differ in
+  # whitespace are silently left unchanged.
+  # Inputs: the setup script text, the CUDA major version as a string, and a multi-line text of
+  # requirement entries. Each entry's name is normalized (dashes to underscores); names ending in
+  # the 12 or 13 suffix are filed under that version, names without suffix under 13, and the
+  # suffix is dropped and a version suffix appended to form the variable name, with the
+  # version constraint (trimmed) as value. Then replaces the CUDA version placeholder, the wheel
+  # suffix placeholder and each version placeholder for the selected CUDA version. Returns the
+  # updated script text; inputs are not modified.
   nvidia_wheel_versions = {"12": {}, "13": {}}
   for line in nvidia_wheel_versions_data.splitlines():
     match = NVIDIA_WHEEL_VERSIONS_PATTERN.match(line)

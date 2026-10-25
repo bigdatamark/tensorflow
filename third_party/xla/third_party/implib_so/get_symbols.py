@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Command-line tool that prints the names of functions a stub library should forward for a
+# given shared library. It loads the third-party implib-gen module (imported by name through the
+# import machinery because the file name contains a dash), asks it to collect the symbol table
+# of the library, keeps only exported default-version defined functions, and prints their
+# names sorted, one per line. The output is meant to be saved as a symbols file consumed by the
+# stub generator next to it. Import-time side effect: imports implib-gen, failing if absent.
 """Given a .so file, lists symbols that should be included in a stub.
 
 Example usage:
@@ -13,6 +20,12 @@ implib = importlib.import_module('implib-gen')
 
 
 def _is_exported_function(s):
+  # [FUNCTION DOC]
+  # HELPER: symbol filter used by the symbol listing entry point.
+  # Input: one symbol record (mapping with binding, type, section index, name and default flag
+  # fields) from the symbol table. Returns true when the symbol is non-local, is a function,
+  # is defined (not undefined), has a name other than empty or the init/fini hooks, and is the
+  # default version. Otherwise false. Pure function.
   return (
       s['Bind'] != 'LOCAL'
       and s['Type'] == 'FUNC'
@@ -23,6 +36,11 @@ def _is_exported_function(s):
 
 
 def main():
+  # [FUNCTION DOC]
+  # Command-line entry point. Takes one required positional argument, the path of the shared
+  # library. Collects its symbols, filters to exported functions and prints the names, sorted
+  # alphabetically, one per line on standard output. Returns nothing. File or parsing errors from
+  # the symbol collection propagate; invalid arguments make the argument parser exit.
   parser = argparse.ArgumentParser(
       description='Extracts a list of symbols from a shared library'
   )

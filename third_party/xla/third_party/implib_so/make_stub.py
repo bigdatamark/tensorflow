@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Command-line tool that generates the source files for a lazy-loading stub of a shared library
+# (used for CUDA libraries). From a symbols file it writes an assembly file containing a table of
+# resolved-symbol slots followed by one trampoline per symbol, and an include file listing the
+# symbol names as quoted, comma-terminated lines. Architecture-specific configuration and
+# assembly templates are located through the Bazel runfiles of the vendored implib package.
+# Import-time side effect: creates a runfiles lookup object.
 """Given a list of symbols, generates a stub."""
 
 import argparse
@@ -11,6 +18,15 @@ r = runfiles.Create()
 
 
 def main():
+  # [FUNCTION DOC]
+  # Command-line entry point. Arguments: a required positional symbols file (one symbol name per
+  # line), an optional output directory (default current directory) and a required target
+  # architecture name. Reads the architecture's configuration file to get the pointer size, then
+  # the table and trampoline templates. The library name is the symbols file name without its
+  # extension. Writes an assembly file named after the library that holds the table (sized for
+  # one slot per symbol plus one) followed by a trampoline for each symbol with its slot offset
+  # and index, and an include file with each symbol name as a quoted line. Returns nothing.
+  # Missing files raise file errors; bad arguments make the argument parser exit.
   parser = argparse.ArgumentParser(
       description='Generates stubs for CUDA libraries.'
   )

@@ -1,3 +1,15 @@
+# [MODULE DOC]
+# Configuration script for the lit test runner for XLA file-check style tests. The runner executes
+# this file with a predefined configuration object and a lit configuration object (hence the
+# undefined-variable lint suppression). It sets the suite name to XLA, the recognized test file
+# suffixes (C++, HLO, JSON, MLIR, protobuf text, Python and LLVM IR), and passes through the
+# XLA flags and code-coverage related environment variables (plus any extra flags a Google-only
+# section would add). The test execution root is the first available of the undeclared-outputs
+# directory, the test temp directory, or a lit folder in the system temp directory. Adds a
+# substitution for the Python interpreter (environment override or the current executable) and
+# one substitution per lit parameter. When the PTX parameter equals GCN, the ROCm feature is
+# enabled. Finally the test format is replaced by the runfiles-aware format from the sibling
+# module. All effects occur at import time; the module defines no functions or classes.
 # Copyright 2019 The OpenXLA Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

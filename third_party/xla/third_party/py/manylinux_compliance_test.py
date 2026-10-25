@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Build-time test script (not a unit-test class) that checks a built Python wheel conforms to the
+# manylinux platform tag expected for the current CPU architecture. It runs the wheel auditing
+# tool's "show" command in-process, capturing its standard output, and searches the report for
+# the required platform tag (accepting the alternative name used for the 2014 tag). Takes the
+# wheel path and the compliance tags for aarch64, x86_64 and ppc64le on the command line (an
+# argument file is allowed). Raises a runtime error for an unsupported machine or a
+# non-compliant wheel. Import-time side effect: imports the auditwheel package. Runs the check
+# only when executed as a script.
 # Copyright 2024 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +32,11 @@ from auditwheel import main_show
 
 
 def parse_args():
+  # [FUNCTION DOC]
+  # HELPER: command-line parser for the compliance test.
+  # Takes no inputs; reads the process arguments. Required options: the wheel path and one
+  # compliance tag each for aarch64, x86_64 and ppc64le. Arguments may be supplied via an
+  # at-prefixed argument file. Returns the parsed namespace; missing options make the parser exit.
   """Arguments parser."""
   parser = argparse.ArgumentParser(
       description="Helper for manylinux compliance verification",
@@ -50,6 +64,15 @@ def parse_args():
 
 
 def get_auditwheel_output(wheel_path: str) -> None:
+  # [FUNCTION DOC]
+  # HELPER: runs the wheel audit tool for the compliance test and captures its report.
+  # KNOWN ISSUE: the return annotation says it returns nothing, but it actually returns the
+  # captured report text as a string. Also, standard output is not restored if the audit
+  # command raises, since no cleanup guard is used.
+  # Input: path of the wheel file. Temporarily redirects standard output to an in-memory buffer,
+  # builds the tool's parser and invokes its show command with the ISA extension check disabled
+  # and verbose level one, then restores standard output. Returns the captured text. Exceptions
+  # from the audit tool propagate.
   """Run "auditwheel show" on the wheel and return the output.
 
   Args:
@@ -83,6 +106,15 @@ def verify_manylinux_compliance(
     auditwheel_log: str,
     compliance_tag: str,
 ) -> None:
+  # [FUNCTION DOC]
+  # HELPER: assertion step of the compliance test.
+  # KNOWN ISSUE: the pattern is written as a plain string with a backslash-s escape, which is an
+  # invalid escape sequence warning in recent Python versions; the tag is also inserted into the
+  # pattern without escaping.
+  # Inputs: the audit report text and the expected manylinux tag. Searches the report for the
+  # phrase naming the supported platform tag equal to the expected tag, also trying a variant in
+  # which the 2014 tag is replaced by its equivalent glibc-versioned name. Returns nothing.
+  # Raises a runtime error containing the tag and the full report if neither pattern matches.
   """Verify manylinux compliance.
 
   Args:
@@ -105,6 +137,12 @@ def verify_manylinux_compliance(
 
 
 def test_manylinux_compliance(args):
+  # [FUNCTION DOC]
+  # Test entry point (a plain function, run from the script main block).
+  # Input: parsed arguments holding the wheel path and the three per-architecture compliance
+  # tags. Determines the machine type of the host; raises a runtime error if it is not x86_64,
+  # aarch64 or ppc64le. Picks the tag for that architecture, produces the audit report for the
+  # wheel and verifies compliance, raising a runtime error on failure. Returns nothing.
   machine_type = platform.uname().machine
   supported_machine_types = ["x86_64", "aarch64", "ppc64le"]
   if machine_type not in supported_machine_types:

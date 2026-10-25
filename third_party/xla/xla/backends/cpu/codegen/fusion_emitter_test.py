@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Test module for the CPU fusion kernel emitter. Two test case classes parse small HLO text
+# modules containing a loop fusion, emit a kernel for the fusion with the emitter binding,
+# compile it with the JIT compiler, run it through the kernel runner on numpy-backed literals and
+# compare the outputs against numpy computations. Covers elementwise add and subtract, conversion
+# through bfloat16, NaN propagation, constants with non-default layouts and removal of dead
+# exponential computations. Runs the test main when executed as a script.
 # Copyright 2024 The OpenXLA Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,8 +31,18 @@ from xla.codegen.testlib import utilities as base_utilities
 
 
 class LoopFusionTest(parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case class covering CPU loop-fusion kernel emission for elementwise operations, type
+  # conversion and layout handling. No shared fixtures; each test parses its own HLO text.
 
   def test_basic_add_sub(self):
+    # [FUNCTION DOC]
+    # Scenario: a loop fusion over three float32 matrices of 100 by 200 computes an addition and
+    # then a subtraction, returning both as a tuple. Setup: parse the HLO text, create the JIT
+    # compiler, a compilation context and the fusion kernel, plus random inputs and zero-filled
+    # outputs. Action: run the kernel. Expected: the first output equals the sum of the first two
+    # inputs and the second output equals that sum minus the third input, within numpy's
+    # almost-equal tolerance.
     dtype = np.dtype(np.float32)
 
     hlo = """
@@ -92,6 +109,12 @@ class LoopFusionTest(parameterized.TestCase):
     )
 
   def test_convert_f32_bf16_f32(self):
+    # [FUNCTION DOC]
+    # Scenario: a fusion converts a float32 array of 300 by 500 to bfloat16 and back. Setup: input
+    # of random values biased and scaled to a large range, with the first element set to
+    # infinity; zero-filled output. Action: run the emitted kernel. Expected: the output matches
+    # the input within a relative tolerance of two to the minus eight (the precision of
+    # bfloat16's 7-bit fraction), and infinity is preserved.
     dtype = np.dtype(np.float32)
 
     hlo = """
@@ -147,6 +170,11 @@ class LoopFusionTest(parameterized.TestCase):
   # Check that user provided nans and nans produced by internal ops are
   # preserved.
   def test_convert_f32_bf16_f32_nan(self):
+    # [FUNCTION DOC]
+    # Scenario: a fusion divides a float32 vector of three elements by itself, then converts to
+    # bfloat16 and back. Setup: inputs one, zero and not-a-number. Action: run the emitted kernel.
+    # Expected: the first output is one, and the other two are not-a-number (zero divided by zero
+    # produced internally, and the user-provided NaN), showing NaNs survive the conversions.
     dtype = np.dtype(np.float32)
 
     hlo = """
@@ -204,6 +232,12 @@ class LoopFusionTest(parameterized.TestCase):
 
   # Check that a constant with a layout is respected.
   def test_constant_with_layout(self):
+    # [FUNCTION DOC]
+    # Scenario: a fusion with no parameters holds a two-by-two float32 constant with a
+    # column-major layout and copies it into a row-major result. Setup: zero-filled result
+    # literal. Action: run the emitted kernel. Expected: the result reads zero, one, two, three in
+    # logical row-major order, i.e. the constant's logical values are preserved across the layout
+    # change.
     dtype = np.dtype(np.float32)
 
     hlo = """
@@ -248,8 +282,17 @@ class LoopFusionTest(parameterized.TestCase):
 
 
 class FusionEmitterTest(parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case class covering general fusion emitter behavior beyond plain elementwise loops
+  # (currently dead-code elimination around exponentials). No shared fixtures.
 
   def test_exp_nan_dce(self):
+    # [FUNCTION DOC]
+    # Scenario: a fusion multiplies a float64 vector of three elements by a constant vector of
+    # one, zero and not-a-number, then applies the exponential. Setup: inputs one, zero and
+    # not-a-number. Action: run the emitted kernel. Expected: outputs are e to the one, e to the
+    # zero (one) and not-a-number, i.e. the emitted code keeps the exponential correct for NaN and
+    # is not broken by dead-code elimination.
     dtype = np.dtype(np.float64)
 
     hlo = """

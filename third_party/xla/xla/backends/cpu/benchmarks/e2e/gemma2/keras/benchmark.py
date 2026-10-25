@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# End-to-end CPU benchmark script for the Gemma 2 2B model using the Keras NLP implementation.
+# Loads the model and tokenizer from the named preset, then for output limits of one token and
+# thirty tokens runs one warm-up generation plus five timed generations of a fixed query,
+# discarding statistical outliers, and reports mean time with a relative range. From the two
+# results it prints time to first token and time per output token. Module constants control the
+# output length, the query and verbosity. No import-time side effects other than imports; the
+# benchmark runs only when executed as a script. Requires keras_nlp and numpy.
 # Copyright 2025 The OpenXLA Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +32,11 @@ _VERBOSE = True
 
 
 def compute_stats(array):
+  # [FUNCTION DOC]
+  # Input: array of numeric timings. Computes the first and third quartiles, discards values
+  # outside 1.5 times the interquartile range beyond them, then returns a pair: the mean of the
+  # remaining values and the largest deviation from that mean (to the min or max) as a percentage
+  # of the mean. Pure function (uses numpy).
   """Reports mean and ± range for the given array.
 
   The range computation follows benchstat's.
@@ -52,6 +65,16 @@ def compute_stats(array):
 
 
 def run(gemma_lm, tokenizer, max_len):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: when max_len is below one it prints an error and calls the interactive exit
+  # helper, terminating the whole process instead of raising an error. The docstring promises the
+  # actual number of output tokens but the value returned is the count measured on the warm-up run
+  # only, and the later runs only assert the count is equal.
+  # Inputs: the Keras Gemma causal language model, its tokenizer and the maximum number of new
+  # tokens. Performs one warm-up generation and five timed generations of the module query with
+  # the total length limit (input tokens plus max_len, plus one), asserting each timed run
+  # produces the same token count as the warm-up. Prints progress when verbose. Returns a tuple
+  # of mean time in milliseconds, relative range percentage and the number of generated tokens.
   """Benchmarks inferences with at most `max_len` output tokens.
 
   Args:
@@ -103,6 +126,14 @@ def run(gemma_lm, tokenizer, max_len):
 
 
 def main():
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the line announcing the generated token count passes the number as a second
+  # print argument to a format string, so the placeholder is printed literally instead of being
+  # filled. The time-per-token range printed uses the range of the long run only.
+  # Loads the model and tokenizer from the preset, runs the benchmark for one output token and
+  # for the configured longer length, then prints the time to first token and the time per output
+  # token (difference of the means divided by the extra tokens). Takes no arguments, returns
+  # nothing.
   if _VERBOSE:
     print("Query: %s" % _QUERY)
 

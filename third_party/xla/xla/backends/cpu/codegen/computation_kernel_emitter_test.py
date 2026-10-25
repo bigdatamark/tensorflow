@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Test module for the CPU computation kernel emitter (the code generator that turns a call to a
+# sub-computation into a runnable kernel). It defines a helper that builds a scalar addition
+# computation and one test case class with a test that builds an HLO module containing a call
+# instruction, compiles it through the JIT compiler and kernel runner, and checks the numeric
+# result. Uses the XLA CPU test library bindings and numpy. Runs the test main when executed as a
+# script.
 # Copyright 2024 The OpenXLA Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,6 +37,11 @@ HloInstruction = testlib_base.HloInstruction
 def create_trivial_add_computation(
     dtype: np.dtype,
 ) -> testlib_base.HloComputation:
+  # [FUNCTION DOC]
+  # HELPER: small shared test utility that builds the callee for the call-kernel test.
+  # Input: numpy data type of the scalars. Creates two scalar parameters of that type and an
+  # addition instruction over them, and returns an HLO computation with the addition as root and
+  # the two parameters in order. No side effects.
   scalar_shape = xla_extension.Shape.scalar_shape(dtype)
   param_0 = testlib_base.HloInstruction.create_parameter(
       0,
@@ -55,8 +67,19 @@ def create_trivial_add_computation(
 
 
 class CallKernelTest(parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case class covering the CPU computation kernel emitter for call instructions. Has no
+  # shared fixtures; the single test builds everything it needs.
 
   def test_basic_call(self):
+    # [FUNCTION DOC]
+    # Scenario: a call instruction invokes a scalar-add computation on two float32 scalar
+    # parameters. Setup: scalar literals one and two for the inputs and a zero result literal;
+    # parameters for the inputs; the trivial add computation; an HLO module (with the add
+    # computation as extra computation) and its buffer assignment; a JIT compiler from the module
+    # config. Action: the computation kernel emitter produces a kernel definition for the root
+    # call, a kernel runner is created and run on the three literals. Expected: the kernel
+    # definition exists and the result literal equals three.
     dtype = np.dtype(np.float32)
 
     lhs_literal = base_utilities.create_scalar_literal(1.0, dtype)

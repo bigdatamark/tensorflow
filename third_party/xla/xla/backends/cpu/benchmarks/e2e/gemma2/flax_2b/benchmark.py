@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# End-to-end CPU benchmark script for the Gemma 2 2B instruction-tuned model in the Flax/JAX
+# implementation. At import time it reads the model directory from the MODEL_DIR environment
+# variable, asserts that the tokenizer file and checkpoint exist, loads parameters, builds the
+# transformer, tokenizer and a chat sampler with a 1024-token cache. When run as a script it
+# measures, five times each, the latency of generating one token (time to first token) and of
+# generating 128 tokens (end-to-end latency), prints mean and relative standard deviation for
+# each, and derives the time per output token from the difference. Times are in milliseconds.
+# Requires the gemma package.
 # Copyright 2024 The OpenXLA Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -50,6 +59,11 @@ prompt = 'What is JAX in 3 bullet points?'
 
 
 def benchmark_generation_time(output_token_len):
+  # [FUNCTION DOC]
+  # Input: maximum number of new tokens to generate (integer). Sends the fixed prompt to the
+  # chat sampler, measuring wall-clock time around the call. Prints the reply only when the
+  # requested length equals the full benchmark length. Returns the elapsed time in milliseconds
+  # as a floating-point number. Uses the module-level sampler and prompt.
   """Benchmark generation time given output token length."""
   timestamp_start = datetime.datetime.now()
   reply = sampler.chat(prompt, max_new_tokens=output_token_len)
@@ -62,6 +76,12 @@ def benchmark_generation_time(output_token_len):
 
 
 def display_tpot():
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: depends on module-level lists of measurements that exist only when the file is
+  # run as a script; calling it from an importing module raises a name error.
+  # Takes no arguments. Subtracts the mean time-to-first-token from the mean end-to-end latency
+  # and divides by one less than the full output length to get the time per output token. Prints
+  # it in milliseconds rounded to two decimals. Returns nothing.
   """Calculate the time per output token."""
   e2e_latency_mean = statistics.mean(latency_list)
   ttft_mean = statistics.mean(ttft_ms_list)
@@ -71,6 +91,10 @@ def display_tpot():
 
 
 def display_benchmark_results(timer_list, metric_name):
+  # [FUNCTION DOC]
+  # Inputs: list of measurements in milliseconds (at least two, otherwise the standard deviation
+  # computation raises a statistics error) and a metric label. Prints the label, the mean and the
+  # sample standard deviation as a percentage of the mean. Returns nothing.
   """Display mean and stdev for a given metric."""
   mean_time = statistics.mean(timer_list)
   stdev_time = statistics.stdev(timer_list)
