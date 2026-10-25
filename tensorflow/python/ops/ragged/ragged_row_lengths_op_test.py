@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit tests for the row-lengths method of ragged tensors: parameterized cases for different
+# ranks, ragged ranks and axes (including negative axes) and error cases for out-of-range axes.
+# Runs the test main when executed as a script.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +30,9 @@ from tensorflow.python.platform import googletest
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedRowLengthsOp(test_util.TensorFlowTestCase,
                          parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for the row-lengths method of ragged tensors, run in graph and eager modes with
+  # parameterized inputs. No shared fixtures.
 
   @parameterized.parameters([
       # Docstring Example
@@ -113,6 +120,12 @@ class RaggedRowLengthsOp(test_util.TensorFlowTestCase,
                      axis=1,
                      ragged_rank=None,
                      expected_ragged_rank=None):
+    # [FUNCTION DOC]
+    # Parameters: rt_input (nested list), expected (expected lengths), axis (defaults to one),
+    # ragged_rank (optional, for building the constant) and expected_ragged_rank (optional).
+    # Builds a ragged tensor, computes row lengths along the axis, asserts they equal the
+    # expectation, and if an expected ragged rank is given asserts the result has that ragged
+    # rank (or, when the result is not ragged, that the expected ragged rank is zero).
     rt = ragged_factory_ops.constant(rt_input, ragged_rank=ragged_rank)
     lengths = rt.row_lengths(axis)
     self.assertAllEqual(lengths, expected)
@@ -133,6 +146,12 @@ class RaggedRowLengthsOp(test_util.TensorFlowTestCase,
           exception=(ValueError, errors.InvalidArgumentError)),
   ])
   def testErrors(self, rt_input, exception, message=None, axis=1):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: no case supplies a message, so the expected message is null and the
+    # regular-expression assertion accepts any error text; only the error type is checked.
+    # Parameters: rt_input (nested list), exception (expected error type or tuple of types),
+    # optional message and axis (defaults to one). Asserts that computing row lengths along an
+    # out-of-bounds axis raises the expected error.
     rt = ragged_factory_ops.constant(rt_input)
     with self.assertRaisesRegex(exception, message):
       rt.row_lengths(axis)

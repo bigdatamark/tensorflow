@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# KNOWN ISSUE: the module docstring says it tests the ragged range operation, but the file
+# actually tests the ragged segment reductions (sum, product, min, max, mean, square-root-n).
+# Unit tests for ragged segment reductions, with plain-Python reference combiners (product,
+# mean, square-root-n), a reference grouping routine, parameterized integer and float cases,
+# ragged-rank-two data, ragged segment ids and shape-mismatch errors.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +35,9 @@ from tensorflow.python.platform import googletest
 
 
 def prod(values):
+  # [FUNCTION DOC]
+  # HELPER: Reference combiner for the segment tests.
+  # Takes a list of numbers and returns their product (one for an empty list).
   val = 1
   for v in values:
     val *= v
@@ -37,18 +46,34 @@ def prod(values):
 
 
 def mean(values):
+  # [FUNCTION DOC]
+  # HELPER: Reference combiner for the segment tests.
+  # Takes a non-empty list of numbers and returns their arithmetic mean as a float.
   return 1.0 * sum(values) / len(values)
 
 
 def sqrt_n(values):
+  # [FUNCTION DOC]
+  # HELPER: Reference combiner for the segment tests.
+  # Takes a non-empty list of numbers and returns their sum divided by the square root of the
+  # count, as a float.
   return 1.0 * sum(values) / math.sqrt(len(values))
 
 
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedSegmentOpsTest(test_util.TensorFlowTestCase,
                            parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for ragged segment reduction operations, run in graph and eager modes. Provides a
+  # reference-result helper method used by the parameterized tests.
 
   def expected_value(self, data, segment_ids, num_segments, combiner):
+    # [FUNCTION DOC]
+    # HELPER: Computes expected results for the segment tests.
+    # Inputs: data (nested list of rows), segment_ids (one segment id per row), num_segments
+    # and combiner (function reducing a list of values to one value). Asserts there is one id
+    # per row, groups the values by segment and column, and returns a nested list with one row
+    # per segment, applying the combiner to every non-empty group.
     """Find the expected value for a call to ragged_segment_<aggregate>.
 
     Args:
@@ -99,6 +124,9 @@ class RaggedSegmentOpsTest(test_util.TensorFlowTestCase,
       (ragged_math_ops.segment_mean, mean, [0, 0, 0, 10, 10, 10]),
   )
   def testRaggedSegment_Int(self, segment_op, combiner, segment_ids):
+    # [FUNCTION DOC]
+    # Parameterized by the segment operation, the reference combiner and the segment ids. Applies
+    # the operation to a ragged integer tensor and asserts exact equality with the reference.
     rt_as_list = [[0, 1, 2, 3], [4], [], [5, 6], [7], [8, 9]]
     rt = ragged_factory_ops.constant(rt_as_list)
     num_segments = max(segment_ids) + 1
@@ -135,6 +163,9 @@ class RaggedSegmentOpsTest(test_util.TensorFlowTestCase,
       (ragged_math_ops.segment_sqrt_n, sqrt_n, [0, 0, 0, 10, 10, 10]),
   )
   def testRaggedSegment_Float(self, segment_op, combiner, segment_ids):
+    # [FUNCTION DOC]
+    # Same as the integer test but with float data, also covering the square-root-n operation,
+    # and asserting closeness rather than exact equality.
     rt_as_list = [[0., 1., 2., 3.], [4.], [], [5., 6.], [7.], [8., 9.]]
     rt = ragged_factory_ops.constant(rt_as_list)
     num_segments = max(segment_ids) + 1
@@ -145,6 +176,9 @@ class RaggedSegmentOpsTest(test_util.TensorFlowTestCase,
     self.assertAllClose(segmented, expected)
 
   def testRaggedRankTwo(self):
+    # [FUNCTION DOC]
+    # Applies segment sum to a ragged-rank-two tensor with two different segment id lists and
+    # asserts the expected nested results, including empty segments.
     rt = ragged_factory_ops.constant([
         [[111, 112, 113, 114], [121],],  # row 0
         [],                              # row 1
@@ -167,6 +201,9 @@ class RaggedSegmentOpsTest(test_util.TensorFlowTestCase,
     self.assertAllEqual(segmented2, expected2)
 
   def testRaggedSegmentIds(self):
+    # [FUNCTION DOC]
+    # Applies segment sum where the segment ids are themselves a ragged tensor whose shape is a
+    # prefix of the data's shape, and asserts the expected nested result.
     rt = ragged_factory_ops.constant([
         [[111, 112, 113, 114], [121],],  # row 0
         [],                              # row 1
@@ -181,6 +218,9 @@ class RaggedSegmentOpsTest(test_util.TensorFlowTestCase,
     self.assertAllEqual(segmented, expected)
 
   def testShapeMismatchError1(self):
+    # [FUNCTION DOC]
+    # Asserts that segment sum with dense data but ragged segment ids raises a value error
+    # saying the segment ids shape must be a prefix of the data shape.
     dt = constant_op.constant([1, 2, 3, 4, 5, 6])
     segment_ids = ragged_factory_ops.constant([[1, 2], []])
     self.assertRaisesRegex(
@@ -189,6 +229,10 @@ class RaggedSegmentOpsTest(test_util.TensorFlowTestCase,
         ragged_math_ops.segment_sum, dt, segment_ids, 3)
 
   def testShapeMismatchError2(self):
+    # [FUNCTION DOC]
+    # Asserts an invalid-argument error when ragged segment ids do not match the ragged data
+    # rows: first raised when building the operation with statically known shapes, then, with
+    # the segment ids rebuilt from placeholders with unknown shape, raised when evaluating.
     rt = ragged_factory_ops.constant([
         [[111, 112, 113, 114], [121]],  # row 0
         [],                             # row 1

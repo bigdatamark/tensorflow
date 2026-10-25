@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Unit tests for the ragged reduction operations (sum, product, min, max, mean, variance,
+# standard deviation, any, all). Contains plain-Python reference helpers for mean, variance and
+# standard deviation, and one test class with a large parameterized table covering axes,
+# keepdims, ragged ranks, negative axes, plus NaN, tensor-input and error cases.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,19 +37,34 @@ _NAN = np.nan
 
 
 def mean(*values):
+  # [FUNCTION DOC]
+  # HELPER: Reference implementation producing expected values for the reduction tests.
+  # Takes any number of numbers and returns their arithmetic mean as a float. Dividing by an
+  # empty argument list raises a zero-division error.
   return 1.0 * sum(values) / len(values)
 
 
 def variance(*values):
+  # [FUNCTION DOC]
+  # HELPER: Reference implementation producing expected values for the reduction tests.
+  # Takes any number of numbers and returns their population variance as a double-precision
+  # float; with no arguments it returns not-a-number.
   return np.var(values, dtype=np.float64)
 
 
 def std(*values):
+  # [FUNCTION DOC]
+  # HELPER: Reference implementation producing expected values for the reduction tests.
+  # Takes any number of numbers and returns their population standard deviation as a
+  # double-precision float; with no arguments it returns not-a-number.
   return np.std(values, dtype=np.float64)
 
 
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedReduceOpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for ragged reduction operations, run in graph and eager modes. Provides a helper
+  # assertion that treats NaN as equal to NaN.
 
   @parameterized.parameters(
       #=========================================================================
@@ -630,11 +650,18 @@ class RaggedReduceOpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       ),
   )
   def testReduce(self, ragged_reduce_op, rt_input, axis, keepdims, expected):
+    # [FUNCTION DOC]
+    # Parameterized by the reduction function, nested-list input, axis (none, a number or list,
+    # possibly negative), keepdims flag and expected result. Builds a ragged constant, applies
+    # the reduction and asserts the result equals the expected values.
     rt_input = ragged_factory_ops.constant(rt_input)
     reduced = ragged_reduce_op(rt_input, axis, keepdims=keepdims)
     self.assertAllEqual(reduced, expected)
 
   def testReduceKeepsInnerDimensionShape(self):
+    # [FUNCTION DOC]
+    # Regression test: reducing a ragged tensor with a uniform inner dimension over a ragged
+    # axis must keep the static inner dimension size. Asserts static shapes before and after.
     # Test for bug [b/139823356].
     rt = ragged_factory_ops.constant([[[[1, 1]]]], ragged_rank=2)
     self.assertEqual(rt.shape.as_list(), [1, None, None, 2])
@@ -642,11 +669,18 @@ class RaggedReduceOpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqual(reduced.shape.as_list(), [1, None, 2])
 
   def assertEqualWithNan(self, actual, expected):
+    # [FUNCTION DOC]
+    # HELPER: Custom assertion for the NaN tests in this class.
+    # Asserts that two array-like values are equal elementwise, treating positions where both
+    # are not-a-number as equal. Fails the test otherwise; returns nothing.
     """Like assertEqual, but NaN==NaN."""
     self.assertTrue(
         ((actual == expected) | (np.isnan(actual) & np.isnan(expected))).all())
 
   def testMeanNan(self):
+    # [FUNCTION DOC]
+    # Reduces the mean over rows of a ragged tensor containing an empty row and asserts the
+    # result matches the expected values, with the empty row yielding not-a-number.
     rt_as_list = [[0, 1, 2, 3], [4], [], [5, 6], [7], [8, 9]]
     expected = (
         np.array([0 + 1 + 2 + 3, 4, 0, 5 + 6, 7, 8 + 9]) /
@@ -656,6 +690,9 @@ class RaggedReduceOpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqualWithNan(self.evaluate(reduced), expected)
 
   def testVarianceNan(self):
+    # [FUNCTION DOC]
+    # Reduces the variance over rows of a ragged tensor with an empty row and asserts it matches
+    # the reference variances, with the empty row yielding not-a-number.
     rt_as_list = [[0, 1, 2, 3], [4], [], [5, 6], [7], [8, 9]]
     expected = ([
         variance(0, 1, 2, 3),
@@ -670,6 +707,9 @@ class RaggedReduceOpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqualWithNan(self.evaluate(reduced), expected)
 
   def testStdNan(self):
+    # [FUNCTION DOC]
+    # Reduces the standard deviation over rows of a ragged tensor with an empty row and asserts
+    # it matches the reference values, with the empty row yielding not-a-number.
     rt_as_list = [[0, 1, 1, 0], [4], [], [5, 6], [7], [8, 9]]
     expected = ([std(0, 1, 1, 0), std(4), std(), std(5, 6), std(7), std(8, 9)])
     rt_input = ragged_factory_ops.constant(rt_as_list)
@@ -677,24 +717,37 @@ class RaggedReduceOpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqualWithNan(self.evaluate(reduced), expected)
 
   def testMeanWithTensorInputs(self):
+    # [FUNCTION DOC]
+    # Passes a regular nested list (not ragged) to the ragged mean reduction along axis one and
+    # asserts the row means are returned.
     tensor = [[1.0, 2.0, 3.0], [10.0, 20.0, 30.0]]
     expected = [2.0, 20.0]
     reduced = ragged_math_ops.reduce_mean(tensor, axis=1)
     self.assertAllEqual(reduced, expected)
 
   def testVarianceWithTensorInputs(self):
+    # [FUNCTION DOC]
+    # Passes a regular nested list to the ragged variance reduction along axis one and asserts
+    # the row variances are returned.
     tensor = [[6.0, 9.0, 6.0], [60.0, 90.0, 60.0]]
     expected = [2., 200.]
     reduced = ragged_math_ops.reduce_variance(tensor, axis=1)
     self.assertAllEqual(reduced, expected)
 
   def testStdWithTensorInputs(self):
+    # [FUNCTION DOC]
+    # Passes a regular nested list to the ragged standard-deviation reduction along axis one and
+    # asserts the row standard deviations are returned.
     tensor = [[1.0, 2.0, 2.0, 1.0], [10.0, 20.0, 20.0, 10.0]]
     expected = [0.5, 5.]
     reduced = ragged_math_ops.reduce_std(tensor, axis=1)
     self.assertAllEqual(reduced, expected)
 
   def testErrors(self):
+    # [FUNCTION DOC]
+    # In graph mode only, asserts that a sum reduction with an axis not known at graph
+    # construction time raises a value error. In both modes asserts that a string axis raises a
+    # type error saying the axis must be an integer.
     rt_input = ragged_factory_ops.constant([[1, 2, 3], [4, 5]])
     axis = array_ops.placeholder_with_default(constant_op.constant([0]), None)
 

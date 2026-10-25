@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit tests for the ragged reverse operation: parameterized cases with various ragged ranks and
+# axes (including negative and empty axis lists) and an error case for an invalid axis list.
+# Runs the test main when executed as a script.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +29,9 @@ from tensorflow.python.platform import googletest
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedReverseOpTest(test_util.TensorFlowTestCase,
                           parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for the ragged reverse operation, run in graph and eager modes with parameterized
+  # inputs. No shared fixtures.
 
   @parameterized.parameters([
       dict(
@@ -69,12 +76,20 @@ class RaggedReverseOpTest(test_util.TensorFlowTestCase,
           expected=[[[1, 2], [3, 4]], [[5, 6]]])
   ])  # pyformat: disable
   def testReverse(self, descr, data, axis, expected, ragged_rank=None):
+    # [FUNCTION DOC]
+    # Parameters: descr (human-readable case label, unused by the checks), data (nested list),
+    # axis (list of axes to reverse), expected (nested list) and optional ragged_rank. Builds
+    # ragged tensors for the data and expectation, reverses the data along the axes and asserts
+    # the result is close to the expectation.
     data = ragged_factory_ops.constant(data, ragged_rank=ragged_rank)
     result = ragged_array_ops.reverse(data, axis)
     expected = ragged_factory_ops.constant(expected, ragged_rank=ragged_rank)
     self.assertAllClose(result, expected)
 
   def testErrors(self):
+    # [FUNCTION DOC]
+    # Asserts that reversing a ragged tensor with an axis list containing a null value raises a
+    # type error saying the axis must be a list of integers or a constant tensor.
     self.assertRaisesRegex(
         TypeError, '`axis` must be a list of int or a constant tensor *',
         ragged_array_ops.reverse,

@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit tests for converting segment-id vectors into row-splits vectors: the documentation
+# example, empty input, error cases, an explicit number of segments and unsorted segment ids.
+# Runs the test main as a script.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,19 +26,31 @@ from tensorflow.python.platform import googletest
 
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedSplitsToSegmentIdsOpTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # KNOWN ISSUE: the class name suggests splits-to-segment-ids but the tests cover the opposite
+  # conversion, segment ids to row splits (the name was likely copied from the sibling test).
+  # Test case for the segment-ids to row-splits conversion, run in graph and eager modes.
 
   def testDocStringExample(self):
+    # [FUNCTION DOC]
+    # Converts the documentation example segment ids and asserts the expected row splits.
     segment_ids = [0, 0, 0, 2, 2, 3, 4, 4, 4]
     expected = [0, 3, 3, 5, 6, 9]
     splits = segment_id_ops.segment_ids_to_row_splits(segment_ids)
     self.assertAllEqual(splits, expected)
 
   def testEmptySegmentIds(self):
+    # [FUNCTION DOC]
+    # Converts an empty segment-id list and asserts the result is a splits vector with a single
+    # zero (the splits of an empty ragged tensor).
     # Note: the splits for an empty ragged tensor contains a single zero.
     segment_ids = segment_id_ops.segment_ids_to_row_splits([])
     self.assertAllEqual(segment_ids, [0])
 
   def testErrors(self):
+    # [FUNCTION DOC]
+    # Asserts a type error for floating-point segment ids, and value errors for a scalar input
+    # and a rank-two input (segment ids must be a vector).
     self.assertRaisesRegex(
         TypeError,
         r'Argument `tensor` \(name\: segment_ids\) must be of type integer.*',
@@ -45,6 +61,9 @@ class RaggedSplitsToSegmentIdsOpTest(test_util.TensorFlowTestCase):
                            segment_id_ops.segment_ids_to_row_splits, [[0]])
 
   def testNumSegments(self):
+    # [FUNCTION DOC]
+    # Converts segment ids with an explicit segment count larger than the maximum id and asserts
+    # the splits are padded at the end with the total number of items.
     segment_ids = [0, 0, 0, 2, 2, 3, 4, 4, 4]
     num_segments = 7
     expected = [0, 3, 3, 5, 6, 9, 9, 9]
@@ -52,6 +71,9 @@ class RaggedSplitsToSegmentIdsOpTest(test_util.TensorFlowTestCase):
     self.assertAllEqual(splits, expected)
 
   def testUnsortedSegmentIds(self):
+    # [FUNCTION DOC]
+    # Converts unsorted segment ids, with and without an explicit segment count, and asserts the
+    # splits are the same as for sorted ids (only the counts per segment matter).
     # Segment ids are not required to be sorted.
     segment_ids = [0, 4, 3, 2, 4, 4, 2, 0, 0]
     splits1 = segment_id_ops.segment_ids_to_row_splits(segment_ids)

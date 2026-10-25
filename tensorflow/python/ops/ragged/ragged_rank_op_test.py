@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Unit tests for the ragged rank operation, parameterized over nested lists of several depths
+# and ragged ranks. Runs the test main when executed as a script.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +27,9 @@ from tensorflow.python.platform import googletest
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedRankOpTest(test_util.TensorFlowTestCase,
                        parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for the rank operation on ragged tensors, run in graph and eager modes with
+  # parameterized inputs.
 
   @parameterized.parameters([
       # Rank 0
@@ -75,6 +81,10 @@ class RaggedRankOpTest(test_util.TensorFlowTestCase,
 
   ])
   def testRaggedRank(self, test_input, expected_rank, ragged_rank=None):
+    # [FUNCTION DOC]
+    # Parameters: test_input (scalar or nested list), expected_rank (total number of dimensions)
+    # and optional ragged_rank used when building the ragged constant. Builds the ragged
+    # tensor and asserts its rank operation result equals the expected rank.
     test_input = ragged_factory_ops.constant(
         test_input, ragged_rank=ragged_rank)
     self.assertAllEqual(ragged_array_ops.rank(

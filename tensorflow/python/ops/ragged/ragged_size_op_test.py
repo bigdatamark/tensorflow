@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Unit tests for the ragged size operation (total number of elements), parameterized over
+# scalars, empty inputs and nested lists of several ragged ranks. Runs test main as a script.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +28,9 @@ from tensorflow.python.platform import googletest
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedSizeOpTest(test_util.TensorFlowTestCase,
                        parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for the ragged size operation, run in graph and eager modes with parameterized
+  # inputs. No shared fixtures.
 
   @parameterized.parameters([
       {'size': 1, 'test_input': 1},
@@ -36,6 +42,10 @@ class RaggedSizeOpTest(test_util.TensorFlowTestCase,
       {'size': 6, 'test_input': [[[1, 1], [1, 1]], [[1, 1]]], 'ragged_rank': 1},
   ])
   def testRaggedSize(self, test_input, size, ragged_rank=None):
+    # [FUNCTION DOC]
+    # Parameters: test_input (scalar or nested list), size (expected element count) and optional
+    # ragged_rank used when building the constant. Builds a ragged tensor and asserts the size
+    # operation returns the expected count.
     input_rt = ragged_factory_ops.constant(test_input, ragged_rank=ragged_rank)
     self.assertAllEqual(ragged_array_ops.size(input_rt), size)
 
