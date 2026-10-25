@@ -1,3 +1,16 @@
+# [MODULE DOC]
+# Unit tests for the legacy queue-based input pipeline helpers in the training input module
+# (imported here under the short alias inp): match_filenames_once, limit_epochs, input_producer,
+# string_input_producer, range_input_producer, slice_input_producer, the dictionary conversion
+# helpers, and the batching family batch, maybe_batch, batch_join, maybe_batch_join,
+# shuffle_batch, maybe_shuffle_batch, shuffle_batch_join and maybe_shuffle_batch_join.
+# Each test builds a graph, starts queue runners, drains the resulting queues and checks the
+# values, shapes, sparse tensor handling, shared queue names, out-of-range termination and
+# argument validation errors.  Queue pipelines are not supported under eager execution (TF2
+# uses tf.data), so the tests explicitly create private graphs; a few are restricted to graph
+# mode (TF1) by a decorator.
+# Importing the module has no side effects beyond defining the test classes; running it as a
+# script invokes the standard TensorFlow test runner.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -40,8 +53,21 @@ from tensorflow.python.util import compat
 # Queue-based input pipelines are not supported when eager execution is enabled.
 # Please use tf.data instead in TF2.
 class MatchFilenamesOnceTest(test_lib.TestCase):
+  # [CLASS DOC]
+  # Test case for the helper that lists files matching a pattern once and stores the result in a
+  # local variable.  It has no shared fixtures beyond the framework temporary directory.
 
   def test(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the extra files are opened for writing and never explicitly closed, relying on
+    # garbage collection to flush them before the matching variables are evaluated.
+    # Scenario: the temporary directory is listed, then three extra files named with a common
+    # prefix and a running number are created in it.  Three match_filenames_once ops are built in a
+    # fresh graph: one with a wildcard for everything, one with a single-character wildcard on the
+    # prefix, and one with an exact file name.  After initializing global and local variables, the
+    # test asserts that each variable holds exactly the expected set of file names (as byte
+    # strings, order ignored).  Side effects: creates files in the temporary directory; the
+    # files are opened for writing without being explicitly closed.
     temp_dir = self.get_temp_dir()
     filenames = [os.path.join(temp_dir, n) for n in os.listdir(temp_dir)]
     additional = [
@@ -67,8 +93,15 @@ class MatchFilenamesOnceTest(test_lib.TestCase):
 
 
 class LimitEpochsTest(test_lib.TestCase):
+  # [CLASS DOC]
+  # Test case for the helper that lets a tensor be produced a limited number of times (epochs)
+  # before raising an out-of-range error.
 
   def testNoLimit(self):
+    # [FUNCTION DOC]
+    # Scenario: limit_epochs is applied to a constant seven with no epoch limit given.  The test
+    # initializes local variables and fetches the result one hundred times, asserting that the
+    # value is always seven, i.e. an unlimited number of epochs is allowed.
     with ops.Graph().as_default(), self.cached_session():
       seven = constant_op.constant(7)
       seven_forever = inp.limit_epochs(seven)
@@ -77,6 +110,11 @@ class LimitEpochsTest(test_lib.TestCase):
         self.assertEqual(7, self.evaluate(seven_forever))
 
   def testLimit(self):
+    # [FUNCTION DOC]
+    # Scenario: limit_epochs is applied to a constant string with a limit of two epochs.  The first
+    # two evaluations must return the string; the third must raise an out-of-range error.
+    # Global and local variables are initialized first because the epoch counter is a local
+    # variable.
     with ops.Graph().as_default(), self.cached_session():
       love_me = constant_op.constant("Love Me")
       love_me_two_times = inp.limit_epochs(love_me, num_epochs=2)
@@ -89,8 +127,16 @@ class LimitEpochsTest(test_lib.TestCase):
 
 
 class InputProducerTest(test_lib.TestCase):
+  # [CLASS DOC]
+  # Test case for the generic input_producer, which fills a queue with the slices of a tensor
+  # for a number of epochs, optionally shuffled.
 
   def testNoShuffle(self):
+    # [FUNCTION DOC]
+    # Scenario: a three by four integer matrix is fed through input_producer for two epochs
+    # without shuffling.  After starting the queue runners, a bulk dequeue of all rows must equal
+    # the matrix repeated twice in order, and one more dequeue must raise an out-of-range error
+    # because the epoch limit is reached.  Finally all runner threads are joined.
     with ops.Graph().as_default(), self.cached_session():
       input_tensor = [[1, 2, 3, 4],
                       [5, 6, 7, 8],
@@ -115,6 +161,11 @@ class InputProducerTest(test_lib.TestCase):
         thread.join()
 
   def testNoShapeInference(self):
+    # [FUNCTION DOC]
+    # Scenario: same as the no-shuffle case, but the input is a placeholder with a default value
+    # and unknown shape, so static shape inference is impossible; the element shape is supplied
+    # explicitly instead.  Asserts that the rows are produced in order for two epochs, that
+    # dequeuing past the limit raises an out-of-range error, and that threads are joined.
     with ops.Graph().as_default(), self.cached_session():
       # Disable shape inference for the input.
       input_value = [[1, 2, 3, 4],
@@ -140,6 +191,10 @@ class InputProducerTest(test_lib.TestCase):
         thread.join()
 
   def testShapeError(self):
+    # [FUNCTION DOC]
+    # Scenario: input_producer is given a float placeholder whose shape is completely unknown and
+    # no element shape.  Asserts that a value error mentioning a fully defined shape is raised at
+    # graph construction time.
     with ops.Graph().as_default():
       input_tensor = array_ops.placeholder(dtypes.float32, None)
       with self.assertRaisesRegex(ValueError, "fully defined shape"):
@@ -147,8 +202,15 @@ class InputProducerTest(test_lib.TestCase):
 
 
 class StringInputProducerTest(test_lib.TestCase):
+  # [CLASS DOC]
+  # Test case for string_input_producer, which enqueues a list of strings (typically file names)
+  # for a number of epochs, optionally shuffled.
 
   def testNoShuffle(self):
+    # [FUNCTION DOC]
+    # Scenario: six strings are produced for three epochs without shuffling.  Asserts that a bulk
+    # dequeue returns the list repeated three times in order, that the next dequeue raises an
+    # out-of-range error, and joins the queue runner threads.
     with ops.Graph().as_default(), self.cached_session():
       strings = [b"to", b"be", b"or", b"not", b"to", b"be"]
       num_epochs = 3
@@ -171,6 +233,12 @@ class StringInputProducerTest(test_lib.TestCase):
         thread.join()
 
   def testShuffle(self):
+    # [FUNCTION DOC]
+    # Scenario: three strings are produced for 600 epochs with shuffling and a fixed seed.  Each
+    # epoch is dequeued as a group, joined into a single byte string, and tallied by permutation.
+    # Asserts that every group is one of the six permutations (shuffling happens only within an
+    # epoch) and that each permutation occurs within forty percent of the uniform expectation.
+    # The observed counts are logged.  Finally asserts the out-of-range error after the last epoch.
     with ops.Graph().as_default(), self.cached_session():
       strings = [b"a", b"b", b"c"]
       num_epochs = 600
@@ -210,12 +278,21 @@ class StringInputProducerTest(test_lib.TestCase):
         thread.join()
 
   def testNullStringPython(self):
+    # [FUNCTION DOC]
+    # Scenario: string_input_producer is given an empty Python list.  Asserts that a value error
+    # is raised immediately at graph construction time.  Note that no explicit graph is created
+    # here, so the default graph of the cached session is used.
     # Graph-construction time check for empty string list:
     with self.cached_session():
       with self.assertRaises(ValueError):
         _ = inp.string_input_producer([])
 
   def testNullString(self):
+    # [FUNCTION DOC]
+    # Scenario: string_input_producer is given an empty string tensor, which cannot be detected at
+    # construction.  The queue runner is started with a coordinator; it is expected to die on an
+    # assertion about the empty input, so that dequeuing raises an out-of-range error.  The test
+    # then asks the coordinator to stop and joins the threads.
     # Runtime check for empty string list.  This is slightly oblique:
     # The queue runner should die with an assertion error on the null
     # input tensor, causing the dequeue to fail with an OutOfRangeError.
@@ -235,6 +312,10 @@ class StringInputProducerTest(test_lib.TestCase):
         thread.join()
 
   def testSharedName(self):
+    # [FUNCTION DOC]
+    # Scenario: a string input producer is created with an explicit shared name and queue name.
+    # Asserts that the underlying queue operation carries the shared-name attribute with the given
+    # value.  No queue runners are started.
     with ops.Graph().as_default(), self.cached_session():
       strings = [b"to", b"be", b"or", b"not", b"to", b"be"]
       queue = inp.string_input_producer(
@@ -243,6 +324,13 @@ class StringInputProducerTest(test_lib.TestCase):
                              queue.queue_ref.op.node_def.attr["shared_name"])
 
   def testConstructionRace(self):
+    # [FUNCTION DOC]
+    # Scenario: queue runners are started on a session while the test still creates a new dequeue
+    # operation for every element it reads, which mutates the graph concurrently with the runner
+    # threads (a pattern not recommended but commonly used).  Two epochs of six strings without
+    # shuffling are read one at a time and each must equal the expected string in order.  The
+    # coordinator is then stopped and the threads are joined.  Verifies that this usage is
+    # supported.
     with ops.Graph().as_default(), self.cached_session() as sess:
       strings = [b"to", b"be", b"or", b"not", b"to", b"be"]
       queue = inp.string_input_producer(strings, shuffle=False)
@@ -263,8 +351,15 @@ class StringInputProducerTest(test_lib.TestCase):
 
 
 class RangeInputProducerTest(test_lib.TestCase):
+  # [CLASS DOC]
+  # Test case for range_input_producer, which enqueues the integers from zero up to a given
+  # size for a number of epochs, optionally shuffled.
 
   def testNoShuffle(self):
+    # [FUNCTION DOC]
+    # Scenario: range size five, three epochs, no shuffling.  Asserts that the bulk dequeue equals
+    # the range repeated three times, that one more dequeue raises an out-of-range error, and
+    # joins the threads.
     with ops.Graph().as_default(), self.cached_session():
       num_epochs = 3
       range_size = 5
@@ -287,6 +382,11 @@ class RangeInputProducerTest(test_lib.TestCase):
         thread.join()
 
   def testShuffle(self):
+    # [FUNCTION DOC]
+    # Scenario: range size two for 200 epochs with shuffling and a fixed seed.  Each epoch is
+    # encoded as a two-digit key; asserts that only the two valid orders appear and that each
+    # occurs within forty percent of the uniform expectation, logs the counts, and finally asserts
+    # the out-of-range error after the epoch limit.
     with ops.Graph().as_default(), self.cached_session():
       num_epochs = 200
       range_size = 2
@@ -326,6 +426,9 @@ class RangeInputProducerTest(test_lib.TestCase):
         thread.join()
 
   def testSharedName(self):
+    # [FUNCTION DOC]
+    # Scenario: range_input_producer is created with an explicit shared name and name.  Asserts
+    # that the queue operation's shared-name attribute equals the given value.
     with ops.Graph().as_default(), self.cached_session():
       range_size = 5
       queue = inp.range_input_producer(
@@ -335,8 +438,16 @@ class RangeInputProducerTest(test_lib.TestCase):
 
 
 class SliceInputProducerTest(test_lib.TestCase):
+  # [CLASS DOC]
+  # Test case for slice_input_producer, which produces one slice (a tuple of the i-th elements)
+  # from several parallel tensors per dequeue, for a number of epochs, optionally shuffled.
 
   def testNoShuffle(self):
+    # [FUNCTION DOC]
+    # Scenario: a list of four byte strings and a list of four integers are sliced together for
+    # three epochs without shuffling.  Twelve slices are fetched one by one and transposed into
+    # two sequences; asserts that both equal their sources repeated three times, that fetching
+    # again raises an out-of-range error, and joins the threads.
     with ops.Graph().as_default(), self.cached_session():
       num_epochs = 3
       source_strings = [b"Alpha", b"Beta", b"Delta", b"Gamma"]
@@ -361,6 +472,12 @@ class SliceInputProducerTest(test_lib.TestCase):
         thread.join()
 
   def testShuffle(self):
+    # [FUNCTION DOC]
+    # Scenario: four strings and four integers are sliced for 1200 epochs with shuffling and a
+    # fixed seed.  Each epoch's four slices are joined into a key string and compared against all
+    # 24 permutations of the paired elements, asserting that pairs stay together, that each
+    # permutation occurs within forty percent of the uniform expectation, and that the epoch limit
+    # raises an out-of-range error afterwards.  Counts are logged.
     with ops.Graph().as_default(), self.cached_session():
       num_epochs = 1200
       source_strings = ["A", "B", "D", "G"]
@@ -405,6 +522,10 @@ class SliceInputProducerTest(test_lib.TestCase):
         thread.join()
 
   def testSharedName(self):
+    # [FUNCTION DOC]
+    # Scenario: slice_input_producer is created with a shared name and a name.  Asserts that the
+    # shared-name attribute is found on the underlying queue operation, reached by walking back
+    # through the inputs of the first slice's operation.
     with ops.Graph().as_default(), self.cached_session():
       source_strings = ["A", "B", "D", "G"]
       source_ints = [7, 3, 5, 2]
@@ -419,8 +540,14 @@ class SliceInputProducerTest(test_lib.TestCase):
 
 
 class DictHelperTest(test_lib.TestCase):
+  # [CLASS DOC]
+  # Test case for the private conversion helpers that flatten a list or dictionary of tensors
+  # into a list and rebuild the original structure.  No graph is needed.
 
   def testListInputs(self):
+    # [FUNCTION DOC]
+    # Scenario: a plain list is converted to a tensor list and back.  Asserts that the tensor list
+    # equals the input and that restoring the original type yields the same list.
     l = [1, 2, 3, 11, 22, 33]
     l2 = inp._as_tensor_list(l)
     self.assertEqual(l, l2)
@@ -428,6 +555,10 @@ class DictHelperTest(test_lib.TestCase):
     self.assertEqual(l, l3)
 
   def testDictInputs(self):
+    # [FUNCTION DOC]
+    # Scenario: a dictionary with string keys is flattened.  Asserts that values are ordered by
+    # sorted key (keys with a common prefix ordered naturally) and that rebuilding from the
+    # flattened list returns an equal dictionary.
     d = {"a": 1, "b": 2, "c": 3, "aa": 11, "bb": 22, "cc": 33}
     l = inp._as_tensor_list(d)
     self.assertEqual([1, 11, 2, 22, 3, 33], l)
@@ -435,6 +566,10 @@ class DictHelperTest(test_lib.TestCase):
     self.assertEqual(d, d2)
 
   def testHeterogeneousKeysDictInputs(self):
+    # [FUNCTION DOC]
+    # Scenario: a dictionary mixing a string, an integer and a tuple as keys is flattened.
+    # Asserts that the order is determined by sorting the keys by their string representation
+    # (tuple, integer, string in this case) and that the original dictionary is rebuilt.
     d = {"z": 1, 1: 42, ("a", "b"): 100}
     l = inp._as_tensor_list(d)
     self.assertEqual([100, 42, 1], l)
@@ -443,8 +578,20 @@ class DictHelperTest(test_lib.TestCase):
 
 
 class BatchTest(test_lib.TestCase):
+  # [CLASS DOC]
+  # Test case for the batch and maybe_batch functions, which group single examples from a queue
+  # into batches, with support for dictionaries, sparse tensors, dynamic padding, multiple
+  # threads, smaller final batches and conditional enqueueing.  Shared helper methods are
+  # reused by several test methods.
 
   def _testOneThreadHelper(self, use_dict):
+    # [FUNCTION DOC]
+    # HELPER: Shared body for the single-thread batching tests (list and dictionary input).
+    # Parameter use_dict selects whether the examples are passed as a dictionary of dense,
+    # sparse and string entries or as a list.  A counter variable counts up to thirty, a two
+    # element sparse tensor and a constant string are batched with batch size ten.  For each of
+    # three batches asserts the dense values, sparse indices, values and dense shape, and the
+    # strings; a further fetch must raise an out-of-range error.  Returns nothing.
     with ops.Graph().as_default(), self.cached_session():
       batch_size = 10
       num_batches = 3
@@ -497,12 +644,21 @@ class BatchTest(test_lib.TestCase):
         thread.join()
 
   def testOneThread(self):
+    # [FUNCTION DOC]
+    # Runs the single-thread batching scenario with list input via the shared helper.
     self._testOneThreadHelper(use_dict=False)
 
   def testOneThreadDict(self):
+    # [FUNCTION DOC]
+    # Runs the single-thread batching scenario with dictionary input via the shared helper.
     self._testOneThreadHelper(use_dict=True)
 
   def testUint32DataTypes(self):
+    # [FUNCTION DOC]
+    # Scenario: a constant of unsigned 32-bit integers is batched with batch size two.  The queue
+    # runners are started with a coordinator and the batch is evaluated once; the test only
+    # verifies that this dtype is supported (no error), then stops the coordinator and joins
+    # the threads.
     with ops.Graph().as_default():
       values = constant_op.constant([0, 1, 2, 3, 4, 5], dtype=dtypes.uint32)
       batched = inp.batch([values], batch_size=2)
@@ -515,6 +671,9 @@ class BatchTest(test_lib.TestCase):
           thread.join()
 
   def testUint64DataTypes(self):
+    # [FUNCTION DOC]
+    # Scenario: same as the unsigned 32-bit case but with unsigned 64-bit integers.  Verifies
+    # that batching and evaluation succeed without error for this dtype.
     with ops.Graph().as_default():
       values = constant_op.constant([0, 1, 2, 3, 4, 5], dtype=dtypes.uint64)
       batched = inp.batch([values], batch_size=2)
@@ -527,6 +686,11 @@ class BatchTest(test_lib.TestCase):
           thread.join()
 
   def testOneThreadDynamicPad(self):
+    # [FUNCTION DOC]
+    # Scenario: a counter and a string tensor whose length equals the counter value are batched
+    # with dynamic padding on and batch size ten.  For each of three batches asserts the counter
+    # values and that every string row is padded with empty strings up to the longest length in
+    # the batch, then asserts that the final fetch raises an out-of-range error.
     with ops.Graph().as_default(), self.cached_session():
       batch_size = 10
       num_batches = 3
@@ -558,6 +722,11 @@ class BatchTest(test_lib.TestCase):
         thread.join()
 
   def testOneThreadEnqueueMany(self):
+    # [FUNCTION DOC]
+    # Scenario: examples are first batched in groups of two, and that result is batched again with
+    # the option that each input already holds a batch of examples to enqueue individually, and a
+    # batch size of ten.  For three batches asserts dense values, sparse indices, values and
+    # dense shape, and strings; then asserts the out-of-range error and joins the threads.
     with ops.Graph().as_default(), self.cached_session():
       batch_size = 10
       num_batches = 3
@@ -594,6 +763,11 @@ class BatchTest(test_lib.TestCase):
         thread.join()
 
   def testManyThreads(self):
+    # [FUNCTION DOC]
+    # Scenario: batching with four enqueue threads and batch size ten over thirty examples.
+    # Because thread interleaving is not deterministic, asserts only per-batch structure (length,
+    # sparse values equal dense values, indices, dense shape, strings) and that the union of all
+    # counters equals the full range.  Batches are logged.  Then asserts the out-of-range error.
     with ops.Graph().as_default(), self.cached_session():
       batch_size = 10
       num_batches = 3
@@ -635,6 +809,11 @@ class BatchTest(test_lib.TestCase):
         thread.join()
 
   def testOneThreadSmallerBatch(self):
+    # [FUNCTION DOC]
+    # Scenario: thirty five examples are batched with batch size ten and the option to allow a
+    # smaller final batch.  Asserts the three full batches as in the basic test, then asserts that
+    # the final batch holds the five remaining elements with matching sparse indices, dense
+    # shape and strings, and that a further fetch raises an out-of-range error.
     with ops.Graph().as_default(), self.cached_session():
       batch_size = 10
       num_batches = 3
@@ -692,6 +871,11 @@ class BatchTest(test_lib.TestCase):
         thread.join()
 
   def testManyThreadsSmallerBatch(self):
+    # [FUNCTION DOC]
+    # Scenario: like the many-thread test, but with thirty five examples and a smaller final
+    # batch allowed.  Asserts the structure of the three full batches, then the five element
+    # final batch, and that all counters seen together equal the full range; finally asserts the
+    # out-of-range error.
     with ops.Graph().as_default(), self.cached_session():
       batch_size = 10
       num_batches = 3
@@ -748,6 +932,10 @@ class BatchTest(test_lib.TestCase):
         thread.join()
 
   def testSharedName(self):
+    # [FUNCTION DOC]
+    # Scenario: batch is called with a shared name and a name.  Asserts that the shared-name
+    # attribute appears on the underlying queue operation found by walking back from the first
+    # output tensor.
     with ops.Graph().as_default(), self.cached_session():
       batch_size = 10
       num_batches = 3
@@ -765,12 +953,19 @@ class BatchTest(test_lib.TestCase):
           batched[0].op.inputs[0].op.node_def.attr["shared_name"])
 
   def testCannotInferRankError(self):
+    # [FUNCTION DOC]
+    # Scenario: batch is called with a placeholder of unknown rank.  Asserts that a value error
+    # saying the tensor rank cannot be inferred is raised.
     with ops.Graph().as_default(), self.cached_session():
       x = array_ops.placeholder(dtype=dtypes.int64)
       with self.assertRaisesRegex(ValueError, "Cannot infer Tensor's rank"):
         inp.batch([x], batch_size=2)
 
   def testBatchedSparseTensorInferredShape(self):
+    # [FUNCTION DOC]
+    # Scenario: a sparse tensor with a one-element dense shape vector is batched with batch size
+    # two.  Asserts the statically inferred shape of the batched dense-shape vector has two
+    # elements (one extra batch dimension).
     with ops.Graph().as_default():
       sparse = sparse_tensor.SparseTensor(
           indices=[[0]], values=[1.0], dense_shape=[1])
@@ -779,6 +974,9 @@ class BatchTest(test_lib.TestCase):
       self.assertAllEqual((2,), batched.dense_shape.get_shape().as_list())
 
   def testBatchedSparseTensorInferredShapeEnqueueMany(self):
+    # [FUNCTION DOC]
+    # Scenario: as above but with the enqueue-many option, so the batch dimension already exists.
+    # Asserts the batched dense-shape vector keeps one element.
     with ops.Graph().as_default():
       sparse = sparse_tensor.SparseTensor(
           indices=[[0]], values=[1.0], dense_shape=[1])
@@ -787,6 +985,10 @@ class BatchTest(test_lib.TestCase):
       self.assertAllEqual((1,), batched.dense_shape.get_shape().as_list())
 
   def testBatchedSparseTensorInferredShapeUnknownRank(self):
+    # [FUNCTION DOC]
+    # Scenario: a sparse tensor built from placeholders so the number of dimensions is unknown is
+    # batched.  Asserts that the batched dense-shape vector also has an unknown number of
+    # elements (none).
     with ops.Graph().as_default():
       sparse = sparse_tensor.SparseTensor(
           indices=array_ops.placeholder(dtypes.int64),
@@ -797,6 +999,9 @@ class BatchTest(test_lib.TestCase):
       self.assertIs(None, batched.dense_shape.get_shape().num_elements())
 
   def testBatchedSparseTensorInferredShapeUnknownRankEnqueueMany(self):
+    # [FUNCTION DOC]
+    # Scenario: unknown rank sparse tensor batched with the enqueue-many option.  Asserts the
+    # element count of the batched dense-shape vector is still unknown.
     with ops.Graph().as_default():
       sparse = sparse_tensor.SparseTensor(
           indices=array_ops.placeholder(dtypes.int64),
@@ -807,12 +1012,25 @@ class BatchTest(test_lib.TestCase):
       self.assertIs(None, batched.dense_shape.get_shape().num_elements())
 
   def testSingleElementDict(self):
+    # [FUNCTION DOC]
+    # Scenario: a dictionary with a single entry holding a two element list is batched with batch
+    # size eight.  Asserts that the static shape of the returned entry is eight by two, showing
+    # that single-key dictionaries are handled.
     with ops.Graph().as_default():
       x = inp.batch({"c": [12, 12]}, batch_size=8)
       self.assertAllEqual((8, 2), x["c"].get_shape().as_list())
 
   def _testKeepInputHelper(self, num_threads, enqueue_many,
                            keep_input_vector=False):
+    # [FUNCTION DOC]
+    # HELPER: Shared body for the conditional (maybe_batch) tests of this class.
+    # Parameters: num_threads is the number of enqueue threads; enqueue_many says whether the
+    # inputs are pre-batched; keep_input_vector (optional, default false) makes the pre-batch
+    # size four so that the keep condition becomes a per-example vector.  A counter up to forty is
+    # paired with a sparse tensor and a string; only even counter values are kept.  Asserts that
+    # four batches of five contain only even numbers (dense and sparse) and the string, and that
+    # a further fetch raises an out-of-range error.  The deprecated all-variables and
+    # local-variables initializers are used.  Returns nothing.
     with ops.Graph().as_default(), self.cached_session():
       batch_size = 5
       num_batches = 4
@@ -855,33 +1073,56 @@ class BatchTest(test_lib.TestCase):
                          "when eager execution is enabled. TF2 uses tf.data "
                          "instead.")
   def testSingleThreadKeepInput(self):
+    # [FUNCTION DOC]
+    # Runs the conditional batching scenario with one thread and no enqueue-many.  Restricted to
+    # graph mode (TF1) because queue pipelines are unsupported in eager mode.
     self._testKeepInputHelper(1, False)
 
   @test_util.run_v1_only("Input pipelines based on Queues are not supported "
                          "when eager execution is enabled. TF2 uses tf.data "
                          "instead.")
   def testSingleThreadKeepInputEnqueueMany(self):
+    # [FUNCTION DOC]
+    # Runs the conditional batching scenario with one thread and the enqueue-many option.
+    # Restricted to graph mode (TF1).
     self._testKeepInputHelper(1, True)
 
   @test_util.run_v1_only("Input pipelines based on Queues are not supported "
                          "when eager execution is enabled. TF2 uses tf.data "
                          "instead.")
   def testMultipleThreadKeepInput(self):
+    # [FUNCTION DOC]
+    # Runs the conditional batching scenario with five threads and no enqueue-many.  Restricted to
+    # graph mode (TF1).
     self._testKeepInputHelper(5, False)
 
   @test_util.run_v1_only("Input pipelines based on Queues are not supported "
                          "when eager execution is enabled. TF2 uses tf.data "
                          "instead.")
   def testMultipleThreadKeepInputEnqueueMany(self):
+    # [FUNCTION DOC]
+    # Runs the conditional batching scenario with five threads and the enqueue-many option.
+    # Restricted to graph mode (TF1).
     self._testKeepInputHelper(5, True)
 
   def testMaybeEnqueuePerExample(self):
+    # [FUNCTION DOC]
+    # Runs the conditional batching scenario with one thread, the enqueue-many option and a
+    # per-example keep vector.
     self._testKeepInputHelper(1, True, keep_input_vector=True)
 
   def testMultipleThreadMaybeEnqueuePerExample(self):
+    # [FUNCTION DOC]
+    # Runs the conditional batching scenario with five threads, the enqueue-many option and a
+    # per-example keep vector.
     self._testKeepInputHelper(5, True, keep_input_vector=True)
 
   def testInvalidKeepInputVector(self):
+    # [FUNCTION DOC]
+    # Scenario: three invalid uses of maybe_batch are checked, each expected to raise a value
+    # error at graph construction: a vector keep condition without enqueue-many ("cannot be a
+    # vector"), a keep condition with more than one dimension ("must be 0 or 1 dimensions"),
+    # and a keep condition of unknown shape ("must be known at graph construction").
     with ops.Graph().as_default():
       # Can't have vector `keep_input` with `enqueue_many=False`.
       with self.assertRaisesRegex(ValueError,
@@ -905,6 +1146,9 @@ class BatchTest(test_lib.TestCase):
                         enqueue_many=True)
 
   def testMaybeBatchedSparseTensorInferredShape(self):
+    # [FUNCTION DOC]
+    # Scenario: maybe_batch with an always-true keep condition on a sparse tensor.  Asserts the
+    # batched dense-shape vector gets two elements (batch dimension added).
     with ops.Graph().as_default():
       sparse = sparse_tensor.SparseTensor(
           indices=[[0]], values=[1.0], dense_shape=[1])
@@ -913,6 +1157,9 @@ class BatchTest(test_lib.TestCase):
       self.assertAllEqual((2,), batched.dense_shape.get_shape().as_list())
 
   def testMaybeBatchedSparseTensorInferredShapeEnqueueMany(self):
+    # [FUNCTION DOC]
+    # Scenario: maybe_batch with enqueue-many and a true keep condition.  Asserts the batched
+    # dense-shape vector keeps one element.
     with ops.Graph().as_default():
       sparse = sparse_tensor.SparseTensor(
           indices=[[0]], values=[1.0], dense_shape=[1])
@@ -924,6 +1171,9 @@ class BatchTest(test_lib.TestCase):
       self.assertAllEqual((1,), batched.dense_shape.get_shape().as_list())
 
   def testMaybeBatchedSparseTensorInferredShapeEnqueueManyPerExample(self):
+    # [FUNCTION DOC]
+    # Scenario: maybe_batch with enqueue-many and a two-element per-example keep list.  Asserts
+    # the batched dense-shape vector keeps one element.
     with ops.Graph().as_default():
       sparse = sparse_tensor.SparseTensor(
           indices=[[0], [0]], values=[1.0, 2.0], dense_shape=[2])
@@ -935,6 +1185,9 @@ class BatchTest(test_lib.TestCase):
       self.assertAllEqual((1,), batched.dense_shape.get_shape().as_list())
 
   def testMaybeBatchedSparseTensorInferredShapeUnknownRank(self):
+    # [FUNCTION DOC]
+    # Scenario: maybe_batch on an unknown-rank sparse tensor.  Asserts the dense-shape vector's
+    # element count stays unknown.
     with ops.Graph().as_default():
       sparse = sparse_tensor.SparseTensor(
           indices=array_ops.placeholder(dtypes.int64),
@@ -945,6 +1198,9 @@ class BatchTest(test_lib.TestCase):
       self.assertIs(None, batched.dense_shape.get_shape().num_elements())
 
   def testMaybeBatchedSparseTensorInferredShapeUnknownRankEnqueueMany(self):
+    # [FUNCTION DOC]
+    # Scenario: maybe_batch with enqueue-many on an unknown-rank sparse tensor.  Asserts the
+    # element count of the dense-shape vector stays unknown.
     with ops.Graph().as_default():
       sparse = sparse_tensor.SparseTensor(
           indices=array_ops.placeholder(dtypes.int64),
@@ -958,6 +1214,9 @@ class BatchTest(test_lib.TestCase):
       self.assertIs(None, batched.dense_shape.get_shape().num_elements())
 
   def testMaybeBatchedSparseTensorInferredShapeUnknownRankPerExample(self):
+    # [FUNCTION DOC]
+    # Scenario: maybe_batch with enqueue-many and a per-example keep list on an unknown-rank
+    # sparse tensor.  Asserts the element count of the dense-shape vector stays unknown.
     with ops.Graph().as_default():
       sparse = sparse_tensor.SparseTensor(
           indices=array_ops.placeholder(dtypes.int64),
@@ -971,6 +1230,11 @@ class BatchTest(test_lib.TestCase):
       self.assertIs(None, batched.dense_shape.get_shape().num_elements())
 
   def testMaybeBatchCorrectValues(self):
+    # [FUNCTION DOC]
+    # Scenario: a two-row sparse tensor is passed to maybe_batch with enqueue-many, a keep vector
+    # selecting only the first row, and batch size one.  Runs the queue runners with a
+    # coordinator, evaluates the batch, stops and joins.  Asserts that the result contains only
+    # the first row (indices, values and a dense shape of one by four).
     with ops.Graph().as_default():
       sparse_t = sparse_tensor.SparseTensor(
           indices=[[0, 1], [0, 2], [1, 0], [1, 3]],
@@ -998,8 +1262,21 @@ class BatchTest(test_lib.TestCase):
 
 
 class BatchJoinTest(test_lib.TestCase):
+  # [CLASS DOC]
+  # Test case for batch_join and maybe_batch_join, which batch examples coming from several
+  # independent input lists (one enqueue thread per list).
 
   def _testTwoThreadsHelper(self, use_dict):
+    # [FUNCTION DOC]
+    # HELPER: Shared body for the two-producer join tests (list and dictionary input).
+    # KNOWN ISSUE: the assertion that both producers are mixed in at least one batch is commented
+    # out because thread scheduling is not fair, so mixing is only logged and never verified.
+    # Parameter use_dict selects dictionary or list form.  Producer "a" yields seventy counter
+    # values with sparse and string parts; producer "b" yields the value 99 ninety times, limited
+    # by epochs.  They are joined with batch size five.  Asserts static shapes, then for each batch
+    # the lengths, sparse consistency, and tallies which entries came from which producer.
+    # Asserts the order of producer "a" results is preserved, all ninety "b" values are seen,
+    # and an out-of-range error follows.  Returns nothing.
     with ops.Graph().as_default(), self.cached_session():
       # Two threads, the first generates (0..69, "a").
       num_a = 70
@@ -1102,12 +1379,19 @@ class BatchJoinTest(test_lib.TestCase):
         thread.join()
 
   def testTwoThreads(self):
+    # [FUNCTION DOC]
+    # Runs the two-producer join scenario with list input.
     self._testTwoThreadsHelper(use_dict=False)
 
   def testTwoThreadsDict(self):
+    # [FUNCTION DOC]
+    # Runs the two-producer join scenario with dictionary input.
     self._testTwoThreadsHelper(use_dict=True)
 
   def testMismatchedDictKeys(self):
+    # [FUNCTION DOC]
+    # Scenario: batch_join is given two dictionaries with different keys.  Asserts that a value
+    # error saying that they must have the same keys is raised at construction time.
     with ops.Graph().as_default(), self.assertRaisesRegex(
         ValueError, "must have the same keys"):
       inp.batch_join(
@@ -1123,6 +1407,15 @@ class BatchJoinTest(test_lib.TestCase):
           batch_size=8)
 
   def testTwoThreadsDynamicPad(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the mixing assertion for the two producers is commented out (unfair thread
+    # scheduling), so the mixing is only logged and never verified.
+    # Scenario: two producers with dynamic padding: "a" yields a counter with a string repeated
+    # counter plus one times, "b" yields 99 with a string repeated 99 times.  Joined with batch
+    # size five.  Asserts static shapes (batch by unknown), then per batch lengths and the
+    # producer tallies, that "b" strings are 99 long, that the lengths of the "a" strings match
+    # their counter plus one in order, that the "a" counters are in order, and the out-of-range
+    # error afterwards.  Mixing is only logged because the assertion is commented out.
     with ops.Graph().as_default(), self.cached_session():
       # Two threads, the first generates (0..69, ["a"] * 1..70).
       num_a = 70
@@ -1202,6 +1495,13 @@ class BatchJoinTest(test_lib.TestCase):
         thread.join()
 
   def testTwoThreadsSmallerBatch(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the mixing assertion for the two producers is commented out (unfair thread
+    # scheduling), so the mixing is only logged and never verified.
+    # Scenario: like the two-producer test but with two extra elements per producer and a smaller
+    # final batch allowed.  Asserts dynamic batch shape, the structure of the full batches, then
+    # a final batch with four elements, preserved "a" order, all "b" elements counted, and the
+    # out-of-range error.  Mixing is only logged.
     with ops.Graph().as_default(), self.cached_session():
       extra_elements = 2
       # Two threads, the first generates (0..69, "a").
@@ -1305,6 +1605,13 @@ class BatchJoinTest(test_lib.TestCase):
         thread.join()
 
   def testTwoThreadsDynamicPadSmallerBatch(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the mixing assertion for the two producers is commented out (unfair thread
+    # scheduling), so the mixing is only logged and never verified.
+    # Scenario: dynamic padding combined with a smaller final batch for two producers with two
+    # extra elements each.  Asserts unknown static shapes, per-batch lengths, "b" string content,
+    # padded "a" string lengths, a final batch of four elements, preserved order of "a" values,
+    # complete count of "b" values, and the out-of-range error.  Mixing is only logged.
     with ops.Graph().as_default(), self.cached_session():
       extra_elements = 2
       # Two threads, the first generates (0..69, ["a"] * 1..70).
@@ -1405,6 +1712,10 @@ class BatchJoinTest(test_lib.TestCase):
         thread.join()
 
   def testSharedName(self):
+    # [FUNCTION DOC]
+    # Scenario: batch_join with a single input list, a shared name and a name.  Asserts the static
+    # shape of both outputs equals the batch size and that the shared-name attribute is present on
+    # the queue operation.
     with ops.Graph().as_default(), self.cached_session():
       batch_size = 10
       num_batches = 3
@@ -1427,18 +1738,31 @@ class BatchJoinTest(test_lib.TestCase):
           batched[0].op.inputs[0].op.node_def.attr["shared_name"])
 
   def testCannotInferRankError(self):
+    # [FUNCTION DOC]
+    # Scenario: batch_join with an unknown-rank placeholder.  Asserts a value error stating that
+    # the tensor rank cannot be inferred.
     with ops.Graph().as_default(), self.cached_session():
       x = array_ops.placeholder(dtype=dtypes.int64)
       with self.assertRaisesRegex(ValueError, "Cannot infer Tensor's rank"):
         inp.batch_join([[x]], batch_size=2)
 
   def testSingleElementDict(self):
+    # [FUNCTION DOC]
+    # Scenario: batch_join with one dictionary holding a two element list and batch size eight.
+    # Asserts the static shape of the entry is eight by two.
     with ops.Graph().as_default():
       x = inp.batch_join([{"c": [12, 12]}], batch_size=8)
       self.assertAllEqual((8, 2), x["c"].get_shape().as_list())
 
   def _testKeepInputHelper(self, num_threads, enqueue_many,
                            keep_input_vector=False):
+    # [FUNCTION DOC]
+    # HELPER: Shared body for the conditional join tests of this class.
+    # Parameters: num_threads is how many copies of the same input list are joined; enqueue_many
+    # says whether inputs are pre-batched; keep_input_vector (optional, default false) selects a
+    # per-example keep vector.  Only even counter values are kept.  Asserts that four batches of
+    # five contain only even values (dense and sparse) and the string, then an out-of-range
+    # error.  Uses the deprecated variable initializers.  Returns nothing.
     with ops.Graph().as_default(), self.cached_session():
       batch_size = 5
       num_batches = 4
@@ -1484,33 +1808,49 @@ class BatchJoinTest(test_lib.TestCase):
                          "when eager execution is enabled. TF2 uses tf.data "
                          "instead.")
   def testSingleThreadKeepInput(self):
+    # [FUNCTION DOC]
+    # Conditional join with one thread and no enqueue-many; graph mode (TF1) only.
     self._testKeepInputHelper(1, False)
 
   @test_util.run_v1_only("Input pipelines based on Queues are not supported "
                          "when eager execution is enabled. TF2 uses tf.data "
                          "instead.")
   def testSingleThreadKeepInputEnqueueMany(self):
+    # [FUNCTION DOC]
+    # Conditional join with one thread and enqueue-many; graph mode (TF1) only.
     self._testKeepInputHelper(1, True)
 
   @test_util.run_v1_only("Input pipelines based on Queues are not supported "
                          "when eager execution is enabled. TF2 uses tf.data "
                          "instead.")
   def testMultipleThreadKeepInput(self):
+    # [FUNCTION DOC]
+    # Conditional join with five threads and no enqueue-many; graph mode (TF1) only.
     self._testKeepInputHelper(5, False)
 
   @test_util.run_v1_only("Input pipelines based on Queues are not supported "
                          "when eager execution is enabled. TF2 uses tf.data "
                          "instead.")
   def testMultipleThreadKeepInputEnqueueMany(self):
+    # [FUNCTION DOC]
+    # Conditional join with five threads and enqueue-many; graph mode (TF1) only.
     self._testKeepInputHelper(5, True)
 
   def testSingleThreadKeepInputPerExample(self):
+    # [FUNCTION DOC]
+    # Conditional join with one thread, enqueue-many and a per-example keep vector.
     self._testKeepInputHelper(1, True, keep_input_vector=True)
 
   def testMultipleThreadKeepInputPerExample(self):
+    # [FUNCTION DOC]
+    # Conditional join with five threads, enqueue-many and a per-example keep vector.
     self._testKeepInputHelper(5, True, keep_input_vector=True)
 
   def testInvalidKeepInputVector(self):
+    # [FUNCTION DOC]
+    # Scenario: three invalid uses of maybe_batch_join, each expected to raise a value error:
+    # vector keep condition without enqueue-many, keep condition with more than one dimension,
+    # and keep condition with unknown shape at graph construction.
     with ops.Graph().as_default():
       # Can't have vector `keep_input` with `enqueue_many=False`.
       with self.assertRaisesRegex(ValueError,
@@ -1534,6 +1874,9 @@ class BatchJoinTest(test_lib.TestCase):
                              enqueue_many=True)
 
   def testMaybeBatchedSparseTensorInferredShape(self):
+    # [FUNCTION DOC]
+    # Scenario: maybe_batch_join with a true keep condition on one sparse input.  Asserts the
+    # batched dense-shape vector has two elements.
     with ops.Graph().as_default():
       sparse = sparse_tensor.SparseTensor(
           indices=[[0]], values=[1.0], dense_shape=[1])
@@ -1542,6 +1885,9 @@ class BatchJoinTest(test_lib.TestCase):
       self.assertAllEqual((2,), batched.dense_shape.get_shape().as_list())
 
   def testMaybeBatchedSparseTensorInferredShapeEnqueueMany(self):
+    # [FUNCTION DOC]
+    # Scenario: maybe_batch_join with enqueue-many.  Asserts the dense-shape vector keeps one
+    # element.
     with ops.Graph().as_default():
       sparse = sparse_tensor.SparseTensor(
           indices=[[0]], values=[1.0], dense_shape=[1])
@@ -1553,6 +1899,9 @@ class BatchJoinTest(test_lib.TestCase):
       self.assertAllEqual((1,), batched.dense_shape.get_shape().as_list())
 
   def testMaybeBatchedSparseTensorInferredShapeEnqueueManyPerExample(self):
+    # [FUNCTION DOC]
+    # Scenario: maybe_batch_join with enqueue-many and a per-example keep list.  Asserts the
+    # dense-shape vector keeps one element.
     with ops.Graph().as_default():
       sparse = sparse_tensor.SparseTensor(
           indices=[[0], [0]], values=[1.0, 2.0], dense_shape=[2])
@@ -1564,6 +1913,9 @@ class BatchJoinTest(test_lib.TestCase):
       self.assertAllEqual((1,), batched.dense_shape.get_shape().as_list())
 
   def testMaybeBatchedSparseTensorInferredShapeUnknownRank(self):
+    # [FUNCTION DOC]
+    # Scenario: maybe_batch_join on an unknown-rank sparse tensor.  Asserts the dense-shape
+    # vector's element count is unknown.
     with ops.Graph().as_default():
       sparse = sparse_tensor.SparseTensor(
           indices=array_ops.placeholder(dtypes.int64),
@@ -1574,6 +1926,9 @@ class BatchJoinTest(test_lib.TestCase):
       self.assertIs(None, batched.dense_shape.get_shape().num_elements())
 
   def testMaybeBatchedSparseTensorInferredShapeUnknownRankEnqueueMany(self):
+    # [FUNCTION DOC]
+    # Scenario: maybe_batch_join with enqueue-many on an unknown-rank sparse tensor.  Asserts the
+    # element count stays unknown.
     with ops.Graph().as_default():
       sparse = sparse_tensor.SparseTensor(
           indices=array_ops.placeholder(dtypes.int64),
@@ -1587,6 +1942,9 @@ class BatchJoinTest(test_lib.TestCase):
       self.assertIs(None, batched.dense_shape.get_shape().num_elements())
 
   def testMaybeBatchedSparseTensorInferredShapeUnknownRankPerExample(self):
+    # [FUNCTION DOC]
+    # Scenario: maybe_batch_join with enqueue-many and a per-example keep list on an unknown-rank
+    # sparse tensor.  Asserts the element count stays unknown.
     with ops.Graph().as_default():
       sparse = sparse_tensor.SparseTensor(
           indices=array_ops.placeholder(dtypes.int64),
@@ -1600,6 +1958,10 @@ class BatchJoinTest(test_lib.TestCase):
       self.assertIs(None, batched.dense_shape.get_shape().num_elements())
 
   def testMaybeBatchCorrectValues(self):
+    # [FUNCTION DOC]
+    # Scenario: a two-row sparse tensor goes through maybe_batch_join with enqueue-many and a keep
+    # vector selecting only the first row, batch size one.  Runs queue runners with a coordinator,
+    # evaluates, stops and joins.  Asserts the result holds only the first row.
     with ops.Graph().as_default():
       sparse = sparse_tensor.SparseTensor(
           indices=[[0, 1], [0, 2], [1, 0], [1, 3]],
@@ -1627,8 +1989,18 @@ class BatchJoinTest(test_lib.TestCase):
 
 
 class ShuffleBatchTest(test_lib.TestCase):
+  # [CLASS DOC]
+  # Test case for shuffle_batch and maybe_shuffle_batch, which batch examples through a
+  # shuffling queue with a capacity and a minimum number of elements kept after dequeue.
 
   def _testOneThreadHelper(self, use_dict):
+    # [FUNCTION DOC]
+    # HELPER: Shared body for single-thread shuffle batching tests (list and dictionary input).
+    # Parameter use_dict selects the input form.  Thirty examples (counter, sparse tensor,
+    # string) are batched with batch size ten, capacity 32, minimum after dequeue 16 and a fixed
+    # seed.  Asserts per-batch structure, that the overall sequence is not in uniformly
+    # increasing order (it was shuffled), that all numbers are present, and that an out-of-range
+    # error follows.  Returns nothing.
     with ops.Graph().as_default(), self.cached_session():
       batch_size = 10
       num_batches = 3
@@ -1689,12 +2061,21 @@ class ShuffleBatchTest(test_lib.TestCase):
         thread.join()
 
   def testOneThread(self):
+    # [FUNCTION DOC]
+    # Runs the single-thread shuffle scenario with list input.
     self._testOneThreadHelper(use_dict=False)
 
   def testOneThreadDict(self):
+    # [FUNCTION DOC]
+    # Runs the single-thread shuffle scenario with dictionary input.
     self._testOneThreadHelper(use_dict=True)
 
   def testOneThreadSmallerBatch(self):
+    # [FUNCTION DOC]
+    # Scenario: thirty five examples, batch size ten, smaller final batch allowed.  Asserts the
+    # three full shuffled batches, then a final batch of five elements (dense shape and strings),
+    # that the combined output is scrambled yet complete, and that a further fetch raises an
+    # out-of-range error.
     with ops.Graph().as_default(), self.cached_session():
       batch_size = 10
       num_batches = 3
@@ -1752,6 +2133,10 @@ class ShuffleBatchTest(test_lib.TestCase):
         thread.join()
 
   def testManyThreads(self):
+    # [FUNCTION DOC]
+    # Scenario: shuffle batching with four threads over thirty examples.  Asserts per-batch
+    # structure, that the combined output is scrambled but complete, and the out-of-range error.
+    # Batches are logged.
     with ops.Graph().as_default(), self.cached_session():
       batch_size = 10
       num_batches = 3
@@ -1800,6 +2185,10 @@ class ShuffleBatchTest(test_lib.TestCase):
         thread.join()
 
   def testManyThreadsSmallerBatch(self):
+    # [FUNCTION DOC]
+    # Scenario: four threads and thirty five examples with a smaller final batch allowed.
+    # Asserts the full batches, the five element final batch, scrambled complete output, and the
+    # out-of-range error.
     with ops.Graph().as_default(), self.cached_session():
       batch_size = 10
       num_batches = 3
@@ -1859,6 +2248,9 @@ class ShuffleBatchTest(test_lib.TestCase):
         thread.join()
 
   def testSharedName(self):
+    # [FUNCTION DOC]
+    # Scenario: shuffle_batch with a shared name and a name.  Asserts the shared-name attribute is
+    # present on the underlying queue operation.
     with ops.Graph().as_default(), self.cached_session():
       batch_size = 10
       num_batches = 3
@@ -1879,6 +2271,13 @@ class ShuffleBatchTest(test_lib.TestCase):
 
   def _testKeepInputHelper(self, num_threads, enqueue_many,
                            keep_input_vector=False):
+    # [FUNCTION DOC]
+    # HELPER: Shared body for the conditional shuffle batching tests.
+    # Parameters: num_threads is the thread count; enqueue_many tells whether the inputs are
+    # pre-batched; keep_input_vector (optional, default false) selects a per-example keep vector.
+    # Only even counter values are kept; capacity 10 and minimum after dequeue 1 are used.
+    # Asserts four batches of five even values plus string, then an out-of-range error.  Uses the
+    # deprecated variable initializers.  Returns nothing.
     with ops.Graph().as_default(), self.cached_session():
       batch_size = 5
       num_batches = 4
@@ -1923,33 +2322,49 @@ class ShuffleBatchTest(test_lib.TestCase):
                          "when eager execution is enabled. TF2 uses tf.data "
                          "instead.")
   def testSingleThreadKeepInput(self):
+    # [FUNCTION DOC]
+    # Conditional shuffle batching with one thread and no enqueue-many; graph mode (TF1) only.
     self._testKeepInputHelper(1, False)
 
   @test_util.run_v1_only("Input pipelines based on Queues are not supported "
                          "when eager execution is enabled. TF2 uses tf.data "
                          "instead.")
   def testSingleThreadKeepInputEnqueueMany(self):
+    # [FUNCTION DOC]
+    # Conditional shuffle batching with one thread and enqueue-many; graph mode (TF1) only.
     self._testKeepInputHelper(1, True)
 
   @test_util.run_v1_only("Input pipelines based on Queues are not supported "
                          "when eager execution is enabled. TF2 uses tf.data "
                          "instead.")
   def testMultipleThreadKeepInput(self):
+    # [FUNCTION DOC]
+    # Conditional shuffle batching with five threads and no enqueue-many; graph mode (TF1) only.
     self._testKeepInputHelper(5, False)
 
   @test_util.run_v1_only("Input pipelines based on Queues are not supported "
                          "when eager execution is enabled. TF2 uses tf.data "
                          "instead.")
   def testMultipleThreadKeepInputEnqueueMany(self):
+    # [FUNCTION DOC]
+    # Conditional shuffle batching with five threads and enqueue-many; graph mode (TF1) only.
     self._testKeepInputHelper(5, True)
 
   def testSingleThreadKeepInputPerExample(self):
+    # [FUNCTION DOC]
+    # Conditional shuffle batching with one thread, enqueue-many and a per-example keep vector.
     self._testKeepInputHelper(1, True, keep_input_vector=True)
 
   def testMultipleThreadKeepInputPerExample(self):
+    # [FUNCTION DOC]
+    # Conditional shuffle batching with five threads, enqueue-many and a per-example keep vector.
     self._testKeepInputHelper(5, True, keep_input_vector=True)
 
   def testInvalidKeepInputVector(self):
+    # [FUNCTION DOC]
+    # Scenario: three invalid uses of maybe_shuffle_batch, each expected to raise a value error:
+    # vector keep condition without enqueue-many, keep condition with more than one dimension,
+    # and keep condition of unknown shape at graph construction.
     with ops.Graph().as_default():
       # Can't have vector `keep_input` with `enqueue_many=False`.
       with self.assertRaisesRegex(ValueError,
@@ -1979,6 +2394,9 @@ class ShuffleBatchTest(test_lib.TestCase):
                                 enqueue_many=True)
 
   def testMaybeBatchedSparseTensorInferredShape(self):
+    # [FUNCTION DOC]
+    # Scenario: maybe_shuffle_batch with a true keep condition on a sparse tensor.  Asserts the
+    # batched dense-shape vector has two elements.
     with ops.Graph().as_default():
       sparse = sparse_tensor.SparseTensor(
           indices=[[0]], values=[1.0], dense_shape=[1])
@@ -1987,6 +2405,9 @@ class ShuffleBatchTest(test_lib.TestCase):
       self.assertAllEqual((2,), batched.dense_shape.get_shape().as_list())
 
   def testMaybeBatchedSparseTensorInferredShapeEnqueueMany(self):
+    # [FUNCTION DOC]
+    # Scenario: maybe_shuffle_batch with enqueue-many.  Asserts the dense-shape vector keeps one
+    # element.
     with ops.Graph().as_default():
       sparse = sparse_tensor.SparseTensor(
           indices=[[0]], values=[1.0], dense_shape=[1])
@@ -2000,6 +2421,9 @@ class ShuffleBatchTest(test_lib.TestCase):
       self.assertAllEqual((1,), batched.dense_shape.get_shape().as_list())
 
   def testMaybeBatchedSparseTensorInferredShapeEnqueueManyPerExample(self):
+    # [FUNCTION DOC]
+    # Scenario: maybe_shuffle_batch with enqueue-many and a per-example keep list.  Asserts the
+    # dense-shape vector keeps one element.
     with ops.Graph().as_default():
       sparse = sparse_tensor.SparseTensor(
           indices=[[0], [0]], values=[1.0, 2.0], dense_shape=[2])
@@ -2012,6 +2436,9 @@ class ShuffleBatchTest(test_lib.TestCase):
       self.assertAllEqual((1,), batched.dense_shape.get_shape().as_list())
 
   def testMaybeBatchedSparseTensorInferredShapeUnknownRank(self):
+    # [FUNCTION DOC]
+    # Scenario: maybe_shuffle_batch on an unknown-rank sparse tensor.  Asserts the dense-shape
+    # vector's element count is unknown.
     with ops.Graph().as_default():
       sparse = sparse_tensor.SparseTensor(
           indices=array_ops.placeholder(dtypes.int64),
@@ -2022,6 +2449,9 @@ class ShuffleBatchTest(test_lib.TestCase):
       self.assertIs(None, batched.dense_shape.get_shape().num_elements())
 
   def testMaybeBatchedSparseTensorInferredShapeUnknownRankEnqueueMany(self):
+    # [FUNCTION DOC]
+    # Scenario: maybe_shuffle_batch with enqueue-many on an unknown-rank sparse tensor.  Asserts
+    # the element count stays unknown.
     with ops.Graph().as_default():
       sparse = sparse_tensor.SparseTensor(
           indices=array_ops.placeholder(dtypes.int64),
@@ -2037,6 +2467,9 @@ class ShuffleBatchTest(test_lib.TestCase):
       self.assertIs(None, batched.dense_shape.get_shape().num_elements())
 
   def testMaybeBatchedSparseTensorInferredShapeUnknownRankPerExample(self):
+    # [FUNCTION DOC]
+    # Scenario: maybe_shuffle_batch with enqueue-many and a per-example keep list on an
+    # unknown-rank sparse tensor.  Asserts the element count stays unknown.
     with ops.Graph().as_default():
       sparse = sparse_tensor.SparseTensor(
           indices=array_ops.placeholder(dtypes.int64),
@@ -2052,8 +2485,19 @@ class ShuffleBatchTest(test_lib.TestCase):
 
 
 class ShuffleBatchJoinTest(test_lib.TestCase):
+  # [CLASS DOC]
+  # Test case for shuffle_batch_join and maybe_shuffle_batch_join, which combine several input
+  # lists through a shuffling queue and batch the result.
 
   def _testTwoThreadsHelper(self, use_dict):
+    # [FUNCTION DOC]
+    # HELPER: Shared body for the two-producer shuffle join tests (list and dictionary input).
+    # Parameter use_dict selects the input form.  Producer "a" yields 25 counter values with
+    # sparse and string parts; producer "b" yields 99 thirty five times.  They are joined with
+    # batch size five, capacity 32, minimum after dequeue 16 and a fixed seed.  Asserts static
+    # shapes, per-batch structure, that both producers are mixed in more than one batch (this
+    # assertion is active here), that all "a" values are seen but scrambled, that all "b" values
+    # are counted, and that an out-of-range error follows.  Returns nothing.
     with ops.Graph().as_default(), self.cached_session():
       # Two threads, the first generates (0..24, "a").
       num_a = 25
@@ -2161,12 +2605,21 @@ class ShuffleBatchJoinTest(test_lib.TestCase):
         thread.join()
 
   def testTwoThreads(self):
+    # [FUNCTION DOC]
+    # Runs the two-producer shuffle join scenario with list input.
     self._testTwoThreadsHelper(use_dict=False)
 
   def testTwoThreadsDict(self):
+    # [FUNCTION DOC]
+    # Runs the two-producer shuffle join scenario with dictionary input.
     self._testTwoThreadsHelper(use_dict=True)
 
   def testTwoThreadsSmallerBatch(self):
+    # [FUNCTION DOC]
+    # Scenario: two producers with two extra elements each (27 and 37 values), joined with a
+    # shuffling queue and a smaller final batch allowed.  Asserts unknown batch dimensions,
+    # structure of the full batches, a final batch of four elements, mixing in more than one
+    # batch, scrambled but complete "a" values, complete "b" count, and the out-of-range error.
     with ops.Graph().as_default(), self.cached_session():
       # Two threads, the first generates (0..26, "a").
       extra_elements = 2
@@ -2272,6 +2725,9 @@ class ShuffleBatchJoinTest(test_lib.TestCase):
         thread.join()
 
   def testMismatchedDictKeys(self):
+    # [FUNCTION DOC]
+    # Scenario: shuffle_batch_join is given two dictionaries with different keys.  Asserts a value
+    # error saying they must have the same keys.
     with ops.Graph().as_default(), self.assertRaisesRegex(
         ValueError, "must have the same keys"):
       inp.shuffle_batch_join(
@@ -2290,6 +2746,9 @@ class ShuffleBatchJoinTest(test_lib.TestCase):
           seed=223607)
 
   def testSharedName(self):
+    # [FUNCTION DOC]
+    # Scenario: shuffle_batch_join with a single input list, a shared name and a name.  Asserts
+    # the static output shapes equal the batch size and the shared-name attribute is present.
     with ops.Graph().as_default(), self.cached_session():
       batch_size = 10
       num_batches = 3
@@ -2315,6 +2774,13 @@ class ShuffleBatchJoinTest(test_lib.TestCase):
 
   def _testKeepInputHelper(self, num_threads, enqueue_many,
                            keep_input_vector=False):
+    # [FUNCTION DOC]
+    # HELPER: Shared body for the conditional shuffle join tests.
+    # Parameters: num_threads is how many copies of the input list are joined; enqueue_many tells
+    # whether inputs are pre-batched; keep_input_vector (optional, default false) selects a
+    # per-example keep vector.  Only even counter values are kept.  Asserts four batches of five
+    # even values plus string and then an out-of-range error.  Uses deprecated initializers.
+    # Returns nothing.
     with ops.Graph().as_default(), self.cached_session():
       batch_size = 5
       num_batches = 4
@@ -2358,33 +2824,49 @@ class ShuffleBatchJoinTest(test_lib.TestCase):
                          "when eager execution is enabled. TF2 uses tf.data "
                          "instead.")
   def testSingleThreadKeepInput(self):
+    # [FUNCTION DOC]
+    # Conditional shuffle join with one thread and no enqueue-many; graph mode (TF1) only.
     self._testKeepInputHelper(1, False)
 
   @test_util.run_v1_only("Input pipelines based on Queues are not supported "
                          "when eager execution is enabled. TF2 uses tf.data "
                          "instead.")
   def testSingleThreadKeepInputEnqueueMany(self):
+    # [FUNCTION DOC]
+    # Conditional shuffle join with one thread and enqueue-many; graph mode (TF1) only.
     self._testKeepInputHelper(1, True)
 
   @test_util.run_v1_only("Input pipelines based on Queues are not supported "
                          "when eager execution is enabled. TF2 uses tf.data "
                          "instead.")
   def testMultipleThreadKeepInput(self):
+    # [FUNCTION DOC]
+    # Conditional shuffle join with five threads and no enqueue-many; graph mode (TF1) only.
     self._testKeepInputHelper(5, False)
 
   @test_util.run_v1_only("Input pipelines based on Queues are not supported "
                          "when eager execution is enabled. TF2 uses tf.data "
                          "instead.")
   def testMultipleThreadKeepInputEnqueueMany(self):
+    # [FUNCTION DOC]
+    # Conditional shuffle join with five threads and enqueue-many; graph mode (TF1) only.
     self._testKeepInputHelper(5, True)
 
   def testSingleThreadKeepInputPerExample(self):
+    # [FUNCTION DOC]
+    # Conditional shuffle join with one thread, enqueue-many and a per-example keep vector.
     self._testKeepInputHelper(1, True, keep_input_vector=True)
 
   def testMultipleThreadKeepInputPerExample(self):
+    # [FUNCTION DOC]
+    # Conditional shuffle join with five threads, enqueue-many and a per-example keep vector.
     self._testKeepInputHelper(5, True, keep_input_vector=True)
 
   def testInvalidKeepInputVector(self):
+    # [FUNCTION DOC]
+    # Scenario: three invalid uses of maybe_shuffle_batch_join, each expected to raise a value
+    # error: vector keep condition without enqueue-many, keep condition with more than one
+    # dimension, and keep condition of unknown shape at graph construction.
     with ops.Graph().as_default():
       # Can't have vector `keep_input` with `enqueue_many=False`.
       with self.assertRaisesRegex(ValueError,
@@ -2416,6 +2898,9 @@ class ShuffleBatchJoinTest(test_lib.TestCase):
                                      enqueue_many=True)
 
   def testMaybeBatchedSparseTensorInferredShape(self):
+    # [FUNCTION DOC]
+    # Scenario: maybe_shuffle_batch_join with a true keep condition on one sparse input.  Asserts
+    # the batched dense-shape vector has two elements.
     with ops.Graph().as_default():
       sparse = sparse_tensor.SparseTensor(
           indices=[[0]], values=[1.0], dense_shape=[1])
@@ -2424,6 +2909,9 @@ class ShuffleBatchJoinTest(test_lib.TestCase):
       self.assertAllEqual((2,), batched.dense_shape.get_shape().as_list())
 
   def testMaybeBatchedSparseTensorInferredShapeEnqueueMany(self):
+    # [FUNCTION DOC]
+    # Scenario: maybe_shuffle_batch_join with enqueue-many.  Asserts the dense-shape vector keeps
+    # one element.
     with ops.Graph().as_default():
       sparse = sparse_tensor.SparseTensor(
           indices=[[0]], values=[1.0], dense_shape=[1])
@@ -2437,6 +2925,9 @@ class ShuffleBatchJoinTest(test_lib.TestCase):
       self.assertAllEqual((1,), batched.dense_shape.get_shape().as_list())
 
   def testMaybeBatchedSparseTensorInferredShapeEnqueueManyPerExample(self):
+    # [FUNCTION DOC]
+    # Scenario: maybe_shuffle_batch_join with enqueue-many and a per-example keep list.  Asserts
+    # the dense-shape vector keeps one element.
     with ops.Graph().as_default():
       sparse = sparse_tensor.SparseTensor(
           indices=[[0], [0]], values=[1.0, 2.0], dense_shape=[2])
@@ -2449,6 +2940,9 @@ class ShuffleBatchJoinTest(test_lib.TestCase):
       self.assertAllEqual((1,), batched.dense_shape.get_shape().as_list())
 
   def testMaybeBatchedSparseTensorInferredShapeUnknownRank(self):
+    # [FUNCTION DOC]
+    # Scenario: maybe_shuffle_batch_join on an unknown-rank sparse tensor.  Asserts the
+    # dense-shape vector's element count is unknown.
     with ops.Graph().as_default():
       sparse = sparse_tensor.SparseTensor(
           indices=array_ops.placeholder(dtypes.int64),
@@ -2459,6 +2953,9 @@ class ShuffleBatchJoinTest(test_lib.TestCase):
       self.assertIs(None, batched.dense_shape.get_shape().num_elements())
 
   def testMaybeBatchedSparseTensorInferredShapeUnknownRankEnqueueMany(self):
+    # [FUNCTION DOC]
+    # Scenario: maybe_shuffle_batch_join with enqueue-many on an unknown-rank sparse tensor.
+    # Asserts the element count stays unknown.
     with ops.Graph().as_default():
       sparse = sparse_tensor.SparseTensor(
           indices=array_ops.placeholder(dtypes.int64),
@@ -2474,6 +2971,9 @@ class ShuffleBatchJoinTest(test_lib.TestCase):
       self.assertIs(None, batched.dense_shape.get_shape().num_elements())
 
   def testMaybeBatchedSparseTensorInferredShapeUnknownRankPerExample(self):
+    # [FUNCTION DOC]
+    # Scenario: maybe_shuffle_batch_join with enqueue-many and a per-example keep list on an
+    # unknown-rank sparse tensor.  Asserts the element count stays unknown.
     with ops.Graph().as_default():
       sparse = sparse_tensor.SparseTensor(
           indices=array_ops.placeholder(dtypes.int64),
