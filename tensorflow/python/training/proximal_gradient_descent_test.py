@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Functional tests for the v1 proximal gradient descent optimizer. Covers dense updates (ordinary
+# and resource variables) without regularization and with L1/L2 regularization against hard-coded
+# expected numbers, a sparse resource-variable minimization, and equivalence with plain gradient
+# descent (dense and sparse) when both regularization strengths are zero. Tests run in explicit
+# graph mode sessions. Runs through the standard test main entry point.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,9 +36,20 @@ from tensorflow.python.training import proximal_gradient_descent
 
 
 class ProximalGradientDescentOptimizerTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the proximal gradient descent optimizer: numeric results of dense updates
+  # under different regularization settings, sparse resource-variable training, and agreement with
+  # plain gradient descent. Shared fixtures: a helper that applies an optimizer to two small
+  # variables and returns their values, and the per-test default graph and cached session.
 
   def doTestProximalGradientDescentwithoutRegularization(
       self, use_resource=False):
+    # [FUNCTION DOC]
+    # HELPER: shared body for the plain and resource "without regularization" tests.
+    # Input use_resource selects resource variables (true) or ordinary variables (false, default).
+    # Scenario: two zero-initialized variables with fixed gradients, optimizer with learning rate
+    # 3.0 and zero L1/L2. Checks the initial zeros, runs three update steps, and asserts the
+    # variables equal minus three times learning rate times gradient (-0.9,-1.8 and -0.09,-0.18).
     with ops.Graph().as_default(), self.cached_session():
       if use_resource:
         var0 = resource_variable_ops.ResourceVariable([0.0, 0.0])
@@ -60,12 +77,22 @@ class ProximalGradientDescentOptimizerTest(test.TestCase):
       self.assertAllClose(np.array([-0.09, -0.18]), v1_val)
 
   def testProximalGradientDescentwithoutRegularization(self):
+    # [FUNCTION DOC]
+    # Test: runs the shared without-regularization scenario with ordinary variables and expects the
+    # plain gradient descent result after three steps.
     self.doTestProximalGradientDescentwithoutRegularization(use_resource=False)
 
   def testResourceProximalGradientDescentwithoutRegularization(self):
+    # [FUNCTION DOC]
+    # Test: runs the shared without-regularization scenario with resource variables and expects the
+    # same numeric result as the ordinary-variable test.
     self.doTestProximalGradientDescentwithoutRegularization(use_resource=True)
 
   def testProximalGradientDescentwithoutRegularization2(self):
+    # [FUNCTION DOC]
+    # Test: variables start at (1,2) and (4,3) with fixed small gradients; learning rate 3.0, no
+    # regularization. Checks the initial values, runs three steps, and asserts the values
+    # (0.1,0.2) and (3.91,2.82), i.e. plain gradient descent.
     with ops.Graph().as_default(), self.cached_session():
       var0 = variables.Variable([1.0, 2.0])
       var1 = variables.Variable([4.0, 3.0])
@@ -90,6 +117,12 @@ class ProximalGradientDescentOptimizerTest(test.TestCase):
       self.assertAllClose(np.array([3.91, 2.82]), v1_val)
 
   def testMinimizeSparseResourceVariable(self):
+    # [FUNCTION DOC]
+    # Test: for single and double precision floats, builds a resource variable holding one row,
+    # reads it through an embedding lookup, multiplies by a constant column, squares the result as
+    # the loss and minimizes it with learning rate 1.0. Asserts the initial value, runs one step,
+    # and asserts the variable becomes roughly (-111, -138) within a small absolute tolerance,
+    # exercising the sparse resource update path.
     for dtype in [dtypes.float32, dtypes.float64]:
       with ops.Graph().as_default(), self.cached_session():
         var0 = resource_variable_ops.ResourceVariable([[1.0, 2.0]], dtype=dtype)
@@ -109,6 +142,10 @@ class ProximalGradientDescentOptimizerTest(test.TestCase):
                                            atol=0.01)
 
   def testProximalGradientDescentWithL1_L2(self):
+    # [FUNCTION DOC]
+    # Test: variables (1,2) and (4,3), fixed gradients, learning rate 3.0, L1 strength 0.001 and
+    # L2 strength 2.0. Verifies initial values, runs ten steps, and asserts the variables shrink to
+    # values very close to zero (-0.0495,-0.0995 and -0.0045,-0.0095).
     with ops.Graph().as_default(), self.cached_session():
       var0 = variables.Variable([1.0, 2.0])
       var1 = variables.Variable([4.0, 3.0])
@@ -133,6 +170,13 @@ class ProximalGradientDescentOptimizerTest(test.TestCase):
       self.assertAllClose(np.array([-0.0045, -0.0095]), v1_val)
 
   def applyOptimizer(self, opt, steps=5, is_sparse=False):
+    # [FUNCTION DOC]
+    # HELPER: runs a given optimizer on two small variables for the equivalence tests.
+    # Inputs: opt (optimizer instance), steps (number of update runs, default 5), is_sparse (when
+    # true, variables are two-row columns and gradients are indexed slices touching one row each;
+    # otherwise plain vectors with dense gradients). Applies gradients, initializes variables,
+    # asserts the initial values, runs the update the given number of times and returns the pair
+    # of final values of the two variables. Must be called inside a graph and session.
     if is_sparse:
       var0 = variables.Variable([[1.0], [2.0]])
       var1 = variables.Variable([[3.0], [4.0]])
@@ -171,6 +215,10 @@ class ProximalGradientDescentOptimizerTest(test.TestCase):
     return v0_val, v1_val
 
   def testEquivSparseGradientDescentwithoutRegularization(self):
+    # [FUNCTION DOC]
+    # Test: applies the proximal optimizer (learning rate 3.0, zero L1/L2) and plain gradient
+    # descent with sparse gradients, both in one graph and session. Asserts both variables end with
+    # the same values in both runs.
     with ops.Graph().as_default(), self.cached_session():
       val0, val1 = self.applyOptimizer(
           proximal_gradient_descent.ProximalGradientDescentOptimizer(
@@ -186,6 +234,9 @@ class ProximalGradientDescentOptimizerTest(test.TestCase):
     self.assertAllClose(val1, val3)
 
   def testEquivGradientDescentwithoutRegularization(self):
+    # [FUNCTION DOC]
+    # Test: same as the sparse equivalence test but with dense gradients. Asserts the proximal
+    # optimizer without regularization matches plain gradient descent on both variables.
     with ops.Graph().as_default(), self.cached_session():
       val0, val1 = self.applyOptimizer(
           proximal_gradient_descent.ProximalGradientDescentOptimizer(

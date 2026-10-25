@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# Defines the v1 base optimizer class (exported as the v1 training optimizer) that all graph-mode
+# optimizers such as gradient descent, momentum and Adagrad derive from. It provides gradient
+# computation, gradient application with distribution-strategy support, slot-variable management
+# (extra per-variable state like momentum), non-slot variable bookkeeping, and checkpoint
+# integration through the trackable interface. It also contains small private "processor" classes
+# that abstract over reference variables, resource variables and plain tensors when producing
+# update operations, plus helpers for de-duplicating sparse gradients and keying slots by variable.
+# Subclasses override the underscore-prefixed hooks (create slots, prepare, apply dense/sparse,
+# finish). Import-time effect: exports the optimizer class under the v1 API namespace.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -43,6 +53,13 @@ from tensorflow.python.util.tf_export import tf_export
 
 
 def get_filtered_grad_fn(grad_fn):
+  # [FUNCTION DOC]
+  # HELPER: wraps a gradient-computing callable for use inside distributed replica contexts.
+  # Input grad_fn is a callable returning a list of (gradient, variable) pairs. Returns a new
+  # callable with the same arguments that calls it and drops pairs whose gradient is null. This
+  # keeps the set and order of variables identical across threads, which the distribution join
+  # requires, because eager multi-thread execution can add extra variables with null gradients.
+  # No side effects of its own.
   # `distributed_context.join()` requires that its arguments are parallel
   # across threads, and in particular that `grads_and_vars` has the same
   # variables in the same order.
@@ -53,12 +70,22 @@ def get_filtered_grad_fn(grad_fn):
   # computation. To get a consistent set of variables, we filter out
   # those with `None` gradients.
   def filtered_grad_fn(*args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: the filtering wrapper returned by the enclosing function. Forwards all positional and
+    # keyword arguments to the wrapped callable and returns only the (gradient, variable) pairs
+    # whose gradient is not null, preserving order.
     return [(g, v) for g, v in grad_fn(*args, **kwargs) if g is not None]
 
   return filtered_grad_fn
 
 
 def _deduplicate_indexed_slices(values, indices):
+  # [FUNCTION DOC]
+  # HELPER: merges repeated rows of a sparse gradient so sparse update kernels see unique indices.
+  # Inputs: values (tensor of rank at least one whose first dimension matches indices) and indices
+  # (one-dimensional integer tensor of row positions, possibly with duplicates). Finds the unique
+  # indices and sums the value slices that share an index. Returns a pair: the summed values (one
+  # row per unique index) and the unique indices. Adds graph operations; no other side effects.
   """Sums `values` associated with any non-unique `indices`.
 
   Args:
@@ -78,6 +105,12 @@ def _deduplicate_indexed_slices(values, indices):
 
 
 def _var_key(var):
+  # [FUNCTION DOC]
+  # HELPER: computes the key used to index slot variables and non-slot variables for a variable.
+  # Input var is a variable (possibly a distributed or mirrored wrapper; the underlying container
+  # is used). Returns a pair of graph and shared name for distributed variables in graph mode; a
+  # pair of the op's graph and op name for variables that have an op; otherwise the variable's
+  # unique integer id (eager resource variables). No side effects.
   """Returns slot key for `var`."""
   # pylint: disable=protected-access
   var = distribute_utils.value_container(var)
@@ -91,32 +124,63 @@ def _var_key(var):
 
 
 class _OptimizableVariable(metaclass=abc.ABCMeta):
+  # [CLASS DOC]
+  # HELPER: abstract interface used internally by the optimizer to treat different kinds of
+  # trainable things (reference variables, resource variables, plain tensors) uniformly. Concrete
+  # subclasses wrap a single variable and say what to differentiate against (the target) and how to
+  # build the update operation for a gradient. Not used directly by clients.
   """Interface for abstracting over variables in the optimizers."""
 
   @abc.abstractmethod
   def target(self):
+    # [FUNCTION DOC]
+    # HELPER: abstract method. Subclasses return the object to differentiate with respect to.
+    # This base version always raises a not-implemented error.
     """Returns the optimization target for this variable."""
     raise NotImplementedError("Calling an abstract method.")
 
   @abc.abstractmethod
   def update_op(self, optimizer, g):
+    # [FUNCTION DOC]
+    # HELPER: abstract method. Subclasses return the operation that applies gradient g to the
+    # wrapped variable using the given optimizer's apply hooks. This base version always raises a
+    # not-implemented error.
     """Returns the update ops for updating the variable."""
     raise NotImplementedError("Calling an abstract method.")
 
 
 class _RefVariableProcessor(_OptimizableVariable):
+  # [CLASS DOC]
+  # HELPER: processor for classic reference-style (graph-mode) variables. Holds the wrapped
+  # variable and builds dense or sparse update operations for it, honoring its constraint
+  # function when the gradient is dense.
   """Processor for Variable."""
 
   def __init__(self, v):
+    # [FUNCTION DOC]
+    # HELPER: constructor. Input v is the variable to wrap; it is stored. Returns nothing.
     self._v = v
 
   def __str__(self):
+    # [FUNCTION DOC]
+    # HELPER: returns a short text form naming the processor class and the wrapped variable.
     return "<_RefVariableProcessor(%s)>" % self._v
 
   def target(self):
+    # [FUNCTION DOC]
+    # HELPER: returns the reference tensor of the wrapped variable, which is what gradients are
+    # computed against.
     return self._v._ref()  # pylint: disable=protected-access
 
   def update_op(self, optimizer, g):
+    # [FUNCTION DOC]
+    # HELPER: builds the update operation for gradient g. Inputs: optimizer (the owning optimizer
+    # whose apply hooks are called) and g (a dense tensor or indexed slices). Dense case: calls
+    # the optimizer's dense apply hook and, if the variable has a constraint, assigns the
+    # constrained value after the update (control-dependent on it) and returns that assignment;
+    # otherwise returns the update. Sparse case: raises a runtime error if the variable has a
+    # constraint, else returns the result of the duplicate-index-safe sparse apply. Any other
+    # gradient type fails an assertion.
     if isinstance(g, tensor.Tensor):
       update_op = optimizer._apply_dense(g, self._v)  # pylint: disable=protected-access
       if self._v.constraint is not None:
@@ -135,15 +199,29 @@ class _RefVariableProcessor(_OptimizableVariable):
 
 
 class _DenseReadResourceVariableProcessor(_OptimizableVariable):
+  # [CLASS DOC]
+  # HELPER: processor for the tensor produced by reading a dense resource variable in graph mode
+  # (the wrapped object is a read result, not the variable). Updates are applied to the underlying
+  # resource handle found as the first input of the read operation.
   """Processor for dense ResourceVariables."""
 
   def __init__(self, v):
+    # [FUNCTION DOC]
+    # HELPER: constructor. Input v is the wrapped read value; it is stored. Returns nothing.
     self._v = v
 
   def target(self):
+    # [FUNCTION DOC]
+    # HELPER: returns the wrapped object itself as the gradient target.
     return self._v
 
   def update_op(self, optimizer, g):
+    # [FUNCTION DOC]
+    # HELPER: builds the update for dense gradient g. Calls the optimizer's resource dense apply
+    # hook with the resource variable behind the read operation (first input of the wrapped op),
+    # then, if the wrapped object has a constraint, assigns the constrained value after the update
+    # and returns that assignment; otherwise returns the update. Sparse gradients are not handled
+    # here, unlike the other resource processor.
     # pylint: disable=protected-access
     update_op = optimizer._resource_apply_dense(g, self._v.op.inputs[0])
     if self._v.constraint is not None:
@@ -154,15 +232,34 @@ class _DenseReadResourceVariableProcessor(_OptimizableVariable):
 
 
 class _DenseResourceVariableProcessor(_OptimizableVariable):
+  # [CLASS DOC]
+  # HELPER: internal glue for the optimizer's update path.
+  # KNOWN ISSUE: the docstring is a copy of the other resource processor's text and says nothing
+  # about the sparse support or the sharding workaround that this class actually implements.
+  # Processor for resource variables (graph or eager). Builds update operations for both
+  # dense and sparse gradients and respects the variable's constraint function for dense updates.
   """Processor for dense ResourceVariables."""
 
   def __init__(self, v):
+    # [FUNCTION DOC]
+    # HELPER: constructor. Input v is the resource variable to wrap; it is stored. Returns nothing.
     self._v = v
 
   def target(self):
+    # [FUNCTION DOC]
+    # HELPER: returns the wrapped resource variable itself as the gradient target.
     return self._v
 
   def update_op(self, optimizer, g):
+    # [FUNCTION DOC]
+    # HELPER: builds the update operation for gradient g. Sparse (indexed slices) gradient: raises
+    # a runtime error if the variable has a constraint; otherwise returns the optimizer's
+    # duplicate-index-safe resource sparse apply result. Dense gradient: if the context flag for
+    # XLA sharding of resource variables is enabled, first reads and re-assigns every optimizer
+    # slot variable that carries an XLA sharding annotation (to force creation of the sharding
+    # operation) and makes the dense apply control-dependent on those assignments; otherwise just
+    # calls the dense apply hook. If the variable has a constraint, assigns the constrained value
+    # after the update and returns that assignment; else returns the update.
     # pylint: disable=protected-access
     if isinstance(g, indexed_slices.IndexedSlices):
       if self._v.constraint is not None:
@@ -202,6 +299,9 @@ class _DenseResourceVariableProcessor(_OptimizableVariable):
 
 
 class _TensorProcessor(_OptimizableVariable):
+  # [CLASS DOC]
+  # HELPER: processor for ordinary tensors, which can be differentiated against but never updated.
+  # Allows computing gradients with respect to a tensor through the optimizer.
   """Processor for ordinary Tensors.
 
   Even though a Tensor can't really be updated, sometimes it is useful to
@@ -210,16 +310,30 @@ class _TensorProcessor(_OptimizableVariable):
   """
 
   def __init__(self, v):
+    # [FUNCTION DOC]
+    # HELPER: constructor. Input v is the tensor to wrap; it is stored. Returns nothing.
     self._v = v
 
   def target(self):
+    # [FUNCTION DOC]
+    # HELPER: returns the wrapped tensor as the gradient target.
     return self._v
 
   def update_op(self, optimizer, g):
+    # [FUNCTION DOC]
+    # HELPER: always raises a not-implemented error because a tensor cannot be updated. Inputs
+    # optimizer and g are ignored.
     raise NotImplementedError("Trying to update a Tensor ", self._v)
 
 
 def _get_processor(v):
+  # [FUNCTION DOC]
+  # HELPER: picks the processor object appropriate for a trainable item.
+  # Input v is a variable or tensor. In eager mode: plain tensors get the tensor processor, anything
+  # else the resource-variable processor. In graph mode: eagerly initialized resource variables and
+  # anything whose op type is a variable-handle op get the resource-variable processor; classic
+  # variables get the reference-variable processor; tensors get the tensor processor. Raises a
+  # not-implemented error for unsupported types. Returns the processor instance.
   """The processor of v."""
   if context.executing_eagerly():
     if isinstance(v, tensor.Tensor):
@@ -244,6 +358,16 @@ class Optimizer(
     # since they do most of their dependency management themselves (slot
     # variables are special-cased, and non-slot variables are keyed to graphs).
     trackable.Trackable):
+  # [CLASS DOC]
+  # Base class of all v1 graph-mode optimizers. Derives from the trackable base (not the auto
+  # tracking one) so that it manages checkpoint dependencies itself: slot variables are
+  # special-cased and non-slot variables are keyed by graph. State: the name, the locking flag,
+  # a mapping from slot name to a mapping of variable key to slot variable, a mapping of non-slot
+  # variables keyed by name and graph, and deferred slot restorations for checkpoints loaded before
+  # slots exist. Defines gate constants (none, per-op, whole-graph) controlling gradient
+  # parallelism. Public API: minimize, compute and apply gradients, slot accessors and variables.
+  # Subclasses must be constructed through this class constructor and override the underscore hooks
+  # for creating slots, preparing, dense and sparse application, and finishing the update.
   """Base class for optimizers.
 
   This class defines the API to add Ops to train a model.  You never use this
@@ -410,6 +534,13 @@ class Optimizer(
   def __init__(
       self, use_locking, name, use_own_namescope_for_non_slot_vars=False
   ):
+    # [FUNCTION DOC]
+    # Constructor; subclass constructors must call it. Inputs: use_locking (bool; whether update
+    # operations use locks to prevent concurrent updates), name (non-empty string used as the
+    # prefix for accumulators), use_own_namescope_for_non_slot_vars (bool, default false; when true
+    # a dedicated variable scope derived from the name is created and remembered for non-slot
+    # variables). Raises a value error if name is empty or null. Initializes empty dictionaries for
+    # slots, non-slot variables and deferred checkpoint slot restorations. Returns nothing.
     """Create a new Optimizer.
 
     This must be called by the constructors of subclasses.
@@ -458,12 +589,28 @@ class Optimizer(
     # compute_gradients()->apply_gradients() sequence is safe.
 
   def get_name(self):
+    # [FUNCTION DOC]
+    # Returns the optimizer's name string as given to the constructor. No side effects.
     return self._name
 
   def minimize(self, loss, global_step=None, var_list=None,
                gate_gradients=GATE_OP, aggregation_method=None,
                colocate_gradients_with_ops=False, name=None,
                grad_loss=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring's Raises section says a value error occurs when some variables are
+    # not variable objects; the method itself only raises a value error when no variable receives
+    # a gradient (other errors come from the gradient computation and application it delegates to).
+    # Convenience combination of computing and applying gradients. Inputs: loss (tensor, or a
+    # no-argument callable in eager mode); global_step (optional variable incremented once after
+    # the update); var_list (optional list of variables, default all trainable variables);
+    # gate_gradients (none, per-op or whole-graph gating, default per-op); aggregation_method
+    # (how to combine gradient terms); colocate_gradients_with_ops (bool); name (optional name for
+    # the returned operation); grad_loss (optional tensor seeding the gradient of the loss). The
+    # last four graph-only options are ignored in eager mode. Computes gradients, raises a value
+    # error if every gradient is null, then applies them. Returns the update operation (which also
+    # increments the global step when given). Side effects: adds graph operations or, in eager
+    # mode, runs updates; creates slot variables on first use.
     """Add operations to minimize `loss` by updating `var_list`.
 
     This method simply combines calls `compute_gradients()` and
@@ -525,6 +672,22 @@ class Optimizer(
                         aggregation_method=None,
                         colocate_gradients_with_ops=False,
                         grad_loss=None):
+    # [FUNCTION DOC]
+    # First half of minimize. Inputs: loss (tensor, or a no-argument callable which is required in
+    # eager mode); var_list (optional list or tuple of variables, default all trainable and
+    # trainable resource variables of the graph; in eager callable mode the variables watched
+    # during the loss call); gate_gradients (must be one of the three gate constants);
+    # aggregation_method; colocate_gradients_with_ops; grad_loss (optional seed gradient tensor).
+    # Callable loss path (works in both modes): records the loss call on a gradient tape, scales
+    # the loss for multi-replica mean reduction, and returns pairs of gradient and variable; the
+    # gating, aggregation and colocation options are ignored. Tensor loss path (graph mode only):
+    # raises a runtime error in eager mode, raises a value error for an invalid gate value or an
+    # empty variable list, checks dtypes are supported, uses processors to choose gradient targets
+    # (adding streaming-model-port collection items to the variable list), computes gradients and,
+    # for whole-graph gating, groups them with a tuple operation. Returns a list of (gradient,
+    # variable) pairs where the gradient can be null. May raise a type error for unsupported
+    # dtypes. Side effects: scales the loss and sets a graph flag recording whether the optimizer
+    # scaled the loss; appends to the passed variable list when it is a list that was flattened.
     """Compute gradients of `loss` for the variables in `var_list`.
 
     This is the first part of `minimize()`.  It returns a list
@@ -645,6 +808,12 @@ class Optimizer(
 
   @staticmethod
   def _scale_loss(loss_value):
+    # [FUNCTION DOC]
+    # HELPER: scales a loss for gradient averaging across replicas under a distribution strategy.
+    # Static method. Input loss_value is a loss tensor. Always first marks the default graph as not
+    # scaled by the optimizer. If the strategy's loss reduction is mean and more than one replica
+    # is in sync, multiplies the loss by one over the replica count and marks the graph as scaled.
+    # Returns the (possibly scaled) loss. Side effect: sets a private flag on the default graph.
     ops.get_default_graph()._is_loss_scaled_by_optimizer = False  # pylint: disable=protected-access
     if distribute_utils.get_loss_reduction() == ds_reduce_util.ReduceOp.MEAN:
       num_replicas = distribute_lib.get_strategy().num_replicas_in_sync
@@ -660,6 +829,21 @@ class Optimizer(
       name=None,
       skip_gradients_aggregation=False,
   ):
+    # [FUNCTION DOC]
+    # Second half of minimize. Inputs: grads_and_vars (list of gradient and variable pairs);
+    # global_step (optional variable incremented by one after the update, handled with a resource
+    # increment for resource variables); name (optional name for the returned op, default the
+    # optimizer name); skip_gradients_aggregation (bool; when true the distribution-strategy
+    # branch is bypassed and no cross-replica aggregation happens). With an active strategy and not
+    # skipping aggregation: raises a runtime error in a cross-replica context, otherwise drops null
+    # gradients and merges the call into the cross-replica distributed apply. Otherwise: raises a
+    # value error if the list is empty or no variable has a gradient, raises a type error if a
+    # gradient is neither convertible to a tensor nor indexed slices, creates slots (outside any
+    # function or control flow), runs the prepare hook, builds each variable's update operation
+    # in a name scope colocated with the variable, then calls the finish hook (and increments the
+    # global step after it if given). In graph mode converts a tensor result to its op and appends
+    # it to the training-op collection. Returns the resulting operation (or eager result). Subclass
+    # hooks it relies on: create slots, prepare, apply dense, apply sparse, finish.
     """Apply gradients to variables.
 
     This is the second part of `minimize()`. It returns an `Operation` that
@@ -787,6 +971,16 @@ class Optimizer(
                          grads_and_vars,
                          global_step=None,
                          name=None):
+    # [FUNCTION DOC]
+    # Cross-replica version of applying gradients, invoked via merge-call from the public method.
+    # Inputs: distribution (the distribution strategy object), grads_and_vars (pairs of gradient and
+    # variable, one per replica), global_step (optional mirrored variable to increment), name
+    # (optional op name). Sums the gradients across replicas with a batch reduce, creates slots,
+    # runs the prepare hook, updates each variable on its devices through the strategy's update
+    # mechanism (each update converts the gradient, selects a processor and builds the update op in
+    # a named scope; raises a type error for bad gradient types), then runs the finish hook on the
+    # non-slot devices and either groups the results or increments the global step. In graph mode
+    # appends the result to the training-op collection. Returns the resulting operation.
     """A version of `apply_gradients` for cross-replica context.
 
     This is a version of `apply_gradients()` for when you are using a
@@ -817,6 +1011,13 @@ class Optimizer(
       self._create_slots(var_list)
 
     def update(v, g):
+      # [FUNCTION DOC]
+      # HELPER: per-variable update callback passed to the strategy's update mechanism.
+      # Inputs: v (a per-device variable, must be non-null) and g (gradient). Converts g to a
+      # tensor or indexed slices (type error if not possible or not those types), finds the
+      # processor for v, derives a scope name from the variable name (eager or eagerly-created
+      # resource variable) or its op name, and returns the update operation built by the
+      # processor inside a name scope prefixed with update.
       """Apply gradients to a replica variable."""
       assert v is not None
 
@@ -855,6 +1056,10 @@ class Optimizer(
       ]
 
       def finish(self, update_ops):
+        # [FUNCTION DOC]
+        # HELPER: callback run on the non-slot devices. Inputs: self (the optimizer, passed
+        # explicitly through the arguments) and update_ops (the per-variable update operations).
+        # Returns the result of the optimizer's finish hook with the name "update".
         return self._finish(update_ops, "update")
 
       non_slot_devices = distribution.extended.non_slot_devices(var_list)
@@ -878,6 +1083,12 @@ class Optimizer(
       return apply_updates
 
   def get_slot(self, var, name):
+    # [FUNCTION DOC]
+    # Looks up a slot variable. Inputs: var (a variable that was passed to minimize or apply
+    # gradients) and name (slot name string). Returns the slot variable, or null if no slot with
+    # that name exists or none was created for var. If the slot is a distributed variable but var is
+    # not, returns the slot's copy on the current device or primary device so both are of the same
+    # kind. No side effects.
     """Return a slot named `name` created for `var` by the Optimizer.
 
     Some `Optimizer` subclasses use additional variables.  For example
@@ -906,6 +1117,9 @@ class Optimizer(
     return slot
 
   def get_slot_names(self):
+    # [FUNCTION DOC]
+    # Returns a sorted list of the names (strings) of all slots this optimizer has created. Empty
+    # for optimizers without slots. No side effects.
     """Return a list of the names of slots created by the `Optimizer`.
 
     See `get_slot()`.
@@ -916,6 +1130,11 @@ class Optimizer(
     return sorted(self._slots.keys())
 
   def variables(self):
+    # [FUNCTION DOC]
+    # Returns a list of the variables that encode the optimizer state: non-slot variables plus all
+    # slot variables, restricted to those belonging to the current default graph (compared by graph
+    # object in graph mode or graph key for eager variables). The list is sorted by variable name
+    # so the order is deterministic. No side effects.
     """A list of variables which encode the current state of `Optimizer`.
 
     Includes slot variables and additional global variables created by the
@@ -927,6 +1146,10 @@ class Optimizer(
     current_graph = ops.get_default_graph()
 
     def _from_current_graph(variable):
+      # [FUNCTION DOC]
+      # HELPER: filter predicate for the enclosing method. Input variable; returns true if it
+      # belongs to the current default graph: by op graph identity in graph mode, otherwise by
+      # comparing graph keys (eager variables have no op).
       if variable._in_graph_mode:  # pylint: disable=protected-access
         return variable.op.graph is current_graph
       else:
@@ -944,6 +1167,16 @@ class Optimizer(
     return sorted(optimizer_variables, key=lambda v: v.name)
 
   def _create_non_slot_variable(self, initial_value, name, colocate_with):
+    # [FUNCTION DOC]
+    # HELPER: creates (or returns the already created) optimizer-level variable that is not tied to
+    # one trained variable, such as a power accumulator. Inputs: initial_value (starting value),
+    # name (string), colocate_with (a variable whose device placement and graph to follow, and
+    # whose kind decides whether a resource variable is made). The key is the name plus the graph
+    # (no graph when eager). If new: initializes trackable state, creates a non-trainable variable
+    # colocated with the reference (in eager mode first replacing the initial value by a preloaded
+    # checkpoint value if one is pending; with the own-namescope option the variable lives in the
+    # dedicated variable scope), then registers it in the non-slot dictionary and handles
+    # restoration by name. Returns the variable. Side effects: mutates the non-slot dictionary.
     """Add an extra variable, not associated with a slot."""
     # Recommendation: Use OptimizerV2 if your optimizer uses non-slot variables.
     eager = ops.executing_eagerly_outside_functions()
@@ -994,6 +1227,14 @@ class Optimizer(
   def _trackable_children(self,
                           save_type=trackable.SaveType.CHECKPOINT,
                           **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: trackable-interface hook that reports checkpoint children. Inputs: save_type (kind of
+    # save, default checkpoint) and extra keyword arguments passed to the parent implementation.
+    # Returns a mapping from non-slot variable names to variables for the current graph (all of
+    # them in eager mode, because async checkpointing may call this from another thread whose
+    # default graph key differs; in graph mode only variables whose graph key matches the current
+    # default graph), merged with the parent's children (parent entries take precedence on name
+    # clashes). Items are visited sorted by name. Slot variables are intentionally not included.
     """From Trackable. Gather graph-specific non-slot variables to save."""
     current_graph_non_slot_variables = {}
     current_graph_key = ops.get_default_graph()._graph_key  # pylint: disable=protected-access
@@ -1013,6 +1254,11 @@ class Optimizer(
     return current_graph_non_slot_variables
 
   def _lookup_dependency(self, name, cached_dependencies=None):
+    # [FUNCTION DOC]
+    # HELPER: trackable-interface hook used during checkpoint restore to find a child by name.
+    # Inputs: name (string) and cached_dependencies (optional precomputed mapping passed to the
+    # parent). Returns the parent's unconditional dependency if one exists; otherwise the non-slot
+    # variable of that name for the current graph (no graph when eager); null if neither exists.
     """From Trackable. Find a non-slot variable in the current graph."""
     unconditional = super()._lookup_dependency(name, cached_dependencies)
     if unconditional is not None:
@@ -1021,6 +1267,11 @@ class Optimizer(
     return self._get_non_slot_variable(name, graph=graph)
 
   def _get_non_slot_variable(self, name, graph=None):
+    # [FUNCTION DOC]
+    # HELPER: looks up a non-slot variable. Inputs: name (string) and graph (the graph it belongs
+    # to, or null for eager mode). Returns the variable, or null when absent. If the stored value is
+    # a mirrored (container) variable, returns the current replica's component so callers such as
+    # the finish hook can assign to it directly.
     non_slot = self._non_slot_dict.get((name, graph), None)
     if distribute_utils.value_container(non_slot) is not non_slot:
       # This is a mirrored non-slot.  In order to enable code like `_finish`
@@ -1030,6 +1281,12 @@ class Optimizer(
       return non_slot
 
   def _non_slot_variables(self):
+    # [FUNCTION DOC]
+    # HELPER: accessor used by the variables method and checkpoint logic.
+    # KNOWN ISSUE: the docstring says a list or tuple is returned, but the code returns a live
+    # dictionary values view, which reflects later additions and cannot be indexed.
+    # Returns all non-slot variables created through the non-slot creation helper (across
+    # graphs). No side effects.
     """Additional variables created by the `Optimizer`.
 
     Returns:
@@ -1038,6 +1295,11 @@ class Optimizer(
     return self._non_slot_dict.values()
 
   def _assert_valid_dtypes(self, tensors):
+    # [FUNCTION DOC]
+    # HELPER: validates tensor dtypes. Input tensors is an iterable of tensors or variables. Gets
+    # the allowed set from the valid-dtypes hook and raises a value error naming the first tensor
+    # (by dtype and name) whose base dtype is not allowed and listing the allowed types. Returns
+    # nothing.
     """Asserts tensors are all valid types (see `_valid_dtypes`).
 
     Args:
@@ -1059,6 +1321,10 @@ class Optimizer(
   # inherited implementation of apply_gradients() or compute_gradients().
   # --------------
   def _valid_dtypes(self):
+    # [FUNCTION DOC]
+    # HELPER: subclass-overridable hook. Returns the set of data types allowed for the loss,
+    # variables and gradients: half, bfloat16, single and double precision floats. Subclasses
+    # override to allow other types.
     """Valid types for loss, variables and gradients.
 
     Subclasses should override to allow other float types.
@@ -1070,6 +1336,9 @@ class Optimizer(
         [dtypes.float16, dtypes.bfloat16, dtypes.float32, dtypes.float64])
 
   def _create_slots(self, var_list):
+    # [FUNCTION DOC]
+    # HELPER: subclass hook called once before applying gradients. Input var_list is the list of
+    # variables that have gradients. The base version creates nothing. Returns nothing.
     """Create all slots needed by the variables.
 
     Args:
@@ -1079,6 +1348,9 @@ class Optimizer(
     pass
 
   def _prepare(self):
+    # [FUNCTION DOC]
+    # HELPER: subclass hook called inside the update name scope before per-variable updates, where
+    # subclasses convert hyperparameters into tensors. The base version does nothing.
     """Create all needed tensors before applying gradients.
 
     This is called with the name_scope using the "name" that
@@ -1087,6 +1359,10 @@ class Optimizer(
     pass
 
   def _apply_dense(self, grad, var):
+    # [FUNCTION DOC]
+    # HELPER: abstract subclass hook for dense updates of reference variables. Inputs: grad (dense
+    # gradient tensor) and var (variable). The base version always raises a not-implemented error.
+    # Subclasses return the update operation.
     """Add ops to apply dense gradients to `var`.
 
     Args:
@@ -1099,6 +1375,14 @@ class Optimizer(
     raise NotImplementedError()
 
   def _resource_apply_dense(self, grad, handle):
+    # [FUNCTION DOC]
+    # HELPER: abstract subclass hook called by the processors for resource variables.
+    # KNOWN ISSUE: the docstring and parameter name say a resource handle tensor is passed, but the
+    # processors call this hook with the resource variable object itself (subclasses such as the
+    # proximal optimizers read its handle attribute).
+    # Abstract subclass hook for dense updates of resource variables. Inputs: grad (dense
+    # gradient tensor) and handle (the resource variable to update). The base version always raises
+    # a not-implemented error. Subclasses return the update operation.
     """Add ops to apply dense gradients to the variable `handle`.
 
     Args:
@@ -1112,6 +1396,12 @@ class Optimizer(
     raise NotImplementedError()
 
   def _resource_apply_sparse_duplicate_indices(self, grad, handle, indices):
+    # [FUNCTION DOC]
+    # HELPER: sparse update entry point for resource variables that tolerates repeated indices.
+    # Inputs: grad (gradient rows), handle (the resource variable, see the dense hook note), indices
+    # (integer row positions, possibly repeated). Sums rows that share an index, then calls the
+    # resource sparse hook with the summed values and unique indices. Returns that hook's update
+    # operation. Optimizers that handle duplicates natively override this to avoid the summing.
     """Add ops to apply sparse gradients to `handle`, with repeated indices.
 
     Optimizers which override this method must deal with repeated indices. See
@@ -1137,6 +1427,10 @@ class Optimizer(
     return self._resource_apply_sparse(summed_grad, handle, unique_indices)
 
   def _resource_apply_sparse(self, grad, handle, indices):
+    # [FUNCTION DOC]
+    # HELPER: abstract subclass hook for sparse updates of resource variables. Inputs: grad
+    # (gradient rows), handle (the resource variable), indices (unique integer row positions). The
+    # base version always raises a not-implemented error. Subclasses return the update operation.
     """Add ops to apply sparse gradients to the variable `handle`.
 
     Similar to `_apply_sparse`, the `indices` argument to this method has been
@@ -1157,6 +1451,12 @@ class Optimizer(
     raise NotImplementedError()
 
   def _apply_sparse_duplicate_indices(self, grad, var):
+    # [FUNCTION DOC]
+    # HELPER: sparse update entry point for reference variables that tolerates repeated indices.
+    # Inputs: grad (indexed slices that may contain repeated indices) and var (variable). Rebuilds
+    # the gradient with unique indices and summed values (keeping the dense shape) and calls the
+    # sparse apply hook. Returns that hook's update operation. Optimizers that handle repeated
+    # indices correctly may override this to skip the summing.
     """Add ops to apply sparse gradients to `var`, with repeated sparse indices.
 
     Optimizers which override this method must deal with IndexedSlices objects
@@ -1193,6 +1493,10 @@ class Optimizer(
     return self._apply_sparse(gradient_no_duplicate_indices, var)
 
   def _apply_sparse(self, grad, var):
+    # [FUNCTION DOC]
+    # HELPER: abstract subclass hook for sparse updates of reference variables. Inputs: grad
+    # (indexed slices with unique indices) and var (variable). The base version always raises a
+    # not-implemented error. Subclasses return the update operation.
     """Add ops to apply sparse gradients to `var`.
 
     The IndexedSlices object passed to `grad` in this function is by default
@@ -1212,6 +1516,11 @@ class Optimizer(
     raise NotImplementedError()
 
   def _finish(self, update_ops, name_scope):
+    # [FUNCTION DOC]
+    # HELPER: subclass-overridable hook that finishes an update. Inputs: update_ops (list of the
+    # operations returned by the apply hooks) and name_scope (name string for the returned
+    # operation). The base version groups all update operations into a single operation with that
+    # name and returns it.
     """Do what is needed to finish the update.
 
     This is called with the `name_scope` using the "name" that
@@ -1233,6 +1542,10 @@ class Optimizer(
   # --------------
 
   def _slot_dict(self, slot_name):
+    # [FUNCTION DOC]
+    # HELPER: gets the per-slot-name cache. Input slot_name is a string. Returns the mapping from
+    # variable keys to slot variables for that name, creating and registering an empty mapping in
+    # the optimizer's slot dictionary if absent (side effect).
     """Returns a dict for caching slots created under the given name.
 
     Args:
@@ -1249,6 +1562,12 @@ class Optimizer(
     return named_slots
 
   def _get_or_make_slot(self, var, val, slot_name, op_name):
+    # [FUNCTION DOC]
+    # HELPER: subclass utility that finds or creates a slot variable initialized from a value.
+    # Inputs: var (primary variable), val (tensor initial value of the slot), slot_name (string),
+    # op_name (name scope for the new variable). If no slot exists for the variable key, creates it
+    # (copying XLA sharding from the primary), applies any deferred checkpoint restoration, and
+    # caches it. Returns the slot variable. Side effect: mutates the slot dictionary.
     """Find or create a slot for a variable.
 
     Args:
@@ -1273,6 +1592,12 @@ class Optimizer(
 
   def _get_or_make_slot_with_initializer(self, var, initializer, shape, dtype,
                                          slot_name, op_name):
+    # [FUNCTION DOC]
+    # HELPER: like the value-based slot helper but creates the slot from an initializer. Inputs:
+    # var (primary variable), initializer (initializer object), shape and dtype (of the slot),
+    # slot_name (string), op_name (name scope). Creates the slot only if absent (copying XLA
+    # sharding), applies deferred restoration, caches and returns the slot variable. Side effect:
+    # mutates the slot dictionary.
     """Find or create a slot for a variable, using an Initializer.
 
     Args:
@@ -1298,6 +1623,11 @@ class Optimizer(
     return named_slots[_var_key(var)]
 
   def _zeros_slot(self, var, slot_name, op_name):
+    # [FUNCTION DOC]
+    # HELPER: subclass utility that finds or creates a slot filled with zeros, shaped and typed like
+    # the primary variable. Inputs: var, slot_name (string), op_name (name scope). Creation copies
+    # XLA sharding, applies deferred restoration and caches the slot. Returns the slot variable.
+    # Side effect: mutates the slot dictionary.
     """Find or create a slot initialized with 0.0.
 
     Args:
@@ -1324,6 +1654,12 @@ class Optimizer(
   # --------------
 
   def _restore_slot_variable(self, slot_name, variable, slot_variable):
+    # [FUNCTION DOC]
+    # HELPER: applies checkpoint restorations that were deferred until the slot existed. Inputs:
+    # slot_name, variable (primary) and slot_variable (newly created slot). Removes the pending
+    # restore positions for this slot name and variable key, sorts them with highest restore id
+    # first (to minimize assignments) and restores each into the slot. Returns nothing. Side effect:
+    # consumes entries of the deferred restorations mapping.
     """Restore a newly created slot variable's value."""
     variable_key = _var_key(variable)
     deferred_restorations = self._deferred_slot_restorations.get(
@@ -1337,6 +1673,14 @@ class Optimizer(
 
   def _create_or_restore_slot_variable(
       self, slot_variable_position, slot_name, variable):
+    # [FUNCTION DOC]
+    # HELPER: trackable-interface hook called when a variable with an associated saved slot is
+    # created or restored. Inputs: slot_variable_position (checkpoint position of the slot),
+    # slot_name, variable. If no slot exists yet, eager mode is on, the saved slot is a simple
+    # variable and no variable-creator scope is active, creates the slot with a restoring
+    # initializer. If a slot now exists it is restored from the position; otherwise the position is
+    # appended to the deferred restorations to be handled when the slot is created normally.
+    # Returns nothing. Side effects: may create a slot, mutates deferred restorations.
     """Restore a slot variable's value, possibly creating it.
 
     Called when a variable which has an associated slot variable is created or
@@ -1402,5 +1746,8 @@ class Optimizer(
               slot_variable_position)
 
   def _call_if_callable(self, param):
+    # [FUNCTION DOC]
+    # HELPER: lets hyperparameters be given either as values or as no-argument callables. Returns
+    # the result of calling param if it is callable, otherwise param unchanged.
     """Call the function if param is callable."""
     return param() if callable(param) else param
