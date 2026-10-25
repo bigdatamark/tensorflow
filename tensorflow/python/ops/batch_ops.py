@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Python front end for automatic batching of computation. Defines the decorator factory exported
+# publicly as the non-differentiable batch function, which wraps a function so that concurrent
+# calls are gathered along the first dimension, run once as a batch by the batch function kernel,
+# and split back into per-call results. Also re-exports everything from the generated batch
+# operations module via a wildcard import. Import-time side effect: registers the public export.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,6 +39,24 @@ def batch_function(num_batch_threads,
                    max_enqueued_batches=10,
                    autograph=True,
                    enable_large_batch_splitting=True):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says allowed batch sizes may be left empty and arguments must be
+  # tensors, but argument validation happens only after building tensor specs from each argument,
+  # so a non-tensor argument usually fails earlier with an attribute error instead of the
+  # documented value error. The docstring also does not state that the result is a decorator, not
+  # a decorated function.
+  # Decorator factory. Inputs: num_batch_threads, number of scheduling threads processing batches
+  # in parallel; max_batch_size, upper bound on a batch; batch_timeout_micros, how long to wait
+  # before emitting an incomplete batch; allowed_batch_sizes, optional increasing list of sizes
+  # to pad batches to, whose last entry must equal the maximum; max_enqueued_batches, queue depth
+  # (default 10); autograph, whether to convert the function with autograph (default true);
+  # enable_large_batch_splitting, whether oversized inputs may be split into several executions
+  # (default true). Returns a decorator. The decorator wraps a function taking only tensors
+  # (batched on the first dimension; sparse tensors unsupported) into one that, per call, traces
+  # the function to a concrete function using tensor specs from the arguments, validates the
+  # arguments are tensors (value error otherwise), calls the batch function kernel inside a
+  # name scope called batch (whose resulting name is the shared name that groups concurrent
+  # calls), and repacks the kernel outputs into the original output structure.
   """Batches the computation done by the decorated function.
 
   So, for example, in the following code
@@ -84,11 +108,26 @@ def batch_function(num_batch_threads,
   """
 
   def decorator(fn):  # pylint: disable=missing-docstring
+    # [FUNCTION DOC]
+    # HELPER: the decorator returned by the batch function factory.
+    # Takes the function fn to batch and returns a replacement callable that takes positional
+    # tensor arguments only. No side effects at decoration time.
 
     def decorated(*args):  # pylint: disable=missing-docstring
+      # [FUNCTION DOC]
+      # HELPER: the batching wrapper produced by the decorator.
+      # Takes positional tensor arguments. Traces the wrapped function into a concrete function
+      # with one tensor spec per argument (named by position), raises a value error if any
+      # argument is not a tensor, then invokes the batch function kernel with the factory's
+      # settings, the traced function, the arguments and the function's captured tensors, and
+      # output types taken from the traced function. Returns the kernel outputs packed into the
+      # function's original output structure (composites expanded).
 
       @def_function.function(autograph=autograph)
       def computation(*computation_args):
+        # [FUNCTION DOC]
+        # HELPER: graph function wrapping the user's function so it can be traced to a concrete
+        # function. Forwards its positional arguments to the user function and returns its result.
         return fn(*computation_args)
 
       computation = computation.get_concrete_function(*[

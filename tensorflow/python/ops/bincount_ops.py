@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Implements the bincount operation (counting occurrences of each non-negative integer value),
+# exported publicly under the math namespace in its current form and, with a reduced legacy
+# signature, as the deprecated top-level and version 1 endpoint. Also contains a small helper that
+# validates or creates the weights tensor passed to the dense bincount kernel. The functions are
+# thin wrappers over the generated dense bincount kernel that compute the output size from the
+# data and the optional minimum and maximum lengths. Import-time side effects: registers the
+# public exports, dispatch support and the deprecation notice for the legacy endpoint.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,6 +44,24 @@ def bincount(arr,
              name=None,
              axis=None,
              binary_output=False):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says only an invalid-argument error is raised (for negative input)
+  # and that ragged and sparse inputs with rank 2 are supported, but this body also raises value
+  # errors (weights together with binary output, or an unsupported axis) and handles only dense
+  # conversion itself; the ragged and sparse cases and the negative-value check rely on dispatch
+  # and on the kernel. Non-integer inputs are silently cast to 32-bit integers (truncating).
+  # Counts occurrences of each integer value. Inputs: arr, values to count (anything convertible
+  # to a tensor); weights, optional same-shape tensor of increments (default none, meaning each
+  # occurrence counts one); minlength and maxlength, optional lower and upper bounds on the output
+  # length (values at or above the maximum are skipped); dtype, output type when no weights are
+  # given (default 32-bit integer); name, optional name scope (default "bincount"); axis, either
+  # none or 0 (flatten everything) or -1 (count per row, input is not flattened); binary_output,
+  # if true emit one instead of counts (default false). Raises a value error if both weights and
+  # binary output are requested, if axis is not 0, -1 or none, or if weights is not a tensor
+  # after conversion. Computes the output size as the largest value plus one (zero for an empty
+  # input), then raises it to minlength and lowers it to maxlength when given; flattens input
+  # and weights when axis is 0; and calls the dense bincount kernel. Returns the tensor of counts
+  # (dtype of weights if given, else the requested dtype). Adds ops to the current graph only.
   """Counts the number of occurrences of each value in an integer array.
 
   If `minlength` and `maxlength` are not given, returns a vector with length
@@ -194,6 +220,13 @@ def bincount_v1(arr,
                 minlength=None,
                 maxlength=None,
                 dtype=dtypes.int32):
+  # [FUNCTION DOC]
+  # Deprecated legacy endpoint (top-level and version 1 namespaces) of the bincount operation.
+  # Inputs: arr (integer tensor of non-negative values), weights (optional same-shape tensor),
+  # minlength and maxlength (optional output length bounds), dtype (output type when no weights,
+  # default 32-bit integer). Simply forwards these to the current bincount with its other options
+  # left at defaults (no name, flatten all axes, counting output) and returns its result. Raises
+  # whatever that function raises; no new side effects.
   """Counts the number of occurrences of each value in an integer array.
 
   If `minlength` and `maxlength` are not given, returns a vector with length
@@ -221,6 +254,15 @@ def bincount_v1(arr,
 
 
 def validate_dense_weights(values, weights, dtype=None):
+  # [FUNCTION DOC]
+  # HELPER: weights preparation step for the bincount functions.
+  # KNOWN ISSUE: the error message mentions the values argument being a tensor, but the check
+  # does not look at the values at all; any non-tensor weights are rejected.
+  # Inputs: values, the tensor being counted (used only for its dtype); weights, a tensor or
+  # nothing; dtype, optional output type. If weights is nothing, returns an empty constant tensor
+  # of the given dtype (or of the values' dtype when no dtype is given) which tells the kernel to
+  # count occurrences. Otherwise raises a value error unless weights is a tensor, and returns the
+  # weights unchanged.
   """Validates the passed weight tensor or creates an empty one."""
   if weights is None:
     if dtype:

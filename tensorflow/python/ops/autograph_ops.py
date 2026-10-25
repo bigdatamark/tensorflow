@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# HELPER: internal glue module that lets the autograph converter's builtin overloads (print and
+# sorted) work on tensor values.
+# Provides a generic helper that wraps an arbitrary Python callable as an eager Python-function
+# operation (wrap_py_func), plus tensor-aware replacements for the print and sorted builtins.
+# Import-time side effects: registers the print replacement and the sorted replacement in the
+# autograph builtin registries, keyed on the set of tensor-like classes, so converted code that
+# prints or sorts tensors picks them up automatically. No public API symbols are exported here.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +34,22 @@ from tensorflow.python.ops.parallel_for import control_flow_ops as parallel_ops
 
 
 def wrap_py_func(f, args, kwargs=None):
+  # [FUNCTION DOC]
+  # HELPER: used by the tensor print overload to run a Python callable as a graph operation.
+  # KNOWN ISSUE: the docstring claims the result is the return value of f converted to a tensor
+  # and that a value error is raised for bad arguments; in fact the return value of f is
+  # discarded and a constant 32-bit integer tensor equal to one is returned, and no explicit
+  # validation or error is raised here.
+  # Wraps callable f so it can be invoked through an eager Python-function operation. Inputs: f,
+  # the callable; args, positional arguments (list or tuple) of which only tensor-like ones are
+  # fed through the operation, the rest are captured and passed to f directly; kwargs, optional
+  # mapping of string keyword names to values, handled the same way (tensor-valued entries are
+  # appended to the tensor inputs, the rest captured). Builds a mapping from original argument
+  # positions or keys to indices in the tensor input list, and an inner wrapper that rebuilds
+  # the full positional and keyword arguments from the received tensors, calls f for its side
+  # effects only, and returns the integer one. Returns the int32 tensor produced by the eager
+  # Python-function operation. Side effect: f runs (at graph execution time) whenever the
+  # operation runs; captured non-tensor arguments are frozen at wrap time.
   """Helper that wraps a callable to py_func.
 
   The helper passes tensor arguments through the py_func interface. Non-tensor
@@ -79,6 +103,13 @@ def wrap_py_func(f, args, kwargs=None):
     kwarg_keys = ()
 
   def f_wrapper(*tensor_args):
+    # [FUNCTION DOC]
+    # HELPER: inner callable handed to the eager Python-function operation by the wrapper builder.
+    # Receives the tensor arguments (as eager values), reassembles the original positional
+    # arguments and keyword arguments by substituting received tensors at their recorded
+    # positions and keeping captured non-tensor values elsewhere, calls the user callable with
+    # them, ignores its result and returns the integer one. The enumeration index in the keyword
+    # comprehension is unused. Side effect: whatever the user callable does.
     f_args = tuple(
         tensor_args[tensor_args_idx[i]] if arg_is_tensor[i] else a
         for i, a in enumerate(args)
@@ -94,6 +125,14 @@ def wrap_py_func(f, args, kwargs=None):
 
 
 def _tf_py_func_print(*objects, **kwargs):
+  # [FUNCTION DOC]
+  # HELPER: tensor-aware replacement for the print builtin, registered for autograph.
+  # Inputs: any number of objects to print (tensors or plain values) and keyword options for
+  # print; options still holding the "unspecified" sentinel are dropped. If no flush option is
+  # given, flush is set to true to reduce garbled console output in notebooks. Wraps an inner
+  # printing function with the wrapping helper and returns the resulting integer tensor, which
+  # must be executed (or kept as a control dependency) for printing to occur. Side effect at
+  # execution time: prints to the output stream.
   """Overload of print_ as a py_func implementation."""
   override_kwargs = {
       k: v for k, v in kwargs.items() if v is not py_builtins.UNSPECIFIED
@@ -104,6 +143,12 @@ def _tf_py_func_print(*objects, **kwargs):
     override_kwargs['flush'] = True
 
   def print_wrapper(*vals, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: the callable that actually prints, run through the Python-function operation.
+    # Converts tensor-like values to their numpy values, decodes byte strings as UTF-8 text (to
+    # avoid a byte-literal prefix in the output), then calls the real print with the given
+    # keyword options. Returns nothing. Side effect: writes to the output stream. Its keyword
+    # parameter shadows the outer one.
     vals = tuple(v.numpy() if tensor_util.is_tf_type(v) else v for v in vals)
     # TensorFlow doesn't seem to generate Unicode when passing strings to
     # py_func. This causes the print to add a "b'" wrapper to the output,
@@ -115,6 +160,16 @@ def _tf_py_func_print(*objects, **kwargs):
 
 
 def _tf_sorted(iterable, key, reverse):
+  # [FUNCTION DOC]
+  # HELPER: tensor-aware replacement for the sorted builtin, registered for autograph.
+  # KNOWN ISSUE: any value of reverse other than the "unspecified" sentinel selects descending
+  # order, so an explicit false still sorts in descending order.
+  # Inputs: iterable, a one-dimensional tensor; key, a function or the unspecified sentinel;
+  # reverse, the unspecified sentinel (ascending) or anything else (descending). With a key, the
+  # key is applied to every element via vectorized mapping, the mapped values must be rank 1
+  # (static check raises a value error for known other ranks; a runtime rank assertion guards the
+  # unknown case), and the iterable is reordered by the argsort of the mapped values. Without a
+  # key it checks rank 1 the same way and returns the sorted tensor. Returns a tensor.
   """Overload of sorted_ for Tensor iterable."""
   if reverse is py_builtins.UNSPECIFIED:
     direction = 'ASCENDING'

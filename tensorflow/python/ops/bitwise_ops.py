@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Public bitwise operations module (documented as the bitwise API namespace): re-exports every
+# symbol of the generated bitwise operations module (and, or, xor, invert, population count, left
+# and right shift on integer tensors). Import-time side effect: marks all seven bitwise kernels as
+# not differentiable in the gradient registry, so requesting gradients through them yields none.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

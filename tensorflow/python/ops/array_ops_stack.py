@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Defines the public stack and unstack tensor operations (exported under the top-level public
+# namespace with dispatch support). Stack packs a list of equally shaped tensors into one tensor
+# of rank one higher; unstack is the inverse, splitting one tensor along an axis into a list of
+# lower-rank tensors. Both are thin wrappers over the generated pack and unpack kernels in the
+# generated array operations module, adding axis validation and shape inference of the count.
+# Tests live in the kernel tests directory (array operations test), not next to this file.
+# Import-time side effects: registers the two exported symbols and the dispatch hooks.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +32,20 @@ from tensorflow.python.util.tf_export import tf_export
 @tf_export("stack")
 @dispatch.add_dispatch_support
 def stack(values, axis=0, name="stack"):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring lists only a value error for a bad axis, but an empty list of values
+  # with a non-zero axis fails with an index error when the first element is read, and the range
+  # check is skipped entirely when the first element's static shape is unknown.
+  # Stacks a list of tensors (or nested lists convertible to a tensor) of identical shape and type
+  # along a new dimension. Inputs: values, the sequence of tensors; axis, integer position of the
+  # new dimension (default 0, negative values wrap, valid range is minus (rank+1) up to rank+1);
+  # name, optional operation name (default "stack"). Behavior: when axis is 0 it first tries to
+  # convert the whole input directly to one constant tensor and returns that on success, silently
+  # falling back on type, value or not-implemented errors (non-constant elements). Otherwise it
+  # converts the first element to a tensor, and, if its static shape is known, validates axis
+  # against the expanded rank, raising a value error if out of range. Finally calls the pack
+  # kernel with the axis and name and returns the stacked tensor. No side effects beyond
+  # possibly adding ops to the current graph.
   """Stacks a list of rank-`R` tensors into one rank-`(R+1)` tensor.
 
   See also `tf.concat`, `tf.tile`, `tf.repeat`.
@@ -88,6 +110,17 @@ def stack(values, axis=0, name="stack"):
 @tf_export("unstack")
 @dispatch.add_dispatch_support
 def unstack(value, num=None, axis=0, name="unstack"):
+  # [FUNCTION DOC]
+  # Splits a tensor along one axis into a Python list of tensors with that axis removed.
+  # Inputs: value, a tensor of rank at least 1 (or anything convertible); num, optional integer
+  # count of outputs, inferred from the static size of the axis when omitted; axis, integer
+  # dimension to split (default 0, negative values wrap); name, optional operation name.
+  # Behavior: when num is not given, converts value to a tensor, checks that axis lies in the
+  # valid range for the static rank (if known) and reads the static axis length as num. Raises a
+  # value error if axis is out of range, or if num cannot be inferred (unknown rank or unknown
+  # axis length, e.g. dynamic shapes inside a traced function). Then calls the unpack kernel,
+  # which raises an invalid-argument error if num disagrees with the actual shape. Returns the
+  # list of num tensors. When num is supplied, value is passed through without validation.
   """Unpacks the given dimension of a rank-`R` tensor into rank-`(R-1)` tensors.
 
   Unpacks tensors from `value` by chipping it along the `axis` dimension.
