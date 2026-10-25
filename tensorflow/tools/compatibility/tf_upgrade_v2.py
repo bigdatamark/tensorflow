@@ -1,3 +1,17 @@
+# [MODULE DOC]
+# Defines the API change specification used by the tf_upgrade_v2 command line tool, which rewrites
+# Python source written for TensorFlow 1.x so that it targets TensorFlow 2.x.
+# The main export is the TFAPIChangeSpec class, a data-driven description of the upgrade: mappings
+# of keyword renames, argument reorders, symbol renames, warnings and per-function transformer
+# callbacks. The module also holds small analysis-result classes and a visitor used in the
+# preprocessing step that detects explicit imports of a specific TensorFlow version, plus a large
+# family of private transformer functions that edit call nodes of the syntax tree in place and
+# append log entries (severity, line, column, message) for the report.
+# These transformers all share one calling convention (parent, node, full_name, name, logs, ...).
+# It relies on the pasta library for source-preserving tree edits and on the sibling modules for
+# renames, reorders and module deprecations, and on the generic engine in the ast_edits module.
+# Import-time side effects: none beyond importing those modules; the spec tables are built when
+# TFAPIChangeSpec is constructed, not at import.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,8 +45,16 @@ from tensorflow.tools.compatibility import reorders_v2
 
 
 class UnaliasedTFImport(ast_edits.AnalysisResult):
+  # [CLASS DOC]
+  # Analysis result reported when a plain, unaliased import of the tensorflow package is found.
+  # Carries an error severity and a message explaining the script only works when tensorflow is
+  # imported under the alias tf. Instantiated once per detection table entry in
+  # TFAPIImportAnalysisSpec.
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor with no inputs. Sets the log level to error and the log message to the text
+    # saying that an unaliased tensorflow import was detected. Returns nothing, no other effects.
     self.log_level = ast_edits.ERROR
     self.log_message = ("The tf_upgrade_v2 script detected an unaliased "
                         "`import tensorflow`. The script can only run when "
@@ -40,8 +62,16 @@ class UnaliasedTFImport(ast_edits.AnalysisResult):
 
 
 class VersionedTFImport(ast_edits.AnalysisResult):
+  # [CLASS DOC]
+  # Analysis result reported when tensorflow is directly imported as tf from a specific version
+  # namespace (compat.v1 or compat.v2). Carries an informational severity and a message that
+  # symbols will not be upgraded. Two module-level instances exist, one per version.
 
   def __init__(self, version):
+    # [FUNCTION DOC]
+    # Constructor. Input: version, a string naming the tensorflow sub-namespace that was imported
+    # (for example the compat v1 or compat v2 namespace). Sets the log level to info and builds
+    # the log message mentioning that version. Returns nothing, no other effects.
     self.log_level = ast_edits.INFO
     self.log_message = ("Not upgrading symbols because `tensorflow." + version +
                         "` was directly imported as `tf`.")
@@ -52,8 +82,18 @@ compat_v2_import = VersionedTFImport("compat.v2")
 
 
 class TFAPIImportAnalysisSpec(ast_edits.APIAnalysisSpec):
+  # [CLASS DOC]
+  # Analysis specification handed to the analysis visitor during preprocessing. It declares no
+  # symbols to detect and three import forms to detect: plain tensorflow with no alias, the
+  # compat v1 namespace aliased as tf, and the compat v2 namespace aliased as tf. Each maps to the
+  # analysis result object that describes what to log.
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor with no inputs. Creates an empty symbol-detection mapping and an import-detection
+    # mapping keyed by (module name, alias) pairs whose values are the analysis result objects.
+    # A new unaliased-import result is created per instance; the versioned ones are the shared
+    # module-level instances. Returns nothing.
     self.symbols_to_detect = {}
     self.imports_to_detect = {
         ("tensorflow", None): UnaliasedTFImport(),
@@ -63,12 +103,21 @@ class TFAPIImportAnalysisSpec(ast_edits.APIAnalysisSpec):
 
 
 class CompatV1ImportReplacer(ast.NodeVisitor):
+  # [CLASS DOC]
+  # Syntax-tree visitor that rewrites an import of the compat v1 namespace aliased as tf into a
+  # plain import of tensorflow aliased as tf. Used once by preprocessing when the upgrade of such
+  # imports is enabled. It mutates the tree it visits in place and holds no state.
   """AST Visitor that replaces `import tensorflow.compat.v1 as tf`.
 
   Converts `import tensorflow.compat.v1 as tf` to `import tensorflow as tf`
   """
 
   def visit_Import(self, node):  # pylint: disable=invalid-name
+    # [FUNCTION DOC]
+    # Visitor callback for an import statement. Input: node, the import statement node. For each
+    # imported name whose full name is the compat v1 tensorflow namespace and whose alias is tf,
+    # the name is changed in place to plain tensorflow. Then it continues visiting child nodes.
+    # Returns nothing; mutates the tree. Raises nothing itself.
     """Handle visiting an import node in the AST.
 
     Args:
@@ -83,9 +132,26 @@ class CompatV1ImportReplacer(ast.NodeVisitor):
 
 
 class TFAPIChangeSpec(ast_edits.NoUpdateSpec):
+  # [CLASS DOC]
+  # The complete TensorFlow 1.x to 2.x upgrade specification, derived from the no-update base
+  # specification of the ast_edits engine. It is a bag of lookup tables set as instance attributes:
+  # keyword renames per function, symbol renames, import renames, argument reorders, function
+  # warnings and argument warnings, functions to convert from methods, per-function transformer
+  # callbacks, and module deprecations. The engine consults them while walking a parsed source
+  # file. Preprocessing can disable nearly all tables when the file imports a specific version of
+  # tensorflow, and clear_preprocessing restores them by running the constructor again.
   """List of maps that describe what changed in the API."""
 
   def __init__(self, import_rename=False, upgrade_compat_v1_import=False):
+    # [FUNCTION DOC]
+    # Constructor that builds all upgrade tables. Inputs: import_rename, optional boolean (default
+    # false) that, when true, adds rules renaming a tensorflow import to the compat v2 form;
+    # upgrade_compat_v1_import, optional boolean (default false) that enables rewriting imports of
+    # the compat v1 namespace during preprocessing. Stores both flags and populates the tables
+    # of keyword renames, symbol renames, reordered function names and orders, warnings, argument
+    # warnings and transformer callbacks. Also registers contrib direct-import support for the
+    # transformers mapping through the all_renames_v2 helper (mutates the transformer table).
+    # Returns nothing, raises nothing under normal use.
     self.upgrade_compat_v1_import = upgrade_compat_v1_import
 
     # Maps from a function name to a dictionary that describes how to
@@ -1500,6 +1566,17 @@ class TFAPIChangeSpec(ast_edits.NoUpdateSpec):
     self.module_deprecations = module_deprecations_v2.MODULE_DEPRECATIONS
 
   def preprocess(self, root_node, after_compat_v1_upgrade=False):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the table reset assigns a function_handle attribute that the constructor never
+    # defines, and the reset is only undone by calling clear_preprocessing.
+    # Hook run by the engine before the main upgrade pass. Inputs: root_node, the parsed syntax
+    # tree; after_compat_v1_upgrade, boolean (default false) marking the recursive second pass.
+    # It analyzes the tree for tensorflow import forms. If a compat v1 import is found and the
+    # upgrade option is on and this is not already the second pass, it rewrites the import in place
+    # and re-runs itself once. If any import form was detected, it empties all conversion tables on
+    # this object (side effect) so that only module deprecations remain active.
+    # Returns a tuple of the (possibly modified) tree, the list of log entries, and the list of
+    # warnings and errors collected by the analysis visitor.
     visitor = ast_edits.PastaAnalyzeVisitor(TFAPIImportAnalysisSpec())
     visitor.visit(root_node)
     detections = set(visitor.results)
@@ -1530,11 +1607,20 @@ class TFAPIChangeSpec(ast_edits.NoUpdateSpec):
     return root_node, visitor.log, visitor.warnings_and_errors
 
   def clear_preprocessing(self):
+    # [FUNCTION DOC]
+    # Undoes the table clearing done by preprocessing. Takes no inputs. Re-runs the constructor
+    # with the stored import_rename and upgrade_compat_v1_import settings, which rebuilds every
+    # upgrade table from scratch. Returns nothing; mutates this object.
     self.__init__(import_rename=self.import_rename,
                   upgrade_compat_v1_import=self.upgrade_compat_v1_import)
 
 
 def _is_ast_str(node):
+  # [FUNCTION DOC]
+  # HELPER: predicate used as an argument-ok test by the rename-if-argument-found transformers.
+  # Input: node, a syntax tree node. Returns true when the node is a string literal, bytes
+  # literal (if the running Python supports it), formatted string, or formatted value piece;
+  # false otherwise. No side effects.
   """Determine whether this node represents a string."""
   allowed_types = [ast.Str]
   if hasattr(ast, "Bytes"):
@@ -1547,6 +1633,11 @@ def _is_ast_str(node):
 
 
 def _is_ast_true(node):
+  # [FUNCTION DOC]
+  # HELPER: predicate used as an argument-ok test by the transformers for removing arguments.
+  # Input: node, a syntax tree node. Returns true when it is the constant true (a named-constant
+  # node holding true, or on old Pythons a name node spelled True); false otherwise.
+  # No side effects.
   if hasattr(ast, "NameConstant"):
     return isinstance(node, ast.NameConstant) and node.value is True
   else:
@@ -1554,6 +1645,11 @@ def _is_ast_true(node):
 
 
 def _is_ast_false(node):
+  # [FUNCTION DOC]
+  # HELPER: predicate used by the pooling seed and string split transformers.
+  # Input: node, a syntax tree node. Returns true when it is the constant false (a named-constant
+  # node holding false, or on old Pythons a name node spelled False); false otherwise.
+  # No side effects.
   if hasattr(ast, "NameConstant"):
     return isinstance(node, ast.NameConstant) and node.value is False
   else:
@@ -1569,6 +1665,18 @@ def _rename_if_arg_found_transformer(parent, node, full_name, name, logs,
                                      arg_ok_predicate=None,
                                      remove_if_ok=False,
                                      message=None):
+  # [FUNCTION DOC]
+  # Transformer callback (standard signature: parent, node, full_name, name, logs) that moves a
+  # call to the compat v1 namespace when a particular keyword argument is present.
+  # Extra inputs: arg_name, the keyword to look for; arg_ok_predicate, optional callable taking the
+  # argument value node and returning whether the value is acceptable; remove_if_ok, boolean
+  # (default false) to delete the argument when it is acceptable; message, optional text appended
+  # to the log entry. Behavior: if the argument is absent, does nothing and returns nothing. If
+  # present and acceptable and remove_if_ok, removes it, logs an info entry and returns the node;
+  # if acceptable without removal, returns nothing. Otherwise rewrites the call target by
+  # inserting the compat v1 segment after the first tf prefix of full_name, logs an info entry,
+  # and returns the node. Side effects: mutates the node and appends to the logs list.
+  # A missing full_name in the rewrite path would raise an attribute error on the null value.
   """Replaces the given call with tf.compat.v1 if the given arg is found.
 
   This requires the function to be called with all named args, so for using
@@ -1635,6 +1743,12 @@ def _rename_if_arg_found_transformer(parent, node, full_name, name, logs,
 
 def _add_argument_transformer(parent, node, full_name, name, logs,
                               arg_name, arg_value_ast):
+  # [FUNCTION DOC]
+  # Transformer callback that appends a keyword argument to a call. Extra inputs: arg_name, the
+  # keyword name; arg_value_ast, the syntax tree node for the value. Always appends the keyword to
+  # the end of the call's keyword list, appends an info log entry describing the added argument,
+  # and returns the modified node. Mutates node and logs. Used with a partial application to bind
+  # the argument name and value.
   """Adds an argument (as a final kwarg arg_name=arg_value_ast)."""
   node.keywords.append(ast.keyword(arg=arg_name, value=arg_value_ast))
   logs.append((
@@ -1646,6 +1760,13 @@ def _add_argument_transformer(parent, node, full_name, name, logs,
 
 
 def _iterator_transformer(parent, node, full_name, name, logs):
+  # [FUNCTION DOC]
+  # Transformer callback turning a dataset method call into a function call in the compat v1 data
+  # namespace, passing the original receiver as the first argument. Does nothing (returns nothing)
+  # if the full name already starts with the compat v1 data or data namespace, or if the call
+  # target is not an attribute access. Otherwise prepends the receiver to the positional
+  # arguments, replaces the receiver with the compat v1 data namespace, appends a warning log
+  # asking the user to check the change, and returns the node. Mutates node and logs.
   """Transform iterator methods to compat function calls."""
   # First, check that node.func.value is not already something we like
   # (tf.compat.v1.data), or something which is handled in the rename
@@ -1672,8 +1793,26 @@ def _iterator_transformer(parent, node, full_name, name, logs):
 
 
 def _dropout_transformer(parent, node, full_name, name, logs):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says keep_prob is replaced with one minus rate, but the code
+  # actually computes rate as one minus keep_prob. Also the error message says the function was
+  # called without arguments even when it merely lacks a second positional argument and has
+  # no keep_prob keyword.
+  # Transformer callback for the dropout function whose second argument changed meaning from
+  # keep probability to drop rate. If a keep_prob keyword exists, renames it to rate, wraps the
+  # value so it becomes one minus the value, logs info, returns the node. Otherwise, if fewer than
+  # two positional arguments exist, logs an error that automatic fixing is disabled and returns
+  # nothing. Otherwise moves the second positional argument to a rate keyword with the same
+  # conversion, deletes it from the positional list, logs info and returns the node.
+  # Mutates node and logs.
   """Replace keep_prob with 1-rate."""
   def _replace_keep_prob_node(parent, old_value):
+    # [FUNCTION DOC]
+    # Nested helper. Inputs: parent, the node holding old_value as a child (a keyword or call);
+    # old_value, the expression for the keep probability. Replaces it in the parent with a
+    # subtraction of old_value from one (position info set to zero for the constant), copies the
+    # source location, and sets parentheses around the old value via the pasta formatting
+    # attributes. Returns nothing; mutates the tree.
     """Replaces old_value with 1-(old_value)."""
     one = ast.Num(n=1)
     one.lineno = 0
@@ -1716,6 +1855,15 @@ def _dropout_transformer(parent, node, full_name, name, logs):
 
 
 def _cast_transformer(parent, node, full_name, name, logs):
+  # [FUNCTION DOC]
+  # Transformer callback converting the deprecated to-type helper calls (names that start with
+  # three characters, such as the to_int and to_float families) into a cast call with a dtype
+  # keyword. The target dtype is the function name minus its first three characters, with float
+  # mapped to 32-bit float and double to 64-bit float. If exactly two positional arguments are
+  # given, the last one is moved to a name keyword. Adds the dtype keyword (with a shifted column
+  # offset so the printer keeps argument order), renames the called function to cast whether it is
+  # an attribute or a plain name, logs an info entry and returns the node.
+  # Mutates node and logs; asserts that a non-attribute target is a plain name.
   """Transforms to_int and to_float to cast(..., dtype=...)."""
 
   # Find out the dtype to cast to from the function name
@@ -1756,8 +1904,21 @@ def _cast_transformer(parent, node, full_name, name, logs):
 
 def _softmax_cross_entropy_with_logits_transformer(
     parent, node, full_name, name, logs):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: only a labels passed as a keyword is handled; a positional labels argument is
+  # silently left unchanged and the node is returned anyway.
+  # Transformer callback for the softmax cross entropy with logits function, whose labels were
+  # made non-differentiable in the old version. Looks for a labels keyword and, unless it is
+  # already wrapped in a stop-gradient call, wraps it, then logs an info entry asking for review.
+  # Always returns the node. Mutates node and logs.
   """Wrap labels argument with stop_gradients."""
   def _wrap_label(parent, old_value):
+    # [FUNCTION DOC]
+    # Nested helper. Inputs: parent, the keyword node containing the value; old_value, the labels
+    # expression. If it is already a call to the stop-gradient function on tf, returns false
+    # without changes. Otherwise replaces it in the parent with a call node wrapping it (with a
+    # fallback construction for older syntax tree signatures), copies the location and returns
+    # true. Mutates the tree.
     """Wrap labels with tf.stop_gradient."""
     already_stop_grad = (isinstance(old_value, ast.Call) and
                          isinstance(old_value.func, ast.Attribute) and
@@ -1794,6 +1955,18 @@ def _softmax_cross_entropy_with_logits_transformer(
 
 
 def _image_resize_transformer(parent, node, full_name, name, logs):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: with three positional arguments the code builds an align_corners keyword object
+  # that is never used and just drops the third positional argument; the preserve_aspect_ratio
+  # case with four arguments does keep the value. So the align_corners value is discarded,
+  # which matches the intent of removing that option but leaves dead code.
+  # Transformer callback converting the old per-method image resize functions (names with a
+  # seven-character prefix, the rest being the method) into the single resize function with a
+  # method keyword set to the upper-cased method constant. With four positional arguments the last
+  # becomes a preserve_aspect_ratio keyword; with three the last positional is dropped. Any
+  # align_corners keyword is removed. Appends the method keyword (column offset shifted to keep
+  # order), renames the call to resize, logs an info entry, returns the node. Mutates node and
+  # logs; asserts that a non-attribute target is a plain name.
   """Transforms image.resize_* to image.resize(..., method=*, ...)."""
   resize_method = name[7:].upper()
   new_arg = ast.keyword(arg="method",
@@ -1842,6 +2015,16 @@ def _image_resize_transformer(parent, node, full_name, name, logs):
 
 
 def _pool_seed_transformer(parent, node, full_name, name, logs):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: logs is used as a list everywhere else (appended to), but the seed-adding and
+  # warning paths call an add method on it, which would raise an attribute error for a list.
+  # The warning message also contains no placeholder values although it describes the function.
+  # Transformer callback for pooling functions with seed2 and deterministic arguments. Removes
+  # seed2 and deterministic keywords (logging each removal as info), remembering whether
+  # deterministic was set to something other than constant false. If determinism was requested and
+  # no seed exists, adds a seed keyword of 42 with an info log; if a seed exists, logs a warning
+  # that it cannot tell if the seed is non-zero. Starred keywords are passed through. Returns the
+  # node if any keyword was removed, otherwise returns nothing. Mutates node and logs.
   """Removes seed2 and deterministic, and adds non-zero seed if needed."""
   # This requires that this function uses all kwargs (add to renames!).
   seed_arg = None
@@ -1892,8 +2075,24 @@ def _pool_seed_transformer(parent, node, full_name, name, logs):
 
 
 def _extract_glimpse_transformer(parent, node, full_name, name, logs):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the positional branch checks for at least five arguments but then indexes the
+  # sixth (position five), so a call with exactly five positional arguments raises an index error.
+  # The local variable value is computed and never used. Also the function falls off the end and
+  # returns nothing when no change applies, and there is a missing second blank line before the
+  # next definition.
+  # Transformer callback for the extract glimpse function, whose boolean uniform_noise argument
+  # became a noise string argument. If a uniform_noise keyword exists, renames it to noise and
+  # wraps its value so it evaluates to the uniform string when true and the gaussian string
+  # otherwise, logs info and returns the node. Else, for many positional arguments, does the same
+  # conversion on a positional argument and returns the node. Mutates node and logs.
 
   def _replace_uniform_noise_node(parent, old_value):
+    # [FUNCTION DOC]
+    # Nested helper. Inputs: parent, node holding old_value; old_value, the boolean expression.
+    # Replaces it in the parent with a conditional expression choosing uniform or gaussian string
+    # constants, copies the location, and sets parentheses around the condition using formatting
+    # attributes. Returns nothing; mutates the tree.
     """Replaces old_value with 'uniform' or 'gaussian'."""
     uniform = ast.Str(s="uniform")
     gaussian = ast.Str(s="gaussian")
@@ -1929,6 +2128,12 @@ def _extract_glimpse_transformer(parent, node, full_name, name, logs):
     return node
 
 def _add_summary_step_transformer(parent, node, full_name, name, logs):
+  # [FUNCTION DOC]
+  # Transformer callback for summary writing functions that now require a step. If a step keyword
+  # already exists, returns the node unchanged. Otherwise parses an expression that gets or creates
+  # the global step from the compat v1 train namespace, removes its line number to avoid spurious
+  # reordering, appends it as a step keyword, logs a warning and returns the node.
+  # Mutates node and logs.
   """Adds a step argument to the summary API call if not specified.
 
   The inserted argument value is tf.compat.v1.train.get_or_create_global_step().
@@ -1949,6 +2154,11 @@ def _add_summary_step_transformer(parent, node, full_name, name, logs):
 
 def _add_summary_recording_cond_transformer(parent, node, full_name, name, logs,
                                             cond):
+  # [FUNCTION DOC]
+  # Transformer callback for record-summaries context functions. Extra input: cond, a string of
+  # source text for the condition expression. Parses it and appends it as a positional argument,
+  # logs an info entry and returns the node. Mutates node and logs; a parse error from pasta
+  # would propagate if cond is not valid source.
   """Adds cond argument to tf.contrib.summary.xxx_record_summaries().
 
   This is in anticipation of them being renamed to tf.summary.record_if(), which
@@ -1972,6 +2182,12 @@ def _rename_if_any_arg_found_transformer(
     arg_ok_predicate=None,
     remove_if_ok=False,
     message=None):
+  # [FUNCTION DOC]
+  # Transformer callback applying the single-argument rename transformer for each name in
+  # arg_names in turn. Extra inputs: arg_names, list of keyword names (the default of null would
+  # raise a type error when iterated); arg_ok_predicate, remove_if_ok and message are passed
+  # through. After each step the node variable follows any modified node returned. Returns the
+  # final node (never null, even if nothing changed). Mutates node and logs.
   """Replaces the given call with tf.compat.v1 if any of the arg_names is found.
 
   Args:
@@ -2011,6 +2227,13 @@ def _rename_if_arg_found_and_add_loss_reduction_transformer(
     arg_ok_predicate=None,
     remove_if_ok=False,
     message=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the name and docstring promise a loss-reduction addition, but the body only
+  # repeats the rename-if-argument-found step for each name, exactly like the any-argument
+  # variant; no loss reduction argument is ever added.
+  # Transformer callback with the same inputs as the any-argument variant (arg_names list, optional
+  # predicate, remove_if_ok flag, message). Returns the final node, never null. Mutates node and
+  # logs.
   """Combination of _rename_if_arg_found and _add_loss_reduction transformers.
 
   Args:
@@ -2043,6 +2266,15 @@ def _rename_if_arg_found_and_add_loss_reduction_transformer(
 
 def _add_uniform_scaling_initializer_transformer(
     parent, node, full_name, name, logs):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring describes mapping the seed and dtype too, but the code only renames
+  # a factor keyword to scale, appends a distribution keyword with the uniform string, and
+  # retargets the call; it logs nothing and relies on the reorder table to have made arguments
+  # keywords.
+  # Transformer callback converting the uniform unit scaling initializer into the compat v1 keras
+  # variance scaling initializer. Retargets the call's receiver to the compat v1 keras initializers
+  # namespace (preserving position info) and the attribute to the variance scaling class.
+  # Returns the node. Mutates node.
   """Updates references to uniform_unit_scaling_initializer.
 
   Transforms:
@@ -2073,6 +2305,14 @@ def _add_uniform_scaling_initializer_transformer(
 
 def _contrib_layers_xavier_initializer_transformer(
     parent, node, full_name, name, logs):
+  # [FUNCTION DOC]
+  # Transformer callback converting the contrib xavier initializer calls to the compat v1 keras
+  # variance scaling initializer. Builds keywords: scale of 1.0, mode of fan average, a
+  # distribution (conditional between uniform and truncated normal from the uniform argument,
+  # keyword or first positional, defaulting to uniform), then seed and dtype from the second and
+  # third positional arguments. Clears positional arguments, puts the new keywords before existing
+  # ones, retargets the call to the keras initializers namespace and variance scaling class,
+  # logs an info entry and returns the node. Mutates node and logs.
   """Updates references to contrib.layers.xavier_initializer.
 
   Transforms:
@@ -2085,6 +2325,11 @@ def _contrib_layers_xavier_initializer_transformer(
   Returns: The new node
   """
   def _get_distribution(old_value):
+    # [FUNCTION DOC]
+    # Nested helper. Input: old_value, the boolean expression for uniform. Parses a conditional
+    # expression choosing the uniform or truncated normal string, substitutes old_value as its
+    # condition, wraps the result in parentheses via formatting attributes and returns that parsed
+    # tree. Mutates old_value's parent link.
     """Returns an AST matching the following:
     ("uniform" if (old_value) else "truncated_normal")
     """
@@ -2151,6 +2396,16 @@ def _contrib_layers_xavier_initializer_transformer(
 
 def _contrib_layers_variance_scaling_initializer_transformer(
     parent, node, full_name, name, logs):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: positional seed and dtype arguments (fourth and fifth) are left in place as
+  # positional arguments rather than converted to keywords, so the result relies on the reorder
+  # table having already turned them into keywords.
+  # Transformer callback converting the contrib variance scaling initializer to the compat v1 keras
+  # variance scaling initializer. Renames factor to scale, wraps mode with a lower-case call,
+  # renames uniform to distribution with a conditional choosing the uniform or truncated normal
+  # string, and handles the first three positional arguments the same way. If no scale was
+  # found, prepends a scale keyword of 2.0 (the contrib default). Retargets the call, logs an
+  # info entry and returns the node. Mutates node and logs.
   """Updates references to contrib.layers.variance_scaling_initializer.
 
   Transforms:
@@ -2167,6 +2422,10 @@ def _contrib_layers_variance_scaling_initializer_transformer(
   default of 1.0
   """
   def _replace_distribution(parent, old_value):
+    # [FUNCTION DOC]
+    # Nested helper. Inputs: parent, node holding old_value; old_value, the boolean uniform
+    # expression. Replaces it with a parsed conditional choosing the uniform or truncated normal
+    # string, with old_value as the condition, then parenthesizes the new value. Returns nothing.
     """Replaces old_value: ("uniform" if (old_value) else "truncated_normal")"""
     new_value = pasta.parse(
         "\"uniform\" if old_value else \"truncated_normal\"")
@@ -2179,6 +2438,10 @@ def _contrib_layers_variance_scaling_initializer_transformer(
     pasta.base.formatting.set(new_value, "suffix", ")")
 
   def _replace_mode(parent, old_value):
+    # [FUNCTION DOC]
+    # Nested helper. Inputs: parent, node holding old_value; old_value, the mode expression.
+    # Replaces it with a call of the lower-case method on the old value, copies prefix and suffix
+    # formatting, and parenthesizes the old value. Returns nothing; mutates the tree.
     """Replaces old_value with (old_value).lower()."""
     new_value = pasta.parse("mode.lower()")
     mode = new_value.body[0].value.func
@@ -2237,6 +2500,11 @@ def _contrib_layers_variance_scaling_initializer_transformer(
 
 def _contrib_layers_l1_regularizer_transformer(
     parent, node, full_name, name, logs):
+  # [FUNCTION DOC]
+  # Transformer callback converting the slim l1 regularizer to the keras regularizers l1 function.
+  # Renames a scale keyword to l (with an info log), removes a scope keyword and any positional
+  # arguments after the first (each with an info log), then retargets the call's receiver to the
+  # keras regularizers namespace and attribute to l1. Returns the node. Mutates node and logs.
   """Replace slim l1 regularizer with Keras one.
 
   This entails renaming the 'scale' arg to 'l' and dropping any
@@ -2276,11 +2544,21 @@ def _contrib_layers_l1_regularizer_transformer(
 
 def _contrib_layers_l2_regularizer_transformer(
     parent, node, full_name, name, logs):
+  # [FUNCTION DOC]
+  # Transformer callback converting the slim l2 regularizer to the keras regularizers l2 function.
+  # Renames a scale keyword to l and multiplies its value by one half, does the same for the first
+  # positional argument, removes a scope keyword and extra positional arguments (info logs),
+  # logs that the scale was halved, retargets the call to the keras regularizers l2 and returns
+  # the node. Mutates node and logs.
   """Replace slim l2 regularizer with Keras one, with l=0.5*scale.
 
   Also drops the scope argument.
   """
   def _replace_scale_node(parent, old_value):
+    # [FUNCTION DOC]
+    # Nested helper. Inputs: parent, node holding old_value; old_value, the scale expression.
+    # Replaces it with a multiplication of one half by the old value (zero position info for the
+    # constant) and parenthesizes the old value. Returns nothing; mutates the tree.
     """Replaces old_value with 0.5*(old_value)."""
     half = ast.Num(n=0.5)
     half.lineno = 0
@@ -2335,6 +2613,12 @@ def _contrib_layers_l2_regularizer_transformer(
 
 
 def _name_scope_transformer(parent, node, full_name, name, logs):
+  # [FUNCTION DOC]
+  # Transformer callback adapting name scope calls to the v2 signature. If a non-null name
+  # argument is given, the call is retargeted to the compat v1 name scope (two info logs) and
+  # returned. Else if a default name is given, all arguments are replaced by a single name keyword
+  # holding the default name (values dropped) with an info log, and the node is returned. If
+  # neither is available, logs an error and returns nothing. Mutates node and logs.
   """Fix name scope invocation to use 'default_name' and omit 'values' args."""
 
   name_found, name = ast_edits.get_arg_value(node, "name", 0)
@@ -2373,11 +2657,22 @@ def _name_scope_transformer(parent, node, full_name, name, logs):
 
 
 def _rename_to_compat_v1(node, full_name, logs, reason):
+  # [FUNCTION DOC]
+  # HELPER: shared by the string split transformers to redirect a call to the compat v1 version.
+  # Inputs: node, the call node; full_name, the dotted name; logs, list to append to; reason, text
+  # explaining the change. Computes the new name by inserting the compat v1 segment after the
+  # first tf prefix and delegates to the rename helper, returning the modified node.
   new_name = full_name.replace("tf.", "tf.compat.v1.", 1)
   return _rename_func(node, full_name, new_name, logs, reason)
 
 
 def _rename_func(node, full_name, new_name, logs, reason):
+  # [FUNCTION DOC]
+  # HELPER: replaces a call target with a new dotted name for the transformers.
+  # Inputs: node, the call node; full_name, old dotted name; new_name, replacement dotted name;
+  # logs, list to append to; reason, explanation text. Appends an info log, builds a name node
+  # for the new name with the old context, copies the location and substitutes it for the call's
+  # function child. Returns the node. Mutates node and logs.
   logs.append((ast_edits.INFO, node.lineno, node.col_offset,
                "Renamed %r to %r: %s" % (full_name, new_name, reason)))
   new_name_node = ast_edits.full_name_node(new_name, node.func.ctx)
@@ -2387,6 +2682,12 @@ def _rename_func(node, full_name, new_name, logs, reason):
 
 
 def _string_split_transformer(parent, node, full_name, name, logs):
+  # [FUNCTION DOC]
+  # Transformer callback for the old string split function. If skip_empty is constant false it is
+  # removed (info log); any other value sends the call to the compat v1 version. If sep is an
+  # empty string literal the call becomes the bytes split function and sep is removed; if sep is a
+  # non-literal, or absent, the call goes to compat v1. Finally delegates to the result type
+  # transformer and returns its result. Mutates node and logs.
   """Update tf.string_split arguments: skip_empty, sep, result_type, source."""
   # Check the skip_empty parameter: if not false, then use compat.v1.
   for i, kw in enumerate(node.keywords):
@@ -2430,6 +2731,13 @@ def _string_split_transformer(parent, node, full_name, name, logs):
 
 
 def _string_split_rtype_transformer(parent, node, full_name, name, logs):
+  # [FUNCTION DOC]
+  # Transformer callback handling the result type and source arguments of the string split
+  # functions. Removes a result_type keyword whose value is a literal for ragged or sparse tensor
+  # (info log); any other result_type value redirects the call to compat v1. Renames a source
+  # keyword to input. If the result was not requested as ragged, wraps the call into a to-sparse
+  # method call (info log), except when the parent is already such a to-sparse attribute, in which
+  # case returns nothing to avoid infinite recursion. Returns the node. Mutates node and logs.
   """Update tf.strings.split arguments: result_type, source."""
   # Remove the "result_type" argument.
   need_to_sparse = True
