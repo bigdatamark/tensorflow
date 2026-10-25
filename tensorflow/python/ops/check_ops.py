@@ -1,3 +1,20 @@
+# [MODULE DOC]
+# Runtime and static assertion ops and boolean checks for TensorFlow tensors. Provides the public
+# debugging assertions (negative, positive, non-negative, non-positive, equal, none-equal, near,
+# less, less-or-equal, greater, greater-or-equal, rank, rank-at-least, rank-in, integer, type,
+# scalar, shapes, same-float-dtype, proper-iterable), the predicates that test whether a tensor is
+# numeric, non-decreasing or strictly increasing, and the shape-checking op ensure_shape.
+# Most assertions exist twice: a version-1 form (with a data argument, exported under the
+# compatibility namespace and the old top-level names) and a version-2 form (exported under the
+# debugging namespace) that simply forwards to the version-1 function.
+# Behavior: when executing eagerly, checks run immediately and raise an invalid-argument error;
+# in graph mode a check is folded statically when values are known, otherwise an assert op is
+# returned that must be attached with control dependencies. Rank/shape/type checks are static and
+# raise ValueError or TypeError.
+# Import-time side effects: exports symbols via the tf_export machinery, wraps public functions with
+# dispatch and deprecation decorators, generates docstrings for the assert functions through
+# decorator factories, defines the set of numeric dtypes, and registers the gradient of the
+# EnsureShape op. The leading-underscore functions here are internal helpers of these assertions.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -72,6 +89,13 @@ __all__ = [
 
 
 def _maybe_constant_value_string(t):
+  # [FUNCTION DOC]
+  # HELPER: formats assertion message data items for _assert_static.
+  # KNOWN ISSUE: the name says it returns a string, but when the input is a tensor whose value is not
+  # statically known the tensor itself is returned unchanged, so the result is not always a string.
+  # Takes one message item t. A non-tensor is converted to its text form. A tensor with a statically
+  # known constant value is converted to the text of that value. Otherwise the tensor is returned.
+  # No side effects.
   if not isinstance(t, tensor_lib.Tensor):
     return str(t)
   const_t = tensor_util.constant_value(t)
@@ -81,6 +105,11 @@ def _maybe_constant_value_string(t):
 
 
 def _assert_static(condition, data):
+  # [FUNCTION DOC]
+  # HELPER: static (graph-construction-time) failure path shared by the binary assertions.
+  # Inputs: condition, a plain boolean already computed from constant values; data, a list of message
+  # items. If the condition is false, each item is rendered (constants as text) and joined with
+  # newlines into the message of an invalid-argument error that is raised. If true, returns nothing.
   """Raises a InvalidArgumentError with as much information as possible."""
   if not condition:
     data_static = [_maybe_constant_value_string(x) for x in data]
@@ -89,11 +118,21 @@ def _assert_static(condition, data):
 
 
 def _shape_and_dtype_str(tensor):
+  # [FUNCTION DOC]
+  # HELPER: builds a short description of a tensor for eager-mode error messages, where the tensor
+  # has no graph name. Input: any object with a shape and a dtype (tensor or sparse tensor).
+  # Returns a string of the form shape=..., dtype=... using the dtype's name. No side effects.
   """Returns a string containing tensor's shape and dtype."""
   return 'shape=%s dtype=%s' % (tensor.shape, tensor.dtype.name)
 
 
 def _unary_assert_doc(sym, sym_name):
+  # [FUNCTION DOC]
+  # HELPER: docstring generator for the unary element-wise assertions (negative, positive, etc).
+  # Inputs: sym, the comparison text applied to each element against zero; sym_name, the English
+  # name of the check (it gets capitalized). Returns a decorator that overwrites the documentation
+  # of the decorated function with a template filled with the symbol, name and function name.
+  # The returned decorator returns the same function object.
   """Common docstring for assert_* ops that evaluate a unary predicate over every element of a tensor.
 
   Args:
@@ -106,6 +145,11 @@ def _unary_assert_doc(sym, sym_name):
   """
 
   def _decorator(func):
+    # [FUNCTION DOC]
+    # HELPER: the decorator produced by _unary_assert_doc.
+    # Takes the function to decorate, reads its name, formats the unary-assertion documentation
+    # template with the captured symbol and capitalized name, assigns it as the function's
+    # documentation (mutating the function) and returns the same function.
     """Generated decorator that adds the appropriate docstring to the function for symbol `sym`.
 
     Args:
@@ -157,6 +201,11 @@ def _unary_assert_doc(sym, sym_name):
 
 
 def _binary_assert_doc(sym, test_var):
+  # [FUNCTION DOC]
+  # HELPER: docstring generator for the version-1 binary element-wise assertions.
+  # Inputs: sym, the comparison symbol text; test_var, text of a sample value used on the right-hand
+  # side in the generated usage example. Returns a decorator that replaces the decorated function's
+  # documentation with a template (including migration notes and examples) and returns the function.
   """Common docstring for most of the v1 assert_* ops that compare two tensors element-wise.
 
   Args:
@@ -170,6 +219,11 @@ def _binary_assert_doc(sym, test_var):
   """
 
   def _decorator(func):
+    # [FUNCTION DOC]
+    # HELPER: the decorator produced by _binary_assert_doc.
+    # Takes the function to decorate, reads its name, formats the version-1 binary-assertion
+    # documentation template with the captured symbol and test value, assigns it as the function's
+    # documentation (mutating the function) and returns the same function.
     """Generated decorator that adds the appropriate docstring to the function for symbol `sym`.
 
     Args:
@@ -276,6 +330,11 @@ def _binary_assert_doc(sym, test_var):
 
 
 def _binary_assert_doc_v2(sym, opname, test_var):
+  # [FUNCTION DOC]
+  # HELPER: docstring generator for the version-2 binary element-wise assertions.
+  # Inputs: sym, comparison symbol text; opname, public name of the assertion; test_var, a number
+  # shown in the generated example. Returns a decorator that replaces the decorated function's
+  # documentation with a template and returns the same function.
   """Common docstring for v2 assert_* ops that compare two tensors element-wise.
 
   Args:
@@ -289,6 +348,12 @@ def _binary_assert_doc_v2(sym, opname, test_var):
   """
 
   def _decorator(func):
+    # [FUNCTION DOC]
+    # HELPER: the decorator produced by _binary_assert_doc_v2.
+    # KNOWN ISSUE: the generated Raises section hardcodes the equality comparison in its text for
+    # every symbol, so documentation of the other assertions (less, greater, and so on) is inaccurate.
+    # Formats the version-2 template with the captured symbol, op name and example number, assigns it
+    # as the function's documentation (mutating the function) and returns the same function.
     """Decorator that adds docstring to the function for symbol `sym`.
 
     Args:
@@ -354,6 +419,14 @@ def _binary_assert_doc_v2(sym, opname, test_var):
 
 
 def _make_assert_msg_data(sym, x, y, summarize, test_op):
+  # [FUNCTION DOC]
+  # HELPER: builds the failure message items for _binary_assert in eager mode (uses numpy values).
+  # Inputs: sym, comparison text; x and y, the two converted tensors; summarize, how many elements to
+  # show; test_op, boolean tensor that is true where the assertion holds. Returns a list starting
+  # with a generic failure sentence. If summarize is positive and both shapes are equal and non-scalar,
+  # it adds the indices of the first differing positions and the corresponding x and y values. It then
+  # adds the first few flattened elements of x and of y. With summarize of zero or less only the
+  # sentence is returned. Has no side effects but runs eager computations.
   """Subroutine of _binary_assert that generates the components of the default error message when running in eager mode.
 
   Args:
@@ -408,6 +481,12 @@ def _make_assert_msg_data(sym, x, y, summarize, test_op):
 
 
 def _pretty_print(data_item, summarize):
+  # [FUNCTION DOC]
+  # HELPER: converts one message item into text for an eager-mode error message.
+  # Inputs: data_item, a tensor or any plain value; summarize, max number of elements kept from a
+  # tensor. A scalar tensor becomes its value as text; a larger tensor becomes the text of a list of
+  # its first summarize flattened elements with an ellipsis marker appended when truncated; any other
+  # value is converted to text directly. Returns the string. No side effects.
   """Format a data item for use in an error message in eager mode.
 
   Args:
@@ -435,6 +514,19 @@ def _pretty_print(data_item, summarize):
 
 def _binary_assert(sym, opname, op_func, static_func, x, y, data, summarize,
                    message, name):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation behind the version-1 binary element-wise assertions.
+  # KNOWN ISSUE: the docstring says it returns the template described elsewhere; in eager mode it
+  # actually returns nothing on success, and the sym/opname are only used for messages.
+  # Inputs: sym, comparison text; opname, default scope name; op_func, function building the boolean
+  # tensor from x and y; static_func, numpy equivalent for constant folding; x and y, values converted
+  # to tensors; data, optional message items; summarize, number of elements to print (default three
+  # in eager mode, negative means everything); message, optional prefix; name, optional scope name.
+  # Eager mode: evaluates the comparison; if all true returns nothing, otherwise builds the message
+  # (prefix plus data or generated details) and raises an invalid-argument error.
+  # Graph mode: builds default data, and when both inputs are statically constant evaluates the
+  # check immediately, raising an invalid-argument error on failure; otherwise returns an assert op
+  # that fails at run time when the reduced condition is false.
   """Generic binary elementwise assertion.
 
   Implements the behavior described in _binary_assert_doc() above.
@@ -514,6 +606,11 @@ def _binary_assert(sym, opname, op_func, static_func, x, y, data, summarize,
 @dispatch.add_dispatch_support
 @deprecation.deprecated_endpoints('assert_proper_iterable')
 def assert_proper_iterable(values):
+  # [FUNCTION DOC]
+  # Static check that values is a real collection rather than a tensor, sparse tensor, numpy array or
+  # byte/text string (which are technically iterable but unintended). Input: any object.
+  # Returns nothing. Raises a type error if the object is one of those types or has no iteration
+  # support. No side effects.
   """Static assert that values is a "proper" iterable.
 
   `Ops` that expect iterables of `Tensor` can call this to validate input.
@@ -543,6 +640,11 @@ def assert_proper_iterable(values):
 @tf_export('debugging.assert_negative', v1=[])
 @dispatch.add_dispatch_support
 def assert_negative_v2(x, message=None, summarize=None, name=None):
+  # [FUNCTION DOC]
+  # Version-2 public entry for asserting every element of x is below zero. Forwards its arguments to
+  # the version-1 function (which takes data as well, left unset here) and returns its result: an
+  # assert op in graph mode, nothing when eager. Raises an invalid-argument error when the check can
+  # be decided immediately and fails. Inputs: x numeric tensor; message prefix; summarize count; name.
   """Assert the condition `x < 0` holds element-wise.
 
   This Op checks that `x[i] < 0` holds for every element of `x`. If `x` is
@@ -578,6 +680,12 @@ def assert_negative_v2(x, message=None, summarize=None, name=None):
 @deprecation.deprecated_endpoints('assert_negative')
 @_unary_assert_doc('< 0', 'negative')
 def assert_negative(x, data=None, summarize=None, message=None, name=None):  # pylint: disable=missing-docstring
+  # [FUNCTION DOC]
+  # Version-1 assertion that all elements of x are less than zero (its documentation is generated by
+  # a decorator). Converts x to a tensor, builds default message data (prefix, condition text, and the
+  # tensor name or eager shape/dtype description) unless data is given, creates a zero of x's dtype and
+  # delegates to the less-than assertion. Returns that assertion's result (assert op or nothing when
+  # eager); raises an invalid-argument error if the check is decidable now and fails.
   message = _message_prefix(message)
   with ops.name_scope(name, 'assert_negative', [x, data]):
     x = ops.convert_to_tensor(x, name='x')
@@ -597,6 +705,11 @@ def assert_negative(x, data=None, summarize=None, message=None, name=None):  # p
 @tf_export('debugging.assert_positive', v1=[])
 @dispatch.add_dispatch_support
 def assert_positive_v2(x, message=None, summarize=None, name=None):
+  # [FUNCTION DOC]
+  # Version-2 public entry for asserting every element of x is above zero. Forwards to the version-1
+  # function and returns its result (assert op in graph mode, nothing when eager). Raises an
+  # invalid-argument error when the check is decidable immediately and fails.
+  # Inputs: x numeric tensor; message prefix; summarize count; name.
   """Assert the condition `x > 0` holds element-wise.
 
   This Op checks that `x[i] > 0` holds for every element of `x`. If `x` is
@@ -632,6 +745,12 @@ def assert_positive_v2(x, message=None, summarize=None, name=None):
 @deprecation.deprecated_endpoints('assert_positive')
 @_unary_assert_doc('> 0', 'positive')
 def assert_positive(x, data=None, summarize=None, message=None, name=None):  # pylint: disable=missing-docstring
+  # [FUNCTION DOC]
+  # Version-1 assertion that all elements of x are greater than zero (documentation is generated by a
+  # decorator). Converts x to a tensor, builds default message data unless data is given, creates a
+  # zero of x's dtype and delegates to the less-than assertion with zero on the left.
+  # Returns the assert op (nothing when eager); raises an invalid-argument error if decidable now
+  # and violated.
   message = _message_prefix(message)
   with ops.name_scope(name, 'assert_positive', [x, data]):
     x = ops.convert_to_tensor(x, name='x')
@@ -650,6 +769,11 @@ def assert_positive(x, data=None, summarize=None, message=None, name=None):  # p
 @tf_export('debugging.assert_non_negative', v1=[])
 @dispatch.add_dispatch_support
 def assert_non_negative_v2(x, message=None, summarize=None, name=None):
+  # [FUNCTION DOC]
+  # Version-2 public entry for asserting every element of x is at least zero. Forwards to the
+  # version-1 function and returns its result (assert op in graph mode, nothing when eager).
+  # Raises an invalid-argument error when decidable immediately and violated.
+  # Inputs: x numeric tensor; message prefix; summarize count; name.
   """Assert the condition `x >= 0` holds element-wise.
 
   This Op checks that `x[i] >= 0` holds for every element of `x`. If `x` is
@@ -687,6 +811,12 @@ def assert_non_negative_v2(x, message=None, summarize=None, name=None):
 @deprecation.deprecated_endpoints('assert_non_negative')
 @_unary_assert_doc('>= 0', 'non-negative')
 def assert_non_negative(x, data=None, summarize=None, message=None, name=None):  # pylint: disable=missing-docstring
+  # [FUNCTION DOC]
+  # Version-1 assertion that all elements of x are greater than or equal to zero (documentation is
+  # generated by a decorator). Converts x to a tensor, builds default message data unless data is
+  # given, and delegates to the less-or-equal assertion with zero on the left.
+  # Returns the assert op (nothing when eager); raises an invalid-argument error if decidable now
+  # and violated.
   message = _message_prefix(message)
   with ops.name_scope(name, 'assert_non_negative', [x, data]):
     x = ops.convert_to_tensor(x, name='x')
@@ -706,6 +836,11 @@ def assert_non_negative(x, data=None, summarize=None, message=None, name=None): 
 @tf_export('debugging.assert_non_positive', v1=[])
 @dispatch.add_dispatch_support
 def assert_non_positive_v2(x, message=None, summarize=None, name=None):
+  # [FUNCTION DOC]
+  # Version-2 public entry for asserting every element of x is at most zero. Forwards to the
+  # version-1 function and returns its result (assert op in graph mode, nothing when eager).
+  # Raises an invalid-argument error when decidable immediately and violated.
+  # Inputs: x numeric tensor; message prefix; summarize count; name.
   """Assert the condition `x <= 0` holds element-wise.
 
   This Op checks that `x[i] <= 0` holds for every element of `x`. If `x` is
@@ -743,6 +878,15 @@ def assert_non_positive_v2(x, message=None, summarize=None, name=None):
 @deprecation.deprecated_endpoints('assert_non_positive')
 @_unary_assert_doc('<= 0', 'non-positive')
 def assert_non_positive(x, data=None, summarize=None, message=None, name=None):  # pylint: disable=missing-docstring
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: in the default message data a comma is missing between the condition sentence and
+  # the tensor-name label, so the two string literals are merged into one item and the name
+  # substitution is applied to the merged text; the message layout differs from the sibling assertions.
+  # Version-1 assertion that all elements of x are less than or equal to zero (documentation is
+  # generated by a decorator). Converts x to a tensor, builds default message data unless data is
+  # given, and delegates to the less-or-equal assertion with zero on the right.
+  # Returns the assert op (nothing when eager); raises an invalid-argument error if decidable now
+  # and violated.
   message = _message_prefix(message)
   with ops.name_scope(name, 'assert_non_positive', [x, data]):
     x = ops.convert_to_tensor(x, name='x')
@@ -764,6 +908,10 @@ def assert_non_positive(x, data=None, summarize=None, message=None, name=None): 
 @dispatch.add_dispatch_support
 @_binary_assert_doc_v2('==', 'assert_equal', 3)
 def assert_equal_v2(x, y, message=None, summarize=None, name=None):
+  # [FUNCTION DOC]
+  # Version-2 public entry for asserting x equals y element-wise (with broadcasting); documentation
+  # comes from a decorator. Forwards to the version-1 function and returns its result (assert op in
+  # graph mode, nothing when eager). Raises an invalid-argument error when decidable now and violated.
   return assert_equal(x=x, y=y, summarize=summarize, message=message, name=name)
 
 
@@ -772,6 +920,15 @@ def assert_equal_v2(x, y, message=None, summarize=None, name=None):
 @dispatch.add_dispatch_support
 @_binary_assert_doc('==', '[1, 2]')
 def assert_equal(x, y, data=None, summarize=None, message=None, name=None):  # pylint: disable=missing-docstring
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the identity short-circuit sits inside a name scope but the real check is run after
+  # leaving it, so the scope only wraps the shortcut test; also an identical object is accepted even
+  # if its values contain not-a-number entries, which would fail an element-wise comparison.
+  # Version-1 assertion that x equals y element-wise (documentation comes from a decorator).
+  # If x and y are the very same object, returns nothing when eager or a no-op in graph mode.
+  # Otherwise delegates to the shared binary assertion with the equality comparison.
+  # Inputs: x, y tensors; data optional message items; summarize count; message prefix; name.
+  # Raises an invalid-argument error when decidable now and violated.
   with ops.name_scope(name, 'assert_equal', [x, y, data]):
     # Short-circuit if x and y are the same tensor.
     if x is y:
@@ -785,6 +942,10 @@ def assert_equal(x, y, data=None, summarize=None, message=None, name=None):  # p
 @dispatch.add_dispatch_support
 @_binary_assert_doc_v2('!=', 'assert_none_equal', 6)
 def assert_none_equal_v2(x, y, summarize=None, message=None, name=None):
+  # [FUNCTION DOC]
+  # Version-2 public entry for asserting x differs from y at every element position (documentation
+  # comes from a decorator). Forwards to the version-1 function and returns its result (assert op in
+  # graph mode, nothing when eager). Raises an invalid-argument error when decidable now and violated.
   return assert_none_equal(x=x, y=y, summarize=summarize, message=message,
                            name=name)
 
@@ -796,6 +957,11 @@ def assert_none_equal_v2(x, y, summarize=None, message=None, name=None):
 @_binary_assert_doc('!=', '[2, 1]')
 def assert_none_equal(
     x, y, data=None, summarize=None, message=None, name=None):
+  # [FUNCTION DOC]
+  # Version-1 assertion that x and y differ at every element (documentation comes from a decorator).
+  # Delegates to the shared binary assertion with the not-equal comparison. Inputs: x, y tensors;
+  # data optional message items; summarize count; message prefix; name. Returns an assert op in graph
+  # mode or nothing when eager; raises an invalid-argument error when decidable now and violated.
   return _binary_assert('!=', 'assert_none_equal', math_ops.not_equal,
                         np.not_equal, x, y, data, summarize, message, name)
 
@@ -805,6 +971,11 @@ def assert_none_equal(
 @dispatch.add_dispatch_support
 def assert_near_v2(x, y, rtol=None, atol=None, message=None, summarize=None,
                    name=None):
+  # [FUNCTION DOC]
+  # Version-2 public entry for asserting x and y are close element-wise. Inputs: x, y float or
+  # complex tensors; rtol and atol optional relative and absolute tolerances (default ten times the
+  # machine epsilon of the dtype); message prefix; summarize count; name. Forwards to the version-1
+  # function and returns its result (assert op in graph mode, nothing when eager).
   """Assert the condition `x` and `y` are close element-wise.
 
   This Op checks that `x[i] - y[i] < atol + rtol * tf.abs(y[i])` holds for every
@@ -862,6 +1033,17 @@ def assert_near_v2(x, y, rtol=None, atol=None, message=None, summarize=None,
 def assert_near(
     x, y, rtol=None, atol=None, data=None, summarize=None, message=None,
     name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring states the closeness test as less-or-equal to the tolerance, but the
+  # code compares the absolute difference with strict less-than, so values exactly at the tolerance
+  # fail. Also, unlike the other assertions, no static constant folding is done.
+  # Version-1 assertion that x and y are close within atol plus rtol times the magnitude of y.
+  # Converts x to a tensor and y to the same dtype; for complex inputs the epsilon comes from the
+  # real dtype. Defaults for rtol and atol are ten times the dtype's epsilon; they are converted to
+  # tensors of that dtype. Builds default message data (prefix, tolerances, x and y labelled by name
+  # or by shape and dtype when eager) unless data is given, then returns the assert op built from
+  # the reduction of the closeness test (executes immediately when eager, raising an
+  # invalid-argument error on failure).
   """Assert the condition `x` and `y` are close element-wise.
 
   Example of adding a dependency to an operation:
@@ -944,6 +1126,10 @@ def assert_near(
 @dispatch.add_dispatch_support
 @_binary_assert_doc_v2('<', 'assert_less', 3)
 def assert_less_v2(x, y, message=None, summarize=None, name=None):
+  # [FUNCTION DOC]
+  # Version-2 public entry for asserting x is less than y element-wise (documentation comes from a
+  # decorator). Forwards to the version-1 function and returns its result (assert op in graph mode,
+  # nothing when eager). Raises an invalid-argument error when decidable now and violated.
   return assert_less(x=x, y=y, summarize=summarize, message=message, name=name)
 
 
@@ -952,6 +1138,12 @@ def assert_less_v2(x, y, message=None, summarize=None, name=None):
 @dispatch.add_dispatch_support
 @_binary_assert_doc('<', '[2, 3]')
 def assert_less(x, y, data=None, summarize=None, message=None, name=None):
+  # [FUNCTION DOC]
+  # Version-1 assertion that x is strictly less than y element-wise (documentation comes from a
+  # decorator). Delegates to the shared binary assertion with the less-than comparison.
+  # Inputs: x, y tensors; data optional message items; summarize count; message prefix; name.
+  # Returns an assert op in graph mode or nothing when eager; raises an invalid-argument error when
+  # decidable now and violated.
   return _binary_assert('<', 'assert_less', math_ops.less, np.less, x, y, data,
                         summarize, message, name)
 
@@ -961,6 +1153,10 @@ def assert_less(x, y, data=None, summarize=None, message=None, name=None):
 @dispatch.add_dispatch_support
 @_binary_assert_doc_v2('<=', 'assert_less_equal', 3)
 def assert_less_equal_v2(x, y, message=None, summarize=None, name=None):
+  # [FUNCTION DOC]
+  # Version-2 public entry for asserting x is less than or equal to y element-wise (documentation
+  # comes from a decorator). Forwards to the version-1 function and returns its result (assert op in
+  # graph mode, nothing when eager). Raises an invalid-argument error when decidable now and violated.
   return assert_less_equal(x=x, y=y,
                            summarize=summarize, message=message, name=name)
 
@@ -971,6 +1167,12 @@ def assert_less_equal_v2(x, y, message=None, summarize=None, name=None):
 @deprecation.deprecated_endpoints('assert_less_equal')
 @_binary_assert_doc('<=', '[1, 3]')
 def assert_less_equal(x, y, data=None, summarize=None, message=None, name=None):
+  # [FUNCTION DOC]
+  # Version-1 assertion that x is less than or equal to y element-wise (documentation comes from a
+  # decorator). Delegates to the shared binary assertion with the less-or-equal comparison.
+  # Inputs: x, y tensors; data optional message items; summarize count; message prefix; name.
+  # Returns an assert op in graph mode or nothing when eager; raises an invalid-argument error when
+  # decidable now and violated.
   return _binary_assert('<=', 'assert_less_equal', math_ops.less_equal,
                         np.less_equal, x, y, data, summarize, message, name)
 
@@ -980,6 +1182,10 @@ def assert_less_equal(x, y, data=None, summarize=None, message=None, name=None):
 @dispatch.add_dispatch_support
 @_binary_assert_doc_v2('>', 'assert_greater', 9)
 def assert_greater_v2(x, y, message=None, summarize=None, name=None):
+  # [FUNCTION DOC]
+  # Version-2 public entry for asserting x is greater than y element-wise (documentation comes from
+  # a decorator). Forwards to the version-1 function and returns its result (assert op in graph mode,
+  # nothing when eager). Raises an invalid-argument error when decidable now and violated.
   return assert_greater(x=x, y=y, summarize=summarize, message=message,
                         name=name)
 
@@ -989,6 +1195,12 @@ def assert_greater_v2(x, y, message=None, summarize=None, name=None):
 @dispatch.add_dispatch_support
 @_binary_assert_doc('>', '[0, 1]')
 def assert_greater(x, y, data=None, summarize=None, message=None, name=None):  # pylint: disable=missing-docstring
+  # [FUNCTION DOC]
+  # Version-1 assertion that x is strictly greater than y element-wise (documentation comes from a
+  # decorator). Delegates to the shared binary assertion with the greater-than comparison.
+  # Inputs: x, y tensors; data optional message items; summarize count; message prefix; name.
+  # Returns an assert op in graph mode or nothing when eager; raises an invalid-argument error when
+  # decidable now and violated.
   return _binary_assert('>', 'assert_greater', math_ops.greater, np.greater, x,
                         y, data, summarize, message, name)
 
@@ -998,6 +1210,10 @@ def assert_greater(x, y, data=None, summarize=None, message=None, name=None):  #
 @dispatch.add_dispatch_support
 @_binary_assert_doc_v2('>=', 'assert_greater_equal', 9)
 def assert_greater_equal_v2(x, y, message=None, summarize=None, name=None):
+  # [FUNCTION DOC]
+  # Version-2 public entry for asserting x is greater than or equal to y element-wise (documentation
+  # comes from a decorator). Forwards to the version-1 function and returns its result (assert op in
+  # graph mode, nothing when eager). Raises an invalid-argument error when decidable now and violated.
   return assert_greater_equal(x=x, y=y, summarize=summarize, message=message,
                               name=name)
 
@@ -1009,12 +1225,28 @@ def assert_greater_equal_v2(x, y, message=None, summarize=None, name=None):
 @_binary_assert_doc('>=', '[1, 0]')
 def assert_greater_equal(x, y, data=None, summarize=None, message=None,
                          name=None):
+  # [FUNCTION DOC]
+  # Version-1 assertion that x is greater than or equal to y element-wise (documentation comes from
+  # a decorator). Delegates to the shared binary assertion with the greater-or-equal comparison.
+  # Inputs: x, y tensors; data optional message items; summarize count; message prefix; name.
+  # Returns an assert op in graph mode or nothing when eager; raises an invalid-argument error when
+  # decidable now and violated.
   return _binary_assert('>=', 'assert_greater_equal', math_ops.greater_equal,
                         np.greater_equal, x, y, data, summarize, message, name)
 
 
 def _assert_rank_condition(
     x, rank, static_condition, dynamic_condition, data, summarize):
+  # [FUNCTION DOC]
+  # HELPER: common core of the single-rank assertions (rank equal, rank at least).
+  # Inputs: x tensor or sparse tensor; rank, integer scalar to compare with; static_condition,
+  # callback taking the known rank of x and the given rank and returning a boolean;
+  # dynamic_condition, op builder doing the same on tensors; data and summarize for the assert op.
+  # First requires rank to be a 32-bit integer (type error otherwise). If rank is constant it must be
+  # a scalar (else value error); if x's rank is also static, evaluates the static condition: raises a
+  # value error carrying a marker, the actual and given ranks on failure, or returns a no-op.
+  # Otherwise builds the dynamic condition, adds a dependency check that a non-constant rank is a
+  # scalar, and returns an assert op.
   """Assert `x` has a rank that satisfies a given condition.
 
   Args:
@@ -1064,6 +1296,11 @@ def _assert_rank_condition(
 @tf_export('debugging.assert_rank', 'assert_rank', v1=[])
 @dispatch.add_dispatch_support
 def assert_rank_v2(x, rank, message=None, name=None):
+  # [FUNCTION DOC]
+  # Version-2 public entry for asserting x has exactly the given rank. Inputs: x tensor; rank scalar
+  # integer; message prefix; name. Forwards to the version-1 function and returns its result
+  # (a no-op or assert op in graph mode, nothing when eager). Raises a value error when the static
+  # rank mismatches, or an invalid-argument error when only determinable at run time.
   """Assert that `x` has rank equal to `rank`.
 
   This Op checks that the rank of `x` is equal to `rank`.
@@ -1098,6 +1335,14 @@ def assert_rank_v2(x, rank, message=None, name=None):
 @tf_export(v1=['debugging.assert_rank', 'assert_rank'])
 @dispatch.add_dispatch_support
 def assert_rank(x, rank, data=None, summarize=None, message=None, name=None):
+  # [FUNCTION DOC]
+  # Version-1 assertion that x has rank equal to rank. Inputs: x tensor or sparse tensor; rank scalar
+  # integer; data optional message items; summarize count; message prefix; name.
+  # Converts inputs, builds default message data (tensor name, required rank, actual shape), and
+  # runs the shared rank-condition helper with an equality test. If the helper reports a static
+  # mismatch, re-raises a value error with a readable message giving required and actual rank and
+  # shape; any other value error is re-raised as a new value error with the same text.
+  # Returns the helper's result: a no-op if statically verified, else an assert op.
   """Assert `x` has rank equal to `rank`.
 
   Example of adding a dependency to an operation:
@@ -1162,6 +1407,11 @@ def assert_rank(x, rank, data=None, summarize=None, message=None, name=None):
 @tf_export('debugging.assert_rank_at_least', v1=[])
 @dispatch.add_dispatch_support
 def assert_rank_at_least_v2(x, rank, message=None, name=None):
+  # [FUNCTION DOC]
+  # Version-2 public entry for asserting x has rank at least the given rank. Inputs: x tensor; rank
+  # scalar integer; message prefix; name. Forwards to the version-1 function and returns its result
+  # (no-op or assert op in graph mode, nothing when eager). Raises a value error on a static mismatch
+  # or an invalid-argument error when only determinable at run time.
   """Assert that `x` has rank of at least `rank`.
 
   This Op checks that the rank of `x` is greater or equal to `rank`.
@@ -1198,6 +1448,13 @@ def assert_rank_at_least_v2(x, rank, message=None, name=None):
 @deprecation.deprecated_endpoints('assert_rank_at_least')
 def assert_rank_at_least(
     x, rank, data=None, summarize=None, message=None, name=None):
+  # [FUNCTION DOC]
+  # Version-1 assertion that x has rank greater than or equal to rank. Inputs: x tensor (converted;
+  # sparse tensors are not specially handled here); rank scalar; data, summarize, message, name as
+  # in the other assertions. Builds default message data, runs the shared rank-condition helper with
+  # a greater-or-equal test, and on a static failure raises a value error with a readable message
+  # including required and actual rank and shape; other value errors propagate unchanged.
+  # Returns a no-op if statically verified, otherwise an assert op.
   """Assert `x` has rank equal to `rank` or higher.
 
   Example of adding a dependency to an operation:
@@ -1261,10 +1518,18 @@ def assert_rank_at_least(
 
 
 def _static_rank_in(actual_rank, given_ranks):
+  # [FUNCTION DOC]
+  # HELPER: static condition callback for assert_rank_in. Returns true when the known rank is a
+  # member of the collection of permitted ranks. No side effects.
   return actual_rank in given_ranks
 
 
 def _dynamic_rank_in(actual_rank, given_ranks):
+  # [FUNCTION DOC]
+  # HELPER: dynamic condition builder for assert_rank_in. Inputs: actual_rank, a tensor holding the
+  # rank of x; given_ranks, a sequence of rank tensors. Returns a boolean tensor that is true if the
+  # actual rank equals any given rank (logical or of equality tests); with no given ranks returns a
+  # constant false tensor.
   if len(given_ranks) < 1:
     return ops.convert_to_tensor(False)
   result = math_ops.equal(given_ranks[0], actual_rank)
@@ -1276,6 +1541,17 @@ def _dynamic_rank_in(actual_rank, given_ranks):
 
 def _assert_ranks_condition(
     x, ranks, static_condition, dynamic_condition, data, summarize):
+  # [FUNCTION DOC]
+  # HELPER: common core of the multi-rank assertion (rank in a set); analogue of the single-rank
+  # helper.
+  # KNOWN ISSUE: the docstring describes ranks as a scalar tensor, but it must be an iterable
+  # of scalar rank tensors.
+  # Inputs: x tensor or sparse tensor; ranks, iterable of permitted ranks; static_condition and
+  # dynamic_condition callbacks; data and summarize for the assert op. Requires each rank to be a
+  # 32-bit integer (type error otherwise). If all ranks are constant each must be scalar (value error
+  # otherwise) and, when x's rank is static, the static condition is evaluated: failure raises a value
+  # error carrying a marker, actual rank and ranks; success returns a no-op. Otherwise builds the
+  # dynamic condition, adds scalar checks for non-constant ranks and returns an assert op.
   """Assert `x` has a rank that satisfies a given condition.
 
   Args:
@@ -1329,6 +1605,11 @@ def _assert_ranks_condition(
 @tf_export('debugging.assert_rank_in', v1=[])
 @dispatch.add_dispatch_support
 def assert_rank_in_v2(x, ranks, message=None, name=None):
+  # [FUNCTION DOC]
+  # Version-2 public entry for asserting the rank of x is one of the given ranks. Inputs: x tensor;
+  # ranks, iterable of scalar integers; message prefix; name. Forwards to the version-1 function and
+  # returns its result (no-op or assert op in graph mode, nothing when eager). Raises a value error
+  # on a static mismatch or an invalid-argument error when only determinable at run time.
   """Assert that `x` has a rank in `ranks`.
 
   This Op checks that the rank of `x` is in `ranks`.
@@ -1364,6 +1645,13 @@ def assert_rank_in_v2(x, ranks, message=None, name=None):
 @deprecation.deprecated_endpoints('assert_rank_in')
 def assert_rank_in(
     x, ranks, data=None, summarize=None, message=None, name=None):
+  # [FUNCTION DOC]
+  # Version-1 assertion that the rank of x is one of ranks. Inputs: x tensor or sparse tensor;
+  # ranks, iterable of scalar integers (each converted to a tensor); data, summarize, message, name
+  # as in the other assertions. Builds default message data, runs the multi-rank helper with the
+  # membership callbacks, and on a static failure raises a value error naming the permitted ranks,
+  # actual rank and shape; other value errors propagate unchanged. Returns a no-op if statically
+  # verified, otherwise an assert op.
   """Assert `x` has rank in `ranks`.
 
   Example of adding a dependency to an operation:
@@ -1434,6 +1722,12 @@ def assert_rank_in(
 @tf_export('debugging.assert_integer', v1=[])
 @dispatch.add_dispatch_support
 def assert_integer_v2(x, message=None, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says an invalid-argument error is raised for a non-integer type, but
+  # the underlying check actually raises a type error (as its Raises section also says).
+  # Version-2 public entry for asserting x has a non-quantized integer dtype. Inputs: x tensor;
+  # message prefix; name. Forwards to the version-1 function, discards its result and returns
+  # nothing. Raises a type error for non-integer dtypes. Always decided statically.
   """Assert that `x` is of integer dtype.
 
   If `x` has a non-integer type, `message`, as well as the dtype of `x` are
@@ -1456,6 +1750,10 @@ def assert_integer_v2(x, message=None, name=None):
 @dispatch.add_dispatch_support
 @deprecation.deprecated_endpoints('assert_integer')
 def assert_integer(x, message=None, name=None):
+  # [FUNCTION DOC]
+  # Version-1 static assertion that x has a non-quantized integer dtype. Inputs: x, converted to a
+  # tensor; message prefix; name for the scope. Raises a type error naming the tensor (or a generic
+  # word when eager) and its dtype if the dtype is not integer. Otherwise returns a no-op.
   """Assert that `x` is of integer dtype.
 
   Example of adding a dependency to an operation:
@@ -1494,6 +1792,10 @@ def assert_integer(x, message=None, name=None):
 @tf_export('debugging.assert_type', v1=[])
 @dispatch.add_dispatch_support
 def assert_type_v2(tensor, tf_type, message=None, name=None):
+  # [FUNCTION DOC]
+  # Version-2 public entry for statically asserting that a tensor, sparse tensor or variable has the
+  # given dtype. Inputs: tensor; tf_type, the expected dtype; message prefix; name. Forwards to the
+  # version-1 function, discards its result and returns nothing. Raises a type error on mismatch.
   """Asserts that the given `Tensor` is of the specified type.
 
   This can always be checked statically, so this method returns nothing.
@@ -1530,6 +1832,10 @@ def assert_type_v2(tensor, tf_type, message=None, name=None):
 @dispatch.add_dispatch_support
 @deprecation.deprecated_endpoints('assert_type')
 def assert_type(tensor, tf_type, message=None, name=None):
+  # [FUNCTION DOC]
+  # Version-1 static assertion on dtype. Inputs: tensor, converted unless already sparse;
+  # tf_type, converted to a dtype object; message prefix; name for the scope. Raises a type error
+  # (naming the tensor, expected and actual dtype) when they differ; otherwise returns a no-op.
   """Statically asserts that the given `Tensor` is of the specified type.
 
   Args:
@@ -1558,6 +1864,11 @@ def assert_type(tensor, tf_type, message=None, name=None):
 
 
 def _dimension_sizes(x):
+  # [FUNCTION DOC]
+  # HELPER: supplies per-dimension sizes for the shape assertion. Input: a tensor or sparse tensor.
+  # A scalar counts as a one-element shape of size one. With a known rank returns a list holding, for
+  # each dimension, a plain integer when statically known or a slice of the dynamic shape tensor.
+  # With unknown rank returns a conditional tensor yielding one for rank zero, else the dynamic shape.
   """Gets the dimension sizes of a tensor `x`.
 
   If a size can be determined statically it is returned as an integer,
@@ -1589,6 +1900,10 @@ def _dimension_sizes(x):
 
 
 def _symbolic_dimension_sizes(symbolic_shape):
+  # [FUNCTION DOC]
+  # HELPER: normalizes a user-specified symbolic shape for the shape assertion. An empty shape is
+  # treated as a single dimension of size one (returned as a one-element tuple of the number one);
+  # otherwise the input is returned unchanged.
   # If len(symbolic_shape) == 0 construct a tuple
   if not symbolic_shape:
     return tuple([1])
@@ -1597,6 +1912,10 @@ def _symbolic_dimension_sizes(symbolic_shape):
 
 
 def _has_known_value(dimension_size):
+  # [FUNCTION DOC]
+  # HELPER: predicate for the shape assertion. Returns true if the dimension size is not null and
+  # can be converted to an integer (so integer-like text qualifies); conversion failures are caught
+  # and give false. No side effects.
   not_none = dimension_size is not None
   try:
     int(dimension_size)
@@ -1607,6 +1926,9 @@ def _has_known_value(dimension_size):
 
 
 def _is_symbol_for_any_size(symbol):
+  # [FUNCTION DOC]
+  # HELPER: predicate for the shape assertion. Returns true when the symbol is null or the single
+  # dot, which both mean a dimension of any size (no constraint).
   return symbol in [None, '.']
 
 
@@ -1619,6 +1941,12 @@ _TensorDimSizes = collections.namedtuple(
 @dispatch.add_dispatch_support
 def assert_shapes_v2(shapes, data=None, summarize=None, message=None,
                      name=None):
+  # [FUNCTION DOC]
+  # Version-2 public entry for asserting tensor shapes and shared dimension-size relations.
+  # Inputs: shapes, mapping or list of pairs of tensor and expected symbolic shape; data, summarize,
+  # message, name as in the other assertions. Forwards to the version-1 function and discards its
+  # result, returning nothing. Raises a value error on static violations; otherwise failures
+  # surface as invalid-argument errors when executed.
   """Assert tensor shapes and dimension size relationships between tensors.
 
   This Op checks that a collection of tensors shape relationships
@@ -1685,6 +2013,19 @@ def assert_shapes_v2(shapes, data=None, summarize=None, message=None,
 @tf_export(v1=['debugging.assert_shapes'])
 @dispatch.add_dispatch_support
 def assert_shapes(shapes, data=None, summarize=None, message=None, name=None):
+  # [FUNCTION DOC]
+  # Version-1 assertion of tensor ranks and dimension sizes against symbolic shape specifications.
+  # Inputs: shapes, a list of pairs of tensor and shape (a mapping is also accepted); each shape is
+  # an iterable whose entries are integers, symbol names (equal symbols must have equal sizes across
+  # tensors), null or a dot for any size, and optionally a leading ellipsis or star meaning any
+  # number of outer dimensions; pairs whose shape is null are skipped. data, summarize, message and
+  # name as in the other assertions.
+  # Steps: converts tensors, validates every shape is iterable and the outer-dimensions marker only
+  # appears first (value error otherwise); builds rank assertions (rank-in zero or one, rank at
+  # least, or exact rank); then, under dependencies on the rank assertions, compares each sized
+  # dimension with an explicit or earlier-bound symbol size, raising a value error on a static
+  # mismatch or adding a run-time assert otherwise.
+  # Returns a grouped op that runs after the rank assertions, or a no-op when everything is static.
   """Assert tensor shapes and dimension size relationships between tensors.
 
   This Op checks that a collection of tensors shape relationships
@@ -1787,6 +2128,10 @@ def assert_shapes(shapes, data=None, summarize=None, message=None, name=None):
     executing_eagerly = context.executing_eagerly()
 
     def tensor_name(x):
+      # [FUNCTION DOC]
+      # HELPER: gives a printable name for a tensor in shape-assertion messages. When executing
+      # eagerly or the input is sparse, returns the shape-and-dtype description; otherwise the
+      # graph name of the tensor.
       if executing_eagerly or isinstance(x, sparse_tensor.SparseTensor):
         return _shape_and_dtype_str(x)
       return x.name
@@ -1940,6 +2285,13 @@ def assert_shapes(shapes, data=None, summarize=None, message=None, name=None):
 
 # pylint: disable=line-too-long
 def _get_results_for_monotonic_comparison(x, compare_op):
+  # [FUNCTION DOC]
+  # HELPER: shared by the non-decreasing and strictly-increasing predicates.
+  # KNOWN ISSUE: the docstring says it gets the difference of shifted slices, but the code returns the
+  # boolean result of applying the comparison to adjacent elements, not a numeric difference.
+  # Inputs: x tensor (flattened); compare_op, binary comparison builder. Raises a type error if x is
+  # not numeric. Returns a boolean vector comparing each element with its predecessor, or an empty
+  # vector when x has fewer than two elements (decided at run time by a conditional).
   """Gets the difference x[1:] - x[:-1]."""
   x = array_ops.reshape(x, [-1])
   if not is_numeric_tensor(x):
@@ -1963,6 +2315,10 @@ def _get_results_for_monotonic_comparison(x, compare_op):
     v1=['debugging.is_numeric_tensor', 'is_numeric_tensor'])
 @deprecation.deprecated_endpoints('is_numeric_tensor')
 def is_numeric_tensor(tensor):
+  # [FUNCTION DOC]
+  # Predicate: true only if the argument is a tensor object whose dtype belongs to the module's set of
+  # numeric dtypes (floats, ints, quantized ints, complex, bfloat16); false for other dtypes and for
+  # non-tensor inputs. Returns a plain boolean. No side effects.
   """Returns `True` if the elements of `tensor` are numbers.
 
   Specifically, returns `True` if the dtype of `tensor` is one of the following:
@@ -2003,6 +2359,10 @@ def is_numeric_tensor(tensor):
 @deprecation.deprecated_endpoints('debugging.is_non_decreasing',
                                   'is_non_decreasing')
 def is_non_decreasing(x, name=None):
+  # [FUNCTION DOC]
+  # Tests whether the flattened numeric tensor x never decreases between adjacent elements.
+  # Inputs: x numeric tensor; name optional scope name. Returns a scalar boolean tensor (true for
+  # fewer than two elements). Raises a type error if x is not numeric.
   """Returns `True` if `x` is non-decreasing.
 
   Elements of `x` are compared in row-major order.  The tensor `[x[0],...]`
@@ -2044,6 +2404,10 @@ def is_non_decreasing(x, name=None):
 @deprecation.deprecated_endpoints('debugging.is_strictly_increasing',
                                   'is_strictly_increasing')
 def is_strictly_increasing(x, name=None):
+  # [FUNCTION DOC]
+  # Tests whether the flattened numeric tensor x strictly increases between adjacent elements.
+  # Inputs: x numeric tensor; name optional scope name. Returns a scalar boolean tensor (true for
+  # fewer than two elements). Raises a type error if x is not numeric.
   """Returns `True` if `x` is strictly increasing.
 
   Elements of `x` are compared in row-major order.  The tensor `[x[0],...]`
@@ -2077,6 +2441,12 @@ def is_strictly_increasing(x, name=None):
 
 
 def _assert_same_base_type(items, expected_type=None):
+  # [FUNCTION DOC]
+  # HELPER: type-consistency check for assert_same_float_dtype.
+  # Inputs: items, list of objects with a dtype (null entries ignored); expected_type, optional type
+  # to compare against (otherwise the first item's base type is used). Returns the common base type,
+  # or the expected type unchanged (possibly null) when no item exists. On the first mismatch makes a
+  # second pass to build a descriptive message and raises a value error naming the offending item.
   r"""Asserts all items are of the same base type.
 
   Args:
@@ -2129,6 +2499,14 @@ def _assert_same_base_type(items, expected_type=None):
 @dispatch.add_dispatch_support
 @deprecation.deprecated_endpoints('assert_same_float_dtype')
 def assert_same_float_dtype(tensors=None, dtype=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says a value error is raised if neither tensors nor dtype is supplied,
+  # but the code returns the default 32-bit float type in that case; it only raises for a
+  # non-floating common type or a mismatch.
+  # Inputs: tensors, optional list of tensors (null entries ignored); dtype, optional expected dtype.
+  # Validates all tensors share one base type (equal to dtype if given), then returns that type; with
+  # nothing to infer returns 32-bit float. Raises a value error on a type mismatch or if the
+  # resulting type is not floating point.
   """Validate and return float type based on `tensors` and `dtype`.
 
   For ops such as matrix multiplication, inputs and weights must be of the
@@ -2161,6 +2539,10 @@ def assert_same_float_dtype(tensors=None, dtype=None):
 @tf_export('debugging.assert_scalar', v1=[])
 @dispatch.add_dispatch_support
 def assert_scalar_v2(tensor, message=None, name=None):
+  # [FUNCTION DOC]
+  # Version-2 public entry for statically asserting that a tensor is a scalar. Inputs: tensor;
+  # message prefix; name. Forwards to the version-1 function, discards its result and returns
+  # nothing. Raises a value error if the rank is not zero or is unknown.
   """Asserts that the given `tensor` is a scalar.
 
   This function raises `ValueError` unless it can be certain that the given
@@ -2185,6 +2567,11 @@ def assert_scalar_v2(tensor, message=None, name=None):
 @dispatch.add_dispatch_support
 @deprecation.deprecated_endpoints('assert_scalar')
 def assert_scalar(tensor, name=None, message=None):
+  # [FUNCTION DOC]
+  # Version-1 static scalar check. Inputs: tensor, converted to a tensor (using the scope name as
+  # the op name); name optional scope name; message prefix. Raises a value error when the static
+  # rank is not zero (this includes unknown rank); the text includes the tensor name only in graph
+  # mode. Returns the converted tensor. Note the parameter order differs from the version-2 form.
   """Asserts that the given `tensor` is a scalar (i.e. zero-dimensional).
 
   This function raises `ValueError` unless it can be certain that the given
@@ -2218,6 +2605,9 @@ def assert_scalar(tensor, name=None, message=None):
 
 
 def _message_prefix(message):
+  # [FUNCTION DOC]
+  # HELPER: formats the optional user message prefix used by the assertions. Returns the message
+  # followed by a period and two spaces if it is non-empty, otherwise an empty string.
   if message:
     return '%s.  ' % message
   return ''
@@ -2226,6 +2616,12 @@ def _message_prefix(message):
 @tf_export('ensure_shape')
 @dispatch.add_dispatch_support
 def ensure_shape(x, shape, name=None):
+  # [FUNCTION DOC]
+  # Asserts at run time that x's shape is compatible with shape and refines the static shape of the
+  # result. Inputs: x tensor; shape, a shape object, shape description, list, tuple or null
+  # (converted to a tensor-shape object if not already one); name optional. Returns a tensor with
+  # the same contents as x and the merged static shape; the result must be used for the check to
+  # run. An invalid-argument error is raised at execution if the shapes are incompatible.
   """Updates the shape of a tensor and checks at runtime that the shape holds.
 
   When executed, this operation asserts that the input tensor `x`'s shape
@@ -2369,5 +2765,8 @@ def ensure_shape(x, shape, name=None):
 
 @ops.RegisterGradient('EnsureShape')
 def _ensure_shape_grad(op, grad):
+  # [FUNCTION DOC]
+  # HELPER: gradient function registered for the EnsureShape op. Inputs: op (ignored) and grad, the
+  # incoming gradient. Returns the incoming gradient unchanged, since the op is an identity on values.
   del op  # Unused.
   return grad
