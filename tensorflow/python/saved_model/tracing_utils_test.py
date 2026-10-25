@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Tests for the save-and-restore tracing helper. Defines a small trackable with two variables
+# and checks both the traced path and the pass-through path for pre-made concrete functions.
+# No import-time side effects.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,23 +30,39 @@ from tensorflow.python.trackable import base
 
 
 class MyTrackable(base.Trackable):
+  # [CLASS DOC]
+  # HELPER: Minimal trackable test fixture holding two integer variables, named a and b, that
+  # provides tensor serialization and restoration methods.
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Creates variable a with initial value 0 and variable b with initial value 1.
     self.a = variables.Variable(0)
     self.b = variables.Variable(1)
 
   def _serialize_to_tensors(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with keys a and b to the two variables.
     return {"a": self.a, "b": self.b}
 
   def _restore_from_tensors(self, restored_tensors):
+    # [FUNCTION DOC]
+    # Takes a mapping of names a and b to tensors, assigns each to the matching variable and
+    # returns the grouped assignment operation.
     return control_flow_ops.group(
         self.a.assign(restored_tensors["a"]),
         self.b.assign(restored_tensors["b"]))
 
 
 class TracingUtilsTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the save-and-restore tracing helper, using the two-variable trackable fixture.
 
   def test_trace_save_and_restore(self):
+    # [FUNCTION DOC]
+    # Scenario: the trackable's methods are plain Python methods. Traces them, asserts the save
+    # function yields a=0 and b=1, calls the restore function with 2 and 3, and asserts a
+    # subsequent save yields a=2 and b=3.
     t = MyTrackable()
     save_fn, restore_fn = tracing_utils.trace_save_and_restore(t)
     self.assertDictEqual({"a": 0, "b": 1}, self.evaluate(save_fn()))
@@ -50,6 +70,10 @@ class TracingUtilsTest(test.TestCase):
     self.assertDictEqual({"a": 2, "b": 3}, self.evaluate(save_fn()))
 
   def test_trace_save_and_restore_concrete(self):
+    # [FUNCTION DOC]
+    # Scenario: the trackable's serialize and restore methods are replaced by already-concrete
+    # functions. Asserts the tracing helper returns exactly those same function objects
+    # (identity) rather than wrapping them.
     t = MyTrackable()
     t._serialize_to_tensors = (def_function.function(t._serialize_to_tensors)
                                .get_concrete_function())

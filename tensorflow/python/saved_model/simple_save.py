@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Provides the deprecated v1 convenience function for exporting a session's graph as a serving
+# SavedModel with a single predict signature. Exported publicly under the v1 saved model
+# namespace. Builds on the SavedModel builder, signature utilities and tag constants. No
+# import-time side effects beyond decorator registration for the exported function.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +34,17 @@ from tensorflow.python.util.tf_export import tf_export
     'This API was designed for TensorFlow v1. See https://www.tensorflow.org/guide/migrate '
     'for instructions on how to migrate your code to TensorFlow v2.')
 def simple_save(session, export_dir, inputs, outputs, legacy_init_op=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: Deprecated TensorFlow v1 API (wrapped with a deprecation notice); the
+  # docstring's example omits the module prefix and the indentation of its bullet list is uneven.
+  # Saves a serving SavedModel from a live session. Inputs: the session holding the graph and
+  # variables, the export directory path, a mapping of input names to tensors, a mapping of
+  # output names to tensors, and an optional legacy initialization op run after restore
+  # (default nothing). Builds one predict signature under the default serving key, creates a
+  # SavedModel builder for the directory, adds the meta graph and variables with the serving tag,
+  # the asset file paths collection, the init op as main op and cleared device placements, then
+  # saves. Returns nothing. Side effects: writes the SavedModel files to disk; errors from the
+  # builder (such as an existing directory) propagate.
   """Convenience function to build a SavedModel suitable for serving.
 
   In many common cases, saving models for serving will be as simple as:

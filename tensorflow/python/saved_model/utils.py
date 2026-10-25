@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: Thin public facade module for the SavedModel utilities.
+# Re-exports three functions from the utilities implementation module: building a tensor-info
+# description from a tensor, building one from an operation, and getting a tensor back from a
+# tensor-info description. Contains no logic of its own; imports are kept intentionally unused.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

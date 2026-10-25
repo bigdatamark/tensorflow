@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Implementation of the SavedModel tensor-info utilities. Provides functions to build a
+# tensor-info message from a dense, sparse or composite tensor or from an operation, to look up
+# the tensor or operation a tensor-info message describes inside a graph, and to swap byte order
+# of tensor contents in a meta graph. The public wrappers are deprecated v1 APIs exported under
+# the v1 saved model namespaces; the module re-exposed through the utils facade module.
+# Import-time side effect: registers those exports.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -42,6 +49,11 @@ _DEPRECATION_MSG = (
     v1=["saved_model.build_tensor_info", "saved_model.utils.build_tensor_info"])
 @deprecation.deprecated(None, _DEPRECATION_MSG)
 def build_tensor_info(tensor):
+  # [FUNCTION DOC]
+  # Deprecated v1 public entry point that builds a tensor-info message for a graph tensor.
+  # Takes a dense tensor, sparse tensor or composite tensor. Raises a runtime error when eager
+  # execution is enabled; otherwise delegates to the internal builder and returns the
+  # tensor-info message (name, dtype and shape; sparse tensors record three component names).
   """Utility function to build TensorInfo proto from a Tensor.
 
   Args:
@@ -69,6 +81,13 @@ def build_tensor_info(tensor):
 
 
 def build_tensor_info_internal(tensor):
+  # [FUNCTION DOC]
+  # HELPER: Eager-agnostic core behind the public tensor-info builder, usable by internal code.
+  # Takes a tensor, sparse tensor, composite tensor or resource variable. Composite tensors
+  # (other than sparse tensors and resource variables) are delegated to the composite builder.
+  # Otherwise builds a message with the dtype and shape; sparse tensors get the names of their
+  # values, indices and dense shape tensors, and other tensors get their own name. Returns the
+  # message. No eager check is performed here.
   """Utility function to build TensorInfo proto from a Tensor."""
   if (isinstance(tensor, composite_tensor.CompositeTensor) and
       not isinstance(tensor, sparse_tensor.SparseTensor) and
@@ -88,6 +107,11 @@ def build_tensor_info_internal(tensor):
 
 
 def _build_composite_tensor_info_internal(tensor):
+  # [FUNCTION DOC]
+  # HELPER: Composite-tensor branch of the tensor-info builder.
+  # Takes a composite tensor. Encodes its type specification into the message, then flattens the
+  # tensor into its component tensors and appends a tensor-info message for each one (built
+  # recursively). Returns the message.
   """Utility function to build TensorInfo proto from a CompositeTensor."""
   spec = tensor._type_spec  # pylint: disable=protected-access
   tensor_info = meta_graph_pb2.TensorInfo()
@@ -100,6 +124,13 @@ def _build_composite_tensor_info_internal(tensor):
 
 
 def build_tensor_info_from_op(op):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: The docstring says the tensor shape is None and its example calls a
+  # nonexistent build_op_info function; the code actually sets an unknown-shape proto and the
+  # invalid dtype, and the function is not deprecated or exported unlike its siblings.
+  # Takes an operation and returns a tensor-info message whose name is the operation's name,
+  # whose dtype is the invalid marker and whose shape is unknown. Raises a runtime error if
+  # eager execution is enabled. Intended for internal use only.
   """Utility function to build TensorInfo proto from an Op.
 
   Note that this function should be used with caution. It is strictly restricted
@@ -144,6 +175,13 @@ def build_tensor_info_from_op(op):
                "saved_model.utils.get_tensor_from_tensor_info"])
 @deprecation.deprecated(None, _DEPRECATION_MSG)
 def get_tensor_from_tensor_info(tensor_info, graph=None, import_scope=None):
+  # [FUNCTION DOC]
+  # Deprecated v1 function that resolves a tensor-info message to the described tensor.
+  # Takes the message, an optional graph (default: the current default graph) and an optional
+  # import scope prefix applied to names. Depending on the encoding, returns a dense tensor by
+  # name, a sparse tensor from its three named components, or a composite tensor rebuilt from the
+  # decoded type specification and its component tensors. Raises a key error when a name is not
+  # in the graph and a value error for an unknown or missing encoding.
   """Returns the Tensor or CompositeTensor described by a TensorInfo proto.
 
   Args:
@@ -164,6 +202,9 @@ def get_tensor_from_tensor_info(tensor_info, graph=None, import_scope=None):
   """
   graph = graph or ops.get_default_graph()
   def _get_tensor(name):
+    # [FUNCTION DOC]
+    # HELPER: Looks up a tensor by name in the enclosing graph after prepending the import
+    # scope. Raises a key error if no such tensor exists. Returns the tensor.
     return graph.get_tensor_by_name(
         ops.prepend_name_scope(name, import_scope=import_scope))
   encoding = tensor_info.WhichOneof("encoding")
@@ -188,6 +229,11 @@ def get_tensor_from_tensor_info(tensor_info, graph=None, import_scope=None):
 
 
 def get_element_from_tensor_info(tensor_info, graph=None, import_scope=None):
+  # [FUNCTION DOC]
+  # Resolves a tensor-info message to a graph element, which may be an operation or a tensor.
+  # Takes the message (only its name is used), an optional graph (default: the current default
+  # graph) and an optional import scope prefix. Returns the element found by name; raises a key
+  # error (or value error from the graph lookup) when no such element exists.
   """Returns the element in the graph described by a TensorInfo proto.
 
   Args:
@@ -209,6 +255,11 @@ def get_element_from_tensor_info(tensor_info, graph=None, import_scope=None):
 
 
 def swap_function_tensor_content(meta_graph_def, from_endiness, to_endiness):
+  # [FUNCTION DOC]
+  # HELPER: Thin wrapper over the byte-swapping utility used when a SavedModel is moved between
+  # machines of different endianness (note the parameter names use the spelling "endiness").
+  # Takes a meta graph definition and the source and target byte orders, and swaps tensor
+  # contents in its graph functions in place. Returns nothing.
   bst.swap_tensor_content_in_graph_function(
       meta_graph_def, from_endiness, to_endiness
   )

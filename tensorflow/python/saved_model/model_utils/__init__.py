@@ -1,3 +1,9 @@
+# [PACKAGE DOC]
+# Package of helpers for exporting models (originally from the estimator/Keras v1 saving utils)
+# to the SavedModel format. Re-exports, via a wildcard import, the export output classes from
+# the export output module, plus the signature-building and export-directory helpers and the tag
+# and signature key maps from the export utils module. Import-time side effects: only the
+# imports of those submodules. The lint markers tie this file to a mirrored Keras package file.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

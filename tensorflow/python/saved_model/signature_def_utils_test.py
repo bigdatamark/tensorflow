@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Unit tests for the SignatureDef helper functions in the saved model signature utilities
+# implementation module. Covers building generic signature definitions, the regression,
+# classification, prediction and supervised train/eval signature builders, validation of
+# signatures against the expected method names and key/type conventions, and creating and
+# loading operation-based signatures. Defines two shared string and float tensor-info fixtures
+# and a small signature-building helper. No import-time side effects; run via the test main.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -42,6 +49,12 @@ _FLOAT = meta_graph_pb2.TensorInfo(
 
 
 def _make_signature(inputs, outputs, name=None):
+  # [FUNCTION DOC]
+  # HELPER: Test utility that builds a signature definition from tensors.
+  # KNOWN ISSUE: Appears unused in this file; no test calls it.
+  # Takes a mapping of input names to tensors, a mapping of output names to tensors and an
+  # optional method name (default nothing). Converts each tensor to a tensor-info description and
+  # returns the signature definition built from them. Has no side effects.
   input_info = {
       input_name: utils.build_tensor_info(tensor)
       for input_name, tensor in inputs.items()
@@ -55,8 +68,18 @@ def _make_signature(inputs, outputs, name=None):
 
 
 class SignatureDefUtilsTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the signature definition builders, validators and operation-signature
+  # helpers. Each test builds tensors inside a fresh graph (the APIs are v1 graph-mode only) and
+  # asserts on the resulting signature definition's method name, inputs and outputs. No shared
+  # fixtures other than the module level string and float tensor-info constants.
 
   def testBuildSignatureDef(self):
+    # [FUNCTION DOC]
+    # Builds a signature definition from one float input, one float output and one default
+    # constant in a graph, with method name "foo-method-name". Asserts that the method name is
+    # kept, the input and output tensor names, dtypes and shapes are recorded, and the default
+    # value (dtype and float value) is stored.
     # Force the test to run in graph mode.
     # This tests a deprecated v1 API that uses functionality that does not work
     # with eager tensors (namely build_tensor_info).
@@ -100,6 +123,10 @@ class SignatureDefUtilsTest(test.TestCase):
     self.assertEqual(1.0, signature_def.defaults["w"].float_val[0])
 
   def testRegressionSignatureDef(self):
+    # [FUNCTION DOC]
+    # Creates a regression signature from a string input and a float output in graph mode.
+    # Asserts the regression method name and that the standard regression input and output keys
+    # hold the expected tensor names, dtypes (string, float) and scalar shapes.
     # Force the test to run in graph mode.
     # This tests a deprecated v1 API that uses functionality that does not work
     # with eager tensors (namely build_tensor_info).
@@ -129,6 +156,10 @@ class SignatureDefUtilsTest(test.TestCase):
     self.assertEqual(0, len(y_tensor_info_actual.tensor_shape.dim))
 
   def testClassificationSignatureDef(self):
+    # [FUNCTION DOC]
+    # Creates a classification signature from a string input, a string classes output and a float
+    # scores output in graph mode. Asserts the classification method name, one input and two
+    # outputs under the standard classify keys, with expected names, dtypes and scalar shapes.
     # Force the test to run in graph mode.
     # This tests a deprecated v1 API that uses functionality that does not work
     # with eager tensors (namely build_tensor_info).
@@ -164,6 +195,10 @@ class SignatureDefUtilsTest(test.TestCase):
     self.assertEqual(0, len(scores_tensor_info_actual.tensor_shape.dim))
 
   def testPredictionSignatureDef(self):
+    # [FUNCTION DOC]
+    # Creates a prediction signature from two named string inputs and two named string outputs in
+    # graph mode. Asserts the predict method name and that every input and output is present
+    # under its given key with the expected tensor name, string dtype and scalar shape.
     # Force the test to run in graph mode.
     # This tests a deprecated v1 API that uses functionality that does not work
     # with eager tensors (namely build_tensor_info).
@@ -207,16 +242,30 @@ class SignatureDefUtilsTest(test.TestCase):
     self.assertEqual(0, len(output2_tensor_info_actual.tensor_shape.dim))
 
   def testTrainSignatureDef(self):
+    # [FUNCTION DOC]
+    # Runs the shared supervised signature check against the supervised train signature builder
+    # and the supervised train method name.
     self._testSupervisedSignatureDef(
         signature_def_utils_impl.supervised_train_signature_def,
         signature_constants.SUPERVISED_TRAIN_METHOD_NAME)
 
   def testEvalSignatureDef(self):
+    # [FUNCTION DOC]
+    # Runs the shared supervised signature check against the supervised eval signature builder
+    # and the supervised eval method name.
     self._testSupervisedSignatureDef(
         signature_def_utils_impl.supervised_eval_signature_def,
         signature_constants.SUPERVISED_EVAL_METHOD_NAME)
 
   def _testSupervisedSignatureDef(self, fn_to_test, method_name):
+    # [FUNCTION DOC]
+    # HELPER: Shared body for the train and eval supervised signature tests.
+    # KNOWN ISSUE: The last assertion block is meant to check the update-op output but re-checks
+    # the metrics value output's dtype instead, so the update-op dtype is never verified.
+    # Takes the builder function under test and the expected method name. Builds string inputs,
+    # a loss, a classes prediction and metrics (value and update op) in a graph, calls the
+    # builder, then asserts the method name, two inputs, four outputs with the expected tensor
+    # names, dtypes and shapes.
     # Force the test to run in graph mode.
     # This tests a deprecated v1 API that uses functionality that does not work
     # with eager tensors (namely build_tensor_info).
@@ -271,16 +320,25 @@ class SignatureDefUtilsTest(test.TestCase):
         types_pb2.DT_FLOAT, signature_def.outputs["metrics/value"].dtype)
 
   def testTrainSignatureDefMissingInputs(self):
+    # [FUNCTION DOC]
+    # Runs the shared missing-inputs check against the supervised train signature builder.
     self._testSupervisedSignatureDefMissingInputs(
         signature_def_utils_impl.supervised_train_signature_def,
         signature_constants.SUPERVISED_TRAIN_METHOD_NAME)
 
   def testEvalSignatureDefMissingInputs(self):
+    # [FUNCTION DOC]
+    # Runs the shared missing-inputs check against the supervised eval signature builder.
     self._testSupervisedSignatureDefMissingInputs(
         signature_def_utils_impl.supervised_eval_signature_def,
         signature_constants.SUPERVISED_EVAL_METHOD_NAME)
 
   def _testSupervisedSignatureDefMissingInputs(self, fn_to_test, method_name):
+    # [FUNCTION DOC]
+    # HELPER: Shared body for the train and eval missing-inputs tests.
+    # Takes the builder under test and the expected method name. In graph mode, asserts that an
+    # empty inputs mapping raises a value error, that calling with only inputs and loss yields one
+    # output, and that adding metrics yields three outputs; the method name is checked each time.
     # Force the test to run in graph mode.
     # This tests a deprecated v1 API that uses functionality that does not work
     # with eager tensors (namely build_tensor_info).
@@ -316,18 +374,29 @@ class SignatureDefUtilsTest(test.TestCase):
       self.assertEqual(3, len(signature_def.outputs))
 
   def _assertValidSignature(self, inputs, outputs, method_name):
+    # [FUNCTION DOC]
+    # HELPER: Assertion helper for the validity tests.
+    # Builds a signature definition from tensor-info mappings for inputs and outputs and the
+    # method name, and asserts that the validity check accepts it.
     signature_def = signature_def_utils_impl.build_signature_def(
         inputs, outputs, method_name)
     self.assertTrue(
         signature_def_utils_impl.is_valid_signature(signature_def))
 
   def _assertInvalidSignature(self, inputs, outputs, method_name):
+    # [FUNCTION DOC]
+    # HELPER: Assertion helper for the rejection tests.
+    # Builds a signature definition from tensor-info mappings for inputs and outputs and the
+    # method name, and asserts that the validity check rejects it.
     signature_def = signature_def_utils_impl.build_signature_def(
         inputs, outputs, method_name)
     self.assertFalse(
         signature_def_utils_impl.is_valid_signature(signature_def))
 
   def testValidSignaturesAreAccepted(self):
+    # [FUNCTION DOC]
+    # Asserts that well-formed classification (both, classes only, scores only), regression and
+    # prediction signatures are all reported valid.
     self._assertValidSignature(
         {"inputs": _STRING},
         {"classes": _STRING, "scores": _FLOAT},
@@ -354,6 +423,8 @@ class SignatureDefUtilsTest(test.TestCase):
         signature_constants.PREDICT_METHOD_NAME)
 
   def testInvalidMethodNameSignatureIsRejected(self):
+    # [FUNCTION DOC]
+    # Asserts that a signature with an unrecognized method name is reported invalid.
     # WRONG METHOD
     self._assertInvalidSignature(
         {"inputs": _STRING},
@@ -361,6 +432,9 @@ class SignatureDefUtilsTest(test.TestCase):
         "WRONG method name")
 
   def testInvalidClassificationSignaturesAreRejected(self):
+    # [FUNCTION DOC]
+    # Asserts that classification signatures with wrong dtypes, wrong or missing input and output
+    # keys, empty outputs, or extra output keys are all reported invalid.
     # CLASSIFY: wrong types
     self._assertInvalidSignature(
         {"inputs": _FLOAT},
@@ -404,6 +478,9 @@ class SignatureDefUtilsTest(test.TestCase):
         signature_constants.CLASSIFY_METHOD_NAME)
 
   def testInvalidRegressionSignaturesAreRejected(self):
+    # [FUNCTION DOC]
+    # Asserts that regression signatures with wrong dtypes, wrong or missing input and output
+    # keys, empty outputs, or extra output keys are all reported invalid.
     # REGRESS: wrong types
     self._assertInvalidSignature(
         {"inputs": _FLOAT},
@@ -442,6 +519,8 @@ class SignatureDefUtilsTest(test.TestCase):
         signature_constants.REGRESS_METHOD_NAME)
 
   def testInvalidPredictSignaturesAreRejected(self):
+    # [FUNCTION DOC]
+    # Asserts that prediction signatures with empty inputs or empty outputs are reported invalid.
     # PREDICT: wrong keys
     self._assertInvalidSignature(
         {},
@@ -454,6 +533,9 @@ class SignatureDefUtilsTest(test.TestCase):
         signature_constants.PREDICT_METHOD_NAME)
 
   def testOpSignatureDef(self):
+    # [FUNCTION DOC]
+    # In graph mode, adds two constants with an add operation and builds an operation signature
+    # under a key. Asserts the key appears among the outputs and maps to the operation's name.
     # Force the test to run in graph mode.
     # This tests a deprecated v1 API that uses functionality that does not work
     # with eager tensors (namely build_tensor_info_from_op).
@@ -466,6 +548,9 @@ class SignatureDefUtilsTest(test.TestCase):
     self.assertEqual(add_op.name, signature_def.outputs[key].name)
 
   def testLoadOpFromSignatureDef(self):
+    # [FUNCTION DOC]
+    # In graph mode, builds an operation signature for an add operation under a key and asserts
+    # that loading the operation from the signature by that key returns the original operation.
     # Force the test to run in graph mode.
     # This tests a deprecated v1 API that uses functionality that does not work
     # with eager tensors (namely build_tensor_info_from_op).

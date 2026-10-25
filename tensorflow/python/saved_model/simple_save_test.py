@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Tests for the deprecated v1 simple save function: saves a small graph with two variables to a
+# temporary directory and reloads it, checking variables and the generated predict signature.
+# No import-time side effects; run through the test main.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,14 +30,25 @@ from tensorflow.python.saved_model import tag_constants
 
 
 class SimpleSaveTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the simple save function. Provides helpers to create and verify variables and
+  # to compare saved tensor-info descriptions with live tensors; has one end-to-end save and
+  # reload test.
 
   def _init_and_validate_variable(self, variable_name, variable_value):
+    # [FUNCTION DOC]
+    # HELPER: Creates test variables.
+    # Creates a named variable with the given initial value, runs the global variable
+    # initializer, asserts the evaluated value equals the given value, and returns the variable.
     v = variables.Variable(variable_value, name=variable_name)
     self.evaluate(variables.global_variables_initializer())
     self.assertEqual(variable_value, self.evaluate(v))
     return v
 
   def _check_variable_info(self, actual_variable, expected_variable):
+    # [FUNCTION DOC]
+    # HELPER: Assertion helper comparing a restored variable with the original.
+    # Asserts equal name, dtype, rank and each dimension size. Returns nothing.
     self.assertEqual(actual_variable.name, expected_variable.name)
     self.assertEqual(actual_variable.dtype, expected_variable.dtype)
     self.assertEqual(len(actual_variable.shape), len(expected_variable.shape))
@@ -41,6 +56,9 @@ class SimpleSaveTest(test.TestCase):
       self.assertEqual(actual_variable.shape[i], expected_variable.shape[i])
 
   def _check_tensor_info(self, actual_tensor_info, expected_tensor):
+    # [FUNCTION DOC]
+    # HELPER: Assertion helper comparing a signature's tensor-info description with a tensor.
+    # Asserts equal name and dtype, the number of shape dimensions, and each dimension size.
     self.assertEqual(actual_tensor_info.name, expected_tensor.name)
     self.assertEqual(actual_tensor_info.dtype, expected_tensor.dtype)
     self.assertEqual(
@@ -50,6 +68,13 @@ class SimpleSaveTest(test.TestCase):
                        expected_tensor.shape[i])
 
   def testSimpleSave(self):
+    # [FUNCTION DOC]
+    # Scenario: save with default parameters. In graph mode, creates two variables (values 1 and
+    # 2), saves them through the simple save function with one input and one output into a
+    # temporary directory, then loads the result in a new session with the serving tag. Asserts
+    # the two restored global variables have the right values and metadata, and that exactly one
+    # signature exists under the default serving key with the predict method name and the
+    # expected input and output tensor infos.
     """Test simple_save that uses the default parameters."""
     export_dir = os.path.join(test.get_temp_dir(),
                               "test_simple_save")

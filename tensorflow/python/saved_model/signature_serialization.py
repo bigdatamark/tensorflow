@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Helpers used by the SavedModel save and load code to turn user-supplied functions into
+# serving signatures. Exposes functions to pick a default function to export, to canonicalize a
+# user "signatures" argument into concrete functions that return mappings of named tensors, to
+# wrap signatures in an immutable trackable signature-map object, and to validate that an object
+# graph does not misuse the reserved signatures attribute. Defines the default-signature
+# attribute name and the signatures attribute name constants. Import-time side effect: registers
+# the "signature_map" revived type so loading recreates signature map objects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -38,6 +46,11 @@ _NUM_DISPLAY_NORMALIZED_SIGNATURES = 5
 
 
 def _get_signature(function):
+  # [FUNCTION DOC]
+  # HELPER: Normalizes a user function for the signature export logic.
+  # Takes a polymorphic function or concrete function. If it is a polymorphic function that
+  # has an input signature, returns its (garbage-collected) concrete function; if the result is a
+  # concrete function, returns it, otherwise returns nothing. Has no other side effects.
   if (
       isinstance(function, def_function.Function)
       and function.input_signature is not None
@@ -49,6 +62,11 @@ def _get_signature(function):
 
 
 def _valid_signature(concrete_function):
+  # [FUNCTION DOC]
+  # HELPER: Predicate used when choosing a function to export as a signature.
+  # Returns false if the concrete function has no outputs, or if input validation or output
+  # normalization raises a value error (for example variable inputs or non-tensor outputs);
+  # otherwise returns true. Catches only value errors and has no side effects.
   """Returns whether concrete function can be converted to a signature."""
   if not concrete_function.outputs:
     # Functions without outputs don't make sense as signatures. We just don't
@@ -64,6 +82,11 @@ def _valid_signature(concrete_function):
 
 
 def _validate_inputs(concrete_function):
+  # [FUNCTION DOC]
+  # HELPER: Input check for signature export.
+  # Scans the flattened structured input signature of a concrete function and raises a value
+  # error if any input is a variable spec, since such functions cannot be exported as signatures.
+  # Returns nothing otherwise.
   """Raises error if input type is tf.Variable."""
   if any(
       isinstance(inp, resource_variable_ops.VariableSpec)
@@ -77,6 +100,12 @@ def _validate_inputs(concrete_function):
 
 
 def _get_signature_name_changes(concrete_function):
+  # [FUNCTION DOC]
+  # HELPER: Supports the informational logging in canonicalizing signatures.
+  # Pairs the function definition's signature input arguments with the graph inputs and returns
+  # a mapping from each user-specified input name to the normalized name, only for inputs where
+  # the two differ. Inputs without a user-specified-name attribute (value error) are skipped.
+  # No side effects.
   """Checks for user-specified signature input names that are normalized."""
   # Map of {user-given name: normalized name} if the names are un-identical.
   name_changes = {}
@@ -97,6 +126,12 @@ def _get_signature_name_changes(concrete_function):
 
 
 def find_function_to_export(saveable_view):
+  # [FUNCTION DOC]
+  # Chooses a function to export as the default serving signature when the user gave none.
+  # Takes a saveable view of the object graph and inspects the children of its root. If a child
+  # function is named with the default-signature attribute name it is returned immediately.
+  # Otherwise, if exactly one child function yields a valid signature, that concrete function is
+  # returned; if none or several qualify, returns nothing. Does not modify anything.
   """Function to export, None if no suitable function was found."""
   # If the user did not specify signatures, check the root object for a function
   # that can be made into a signature.
@@ -124,6 +159,20 @@ def find_function_to_export(saveable_view):
 
 
 def canonicalize_signatures(signatures):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: The docstring says it returns a dictionary of concrete functions, but it
+  # actually returns a three-tuple: concrete signatures, wrapped functions and default tensors.
+  # Converts the user "signatures" argument into signature concrete functions. Input is nothing,
+  # a mapping from signature keys to functions, or a single function (stored under the default
+  # serving key). Nothing yields three empty mappings. Each function must be a polymorphic
+  # function with an input signature or a concrete function, else a value error is raised;
+  # variable inputs also raise a value error. Cached variables are wrapped, a wrapper returning
+  # a normalized mapping of output names to tensors is traced with named tensor specs, allowed
+  # function attributes are propagated, and positional-argument count is set to one when there
+  # is a single input and zero otherwise. Returns the mapping of keys to final concrete
+  # functions, the mapping of original to wrapped functions, and a mapping of keys to
+  # argument-name to default tensor mappings. Side effect: logs up to a few informational
+  # messages about input names that get renamed, and sets private attributes on concrete functions.
   """Converts `signatures` into a dictionary of concrete functions."""
   if signatures is None:
     return {}, {}, {}
@@ -165,6 +214,11 @@ def canonicalize_signatures(signatures):
     # matches the format of 1.x-style signatures.
     # pylint: disable=cell-var-from-loop
     def signature_wrapper(**kwargs):
+      # [FUNCTION DOC]
+      # HELPER: Wrapper traced to form each exported signature function.
+      # Takes keyword arguments (named tensors), calls the captured signature function with them
+      # and returns the outputs normalized to a mapping of string names to tensors. Raises a value
+      # error via normalization for bad outputs. Captures loop variables by reference.
       structured_outputs = signature_function(**kwargs)
       return _normalize_outputs(
           structured_outputs, signature_function.name, signature_key
@@ -246,6 +300,13 @@ def canonicalize_signatures(signatures):
 
 
 def _normalize_outputs(outputs, function_name, signature_key):
+  # [FUNCTION DOC]
+  # HELPER: Output normalization for signature wrappers and validity checks.
+  # Takes function outputs plus the function name and signature key (used only in error
+  # messages). Mappings pass through; named tuples become mappings of field names; a single value
+  # is wrapped in a list; sequences become a mapping with keys output_0, output_1 and so on.
+  # Raises a value error if a key is not a string or a value is not a tensor or composite tensor.
+  # Returns the resulting mapping. No side effects.
   """Normalize outputs if necessary and check that they are tensors."""
   # Convert `outputs` to a dictionary (if it's not one already).
   if not isinstance(outputs, collections_abc.Mapping):
@@ -287,30 +348,56 @@ def _normalize_outputs(outputs, function_name, signature_key):
 # any other type (e.g. a regular dict) will raise an exception asking the user
 # to first "del obj.signatures" if they want it overwritten.
 class _SignatureMap(collections_abc.Mapping, base.Trackable):
+  # [CLASS DOC]
+  # HELPER: Internal container used to expose signatures on saved and loaded objects.
+  # A read-only mapping from signature names to concrete functions that is also trackable, so
+  # the functions become dependencies in the SavedModel object graph. Holds a private dictionary
+  # of signatures; entries can only be added through a private method used while restoring.
+  # Only reports children when saving as a SavedModel. Registered as a revived type.
   """A collection of SavedModel signatures."""
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor taking no arguments; creates an empty private dictionary of signatures.
     self._signatures = {}
 
   def _add_signature(self, name, concrete_function):
+    # [FUNCTION DOC]
+    # HELPER: Private mutator used by the restore code (the revived-type setter).
+    # Stores the concrete function under the given signature name, overwriting any existing
+    # entry. Mutates the map; returns nothing.
     """Adds a signature to the _SignatureMap."""
     # Ideally this object would be immutable, but restore is streaming so we do
     # need a private API for adding new signatures to an existing object.
     self._signatures[name] = concrete_function
 
   def __getitem__(self, key):
+    # [FUNCTION DOC]
+    # Returns the concrete function stored under the signature name; a missing name raises a
+    # key error.
     return self._signatures[key]
 
   def __iter__(self):
+    # [FUNCTION DOC]
+    # Returns an iterator over the signature names.
     return iter(self._signatures)
 
   def __len__(self):
+    # [FUNCTION DOC]
+    # Returns the number of stored signatures.
     return len(self._signatures)
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns a string showing the class name and the underlying signatures dictionary.
     return "_SignatureMap({})".format(self._signatures)
 
   def _trackable_children(self, save_type=base.SaveType.CHECKPOINT, **kwargs):
+    # [FUNCTION DOC]
+    # Reports the trackable dependencies of this map. Takes the save type (default checkpoint)
+    # and ignores extra keyword arguments. For anything other than a SavedModel save returns an
+    # empty mapping; otherwise returns a mapping of name to function containing only the entries
+    # that are polymorphic or concrete functions.
     if save_type != base.SaveType.SAVEDMODEL:
       return {}
 
@@ -340,6 +427,11 @@ revived_types.register_revived_type(
 
 
 def create_signature_map(signatures):
+  # [FUNCTION DOC]
+  # Builds a signature-map object from a mapping of names to concrete functions (normally the
+  # output of canonicalizing signatures). Asserts that each value is a concrete function with
+  # mapping-valued structured outputs and that its positional-argument count is one for a single
+  # input and zero otherwise; assertion failures raise assertion errors. Returns the new map.
   """Creates an object containing `signatures`."""
   signature_map = _SignatureMap()
   for name, func in signatures.items():
@@ -360,6 +452,10 @@ def create_signature_map(signatures):
 
 
 def validate_augmented_graph_view(augmented_graph_view):
+  # [FUNCTION DOC]
+  # Checks that the root object of an augmented graph view does not have a child named with the
+  # reserved signatures attribute name unless it is a signature-map object. Otherwise raises a
+  # value error telling the user to delete the attribute before saving. Returns nothing.
   """Performs signature-related sanity checks on `augmented_graph_view`."""
   for name, dep in augmented_graph_view.list_children(
       augmented_graph_view.root

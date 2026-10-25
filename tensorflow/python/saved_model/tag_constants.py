@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Defines the string constants used as tags that label graphs inside a SavedModel: serving,
+# training, eval, gpu and tpu. Serving, training, gpu and tpu are registered at import time for
+# public export under both the v2 and the older v1 saved model namespaces; the eval tag is
+# intentionally not exported. Pure constants module with no functions.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
