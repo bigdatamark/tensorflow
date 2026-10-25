@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Test data input for the TensorFlow 0.11 to 1.0 upgrade script. Contains a single test class written
+# against the old 0.11 API (renamed arguments, renamed arithmetic ops, old summary and variable
+# helpers). It does not run on current TensorFlow; a build rule feeds it through the converter and
+# runs the converted copy as a unit test. Importing it has no side effects beyond the imports;
+# running it as a script starts the standard test runner.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +30,11 @@ from tensorflow.python.platform import test as test_lib
 
 
 class TestUpgrade(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case holding old-API scenarios (0.11 names and argument orders) that the upgrade converter
+  # must rewrite so they pass on 1.0. Each method builds small constants or variables in a cached
+  # session and compares old-style calls with their new-style equivalents or known results.
+  # Methods are limited to graph mode (v1 only) by a decorator.
   """Test various APIs that have been changed in 1.0.
 
   This test will not run in current TensorFlow, but did run in 0.11.
@@ -34,6 +45,10 @@ class TestUpgrade(test_util.TensorFlowTestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testArgRenames(self):
+    # [FUNCTION DOC]
+    # Checks the reduction ops (any, all, sum, prod, mean, min, max, logsumexp) called with the old
+    # reduction-indices keyword and with positional axes, plus expand-dims with an axis, against
+    # expected values on small nested lists. Takes no inputs, returns nothing; fails through assertions.
     with self.cached_session():
 
       a = [[1., 2., 3.], [4., 5., 6.]]
@@ -98,6 +113,9 @@ class TestUpgrade(test_util.TensorFlowTestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testArgMinMax(self):
+    # [FUNCTION DOC]
+    # Checks argmin and argmax using the old dimension keyword on a small matrix for both axes and
+    # asserts the expected index results. No inputs, returns nothing.
     with self.cached_session():
       self.assertAllEqual(
           tf.argmin([[1, 2, 3], [4, 1, 0]], dimension=1).eval(),
@@ -114,6 +132,9 @@ class TestUpgrade(test_util.TensorFlowTestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testExpandAndSqueeze(self):
+    # [FUNCTION DOC]
+    # Checks expand-dims and squeeze round trips, including the old dim keyword for expand-dims and
+    # axis lists for squeeze, against the original nested list. No inputs, returns nothing.
     with self.cached_session():
 
       # TODO(aselle): sparse_split, sparse_reduce_sum,
@@ -133,6 +154,10 @@ class TestUpgrade(test_util.TensorFlowTestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testArithmeticRenames(self):
+    # [FUNCTION DOC]
+    # Checks old-style ops: split with old argument order, negate/multiply/add/subtract names, the
+    # list-difference ops, select versus a numpy where, and complex absolute value. Asserts known
+    # results. No inputs, returns nothing. Leaves a trailing commented TODO about batch ops.
     with self.cached_session() as s:
       stuff = tf.split(1, 2, [[1, 2, 3, 4], [4, 5, 6, 7]])
       vals = s.run(stuff)
@@ -158,6 +183,10 @@ class TestUpgrade(test_util.TensorFlowTestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testBatchAndSvd(self):
+    # [FUNCTION DOC]
+    # Checks that batch matrix multiply on an expanded batch matches ordinary matrix multiply, and
+    # that SVD with positional flags equals SVD called with named compute-uv and full-matrices flags.
+    # No inputs, returns nothing.
     with self.cached_session():
       mat = [[1., 2.], [2., 3.]]
       batched_mat = tf.expand_dims(mat, [0])
@@ -170,6 +199,9 @@ class TestUpgrade(test_util.TensorFlowTestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testCrossEntropy(self):
+    # [FUNCTION DOC]
+    # Checks softmax and sigmoid cross entropy with logits: the old positional order (logits, labels)
+    # must equal the new keyword form with labels and logits. No inputs, returns nothing.
     # TODO(aselle): Test sparse_softmax_...
     with self.cached_session():
       labels = [.8, .5, .2, .1]
@@ -187,6 +219,10 @@ class TestUpgrade(test_util.TensorFlowTestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testVariables(self):
+    # [FUNCTION DOC]
+    # Creates two variables, runs the global variable initializer and lists names using the old
+    # all-variables and local-variables helpers. Nothing is asserted; it only needs to run without
+    # error. No inputs, returns nothing.
     with self.cached_session() as s:
 
       # make some variables
@@ -198,6 +234,11 @@ class TestUpgrade(test_util.TensorFlowTestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testSummaries(self):
+    # [FUNCTION DOC]
+    # Builds a sample image and audio signal, creates a summary writer in a temporary directory, and
+    # exercises old scalar, histogram, image, audio and merge summary ops plus the merge-all op.
+    # Writes summaries then closes the writer and deletes the temporary directory. Nothing is
+    # asserted; success means no error. No inputs, returns nothing.
     with self.cached_session() as s:
       var = tf.Variable([1, 2, 3], dtype=tf.float32)
       s.run(tf.global_variables_initializer())

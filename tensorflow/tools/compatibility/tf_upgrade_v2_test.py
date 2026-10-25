@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Unit tests for the TensorFlow 2.0 upgrade script (tf_upgrade_v2). The main test class feeds small
+#   pieces of old-style source text through the code upgrader built from the 2.0 change
+#   specification and checks the rewritten text, the report and the errors for renames, keyword and
+#   positional argument changes, contrib migrations, summary and import handling. Several tests also
+#   walk the whole public v1 and v2 API to check that conversion targets and argument names exist. A
+#   second test class checks in-place file processing with temporary files. Helper functions at the
+#   top resolve dotted API names, list argument names and parse converted call text. Importing the
+#   module has no side effects; running it as a script starts the standard test runner.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,6 +44,14 @@ from tensorflow.tools.compatibility import tf_upgrade_v2
 
 
 def get_symbol_for_name(root, name):
+  # [FUNCTION DOC]
+  # HELPER: lets tests resolve dotted API names to live objects.
+  # Resolves a dotted public API name such as the root module name followed by sub-names into the
+  #   actual object.
+  # Inputs: root is the object to start from (normally the tensorflow module); name is a dotted
+  #   string whose first part is skipped because it names the root itself.
+  # Returns the object found by walking the remaining parts one attribute at a time. Raises an
+  #   attribute error if any part is missing. No side effects.
   name_parts = name.split(".")
   symbol = root
   # Iterate starting with second item since 1st item is "tf.".
@@ -44,6 +61,14 @@ def get_symbol_for_name(root, name):
 
 
 def get_args(symbol):
+  # [FUNCTION DOC]
+  # HELPER: lets tests compare argument names of API functions.
+  # KNOWN ISSUE: the fallback branch using the legacy argument-spec helper is dead code on any
+  #   Python 3 interpreter, because the signature inspector always exists there.
+  # Returns the list of names of positional-or-keyword parameters of a callable, in declaration
+  #   order, ignoring variadic positional and keyword parameters.
+  # Input: symbol, any callable. May raise a value or type error if the callable has no inspectable
+  #   signature. No side effects.
   if hasattr(inspect, "signature"):
     signature = inspect.signature(symbol)
     # Ignore *args and **kwargs for now.
@@ -53,6 +78,16 @@ def get_args(symbol):
 
 
 def get_func_and_args_from_str(call_str):
+  # [FUNCTION DOC]
+  # HELPER: lets tests inspect the output of the upgrader for a converted call.
+  # KNOWN ISSUE: the split is naive; it breaks on commas inside nested calls and, if the text has no
+  #   parenthesis, the function name loses its last character. Test inputs avoid these cases.
+  # Parses a call written as text (a name followed by parenthesized keyword arguments) and splits it
+  #   into the function name and the list of argument names.
+  # Input: call_str, the call text. Returns a pair: the function name (everything before the first
+  #   opening parenthesis) and a list of argument names (text before each equals sign, trimmed,
+  #   empty entries dropped).
+  # No side effects.
   """Parse call string to get function and argument names.
 
   Args:
@@ -73,6 +108,15 @@ def get_func_and_args_from_str(call_str):
 
 
 class TestUpgrade(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Main test case for the version 2.0 upgrade script. Each test method feeds a small piece of
+  #   old-style source text through the upgrader built from the 2.0 change specification and checks
+  #   the rewritten text, the generated report and the list of errors or warnings.
+  # Class-level fixtures: two mappings from public API names to objects, one for the v2 API and one
+  #   for the v1 API, filled once in the class setup. Instances are created by the test runner; the
+  #   parameterized mixin supplies data-driven tests.
+  # Helpers: an upgrade method for one text, a multi-file variant that reuses one upgrader, and a
+  #   rename-correctness checker.
   """Test various APIs that have been changed in 2.0.
 
   We also test whether a converted file is executable. test_file_v1_10.py
@@ -82,12 +126,26 @@ class TestUpgrade(test_util.TensorFlowTestCase, parameterized.TestCase):
 
   @classmethod
   def setUpClass(cls):
+    # [FUNCTION DOC]
+    # HELPER: builds the shared symbol tables used by the API-wide tests.
+    # Class-level fixture run once before the tests. Calls the parent setup, then creates two empty
+    #   mappings on the class: v2_symbols and v1_symbols.
+    # If the compat v2 namespace exists, walks it with the public API visitor (skipping the compat
+    #   sub-namespaces) and records every exported v2 name, prefixed with the root module name,
+    #   mapped to its undecorated object. Does the same for compat v1 into v1_symbols.
+    # No inputs besides the class; returns nothing. Side effect: sets class attributes.
     super(TestUpgrade, cls).setUpClass()
     cls.v2_symbols = {}
     cls.v1_symbols = {}
     if hasattr(tf.compat, "v2"):
 
       def symbol_collector(unused_path, unused_parent, children):
+        # [FUNCTION DOC]
+        # HELPER: visitor callback used by the class setup.
+        # Called by the API traversal for each module with a list of children pairs. For each child
+        #   it unwraps decorators, looks up the v2 export names of the object and stores each
+        #   prefixed name in the class v2 table. Parent and path arguments are ignored. Returns
+        #   nothing.
         for child in children:
           _, attr = tf_decorator.unwrap(child[1])
           api_names_v2 = tf_export.get_v2_names(attr)
@@ -101,6 +159,10 @@ class TestUpgrade(test_util.TensorFlowTestCase, parameterized.TestCase):
     if hasattr(tf.compat, "v1"):
 
       def symbol_collector_v1(unused_path, unused_parent, children):
+        # [FUNCTION DOC]
+        # HELPER: visitor callback used by the class setup.
+        # Same as the v2 collector but uses the v1 export names and stores them in the class v1
+        #   table. Parent and path arguments are ignored. Returns nothing.
         for child in children:
           _, attr = tf_decorator.unwrap(child[1])
           api_names_v1 = tf_export.get_v1_names(attr)
@@ -115,6 +177,16 @@ class TestUpgrade(test_util.TensorFlowTestCase, parameterized.TestCase):
                old_file_text,
                import_rename=False,
                upgrade_compat_v1_import=False):
+    # [FUNCTION DOC]
+    # HELPER: runs the upgrader on one piece of text for all tests in this class.
+    # Inputs: old_file_text, the source text to convert; import_rename, optional flag (default
+    #   false) telling the change spec to also rename the tensorflow import to the compat v2 form;
+    #   upgrade_compat_v1_import, optional flag (default false) allowing the compat v1 import to be
+    #   upgraded.
+    # Wraps the text in an in-memory input stream, builds a code upgrader around the 2.0 change
+    #   specification and processes it into an in-memory output stream under fake file names.
+    # Returns a four-item tuple: the count of changes, the report text, the list of errors, and the
+    #   converted text. No files are touched.
     in_file = io.StringIO(old_file_text)
     out_file = io.StringIO()
     upgrader = ast_edits.ASTCodeUpgrader(
@@ -126,6 +198,14 @@ class TestUpgrade(test_util.TensorFlowTestCase, parameterized.TestCase):
     return count, report, errors, out_file.getvalue()
 
   def _upgrade_multiple(self, upgrade_compat_v1_import, old_file_texts):
+    # [FUNCTION DOC]
+    # HELPER: runs one upgrader on several texts in sequence.
+    # Inputs: upgrade_compat_v1_import, flag passed to the change specification (import renaming is
+    #   always on); old_file_texts, a list of source texts.
+    # Creates a single upgrader and processes each text in order, so any state carried between files
+    #   by the upgrader persists.
+    # Returns a list with one entry per text; each entry is a list of count, report, errors and
+    #   converted text. No files are touched.
     upgrader = ast_edits.ASTCodeUpgrader(
         tf_upgrade_v2.TFAPIChangeSpec(True, upgrade_compat_v1_import))
     results = []
@@ -139,11 +219,23 @@ class TestUpgrade(test_util.TensorFlowTestCase, parameterized.TestCase):
     return results
 
   def testParseError(self):
+    # [FUNCTION DOC]
+    # Scenario: the input is not valid source (a dangling operator).
+    # Action: run the upgrader.
+    # Asserts: the report contains the message saying the file failed to parse. Takes no inputs,
+    #   returns nothing.
     _, report, unused_errors, unused_new_text = self._upgrade(
         "import tensorflow as tf\na + \n")
     self.assertNotEqual(report.find("Failed to parse"), -1)
 
   def testReport(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the assertion is weak; it checks the truthiness of a text search result, which is
+    #   true for not-found (minus one) and false only when the message sits at position zero, so it
+    #   almost never fails.
+    # Scenario: a call to the old angle function.
+    # Action: upgrade it and search the report for the rename message.
+    # Takes no inputs, returns nothing.
     text = "tf.angle(a)\n"
     _, report, unused_errors, unused_new_text = self._upgrade(text)
     # This is not a complete test, but it is a sanity test that a report
@@ -153,6 +245,10 @@ class TestUpgrade(test_util.TensorFlowTestCase, parameterized.TestCase):
                     "`tf.math.angle`"))
 
   def testRename(self):
+    # [FUNCTION DOC]
+    # Scenario: simple renames of old math functions (conjugate, reciprocal square root,
+    #   log-sigmoid), including nested calls.
+    # Asserts the converted text moves them into the math namespace.
     text = "tf.conj(a)\n"
     _, unused_report, unused_errors, new_text = self._upgrade(text)
     self.assertEqual(new_text, "tf.math.conj(a)\n")
@@ -161,6 +257,12 @@ class TestUpgrade(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqual(new_text, "tf.math.rsqrt(tf.math.log_sigmoid(3.8))\n")
 
   def testAllAPI(self):
+    # [FUNCTION DOC]
+    # Walks every symbol of the compat v1 API (skipping contrib), upgrades a bare reference to each,
+    #   and fails if the converted name is not a compat v1 or v2 reference, is not in the v2 symbol
+    #   table, and does not involve internal namespaces.
+    # Returns immediately if the compat v2 namespace is unavailable. Uses the class v2 table; fails
+    #   with an assertion message naming the offending symbol.
     if not hasattr(tf.compat, "v2"):
       return
 
@@ -169,6 +271,12 @@ class TestUpgrade(test_util.TensorFlowTestCase, parameterized.TestCase):
     # Please regenerate the renames file or edit any manual renames if this
     # test fails.
     def conversion_visitor(unused_path, unused_parent, children):
+      # [FUNCTION DOC]
+      # HELPER: traversal callback for the all-API test.
+      # For each child of the visited module, unwraps decorators, finds its v1 export names,
+      #   upgrades each name as text and asserts the output is acceptable (compat prefix, known v2
+      #   symbol, or internal). Fails the test through an assertion otherwise. Ignores the path and
+      #   parent arguments; returns nothing.
       for child in children:
         _, attr = tf_decorator.unwrap(child[1])
         api_names = tf_export.get_v1_names(attr)
@@ -190,12 +298,23 @@ class TestUpgrade(test_util.TensorFlowTestCase, parameterized.TestCase):
     traverse.traverse(tf.compat.v1, visitor)
 
   def testAllAPIV1(self):
+    # [FUNCTION DOC]
+    # Two-pass traversal of the compat v1 API. First pass (collect mode) gathers all v1 names into a
+    #   set; second pass upgrades each name and fails if the result is not a compat reference nor a
+    #   known v1 name.
+    # Local state: a collect flag and the symbol set, shared with the callback through closure; the
+    #   flag is flipped between the two traversals. Takes no inputs, returns nothing.
     collect = True
     v1_symbols = set([])
 
     # Converts all symbols in the v1 namespace to the v2 namespace, raising
     # an error if the target of the conversion is not in the v1 namespace.
     def conversion_visitor(unused_path, unused_parent, children):
+      # [FUNCTION DOC]
+      # HELPER: traversal callback for the v1 all-API test.
+      # In collect mode adds each prefixed v1 export name to the set. Otherwise upgrades the name
+      #   and asserts the output starts with a compat prefix or is in the set, failing with a
+      #   message otherwise. Reads the flag from the enclosing scope. Returns nothing.
       for child in children:
         _, attr = tf_decorator.unwrap(child[1])
         api_names = tf_export.get_v1_names(attr)
@@ -220,11 +339,22 @@ class TestUpgrade(test_util.TensorFlowTestCase, parameterized.TestCase):
     traverse.traverse(tf.compat.v1, visitor)
 
   def testV1KeywordArgNames(self):
+    # [FUNCTION DOC]
+    # Checks that every keyword rename registered in the change specification names an argument that
+    #   really exists in the v1 function.
+    # For each exported v1 API that has keyword renames, reads the function's argument names and
+    #   asserts the type of the rename table is a mapping and each old name is present.
+    # Traverses compat v1 skipping contrib. Fails through assertions.
     all_keyword_renames = (
         tf_upgrade_v2.TFAPIChangeSpec().function_keyword_renames)
 
     # Visitor that verifies V1 argument names.
     def arg_test_visitor(unused_path, unused_parent, children):
+      # [FUNCTION DOC]
+      # HELPER: traversal callback for the v1 keyword-name test.
+      # For each child, gets its v1 export names; for names with keyword renames asserts each old
+      #   argument name appears in the function's argument list, with a descriptive failure message.
+      #   Returns nothing.
       for child in children:
         _, attr = tf_decorator.unwrap(child[1])
         names_v1 = tf_export.get_v1_names(attr)
@@ -250,6 +380,14 @@ class TestUpgrade(test_util.TensorFlowTestCase, parameterized.TestCase):
     traverse.traverse(tf.compat.v1, visitor)
 
   def testV2KeywordArgNames(self):
+    # [FUNCTION DOC]
+    # Checks that the converted keyword arguments are valid v2 and v1 arguments.
+    # For every exported function, builds a call text assigning each v1 argument its index, upgrades
+    #   it, parses the output, and verifies: functions moved to compat v1 are not ones with keyword
+    #   renames, compat v2 targets exist, each output argument exists in the v2 function (plus a few
+    #   allowed exceptions) and also in the v1 function (with two functions exempt).
+    # Skips symbols needing manual change, the print function, and internal namespaces. Returns
+    #   immediately if compat v2 is missing.
     # This test converts a call of the form:
     # tf.foo(arg1=0, arg2=1, ...)
     # to 2.0. Then, checks that converted function has valid argument names.
@@ -274,6 +412,12 @@ class TestUpgrade(test_util.TensorFlowTestCase, parameterized.TestCase):
 
     # Visitor that converts to V2 and checks V2 argument names.
     def conversion_visitor(unused_path, unused_parent, children):
+      # [FUNCTION DOC]
+      # HELPER: traversal callback holding the main loop of the v2 keyword-name test.
+      # Described in the parent test: for each function child, for each v1 name, creates and
+      #   upgrades a keyword-style call, then asserts the converted names and arguments are valid in
+      #   v2 and v1. Uses enclosing-scope tables. Fails through assertions or the fail call. Returns
+      #   nothing.
       for child in children:
         _, attr = tf_decorator.unwrap(child[1])
         if not tf_inspect.isfunction(attr):
@@ -341,6 +485,13 @@ class TestUpgrade(test_util.TensorFlowTestCase, parameterized.TestCase):
     traverse.traverse(tf.compat.v1, visitor)
 
   def testPositionsMatchArgGiven(self):
+    # [FUNCTION DOC]
+    # Checks that the argument-position warnings registered in the change spec point to the right
+    #   positions.
+    # For each registered method (skipping contrib ones), resolves the real function
+    #   (optimizer-style names starting with a wildcard are mapped to the train optimizer class and
+    #   positions shifted by one for self), reads its argument spec and asserts the argument at the
+    #   stated position has the stated name. Fails on mismatch.
     full_dict = tf_upgrade_v2.TFAPIChangeSpec().function_arg_warnings
     method_names = list(full_dict.keys())
     for method_name in method_names:
@@ -364,6 +515,11 @@ class TestUpgrade(test_util.TensorFlowTestCase, parameterized.TestCase):
         self.assertEqual(arg_spec[0][pos], arg)
 
   def testReorderFileNeedsUpdate(self):
+    # [FUNCTION DOC]
+    # Consistency test for the generated reorder table.
+    # Asserts that every name in the reordered-function-names set is a key of the function-reorders
+    #   table, and that every non-manual key has at least one v1 alias present in the reordered
+    #   names set. Failure messages tell the developer to rerun the generator for the reorders map.
     reordered_function_names = (
         tf_upgrade_v2.TFAPIChangeSpec().reordered_function_names)
     function_reorders = (
@@ -401,6 +557,9 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
           removed_names_message % name)
 
   def testRenameConstant(self):
+    # [FUNCTION DOC]
+    # Scenario: reference to a constant, alone and as a call argument.
+    # Asserts it moves to the sysconfig namespace.
     text = "tf.MONOLITHIC_BUILD\n"
     _, unused_report, unused_errors, new_text = self._upgrade(text)
     self.assertEqual(new_text, "tf.sysconfig.MONOLITHIC_BUILD\n")
@@ -409,6 +568,10 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     self.assertEqual(new_text, "some_call(tf.sysconfig.MONOLITHIC_BUILD)\n")
 
   def testRenameArgs(self):
+    # [FUNCTION DOC]
+    # Scenario: pooling call with eight positional arguments.
+    # Asserts the first four stay positional and the remaining ones get keywords, including the
+    #   renamed dilation rate and the renamed padding-related ones.
     text = ("tf.nn.pool(input_a, window_shape_a, pooling_type_a, padding_a, "
             "dilation_rate_a, strides_a, name_a, data_format_a)\n")
     _, unused_report, unused_errors, new_text = self._upgrade(text)
@@ -419,11 +582,18 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
                       "data_format=data_format_a)\n"))
 
   def testReorder(self):
+    # [FUNCTION DOC]
+    # Scenario: boolean mask with positional arguments.
+    # Asserts the last two arguments become keyword arguments in the new order (name and axis).
     text = "tf.boolean_mask(a, b, c, d)\n"
     _, unused_report, unused_errors, new_text = self._upgrade(text)
     self.assertEqual(new_text, "tf.boolean_mask(a, b, name=c, axis=d)\n")
 
   def testLearningRateDecay(self):
+    # [FUNCTION DOC]
+    # Scenario: each old learning-rate decay function in the train namespace called with two
+    #   arguments.
+    # Asserts the report suggests switching to the Keras schedules.
     for decay in ["tf.train.exponential_decay",
                   "tf.train.polynomial_decay", "tf.train.natural_exp_decay",
                   "tf.train.inverse_time_decay", "tf.train.cosine_decay",
@@ -439,6 +609,13 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
                     "`tf.keras.optimizers.schedules`", report)
 
   def verify_compat_v1_rename_correctness(self, values, ns_prefix=""):
+    # [FUNCTION DOC]
+    # HELPER: shared check for the initializer test.
+    # Inputs: values, list of function names; ns_prefix, optional namespace (default empty) inserted
+    #   after the root module name with a trailing dot added if non-empty.
+    # For each name, upgrades a two-argument call and asserts it is rewritten with the compat v1
+    #   prefix at the same place. Fails through assertions; returns nothing. Mutates only its local
+    #   prefix.
     if ns_prefix:
       ns_prefix += "."
     for v in values:
@@ -447,6 +624,10 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
       self.assertEqual("tf.compat.v1." + ns_prefix + v + "(a, b)", new_text)
 
   def testInitializers(self):
+    # [FUNCTION DOC]
+    # Scenario: three lists of initializer names (functions in the initializers namespace, top-level
+    #   initializer classes, and Keras initializers).
+    # Asserts every one is redirected to compat v1 under the right namespace, using the helper.
     initializers = [
         "zeros",
         "ones",
@@ -512,6 +693,12 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
         initializers, ns_prefix="keras.initializers")
 
   def testContribXavierInitializer(self):
+    # [FUNCTION DOC]
+    # Scenario: Xavier initializers from contrib and slim aliases with different combinations of
+    #   uniform flag, seed and data type, positional and keyword.
+    # Asserts each is rewritten to a variance scaling initializer with fan-average mode, and the
+    #   uniform flag becomes a conditional distribution expression when not a literal. Loops over
+    #   two contrib aliases.
     for contrib_alias in ["tf.contrib.", "contrib_"]:
       text = contrib_alias + "layers.xavier_initializer()\n"
       _, unused_report, unused_errors, new_text = self._upgrade(text)
@@ -577,6 +764,11 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
       )
 
   def testVarianceScalingInitializer(self):
+    # [FUNCTION DOC]
+    # Scenario: variance scaling initializers from contrib/slim with factor, mode, uniform flag, and
+    #   data type given in various ways.
+    # Asserts conversion to the Keras variance scaling initializer with scale mapped from factor,
+    #   mode lowered, and distribution chosen from the uniform flag.
     text = ("tf.contrib.layers.variance_scaling_initializer("
             "mode=(\"FAN\" + \"_AVG\"))\n")
     _, unused_report, unused_errors, new_text = self._upgrade(text)
@@ -615,6 +807,10 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     )
 
   def testMetrics(self):
+    # [FUNCTION DOC]
+    # Scenario: each metric name in the old metrics namespace.
+    # Asserts redirect to compat v1 metrics and that the report says they were replaced by
+    #   object-oriented versions.
     metrics = [
         "accuracy",
         "auc",
@@ -658,6 +854,10 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
           "tf.metrics have been replaced with object oriented versions", report)
 
   def testLosses(self):
+    # [FUNCTION DOC]
+    # Scenario: each loss name in the old losses namespace.
+    # Asserts redirect to compat v1 losses and that the report says they were replaced by
+    #   object-oriented versions.
     losses = [
         "absolute_difference",
         "add_loss",
@@ -684,6 +884,11 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
           "tf.losses have been replaced with object oriented versions", report)
 
   def testExtractGlimpse(self):
+    # [FUNCTION DOC]
+    # Scenario: glimpse extraction calls with the uniform-noise flag positional, keyword and
+    #   multiline with comments, and one without arguments.
+    # Asserts the flag becomes a noise choice expression, comments and layout survive, and the
+    #   argument-less call is unchanged with no errors.
     text = ("tf.image.extract_glimpse(x, size, off, False, "
             "False, False, name=\"foo\")\n")
     _, unused_report, unused_errors, new_text = self._upgrade(text)
@@ -727,6 +932,11 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     self.assertEqual(errors, [])
 
   def testDropout(self):
+    # [FUNCTION DOC]
+    # Scenario: dropout with keep probability positional, keyword, in a multiline call with
+    #   comments, and with no arguments.
+    # Asserts conversion to the rate form as one minus the value, comment preservation, and for the
+    #   bare call no change plus an error saying it was called without arguments.
     text = "tf.nn.dropout(x, keep_prob, name=\"foo\")\n"
     _, unused_report, unused_errors, new_text = self._upgrade(text)
     self.assertEqual(
@@ -760,6 +970,9 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     self.assertIn("tf.nn.dropout called without arguments", errors[0])
 
   def testDropoutExpr(self):
+    # [FUNCTION DOC]
+    # Scenario: dropout whose keep probability is an arithmetic expression.
+    # Asserts the expression is wrapped in parentheses in the rate computation.
     text = "tf.nn.dropout(x, 1 - func(3 + 4.), name=\"foo\")\n"
     _, unused_report, unused_errors, new_text = self._upgrade(text)
     self.assertEqual(
@@ -768,6 +981,12 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     )
 
   def testContribL1(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the report variable is named as unused yet it is read by the assertions; the name
+    #   is misleading.
+    # Scenario: L1 regularizer from contrib and slim with and without a scope argument.
+    # Asserts conversion to the Keras L1 regularizer, argument renamed in the keyword case, layout
+    #   comments kept, and the report mentions dropping scope only when scope was given.
     text = "tf.contrib.layers.l1_regularizer(scale)\n"
     _, unused_report, unused_errors, new_text = self._upgrade(text)
     self.assertEqual(
@@ -798,6 +1017,12 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     self.assertIn("Dropping scope", unused_report)
 
   def testContribL2(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the report variable is named as unused yet it is read by the assertions; the name
+    #   is misleading.
+    # Scenario: L2 regularizer from contrib and slim with and without scope.
+    # Asserts conversion to the Keras L2 regularizer with the scale halved in parentheses, and the
+    #   dropping-scope message only when scope was given.
     text = "tf.contrib.layers.l2_regularizer(scale)\n"
     _, unused_report, unused_errors, new_text = self._upgrade(text)
     self.assertEqual(
@@ -828,6 +1053,9 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     self.assertIn("Dropping scope", unused_report)
 
   def testContribL2Expr(self):
+    # [FUNCTION DOC]
+    # Scenario: L2 regularizer with an expression as scale plus a scope.
+    # Asserts the expression is parenthesized inside the halving and the scope removed.
     text = "tf.contrib.layers.l2_regularizer(1 - func(3 + 4.), scope=\"foo\")\n"
     _, unused_report, unused_errors, new_text = self._upgrade(text)
     self.assertEqual(
@@ -836,6 +1064,9 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     )
 
   def testMathCountNonZeroChanges(self):
+    # [FUNCTION DOC]
+    # Scenario: nonzero counting in the math namespace with old argument names.
+    # Asserts input tensor, reduction indices and keep dims are renamed to input, axis and keepdims.
     text = (
         "tf.math.count_nonzero(input_tensor=input, dtype=dtype, name=name, "
         "reduction_indices=axis, keep_dims=keepdims)\n"
@@ -848,6 +1079,9 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     self.assertEqual(new_text, expected_text)
 
   def testCountNonZeroChanges(self):
+    # [FUNCTION DOC]
+    # Scenario: the same old nonzero count at top level.
+    # Asserts it moves to the math namespace and arguments are renamed.
     text = (
         "tf.count_nonzero(input_tensor=input, dtype=dtype, name=name, "
         "reduction_indices=axis, keep_dims=keepdims)\n"
@@ -860,6 +1094,10 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     self.assertEqual(new_text, expected_text)
 
   def testRandomMultinomialToRandomCategorical(self):
+    # [FUNCTION DOC]
+    # Scenario: random multinomial in two spellings with positional arguments.
+    # Asserts both become the categorical sampler with seed and name as keywords and the output type
+    #   renamed to dtype.
     text = (
         "tf.random.multinomial(logits, samples, seed, name, output_dtype)\n"
         )
@@ -881,6 +1119,9 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     self.assertEqual(new_text, expected_text)
 
   def testRandomPoissonConversion(self):
+    # [FUNCTION DOC]
+    # Scenario: random Poisson in the old and new spellings.
+    # Asserts both produce the new name with all three arguments as keywords.
     text1 = "tf.random_poisson(lam, shape, dtype)"
     text2 = "tf.random.poisson(lam, shape, dtype)"
     expected_text = "tf.random.poisson(lam=lam, shape=shape, dtype=dtype)"
@@ -890,6 +1131,9 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     self.assertEqual(new_text2, expected_text)
 
   def testConvolutionOpUpdate(self):
+    # [FUNCTION DOC]
+    # Scenario: convolution with seven positional arguments.
+    # Asserts filter becomes filters and dilation rate becomes dilations, others become keywords.
     text = (
         "tf.nn.convolution(input, filter, padding, strides, dilation_rate, "
         "name, data_format)"
@@ -903,6 +1147,10 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     self.assertEqual(new_text, expected_text)
 
   def test_substr(self):
+    # [FUNCTION DOC]
+    # Scenario: substring op with positional arguments.
+    # Asserts it moves to the strings namespace, name and unit become keywords, and there are no
+    #   errors.
     text = "tf.substr(input, pos, len, name, unit)\n"
     _, unused_report, errors, new_text = self._upgrade(text)
     self.assertEqual("tf.strings.substr(input, pos, len, name=name, "
@@ -910,6 +1158,10 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     self.assertEqual(errors, [])
 
   def testColocateGradientsWithOps(self):
+    # [FUNCTION DOC]
+    # Scenario: gradients calls: unrelated keyword (unchanged, no errors), the removed colocate
+    #   argument (dropped with a report note), and a positional call where the colocate argument is
+    #   dropped and gate becomes a keyword.
     text = "tf.gradients(yx=a, foo=False)\n"
     _, unused_report, errors, new_text = self._upgrade(text)
     self.assertEqual(text, new_text)
@@ -926,6 +1178,10 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     self.assertEqual(expected, new_text)
 
   def testColocateGradientsWithOpsMinimize(self):
+    # [FUNCTION DOC]
+    # Scenario: optimizer minimize with an unrelated keyword (unchanged, no errors) and with the
+    #   removed colocate argument.
+    # Asserts the argument is dropped and the report notes minimize no longer takes it.
     text = "optimizer.minimize(a, foo=False)\n"
     _, unused_report, errors, new_text = self._upgrade(text)
     self.assertEqual(text, new_text)
@@ -937,6 +1193,10 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     self.assertIn("Optimizer.minimize no longer takes", report)
 
   def testColocateGradientsWithOpsComputeGradients(self):
+    # [FUNCTION DOC]
+    # Scenario: optimizer compute-gradients with an unrelated keyword (unchanged) and with the
+    #   removed colocate argument.
+    # Asserts it is dropped and the report notes the change.
     text = "optimizer.compute_gradients(a, foo=False)\n"
     _, unused_report, errors, new_text = self._upgrade(text)
     self.assertEqual(text, new_text)
@@ -948,12 +1208,19 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     self.assertIn("Optimizer.compute_gradients no longer takes", report)
 
   def testColocateGradientsWithHessians(self):
+    # [FUNCTION DOC]
+    # Scenario: hessians with the removed colocate argument.
+    # Asserts it is dropped and the report notes the change.
     text = "tf.hessians(ys=a, xs=b, colocate_gradients_with_ops=False)\n"
     _, report, unused_errors, new_text = self._upgrade(text)
     self.assertEqual("tf.hessians(ys=a, xs=b)\n", new_text)
     self.assertIn("tf.hessians no longer takes", report)
 
   def testArgmin(self):
+    # [FUNCTION DOC]
+    # Scenario: argmin and the old arg-min name, with dimension keyword or positional arguments.
+    # Asserts dimension becomes axis, the third positional becomes name, and the old name is
+    #   replaced.
     text = "tf.argmin(input, name=n, dimension=1, output_type=type)"
     expected_text = "tf.argmin(input, name=n, axis=1, output_type=type)"
     _, unused_report, unused_errors, new_text = self._upgrade(text)
@@ -975,6 +1242,9 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     self.assertEqual(new_text, expected_text)
 
   def testArgmax(self):
+    # [FUNCTION DOC]
+    # Scenario: argmax and the old arg-max name, mirroring the argmin test.
+    # Asserts the same renames.
     text = "tf.argmax(input, name=n, dimension=1, output_type=type)"
     expected_text = "tf.argmax(input, name=n, axis=1, output_type=type)"
     _, unused_report, unused_errors, new_text = self._upgrade(text)
@@ -996,6 +1266,9 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     self.assertEqual(new_text, expected_text)
 
   def testAutograph(self):
+    # [FUNCTION DOC]
+    # Scenario: autograph to-graph and to-code with argument value/type and indentation arguments.
+    # Asserts those removed arguments are dropped.
     text = "tf.autograph.to_graph(f, True, arg_values=None, arg_types=None)"
     expected_text = "tf.autograph.to_graph(f, True)"
     _, unused_report, unused_errors, new_text = self._upgrade(text)
@@ -1008,6 +1281,10 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     self.assertEqual(new_text, expected_text)
 
   def testBatchToSpace(self):
+    # [FUNCTION DOC]
+    # Scenario: batch-to-space variants.
+    # Asserts the n-dimensional forms are renamed to the plain name and the old block-size form gets
+    #   keywords crops and block shape.
     text = "tf.batch_to_space_nd(input, block_shape, crops, name)"
     expected_text = "tf.batch_to_space(input, block_shape, crops, name)"
     _, unused_report, unused_errors, new_text = self._upgrade(text)
@@ -1026,6 +1303,9 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     self.assertEqual(new_text, expected_text)
 
   def testExtractImagePatches(self):
+    # [FUNCTION DOC]
+    # Scenario: the old extract-image-patches call.
+    # Asserts it becomes the image extract-patches function with ksizes renamed to sizes.
     text = (
         "tf.extract_image_patches(images, ksizes=ksizes, strides=strides,"
         "rates=rates, padding=padding, name=name)")
@@ -1036,6 +1316,10 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     self.assertEqual(new_text, expected_text)
 
   def testKerasSavedModel(self):
+    # [FUNCTION DOC]
+    # Scenario: contrib Keras saved model save and load calls.
+    # Asserts they become compat v1 experimental export and load functions and the report suggests
+    #   using model save.
     text = (
         "tf.contrib.saved_model.save_keras_model(model, './saved_models')\n"
         "tf.contrib.saved_model.load_keras_model(saved_model_path)\n")
@@ -1050,6 +1334,9 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     self.assertIn(expected_info, report)
 
   def testStatelessMultinomial(self):
+    # [FUNCTION DOC]
+    # Scenario: stateless multinomial with output dtype keyword.
+    # Asserts renamed to stateless categorical with dtype.
     text = (
         "tf.random.stateless_multinomial(logits, num_samples, seed, "
         "output_dtype=dtype, name=name)")
@@ -1060,6 +1347,9 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     self.assertEqual(new_text, expected_text)
 
   def testSoftMaxCrossEntropyWithLogitsV2(self):
+    # [FUNCTION DOC]
+    # Scenario: the v2 softmax cross entropy name with a dim argument.
+    # Asserts it becomes the plain name with axis and there are no errors.
     text = (
         "tf.nn.softmax_cross_entropy_with_logits_v2("
         "labels=labels, logits=logits, dim=2)")
@@ -1072,6 +1362,9 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     self.assertFalse(errors)
 
   def testSoftMaxCrossEntropyWithLogits(self):
+    # [FUNCTION DOC]
+    # Scenario: the old softmax cross entropy with labels given as a name or a call.
+    # Asserts labels are wrapped in a stop-gradient call and dim becomes axis.
     text = ("tf.nn.softmax_cross_entropy_with_logits("
             "labels=labels, logits=logits, dim=2)")
     expected_text = (
@@ -1088,6 +1381,10 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     self.assertEqual(expected_text, new_text)
 
   def testSoftMaxCrossEntropyWithLogitsDoesntNest(self):
+    # [FUNCTION DOC]
+    # Scenario: labels already wrapped in stop-gradient, or arbitrary call results.
+    # Asserts no double wrapping occurs for existing wrappers, while calls and call chains get
+    #   wrapped once.
     text = ("tf.nn.softmax_cross_entropy_with_logits("
             "labels=tf.stop_gradient(labels), logits=logits, dim=2)")
     expected_text = (
@@ -1118,6 +1415,9 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     self.assertEqual(expected_text, new_text)
 
   def testSparseMatmul(self):
+    # [FUNCTION DOC]
+    # Scenario: sparse matmul with seven positional arguments.
+    # Asserts it becomes the linalg matmul with sparse flags and name as keywords.
     text = ("tf.sparse_matmul(a, b, c, d, e, f, g)\n")
     expected_text = ("tf.linalg.matmul(a, b, c, d, a_is_sparse=e, "
                      "b_is_sparse=f, name=g)\n")
@@ -1125,6 +1425,9 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     self.assertEqual(new_text, expected_text)
 
   def testWeightedMoments(self):
+    # [FUNCTION DOC]
+    # Scenario: weighted moments with five positional arguments.
+    # Asserts name and keepdims become keywords.
     text = "tf.nn.weighted_moments(x, axes, freq, name, kd)"
     expected_text = (
         "tf.nn.weighted_moments(x, axes, freq, name=name, keepdims=kd)")
@@ -1132,12 +1435,18 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     self.assertEqual(new_text, expected_text)
 
   def testSparseAdd(self):
+    # [FUNCTION DOC]
+    # Scenario: sparse add with thresh keyword.
+    # Asserts it is renamed to threshold.
     text = "tf.sparse.add(a, b, thresh=t)"
     expected_text = "tf.sparse.add(a, b, threshold=t)"
     _, unused_report, unused_errors, new_text = self._upgrade(text)
     self.assertEqual(new_text, expected_text)
 
   def testSparseConcat(self):
+    # [FUNCTION DOC]
+    # Scenario: sparse concat with five positional arguments.
+    # Asserts the last three become name, expand-nonconcat-dims and axis keywords.
     text = "tf.sparse.concat(ax, inp, name, exp, concat)"
     expected_text = (
         "tf.sparse.concat(ax, inp, name=name, expand_nonconcat_dims=exp, "
@@ -1146,6 +1455,9 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     self.assertEqual(new_text, expected_text)
 
   def testSeparableConv2D(self):
+    # [FUNCTION DOC]
+    # Scenario: separable convolution with eight positional arguments.
+    # Asserts rate becomes dilations and the last two become keywords.
     text = "tf.nn.separable_conv2d(inp, d, pt, strides, pad, rate, name, fmt)"
     expected_text = (
         "tf.nn.separable_conv2d(inp, d, pt, strides, pad, dilations=rate, "
@@ -1154,6 +1466,9 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     self.assertEqual(new_text, expected_text)
 
   def testConv2D(self):
+    # [FUNCTION DOC]
+    # Scenario: conv2d with the cudnn flag positional and keyword.
+    # Asserts filter becomes filters, the cudnn flag is dropped, and data format becomes a keyword.
     text = (
         "tf.nn.conv2d(input, filter, strides, padding, use_cudnn_on_gpu, "
         "data_format)")
@@ -1172,6 +1487,9 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     self.assertEqual(new_text, expected_text)
 
   def testConv2DBackpropFilter(self):
+    # [FUNCTION DOC]
+    # Scenario: conv2d backprop filter.
+    # Asserts the call moves to compat v1 with arguments unchanged.
     text = (
         "tf.nn.conv2d_backprop_filter(input, filter_sizes, out_backprop, "
         "strides, padding, use_cudnn_on_gpu, data_format)")
@@ -1182,6 +1500,9 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     self.assertEqual(new_text, expected_text)
 
   def testConv2DBackpropInput(self):
+    # [FUNCTION DOC]
+    # Scenario: conv2d backprop input.
+    # Asserts it becomes conv2d transpose with keywords and the cudnn flag removed.
     text = (
         "tf.nn.conv2d_backprop_input(input_sizes, filter, out_backprop, "
         "strides, padding, use_cudnn_on_gpu, data_format)")
@@ -1193,6 +1514,9 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     self.assertEqual(new_text, expected_text)
 
   def testSpacetoBatch(self):
+    # [FUNCTION DOC]
+    # Scenario: n-dimensional space-to-batch and the nn version with block size.
+    # Asserts rename and keywords.
     text = "tf.space_to_batch_nd(input, shape, paddings, name)"
     expected_text = "tf.space_to_batch(input, shape, paddings, name)"
     _, unused_report, unused_errors, new_text = self._upgrade(text)
@@ -1206,6 +1530,9 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     self.assertEqual(new_text, expected_text)
 
   def testInTopK(self):
+    # [FUNCTION DOC]
+    # Scenario: in-top-k in the math namespace with positional arguments.
+    # Asserts they become predictions, targets, k and name keywords.
     text = "tf.math.in_top_k(a, b, c, n)"
     expected_text = (
         "tf.math.in_top_k(predictions=a, targets=b, k=c, name=n)")
@@ -1213,6 +1540,9 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     self.assertEqual(new_text, expected_text)
 
   def testDepthToSpace(self):
+    # [FUNCTION DOC]
+    # Scenario: depth-to-space with four positional arguments.
+    # Asserts the last two become keywords.
     text = "tf.nn.depth_to_space(input, block_size, name, data_format)"
     expected_text = (
         "tf.nn.depth_to_space(input, block_size, name=name, "
@@ -1221,6 +1551,9 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     self.assertEqual(new_text, expected_text)
 
   def testEmbeddingLookup(self):
+    # [FUNCTION DOC]
+    # Scenario: embedding lookup with six positional arguments.
+    # Asserts the validate indices argument is dropped and others become keywords.
     text = ("tf.nn.embedding_lookup(params, ids, partition_strategy, name, "
             "validate_indices, max_norm)")
     expected_text = ("tf.nn.embedding_lookup(params, ids, "
@@ -1230,6 +1563,9 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     self.assertEqual(new_text, expected_text)
 
   def testEmbeddingLookupSparse(self):
+    # [FUNCTION DOC]
+    # Scenario: sparse embedding lookup with seven positional arguments.
+    # Asserts the last four become keywords.
     text = ("tf.nn.embedding_lookup_sparse(params, sp_ids, sp_weights, "
             "partition_strategy, name, combiner, max_norm)")
     expected_text = ("tf.nn.embedding_lookup_sparse(params, sp_ids, "
@@ -1239,6 +1575,9 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     self.assertEqual(new_text, expected_text)
 
   def testNnInTopK(self):
+    # [FUNCTION DOC]
+    # Scenario: nn in-top-k with positional arguments.
+    # Asserts all become keywords.
     text = "tf.nn.in_top_k(predictions, targets, k, name)"
     expected_text = ("tf.nn.in_top_k(predictions=predictions, "
                      "targets=targets, k=k, name=name)")
@@ -1246,6 +1585,9 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     self.assertEqual(new_text, expected_text)
 
   def testSpaceToDepth(self):
+    # [FUNCTION DOC]
+    # Scenario: space-to-depth with four positional arguments.
+    # Asserts the last two become keywords.
     text = "tf.nn.space_to_depth(input, block_size, name, data_format)"
     expected_text = ("tf.nn.space_to_depth(input, block_size, name=name, "
                      "data_format=data_format)")
@@ -1253,6 +1595,9 @@ bazel run tensorflow/tools/compatibility/update:generate_v2_reorders_map
     self.assertEqual(new_text, expected_text)
 
   def testPrint(self):
+    # [FUNCTION DOC]
+    # Scenario: print function calls preceded by the future import for print.
+    # Asserts the text is unchanged (the print call is left alone).
     # tf.print() cannot be parsed unless we import print_function
     text = """from __future__ import print_function
 tf.print()
@@ -1262,6 +1607,9 @@ tf.print('abc')
     self.assertEqual(new_text, text)  # Text should stay the same
 
   def testSparseSplit(self):
+    # [FUNCTION DOC]
+    # Scenario: sparse split in old and new spellings with split_dim.
+    # Asserts rename to sparse split and split_dim to axis, with unchanged keywords left as-is.
     text = (
         "tf.sparse_split(sp_input=sp_input, num_split=num_split, axis=axis, "
         "name=name)")
@@ -1290,6 +1638,11 @@ tf.print('abc')
     self.assertEqual(new_text, expected_text)
 
   def testIterators(self):
+    # [FUNCTION DOC]
+    # Scenario: a table of dataset iterator creation calls: method style on arbitrary expressions,
+    #   top-level data functions, and already-compat calls.
+    # Asserts method style becomes the compat v1 data function taking the dataset first, and already
+    #   compat or top-level forms keep arguments. Checks each pair.
     for (text, expected) in [
         ("(expr + yielding(data)).make_one_shot_iterator()",
          "tf.compat.v1.data.make_one_shot_iterator((expr + yielding(data)))"),
@@ -1333,6 +1686,9 @@ tf.print('abc')
       self.assertEqual(actual, expected)
 
   def testStructure(self):
+    # [FUNCTION DOC]
+    # Scenario: names of data structure classes.
+    # Asserts each maps to its spec class name.
     for (text, expected) in [
         ("tf.data.experimental.DatasetStructure", "tf.data.DatasetSpec"),
         ("tf.data.experimental.OptionalStructure", "tf.OptionalSpec"),
@@ -1346,6 +1702,9 @@ tf.print('abc')
       self.assertEqual(actual, expected)
 
   def testMapAndBatch(self):
+    # [FUNCTION DOC]
+    # Scenario: map-and-batch with legacy function in the experimental data namespace.
+    # Asserts it is redirected to compat v1.
     suffix = ".data.experimental.map_and_batch_with_legacy_function(args)"
     text = "tf" + suffix
     expected = "tf.compat.v1" + suffix
@@ -1353,6 +1712,9 @@ tf.print('abc')
     self.assertEqual(actual, expected)
 
   def testCast(self):
+    # [FUNCTION DOC]
+    # Scenario: legacy cast helpers for several types with a name keyword.
+    # Asserts conversion to cast with a data type keyword (float and double map to 32 and 64 bit).
     for (name, dtype) in [("int32", "int32"),
                           ("int64", "int64"),
                           ("float", "float32"),
@@ -1366,6 +1728,9 @@ tf.print('abc')
       self.assertEqual(expected_text, new_text)
 
   def testCastPositionalSecondArgument(self):
+    # [FUNCTION DOC]
+    # Scenario: the same cast helpers with name given positionally.
+    # Asserts it becomes a name keyword and the data type keyword is added.
     for (name, dtype) in [("int32", "int32"),
                           ("int64", "int64"),
                           ("float", "float32"),
@@ -1379,6 +1744,9 @@ tf.print('abc')
       self.assertEqual(expected_text, new_text)
 
   def testImageResize(self):
+    # [FUNCTION DOC]
+    # Scenario: four resize functions (bilinear, area, bicubic, nearest neighbor).
+    # Asserts conversion to resize with the matching resize method constant.
     for method in ["bilinear", "area", "bicubic", "nearest_neighbor"]:
       text = "tf.image.resize_%s(i, s)" % method
       expected_text = ("tf.image.resize(i, s, "
@@ -1387,6 +1755,10 @@ tf.print('abc')
       self.assertEqual(expected_text, new_text)
 
   def testImageResizeExtraPositionalArgs(self):
+    # [FUNCTION DOC]
+    # Scenario: the same resize functions with extra positional arguments.
+    # Asserts the output contains the resize prefix, the preserve-aspect-ratio keyword and the
+    #   method constant.
     for method in ["bilinear", "area", "bicubic", "nearest_neighbor"]:
       text = "tf.image.resize_%s(i, s, a, p)" % method
       expected_text = [
@@ -1398,6 +1770,10 @@ tf.print('abc')
         self.assertIn(s, new_text)
 
   def testCond(self):
+    # [FUNCTION DOC]
+    # Scenario: cond with a deprecated positional argument.
+    # Asserts the argument is dropped, name becomes keyword, and an error says the call requires
+    #   manual check.
     text = "tf.cond(a, b, c, True, d)"
     expected_text = "tf.cond(a, b, c, name=d)"
     _, unused_report, errors, new_text = self._upgrade(text)
@@ -1406,6 +1782,10 @@ tf.print('abc')
     self.assertIn("requires manual check", errors[0])
 
   def testParens(self):
+    # [FUNCTION DOC]
+    # Scenario: a multi-line function source (held in a string) whose argument is a parenthesized
+    #   expression.
+    # Asserts the first argument becomes a keyword with parentheses and layout preserved.
     text = """
 def _log_prob(self, x):
   return tf.debugging.assert_all_finite(
@@ -1422,6 +1802,11 @@ def _log_prob(self, x):
     self.assertEqual(expected_text, new_text)
 
   def testAssertStatements(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the list of names repeats two entries (assert less and assert greater), so those
+    #   are checked twice.
+    # Scenario: a list of assertion functions at top level and in the debugging namespace.
+    # Asserts each is redirected to compat v1 and the report says it has been changed.
     for name in [
         "assert_greater", "assert_equal", "assert_none_equal", "assert_less",
         "assert_negative", "assert_positive", "assert_non_negative",
@@ -1442,6 +1827,9 @@ def _log_prob(self, x):
       self.assertIn("%s has been" % name, report)
 
   def testAssertRankStatements(self):
+    # [FUNCTION DOC]
+    # Scenario: the three rank assertion functions at top level and in debugging.
+    # Asserts redirect to compat v1 and report notes.
     for name in ["assert_rank", "assert_rank_at_least", "assert_rank_in"]:
       text = "tf.%s(a)" % name
       expected_text = "tf.compat.v1.%s(a)" % name
@@ -1456,6 +1844,9 @@ def _log_prob(self, x):
       self.assertIn("%s has been" % name, report)
 
   def test_assert_equal_graph_def(self):
+    # [FUNCTION DOC]
+    # Scenario: graph-def equality assertion with removed keywords.
+    # Asserts removed arguments dropped and a and b renamed to actual and expected.
     text = ("tf.test.assert_equal_graph_def(a, b, checkpoint_v2=x, "
             "hash_table_shared_name=y)")
     expected = "tf.test.assert_equal_graph_def(actual=a, expected=b)"
@@ -1463,24 +1854,37 @@ def _log_prob(self, x):
     self.assertEqual(expected, new_text)
 
   def test_is_tensor_upgrade(self):
+    # [FUNCTION DOC]
+    # Scenario: contrib framework is-tensor.
+    # Asserts it maps to the top-level is-tensor.
     text = "tf.contrib.framework.is_tensor(x)"
     expected = "tf.is_tensor(x)"
     _, _, _, new_text = self._upgrade(text)
     self.assertEqual(expected, new_text)
 
   def test_is_tensor_direct_import_upgrade(self):
+    # [FUNCTION DOC]
+    # Scenario: the direct-import alias form of is-tensor.
+    # Asserts the same mapping.
     text = "contrib_framework.is_tensor(x)"
     expected = "tf.is_tensor(x)"
     _, _, _, new_text = self._upgrade(text)
     self.assertEqual(expected, new_text)
 
   def test_CriticalSection_upgrade(self):
+    # [FUNCTION DOC]
+    # Scenario: contrib CriticalSection with a shared name.
+    # Asserts it maps to the top-level class.
     text = "tf.contrib.framework.CriticalSection(shared_name='blah')"
     expected = "tf.CriticalSection(shared_name='blah')"
     _, _, _, new_text = self._upgrade(text)
     self.assertEqual(expected, new_text)
 
   def test_sample_distorted_bounding_box(self):
+    # [FUNCTION DOC]
+    # Scenario: bounding box sampling with ten positional arguments.
+    # Asserts the first three stay positional, the seed-related ones are removed and the rest become
+    #   keywords.
     text = ("tf.image.sample_distorted_bounding_box(a, b, c, d, e, f, g, h, i, "
             "j)")
     expected = ("tf.image.sample_distorted_bounding_box(a, b, c, "
@@ -1490,46 +1894,73 @@ def _log_prob(self, x):
     self.assertEqual(expected, new_text)
 
   def test_contrib_initialize(self):
+    # [FUNCTION DOC]
+    # Scenario: contrib summary initialize reference.
+    # Asserts it maps to the summary initialize in compat v1.
     text = "tf.contrib.summary.initialize"
     expected = "tf.compat.v1.summary.initialize"
     _, _, _, new_text = self._upgrade(text)
     self.assertEqual(expected, new_text)
 
   def test_contrib_framework_argsort(self):
+    # [FUNCTION DOC]
+    # Scenario: contrib argsort reference.
+    # Asserts it maps to top-level argsort.
     text = "tf.contrib.framework.argsort"
     expected = "tf.argsort"
     _, _, _, new_text = self._upgrade(text)
     self.assertEqual(expected, new_text)
 
   def test_flags_bare(self):
+    # [FUNCTION DOC]
+    # Scenario: bare flags module reference.
+    # Asserts the first error says flags have been removed.
     _, _, errors, _ = self._upgrade("tf.flags")
     self.assertIn("tf.flags and tf.app.flags have been removed", errors[0])
 
   def test_flags_flags(self):
+    # [FUNCTION DOC]
+    # Scenario: the FLAGS object reference.
+    # Asserts the same removal error.
     _, _, errors, _ = self._upgrade("tf.flags.FLAGS")
     self.assertIn("tf.flags and tf.app.flags have been removed", errors[0])
 
   def test_contrib_layers_layer_norm_deprecation(self):
+    # [FUNCTION DOC]
+    # Scenario: layer norm through two contrib aliases.
+    # Asserts the report notes deprecation.
     for contrib_alias in ["tf.contrib.", "contrib_"]:
       _, report, _, _ = self._upgrade(contrib_alias + "layers.layer_norm")
       self.assertIn(
           "`tf.contrib.layers.layer_norm` has been deprecated", report)
 
   def test_contrib_rnn_deprecation(self):
+    # [FUNCTION DOC]
+    # Scenario: contrib rnn module reference.
+    # Asserts the report notes deprecation.
     _, report, _, _ = self._upgrade("tf.contrib.rnn")
     self.assertIn("tf.contrib.rnn.* has been deprecated", report)
 
   def test_contrib_cudnn_rnn_deprecation(self):
+    # [FUNCTION DOC]
+    # Scenario: contrib cudnn rnn reference.
+    # Asserts the report notes deprecation.
     _, report, _, _ = self._upgrade("tf.contrib.cudnn_rnn")
     self.assertIn("tf.contrib.cudnn_rnn.* has been deprecated", report)
 
   def test_max_pool_2d(self):
+    # [FUNCTION DOC]
+    # Scenario: max pool with value keyword.
+    # Asserts rename to the 2D function with input keyword.
     text = "tf.nn.max_pool(value=4)"
     expected_text = "tf.nn.max_pool2d(input=4)"
     _, _, _, new_text = self._upgrade(text)
     self.assertEqual(expected_text, new_text)
 
   def test_contrib_rnn_cell(self):
+    # [FUNCTION DOC]
+    # Scenario: a list of contrib rnn cell classes.
+    # Asserts each maps to the compat v1 nn rnn cell namespace.
     api_symbols = ["RNNCell", "BasicLSTMCell", "BasicRNNCell", "GRUCell",
                    "LSTMCell", "MultiRNNCell"]
     for symbol in api_symbols:
@@ -1539,6 +1970,9 @@ def _log_prob(self, x):
       self.assertEqual(expected_text, new_text)
 
   def test_contrib_rnn_function(self):
+    # [FUNCTION DOC]
+    # Scenario: static rnn functions in contrib.
+    # Asserts each maps to compat v1 nn.
     api_symbols = ["static_rnn", "static_state_saving_rnn",
                    "static_bidirectional_rnn"]
     for symbol in api_symbols:
@@ -1548,6 +1982,10 @@ def _log_prob(self, x):
       self.assertEqual(expected_text, new_text)
 
   def test_contrib_summary_generic(self):
+    # [FUNCTION DOC]
+    # Scenario: generic contrib summary with name, value, metadata, family and step.
+    # Asserts conversion to the v2 summary write function with keywords, and three errors in
+    #   alphabetical argument order (family, name, generic note).
     text = "tf.contrib.summary.generic('foo', myval, meta, 'fam', 42)"
     expected = ("tf.compat.v2.summary.write(tag='foo', data=myval, "
                 "metadata=meta, step=42)")
@@ -1559,6 +1997,9 @@ def _log_prob(self, x):
     self.assertIn("tf.compat.v2.summary.*", errors[2])
 
   def test_contrib_summary_audio(self):
+    # [FUNCTION DOC]
+    # Scenario: contrib audio summary with all arguments.
+    # Asserts conversion to v2 audio with keywords and errors about family and the general note.
     text = "tf.contrib.summary.audio('foo', myval, 44100, 3, 'fam', 42)"
     expected = ("tf.compat.v2.summary.audio(name='foo', data=myval, "
                 "sample_rate=44100, max_outputs=3, step=42)")
@@ -1568,6 +2009,9 @@ def _log_prob(self, x):
     self.assertIn("tf.compat.v2.summary.*", errors[1])
 
   def test_contrib_summary_histogram(self):
+    # [FUNCTION DOC]
+    # Scenario: contrib histogram summary.
+    # Asserts conversion to v2 histogram, family dropped with an error, and the general note.
     text = "tf.contrib.summary.histogram('foo', myval, 'fam', 42)"
     expected = ("tf.compat.v2.summary.histogram(name='foo', data=myval, "
                 "step=42)")
@@ -1577,6 +2021,9 @@ def _log_prob(self, x):
     self.assertIn("tf.compat.v2.summary.*", errors[1])
 
   def test_contrib_summary_image(self):
+    # [FUNCTION DOC]
+    # Scenario: contrib image summary with bad color, max outputs, family and step.
+    # Asserts conversion to v2 image and three errors (bad color, family, general note).
     text = "tf.contrib.summary.image('foo', myval, red, 3, 'fam', 42)"
     expected = ("tf.compat.v2.summary.image(name='foo', data=myval, "
                 "max_outputs=3, step=42)")
@@ -1587,6 +2034,9 @@ def _log_prob(self, x):
     self.assertIn("tf.compat.v2.summary.*", errors[2])
 
   def test_contrib_summary_scalar(self):
+    # [FUNCTION DOC]
+    # Scenario: contrib scalar summary.
+    # Asserts conversion to v2 scalar and errors on family and the general note.
     text = "tf.contrib.summary.scalar('foo', myval, 'fam', 42)"
     expected = ("tf.compat.v2.summary.scalar(name='foo', data=myval, "
                 "step=42)")
@@ -1596,6 +2046,9 @@ def _log_prob(self, x):
     self.assertIn("tf.compat.v2.summary.*", errors[1])
 
   def test_contrib_summary_generic_nostep(self):
+    # [FUNCTION DOC]
+    # Scenario: generic summary without a step.
+    # Asserts a global-step default is added, with errors for name, step and the general note.
     text = "tf.contrib.summary.generic('foo', myval)"
     expected = ("tf.compat.v2.summary.write(tag='foo', data=myval, "
                 "step=tf.compat.v1.train.get_or_create_global_step())")
@@ -1606,6 +2059,9 @@ def _log_prob(self, x):
     self.assertIn("tf.compat.v2.summary.*", errors[2])
 
   def test_contrib_summary_audio_nostep(self):
+    # [FUNCTION DOC]
+    # Scenario: audio summary without a step.
+    # Asserts a default global step and errors for step and the general note.
     text = "tf.contrib.summary.audio('foo', myval, 44100)"
     expected = ("tf.compat.v2.summary.audio(name='foo', data=myval, "
                 "sample_rate=44100, "
@@ -1616,6 +2072,9 @@ def _log_prob(self, x):
     self.assertIn("tf.compat.v2.summary.*", errors[1])
 
   def test_contrib_summary_histogram_nostep(self):
+    # [FUNCTION DOC]
+    # Scenario: histogram summary without a step.
+    # Same assertions as the audio variant.
     text = "tf.contrib.summary.histogram('foo', myval)"
     expected = ("tf.compat.v2.summary.histogram(name='foo', data=myval, "
                 "step=tf.compat.v1.train.get_or_create_global_step())")
@@ -1625,6 +2084,9 @@ def _log_prob(self, x):
     self.assertIn("tf.compat.v2.summary.*", errors[1])
 
   def test_contrib_summary_image_nostep(self):
+    # [FUNCTION DOC]
+    # Scenario: image summary without a step.
+    # Same assertions as the audio variant.
     text = "tf.contrib.summary.image('foo', myval)"
     expected = ("tf.compat.v2.summary.image(name='foo', data=myval, "
                 "step=tf.compat.v1.train.get_or_create_global_step())")
@@ -1634,6 +2096,9 @@ def _log_prob(self, x):
     self.assertIn("tf.compat.v2.summary.*", errors[1])
 
   def test_contrib_summary_scalar_nostep(self):
+    # [FUNCTION DOC]
+    # Scenario: scalar summary without a step.
+    # Same assertions as the audio variant.
     text = "tf.contrib.summary.scalar('foo', myval)"
     expected = ("tf.compat.v2.summary.scalar(name='foo', data=myval, "
                 "step=tf.compat.v1.train.get_or_create_global_step())")
@@ -1643,24 +2108,37 @@ def _log_prob(self, x):
     self.assertIn("tf.compat.v2.summary.*", errors[1])
 
   def test_contrib_summary_graph(self):
+    # [FUNCTION DOC]
+    # Scenario: contrib summary graph.
+    # Asserts the first error mentions the v2 trace function.
     text = "tf.contrib.summary.graph(my_graph)"
     _, _, errors, _ = self._upgrade(text)
     expected_error = "tf.compat.v2.summary.trace"
     self.assertIn(expected_error, errors[0])
 
   def test_contrib_summary_import_event(self):
+    # [FUNCTION DOC]
+    # Scenario: contrib summary import event.
+    # Asserts the first error mentions the raw proto write function.
     text = "tf.contrib.summary.import_event(my_event)"
     _, _, errors, _ = self._upgrade(text)
     expected_error = "tf.compat.v2.summary.experimental.write_raw_pb"
     self.assertIn(expected_error, errors[0])
 
   def test_contrib_summary_flush(self):
+    # [FUNCTION DOC]
+    # Scenario: contrib summary flush with writer keyword.
+    # Asserts it maps to v2 flush.
     text = "tf.contrib.summary.flush(writer=foo)"
     expected = "tf.compat.v2.summary.flush(writer=foo)"
     _, _, _, new_text = self._upgrade(text)
     self.assertEqual(expected, new_text)
 
   def test_contrib_summary_create_file_writer(self):
+    # [FUNCTION DOC]
+    # Scenario: contrib file writer creation with five positional arguments.
+    # Asserts keywords are added, the name argument is dropped with an error, and a second error
+    #   says event files are no longer reused.
     text = ("tf.contrib.summary.create_file_writer('my_logdir', 0, 1000, "
             "'.foo', 'shared-name')")
     expected = ("tf.compat.v2.summary.create_file_writer(logdir='my_logdir', "
@@ -1671,30 +2149,48 @@ def _log_prob(self, x):
     self.assertIn("no longer re-uses existing event files", errors[1])
 
   def test_contrib_summary_always_record_summaries(self):
+    # [FUNCTION DOC]
+    # Scenario: always-record call.
+    # Asserts it becomes record-if with true.
     text = "tf.contrib.summary.always_record_summaries()"
     expected = "tf.compat.v2.summary.record_if(True)"
     _, _, _, new_text = self._upgrade(text)
     self.assertEqual(expected, new_text)
 
   def test_contrib_summary_never_record_summaries(self):
+    # [FUNCTION DOC]
+    # Scenario: never-record call.
+    # Asserts it becomes record-if with false.
     text = "tf.contrib.summary.never_record_summaries()"
     expected = "tf.compat.v2.summary.record_if(False)"
     _, _, _, new_text = self._upgrade(text)
     self.assertEqual(expected, new_text)
 
   def test_contrib_summary_record_summaries_every_n_global_steps(self):
+    # [FUNCTION DOC]
+    # Scenario: every-n-steps recording.
+    # Asserts an error saying it must be replaced by a record-if call.
     text = "tf.contrib.summary.record_summaries_every_n_global_steps(10)"
     _, _, errors, _ = self._upgrade(text)
     expected_error = "replaced by a call to tf.compat.v2.summary.record_if()"
     self.assertIn(expected_error, errors[0])
 
   def test_contrib_summary_all_summary_ops(self):
+    # [FUNCTION DOC]
+    # Scenario: all-summary-ops call.
+    # Asserts it maps to the compat v1 all-v2-summary-ops function.
     text = "tf.contrib.summary.all_summary_ops()"
     expected = "tf.compat.v1.summary.all_v2_summary_ops()"
     _, _, _, new_text = self._upgrade(text)
     self.assertEqual(expected, new_text)
 
   def test_contrib_summary_full_example(self):
+    # [FUNCTION DOC]
+    # Scenario: a multi-line program (held in a string, indented then stripped with a small local
+    #   helper) using eager mode, a file writer, a context manager with record-always, and scalar,
+    #   histogram and flush calls.
+    # Asserts the whole converted program matches the expected text, including default global step
+    #   for the scalar.
     deindent = lambda n, s: "\n".join(line[n:] for line in s.split("\n"))
     text = deindent(4, """
     import tensorflow as tf
@@ -1720,18 +2216,27 @@ def _log_prob(self, x):
     self.assertEqual(expected, new_text)
 
   def test_summary_api_warning(self):
+    # [FUNCTION DOC]
+    # Scenario: a v1 summary scalar call.
+    # Asserts the report says the v1 summary API cannot be migrated automatically.
     text = "tf.summary.scalar('foo', 42)"
     _, report, _, _ = self._upgrade(text)
     expected_info = "TF 1.x summary API cannot be automatically migrated"
     self.assertIn(expected_info, report)
 
   def test_avg_pool_2d(self):
+    # [FUNCTION DOC]
+    # Scenario: average pool with value keyword.
+    # Asserts rename to the 2D function with input keyword.
     text = "tf.nn.avg_pool(value=4)"
     expected_text = "tf.nn.avg_pool2d(input=4)"
     _, _, _, new_text = self._upgrade(text)
     self.assertEqual(expected_text, new_text)
 
   def test_saved_model_load(self):
+    # [FUNCTION DOC]
+    # Scenario: saved model load with a session.
+    # Asserts redirect to compat v1 and a report note that load works differently.
     text = "tf.saved_model.load(sess, ['foo_graph'])"
     expected = "tf.compat.v1.saved_model.load(sess, ['foo_graph'])"
     _, report, _, new_text = self._upgrade(text)
@@ -1740,6 +2245,9 @@ def _log_prob(self, x):
     self.assertIn(expected_info, report)
 
   def test_saved_model_loader_load(self):
+    # [FUNCTION DOC]
+    # Scenario: loader-namespace load.
+    # Asserts redirect to compat v1 load and the same note.
     text = "tf.saved_model.loader.load(sess, ['foo_graph'])"
     expected = "tf.compat.v1.saved_model.load(sess, ['foo_graph'])"
     _, report, _, new_text = self._upgrade(text)
@@ -1748,18 +2256,27 @@ def _log_prob(self, x):
     self.assertIn(expected_info, report)
 
   def test_saved_model_load_v2(self):
+    # [FUNCTION DOC]
+    # Scenario: load-v2.
+    # Asserts it becomes the compat v2 load.
     text = "tf.saved_model.load_v2('/tmp/blah')"
     expected = "tf.compat.v2.saved_model.load('/tmp/blah')"
     _, _, _, new_text = self._upgrade(text)
     self.assertEqual(expected, new_text)
 
   def test_app_flags(self):
+    # [FUNCTION DOC]
+    # Scenario: assignment of the app flags module.
+    # Asserts it goes to compat v1.
     text = "flags = tf.app.flags"
     expected = "flags = tf.compat.v1.app.flags"
     _, _, _, new_text = self._upgrade(text)
     self.assertEqual(expected, new_text)
 
   def test_uniform_unit_scaling_initializer(self):
+    # [FUNCTION DOC]
+    # Scenario: uniform unit scaling initializer in two spellings.
+    # Asserts both become Keras variance scaling with a uniform distribution.
     text = "tf.uniform_unit_scaling_initializer(0.5)"
     expected_text = ("tf.compat.v1.keras.initializers.VarianceScaling("
                      "scale=0.5, distribution=\"uniform\")")
@@ -1773,6 +2290,11 @@ def _log_prob(self, x):
     self.assertEqual(expected_text, new_text)
 
   def test_name_scope(self):
+    # [FUNCTION DOC]
+    # Scenario: name scope with the old arguments in several forms.
+    # Asserts positional and default-name forms become a name keyword, a call with both name and
+    #   default name goes to compat v1 with a report note, and a call with neither name nor default
+    #   name raises an error entry.
     text = "tf.name_scope(None, default_name, [some, values])"
     expected_text = "tf.name_scope(name=default_name)"
     _, _, _, new_text = self._upgrade(text)
@@ -1837,6 +2359,13 @@ def _log_prob(self, x):
   )  # pyformat: disable
   # TODO(b/129398290)
   def DISABLED_test_string_split(self, text, expected_text):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the name does not start with the test prefix, so the runner never executes it;
+    #   the TODO shows it is intentionally disabled.
+    # Data-driven test (parameters: input text and expected text) for string splitting conversions:
+    #   renames, empty separator to bytes split, compat v1 fallback for unknown separator or result
+    #   type, and adding a sparse conversion unless the result type is ragged.
+    # Would assert the upgraded text equals the expected text.
     """Tests for transforming from tf.string_split."""
     _, _, _, new_text = self._upgrade(text)
     self.assertEqual(expected_text, new_text)
@@ -1853,11 +2382,19 @@ def _log_prob(self, x):
        "tf.compat.v1.strings.split(x, sep, result_type=x)"],
   )  # pyformat: disable
   def test_strings_split(self, text, expected_text):
+    # [FUNCTION DOC]
+    # Data-driven test (parameters: input text and expected text) for splitting in the strings
+    #   namespace.
+    # Asserts a sparse conversion is appended unless the result type is ragged, and a non-literal
+    #   result type falls back to compat v1.
     """Tests for transforming from tf.strings.split."""
     _, _, _, new_text = self._upgrade(text)
     self.assertEqual(expected_text, new_text)
 
   def test_sdca_to_raw_ops(self):
+    # [FUNCTION DOC]
+    # Scenario: SDCA train functions (fingerprint, shrink, optimizer).
+    # Asserts each is replaced by its raw op with unchanged arguments.
     text = "tf.train.sdca_fprint(input_tensor)"
     expected_text = "tf.raw_ops.SdcaFprint(input_tensor)"
     _, _, _, new_text = self._upgrade(text)
@@ -1881,6 +2418,9 @@ def _log_prob(self, x):
     self.assertEqual(expected_text, new_text)
 
   def test_contrib_to_addons_move(self):
+    # [FUNCTION DOC]
+    # Scenario: four contrib layer functions with a mapping to addons replacements.
+    # Asserts the report mentions each replacement name.
     small_mapping = {
         "tf.contrib.layers.poincare_normalize":
             "tfa.layers.PoincareNormalize",
@@ -1897,6 +2437,9 @@ def _log_prob(self, x):
       self.assertIn(replacement, report)
 
   def testXlaExperimental(self):
+    # [FUNCTION DOC]
+    # Scenario: jit scope and compile in the xla experimental namespace.
+    # Asserts they are left unchanged.
     text = "tf.xla.experimental.jit_scope(0)"
     expected_text = "tf.xla.experimental.jit_scope(0)"
     _, _, _, new_text = self._upgrade(text)
@@ -1908,18 +2451,27 @@ def _log_prob(self, x):
     self.assertEqual(new_text, expected_text)
 
   def testNnErosion2d(self):
+    # [FUNCTION DOC]
+    # Scenario: erosion with five positional arguments.
+    # Asserts the data format keyword is appended.
     text = "tf.nn.erosion2d(v, k, s, r, p)"
     expected_text = "tf.nn.erosion2d(v, k, s, r, p, data_format='NHWC')"
     _, _, _, new_text = self._upgrade(text)
     self.assertEqual(new_text, expected_text)
 
   def testNnDilation2d(self):
+    # [FUNCTION DOC]
+    # Scenario: dilation with five positional arguments.
+    # Asserts the data format keyword is appended.
     text = "tf.nn.dilation2d(v, k, s, r, p)"
     expected_text = "tf.nn.dilation2d(v, k, s, r, p, data_format='NHWC')"
     _, _, _, new_text = self._upgrade(text)
     self.assertEqual(new_text, expected_text)
 
   def testPywrapTensorflowWarning(self):
+    # [FUNCTION DOC]
+    # Scenario: use of the pywrap module.
+    # Asserts the text is unchanged and the first error says it will not be distributed.
     text = "tf.pywrap_tensorflow.foo()"
     expected = "tf.pywrap_tensorflow.foo()"
     _, _, errors, new_text = self._upgrade(text)
@@ -1927,6 +2479,10 @@ def _log_prob(self, x):
     self.assertIn("`tf.pywrap_tensorflow` will not be distributed", errors[0])
 
   def testKerasSaveModelFormat(self):
+    # [FUNCTION DOC]
+    # Scenario: Keras save-model function call, then a plain model save.
+    # Asserts the first gets a save format of h5 and no default-format note, and the second report
+    #   has the note about the SavedModel default.
     text = "tf.keras.models.save_model(model, path)"
     expected_text = "tf.keras.models.save_model(model, path, save_format='h5')"
     _, report, _, new_text = self._upgrade(text)
@@ -1939,6 +2495,11 @@ def _log_prob(self, x):
         "saves to the Tensorflow SavedModel format by default", report)
 
   def test_distribute_strategy(self):
+    # [FUNCTION DOC]
+    # Scenario: contrib distribute names and the new strategy name.
+    # Asserts a cross device ops reference is moved, mirrored and TPU strategies are left with
+    #   migration errors, the new mirrored strategy gets an API-changed report, and other contrib
+    #   distribute names get a general migration note.
     text = "tf.contrib.distribute.CrossDeviceOps()"
     expected = "tf.distribute.CrossDeviceOps()"
     _, _, _, new_text = self._upgrade(text)
@@ -1972,6 +2533,9 @@ def _log_prob(self, x):
     self.assertIn("tf.contrib.distribute.* have been migrated", report)
 
   def test_decode_raw(self):
+    # [FUNCTION DOC]
+    # Scenario: raw decode with bytes keyword.
+    # Asserts it is renamed to input bytes.
     text = "tf.io.decode_raw(bytes=[1,2,3], output_dtype=tf.int32)"
     expected_text = (
         "tf.io.decode_raw(input_bytes=[1,2,3], output_dtype=tf.int32)")
@@ -1979,12 +2543,18 @@ def _log_prob(self, x):
     self.assertEqual(expected_text, new_text)
 
   def testRecomputeGrad(self):
+    # [FUNCTION DOC]
+    # Scenario: contrib recompute grad.
+    # Asserts it maps to the top-level function.
     text = "tf.contrib.layers.recompute_grad()"
     expected = "tf.recompute_grad()"
     _, _, _, new_text = self._upgrade(text)
     self.assertEqual(expected, new_text)
 
   def test_load_variable(self):
+    # [FUNCTION DOC]
+    # Scenario: contrib load variable, positional and with checkpoint dir keyword.
+    # Asserts mapping to the train function with keyword renamed.
     text = "tf.contrib.framework.load_variable('a')"
     expected_text = (
         "tf.train.load_variable('a')")
@@ -1997,6 +2567,12 @@ def _log_prob(self, x):
     self.assertEqual(expected_text, new_text)
 
   def test_import_rename_analysis(self):
+    # [FUNCTION DOC]
+    # Scenario: several import styles combined with the rename option: plain, multi-name, alongside
+    #   compat v1 and v2 aliases, from-imports, star imports and submodule imports, plus the compat
+    #   v1 upgrade option with and without renaming.
+    # Asserts import lines are rewritten to the compat v2 module when appropriate and left alone for
+    #   explicit compat aliases, and the old symbol is renamed.
     old_symbol = "tf.conj(a)"
     new_symbol = "tf.math.conj(a)"
 
@@ -2083,6 +2659,10 @@ def _log_prob(self, x):
     self.assertEqual(new_text, expected_text)
 
   def test_import_analysis(self):
+    # [FUNCTION DOC]
+    # Scenario: import styles without the rename option.
+    # Asserts plain tensorflow aliased as tf is upgraded; unaliased import gives an error and no
+    #   change; explicit compat v1 or v2 imports as tf give a report note, no change and no errors.
     old_symbol = "tf.conj(a)"
     new_symbol = "tf.math.conj(a)"
 
@@ -2179,12 +2759,20 @@ def _log_prob(self, x):
                                         upgrade_compat_v1_import,
                                         text_a, expected_text_a,
                                         text_b, expected_text_b):
+    # [FUNCTION DOC]
+    # Data-driven test (parameters: the compat v1 upgrade flag, two source texts and their expected
+    #   outputs) that processes two files with one upgrader.
+    # Asserts each output matches, showing that the API spec state is reset between files while the
+    #   option persists.
     results = self._upgrade_multiple(upgrade_compat_v1_import, [text_a, text_b])
     result_a, result_b = results[0], results[1]
     self.assertEqual(result_a[3], expected_text_a)
     self.assertEqual(result_b[3], expected_text_b)
 
   def test_keras_experimental_export_warning(self):
+    # [FUNCTION DOC]
+    # Scenario: Keras experimental export of a saved model.
+    # Asserts the report suggests using model save.
     text = "tf.keras.experimental.export_saved_model"
     _, report, _, _ = self._upgrade(text)
     expected_info = "Please use model.save"
@@ -2192,8 +2780,17 @@ def _log_prob(self, x):
 
 
 class TestUpgradeFiles(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests of the upgrader's file-level entry point. Each test writes a temporary file, upgrades it
+  #   in place and checks the contents. No shared fixtures.
 
   def testInplace(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the file is read with a handle that is never closed and the temporary file is
+    #   only deleted when the assertion passes.
+    # Scenario: a temporary file holding an old call, processed with the same path as input and
+    #   output.
+    # Asserts the file ends up with the upgraded text (no race), then deletes it.
     """Check to make sure we don't have a file system race."""
     temp_file = tempfile.NamedTemporaryFile("w", delete=False)
     original = "tf.conj(a)\n"
@@ -2206,6 +2803,11 @@ class TestUpgradeFiles(test_util.TensorFlowTestCase):
     os.unlink(temp_file.name)
 
   def testInplaceNoOutputChangeOnErrorHandling(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: same unclosed read handle and cleanup-on-pass-only as the first file test.
+    # Scenario: a temporary file with invalid source, processed in place with the option that keeps
+    #   the output unchanged on error.
+    # Asserts the content is untouched; then deletes the file.
     """In place file should not be modified when parsing error is handled."""
     temp_file = tempfile.NamedTemporaryFile("w", delete=False)
     original = "print 'a' \n"
@@ -2219,6 +2821,10 @@ class TestUpgradeFiles(test_util.TensorFlowTestCase):
     os.unlink(temp_file.name)
 
   def testInplaceEmptyOutputOnError(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: same unclosed read handle and cleanup-on-pass-only as the first file test.
+    # Scenario: a temporary file with invalid source, processed in place without the error option.
+    # Asserts the file becomes empty; then deletes it.
     """In place file becomes empty when parsing error is not handled."""
     temp_file = tempfile.NamedTemporaryFile("w", delete=False)
     original = "print 'a' \n"
