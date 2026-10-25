@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# Arithmetic and special-function operations that could not live in the main math ops module
+# because of circular dependencies. Exposes the log-beta function, Dawson's integral, the
+# exponential integral, Fresnel sine and cosine integrals, Spence's integral, modified Bessel
+# functions (i0, i0e, i1, i1e, k0, k0e, k1, k1e) and Bessel functions (j0, j1, y0, y1), most of
+# which are thin wrappers over generated kernels. It also implements einsum (tensor contraction
+# by an Einstein-summation equation) in two forms: a legacy implementation built from transposes,
+# reshapes and batch matmul, and the current one that uses the einsum kernel plus the external
+# opt_einsum library to pick a pairwise contraction order. Import-time side effects: registers
+# public API exports and dispatch support for the functions, registers a gradient for the XLA
+# einsum op, and wraps the contraction-path helper in a bounded least-recently-used cache.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -46,6 +57,13 @@ from tensorflow.python.util.tf_export import tf_export
 @dispatch.add_dispatch_support
 @deprecation.deprecated_endpoints('lbeta')
 def lbeta(x, name=None):
+  # [FUNCTION DOC]
+  # Computes the natural log of the absolute value of the multivariate beta function, reducing
+  # over the last dimension. Inputs: x, a tensor (or convertible value) of rank at least one with
+  # float or double type; name, optional operation name. Output: tensor with the last dimension
+  # removed, equal to the sum of log-gamma of the entries minus log-gamma of their sum. An empty
+  # last dimension gives negative infinity. No explicit exceptions; type errors come from the
+  # underlying ops. Side effects: creates a name scope in the current graph.
   r"""Computes \\(ln(|Beta(x)|)\\), reducing along the last dimension.
 
   Given one-dimensional $z = [z_1,...,z_K]$, we define
@@ -102,6 +120,11 @@ def lbeta(x, name=None):
 @dispatch.register_unary_elementwise_api
 @dispatch.add_dispatch_support
 def dawsn(x, name=None):
+  # [FUNCTION DOC]
+  # Element-wise Dawson's integral. Input x: tensor or sparse tensor of float32 or float64; name:
+  # optional operation name. Returns a tensor (sparse if the input is sparse, via dispatch) of
+  # the same type. Delegates to the generated kernel inside a name scope; invalid dtypes raise
+  # the kernel's type error.
   """Computes Dawson's integral of `x` element-wise.
 
   Dawson's integral is defined as `exp(-x**2)` times the integral of
@@ -133,6 +156,10 @@ def dawsn(x, name=None):
 @dispatch.register_unary_elementwise_api
 @dispatch.add_dispatch_support
 def expint(x, name=None):
+  # [FUNCTION DOC]
+  # Element-wise exponential integral. Input x: tensor or sparse tensor of float32 or float64;
+  # name: optional operation name. Returns a tensor of the same type (sparse for sparse input).
+  # Delegates to the generated kernel inside a name scope; invalid dtypes raise a type error.
   """Computes the Exponential integral of `x` element-wise.
 
   The Exponential integral is defined as the integral of `exp(t) / t` from
@@ -163,6 +190,10 @@ def expint(x, name=None):
 @dispatch.register_unary_elementwise_api
 @dispatch.add_dispatch_support
 def fresnel_cos(x, name=None):
+  # [FUNCTION DOC]
+  # Element-wise Fresnel cosine integral. Input x: tensor or sparse tensor of float32 or float64;
+  # name: optional operation name. Returns a tensor of the same type (sparse for sparse input).
+  # Delegates to the generated kernel inside a name scope; invalid dtypes raise a type error.
   """Computes Fresnel's cosine integral of `x` element-wise.
 
   The Fresnel cosine integral is defined as the integral of `cos(t^2)` from
@@ -194,6 +225,10 @@ def fresnel_cos(x, name=None):
 @dispatch.register_unary_elementwise_api
 @dispatch.add_dispatch_support
 def fresnel_sin(x, name=None):
+  # [FUNCTION DOC]
+  # Element-wise Fresnel sine integral. Input x: tensor or sparse tensor of float32 or float64;
+  # name: optional operation name. Returns a tensor of the same type (sparse for sparse input).
+  # Delegates to the generated kernel inside a name scope; invalid dtypes raise a type error.
   """Computes Fresnel's sine integral of `x` element-wise.
 
   The Fresnel sine integral is defined as the integral of `sin(t^2)` from
@@ -224,6 +259,11 @@ def fresnel_sin(x, name=None):
 @dispatch.register_unary_elementwise_api
 @dispatch.add_dispatch_support
 def spence(x, name=None):
+  # [FUNCTION DOC]
+  # Element-wise Spence's integral (dilogarithm). Input x: tensor or sparse tensor of float32 or
+  # float64; name: optional operation name. Returns a tensor of the same type (sparse for sparse
+  # input). Delegates to the generated kernel inside a name scope; invalid dtypes raise a type
+  # error.
   """Computes Spence's integral of `x` element-wise.
 
   Spence's integral is defined as the integral of `log(t) / (1 - t)` from
@@ -254,6 +294,10 @@ def spence(x, name=None):
 @dispatch.register_unary_elementwise_api
 @dispatch.add_dispatch_support
 def bessel_i0(x, name=None):
+  # [FUNCTION DOC]
+  # Element-wise modified Bessel function of the first kind, order 0. Input x: tensor or sparse
+  # tensor of half, float32 or float64; name: optional operation name. Returns a tensor of the
+  # same type (sparse for sparse input). Delegates to the generated kernel in a name scope.
   """Computes the Bessel i0 function of `x` element-wise.
 
   Modified Bessel function of order 0.
@@ -283,6 +327,10 @@ def bessel_i0(x, name=None):
 @dispatch.register_unary_elementwise_api
 @dispatch.add_dispatch_support
 def bessel_i0e(x, name=None):
+  # [FUNCTION DOC]
+  # Element-wise exponentially scaled modified Bessel function of the first kind, order 0. Input
+  # x: tensor or sparse tensor of half, float32 or float64; name: optional operation name.
+  # Returns a tensor of the same type. Delegates to the generated kernel in a name scope.
   """Computes the Bessel i0e function of `x` element-wise.
 
   Modified Bessel function of order 0.
@@ -310,6 +358,10 @@ def bessel_i0e(x, name=None):
 @dispatch.register_unary_elementwise_api
 @dispatch.add_dispatch_support
 def bessel_i1(x, name=None):
+  # [FUNCTION DOC]
+  # Element-wise modified Bessel function of the first kind, order 1. Input x: tensor or sparse
+  # tensor of half, float32 or float64; name: optional operation name. Returns a tensor of the
+  # same type. Delegates to the generated kernel in a name scope.
   """Computes the Bessel i1 function of `x` element-wise.
 
   Modified Bessel function of order 1.
@@ -339,6 +391,10 @@ def bessel_i1(x, name=None):
 @dispatch.register_unary_elementwise_api
 @dispatch.add_dispatch_support
 def bessel_i1e(x, name=None):
+  # [FUNCTION DOC]
+  # Element-wise exponentially scaled modified Bessel function of the first kind, order 1. Input
+  # x: tensor or sparse tensor of half, float32 or float64; name: optional operation name.
+  # Returns a tensor of the same type. Delegates to the generated kernel in a name scope.
   """Computes the Bessel i1e function of `x` element-wise.
 
   Modified Bessel function of order 1.
@@ -366,6 +422,10 @@ def bessel_i1e(x, name=None):
 @dispatch.register_unary_elementwise_api
 @dispatch.add_dispatch_support
 def bessel_k0(x, name=None):
+  # [FUNCTION DOC]
+  # Element-wise modified Bessel function of the second kind, order 0. Input x: tensor or sparse
+  # tensor of half, float32 or float64 (positive values for finite results); name: optional
+  # operation name. Returns a tensor of the same type. Delegates to the generated kernel.
   """Computes the Bessel k0 function of `x` element-wise.
 
   Modified Bessel function of order 0.
@@ -395,6 +455,10 @@ def bessel_k0(x, name=None):
 @dispatch.register_unary_elementwise_api
 @dispatch.add_dispatch_support
 def bessel_k0e(x, name=None):
+  # [FUNCTION DOC]
+  # Element-wise exponentially scaled modified Bessel function of the second kind, order 0.
+  # Input x: tensor or sparse tensor of half, float32 or float64; name: optional operation name.
+  # Returns a tensor of the same type. Delegates to the generated kernel in a name scope.
   """Computes the Bessel k0e function of `x` element-wise.
 
   Modified Bessel function of order 0.
@@ -422,6 +486,10 @@ def bessel_k0e(x, name=None):
 @dispatch.register_unary_elementwise_api
 @dispatch.add_dispatch_support
 def bessel_k1(x, name=None):
+  # [FUNCTION DOC]
+  # Element-wise modified Bessel function of the second kind, order 1. Input x: tensor or sparse
+  # tensor of half, float32 or float64; name: optional operation name. Returns a tensor of the
+  # same type. Delegates to the generated kernel in a name scope.
   """Computes the Bessel k1 function of `x` element-wise.
 
   Modified Bessel function of order 1.
@@ -451,6 +519,10 @@ def bessel_k1(x, name=None):
 @dispatch.register_unary_elementwise_api
 @dispatch.add_dispatch_support
 def bessel_k1e(x, name=None):
+  # [FUNCTION DOC]
+  # Element-wise exponentially scaled modified Bessel function of the second kind, order 1.
+  # Input x: tensor or sparse tensor of half, float32 or float64; name: optional operation name.
+  # Returns a tensor of the same type. Delegates to the generated kernel in a name scope.
   """Computes the Bessel k1e function of `x` element-wise.
 
   Modified Bessel function of order 1.
@@ -478,6 +550,12 @@ def bessel_k1e(x, name=None):
 @dispatch.register_unary_elementwise_api
 @dispatch.add_dispatch_support
 def bessel_j0(x, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring calls this a "Modified Bessel function"; it is actually the
+  # ordinary Bessel function of the first kind, order 0 (matching the scipy j0 reference).
+  # Element-wise Bessel function of the first kind, order 0. Input x: tensor or sparse tensor of
+  # half, float32 or float64; name: optional operation name. Returns a tensor of the same type.
+  # Delegates to the generated kernel in a name scope.
   """Computes the Bessel j0 function of `x` element-wise.
 
   Modified Bessel function of order 0.
@@ -505,6 +583,12 @@ def bessel_j0(x, name=None):
 @dispatch.register_unary_elementwise_api
 @dispatch.add_dispatch_support
 def bessel_j1(x, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring calls this a "Modified Bessel function"; it is actually the
+  # ordinary Bessel function of the first kind, order 1 (matching the scipy j1 reference).
+  # Element-wise Bessel function of the first kind, order 1. Input x: tensor or sparse tensor of
+  # half, float32 or float64; name: optional operation name. Returns a tensor of the same type.
+  # Delegates to the generated kernel in a name scope.
   """Computes the Bessel j1 function of `x` element-wise.
 
   Modified Bessel function of order 1.
@@ -532,6 +616,12 @@ def bessel_j1(x, name=None):
 @dispatch.register_unary_elementwise_api
 @dispatch.add_dispatch_support
 def bessel_y0(x, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring calls this a "Modified Bessel function"; it is actually the
+  # ordinary Bessel function of the second kind, order 0 (matching the scipy y0 reference).
+  # Element-wise Bessel function of the second kind, order 0. Input x: tensor or sparse tensor of
+  # half, float32 or float64; name: optional operation name. Returns a tensor of the same type.
+  # Delegates to the generated kernel in a name scope.
   """Computes the Bessel y0 function of `x` element-wise.
 
   Modified Bessel function of order 0.
@@ -559,6 +649,12 @@ def bessel_y0(x, name=None):
 @dispatch.register_unary_elementwise_api
 @dispatch.add_dispatch_support
 def bessel_y1(x, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring calls this a "Modified Bessel function"; it is actually the
+  # ordinary Bessel function of the second kind, order 1 (matching the scipy y1 reference).
+  # Element-wise Bessel function of the second kind, order 1. Input x: tensor or sparse tensor of
+  # half, float32 or float64; name: optional operation name. Returns a tensor of the same type.
+  # Delegates to the generated kernel in a name scope.
   """Computes the Bessel y1 function of `x` element-wise.
 
   Modified Bessel function of order 1.
@@ -584,6 +680,14 @@ def bessel_y1(x, name=None):
 
 @ops.RegisterGradient('XlaEinsum')
 def _einsum_grad(op, grad):
+  # [FUNCTION DOC]
+  # HELPER: gradient function registered for the XLA einsum op.
+  # KNOWN ISSUE: assumes exactly two operands (splits the input part of the equation on a single
+  # comma into two); equations with other operand counts would fail with an unpacking error.
+  # Inputs: op, the forward operation (its equation attribute, bytes or text, and two inputs);
+  # grad, the upstream gradient. Returns a list of two gradients, each computed by another XLA
+  # einsum of the upstream gradient with the opposite operand, using the equation with output and
+  # the other operand's subscripts swapped appropriately.
   equation = op.get_attr('equation')
   if isinstance(equation, bytes):
     equation = equation.decode()
@@ -606,6 +710,11 @@ def _einsum_grad(op, grad):
 
 
 def _enclosing_tpu_context():
+  # [FUNCTION DOC]
+  # HELPER: used by the legacy einsum to detect compilation for TPU/XLA.
+  # Takes no inputs. Walks outward from the default graph's current control-flow context through
+  # outer contexts and returns the first XLA control-flow context, or nothing if none encloses
+  # the current position. Reads graph state (a private accessor); no mutation.
   # pylint: disable=protected-access
   context = ops.get_default_graph()._get_control_flow_context()
   # pylint: enable=protected-access
@@ -618,6 +727,16 @@ def _enclosing_tpu_context():
 @tf_export('einsum', 'linalg.einsum')
 @dispatch.add_dispatch_support
 def einsum(equation, *inputs, **kwargs):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring examples are inconsistent (the transpose example creates a ones
+  # tensor with two scalar arguments but then transposes another tensor), and the docstring says
+  # a bad equation raises a value error while unexpected keyword arguments raise a type error
+  # from the implementation instead.
+  # Public einsum: contracts the input tensors according to the Einstein-summation equation
+  # string. Inputs: equation, text such as two subscripts joined by an arrow; inputs, one or more
+  # tensors; keyword arguments optional name and optimize (path strategy, default greedy).
+  # Returns the contracted tensor. Simply forwards everything to the version-2 implementation,
+  # so exceptions and side effects are those of that function.
   r"""Tensor contraction over specified indices and outer product.
 
   Einsum allows defining Tensors by defining their element-wise computation.
@@ -764,6 +883,17 @@ def einsum(equation, *inputs, **kwargs):
 
 
 def _einsum_v1(equation, *inputs, **kwargs):
+  # [FUNCTION DOC]
+  # HELPER: legacy einsum implementation, retained as an alternative to the version-2 path.
+  # KNOWN ISSUE: this function appears unused by the public einsum, which calls the version-2
+  # implementation, so it is effectively dead code.
+  # Inputs: equation text; inputs, tensors; optional keyword name (any other keyword raises a
+  # type error). Parses and resolves the equation, returns the trace for a lone repeated-index
+  # input without an arrow, raises a value error if an axis repeats within one input, falls back
+  # to the exponential-space version (with a logged warning) if an index is summed over more than
+  # two inputs, uses the XLA einsum when inside a TPU context with two inputs, otherwise reduces
+  # pairwise with batch matmul, sums any leftover axes, checks the labels match the requested
+  # output (value error otherwise) and transposes to the output order.
   """Legacy implementation of einsum without using EinsumOp."""
   name = kwargs.pop('name', None)
   if kwargs:
@@ -832,6 +962,16 @@ def _einsum_v1(equation, *inputs, **kwargs):
 
 
 def _einsum_v1_parse_and_resolve_equation(equation, input_shapes):
+  # [FUNCTION DOC]
+  # HELPER: equation parser for the legacy einsum and its exponential-space fallback.
+  # Inputs: equation text (spaces ignored); input_shapes, list of tensor shapes, one per operand.
+  # Validates the format (letters, commas, periods, optional arrow plus output letters), checks
+  # operand count against the number of comma-separated subscripts, replaces each ellipsis with
+  # unused letters sized from the operand's static rank, and infers the output subscripts
+  # (ellipsis letters first, then letters occurring exactly once, alphabetical) when no arrow is
+  # given. Returns a pair: list of per-input label strings and the output label string. Raises a
+  # value error for bad format, wrong operand count, several ellipses in one operand, unknown
+  # rank, rank too small for the labels, too many distinct labels, or stray periods.
   """Helper for einsum() that splits/resolves inputs & outputs.
 
   Args:
@@ -920,6 +1060,14 @@ def _einsum_v1_parse_and_resolve_equation(equation, input_shapes):
 
 
 def _einsum_v1_reduction(t0, t0_axis_labels, t1, t1_axis_labels, axes_to_sum):
+  # [FUNCTION DOC]
+  # HELPER: two-operand contraction step for the legacy einsum.
+  # Inputs: two tensors with their axis-label strings (length must equal each tensor's rank) and
+  # the set of labels to sum over. Transposes both so preserved axes come first, then reshapes to
+  # rank three and uses batch matmul (or plain multiply with expanded dims when nothing is
+  # summed), then restores the broadcast axes. Returns a pair: the product tensor and the string
+  # of its axis labels. Raises a value error if a label string length does not match its tensor
+  # rank. Asserts that all summed labels occur in both operands.
   """Helper for einsum() that computes the result of a two-argument einsum().
 
   Args:
@@ -979,6 +1127,11 @@ def _einsum_v1_reduction(t0, t0_axis_labels, t1, t1_axis_labels, axes_to_sum):
   # 2. in input 0, broadcast axes come next, followed by summed axes
   # 3. in input 1, summed axes come next, followed by broadcast axes
   def sort_key(input_index, a):
+    # [FUNCTION DOC]
+    # HELPER: ordering key for axis labels inside the reduction. Inputs: which operand (0 or 1)
+    # and an axis label. Returns a pair ranking preserved axes first, then (for operand 0)
+    # broadcast axes or (for operand 1) summed axes, then everything else, with the label as
+    # tie-breaker. Uses the enclosing function's axis sets.
     if a in preserved_axes:
       return (-1, a)
     elif ((input_index == 0 and a in broadcast_axes[0]) or
@@ -1048,6 +1201,9 @@ def _einsum_v1_reduction(t0, t0_axis_labels, t1, t1_axis_labels, axes_to_sum):
 
 
 def _transpose_if_necessary(tensor, perm):
+  # [FUNCTION DOC]
+  # HELPER: legacy einsum utility. Inputs: a tensor and a permutation list. Returns the tensor
+  # unchanged when the permutation is the identity, otherwise a transposed tensor.
   """Like transpose(), but avoids creating a new tensor if possible."""
   if perm != list(range(len(perm))):
     return array_ops.transpose(tensor, perm=perm)
@@ -1056,6 +1212,11 @@ def _transpose_if_necessary(tensor, perm):
 
 
 def _reshape_if_necessary(tensor, new_shape):
+  # [FUNCTION DOC]
+  # HELPER: legacy einsum utility. Inputs: a tensor and a target shape list (nothing entries
+  # count as minus one, meaning inferred). Returns the tensor itself when the static shape
+  # already matches (same rank, every target dimension equal or inferred, none dynamic),
+  # otherwise a reshaped tensor.
   """Like reshape(), but avoids creating a new tensor if possible."""
   # Accept None as an alias for -1 in new_shape.
   new_shape = tuple(-1 if x is None else x for x in new_shape)
@@ -1069,6 +1230,10 @@ def _reshape_if_necessary(tensor, new_shape):
 
 
 def _get_shape(tensor):
+  # [FUNCTION DOC]
+  # HELPER: legacy einsum utility. Input: a tensor. Returns its shape as a list, substituting
+  # dynamic shape-tensor elements for unknown static dimensions so no entry is unknown. Adds a
+  # shape op to the graph only when some dimension is unknown.
   """Like get_shape().as_list(), but explicitly queries the shape of a tensor
   if necessary to ensure that the returned value contains no unknown value."""
 
@@ -1083,6 +1248,10 @@ def _get_shape(tensor):
 
 
 def _total_size(shape_values):
+  # [FUNCTION DOC]
+  # HELPER: legacy einsum utility. Input: list of dimension values (integers or scalar tensors).
+  # Returns their product: an integer if all are integers, else a scalar tensor. An empty list
+  # gives one.
   """Given list of tensor shape values, returns total size.
   If shape_values contains tensor values (which are results of
   array_ops.shape), then it returns a scalar tensor.
@@ -1095,6 +1264,15 @@ def _total_size(shape_values):
 
 
 def _exponential_space_einsum_v1(equation, *inputs):
+  # [FUNCTION DOC]
+  # HELPER: fallback for the legacy einsum when one index is summed over more than two inputs.
+  # KNOWN ISSUE: the unknown-output-axes check can never trigger because the set of all labels is
+  # built from the output labels too; and dimensions of size zero are mapped to minus one when
+  # building broadcast shapes, which treats empty dimensions as inferred.
+  # Inputs: equation text and the operand tensors. Transposes operands to a common axis order,
+  # reshapes each to broadcast against all axes, multiplies them all and sums over the axes not
+  # in the output. Returns the result tensor. Raises a value error for operand rank mismatch,
+  # repeated axis within one operand, or conflicting dimension sizes on a label.
   """Fallback implementation that supports summing an index over > 2 inputs."""
   inputs = list(inputs)
   input_shapes = [x.shape for x in inputs]
@@ -1169,6 +1347,16 @@ def _exponential_space_einsum_v1(equation, *inputs):
 
 
 def _einsum_v2(equation, *inputs, **kwargs):
+  # [FUNCTION DOC]
+  # HELPER: implementation behind the public einsum.
+  # KNOWN ISSUE: the unknown-keyword error message lists "greedy" as a valid argument name, but
+  # only name and optimize are accepted.
+  # Inputs: equation text; inputs, operand tensors; optional keywords name and optimize (path
+  # strategy, default greedy); any other keyword raises a type error. Resolves static shapes and
+  # the equation; with at most two operands calls the einsum kernel directly; otherwise asks
+  # opt_einsum for a pairwise contraction path (guessing unknown dimensions as one) and applies
+  # the kernel pairwise, replacing consumed operands by intermediate results. Returns the final
+  # tensor. Raises value errors from equation parsing. Creates a name scope and graph ops.
   """Implementation of einsum utilizing opt_einsum and EinsumOp."""
   name = kwargs.pop('name', None)
   optimize = kwargs.pop('optimize', 'greedy')
@@ -1221,6 +1409,12 @@ def _einsum_v2(equation, *inputs, **kwargs):
 
 
 def _get_opt_einsum_contract_path(equation, shaped_inputs_tuple, optimize):
+  # [FUNCTION DOC]
+  # HELPER: contraction-path lookup for the version-2 einsum; cached by a least-recently-used
+  # wrapper installed below (up to 128 entries), so arguments must be hashable.
+  # Inputs: equation text, a tuple of objects exposing a shape, and the optimization strategy.
+  # Asks opt_einsum (using an internal call mode, no real contraction) for the path. Returns an
+  # immutable tuple of pairs: the operand indices consumed and the binary equation for each step.
   """Returns the (memoized) result of opt_einsum.contract_path."""
   # Note: We use einsum_call=True, which is an internal api for opt_einsum,
   # to get the contraction path without having opt_einsum perform the actual
@@ -1243,6 +1437,17 @@ _get_opt_einsum_contract_path = functools.lru_cache(maxsize=128)(
 
 
 def _einsum_v2_parse_and_resolve_equation(equation, input_shapes):
+  # [FUNCTION DOC]
+  # HELPER: equation validator and shape resolver for the version-2 einsum.
+  # Inputs: equation text; input_shapes, list of shape lists (or nothing for unknown rank), one
+  # per operand; shape lists may be modified in place when an ellipsis is collapsed. Replaces an
+  # ellipsis by a placeholder digit, validates the format, operand count and output labels,
+  # appends inferred output labels when there is no arrow. With two or fewer operands returns
+  # (equation, nothing, ellipsis placeholder). Otherwise builds per-label known dimensions
+  # (default one) and returns (equation, list of resolved shape lists, placeholder). Raises value
+  # errors for a literal placeholder character, bad format, wrong operand count, repeated or
+  # unknown output labels, multiple output ellipses, repeated ellipsis in one input, or label
+  # count versus shape rank mismatches.
   """Helper which validates einsum equation and resolves input shapes."""
   resolved_equation = equation.replace(' ', '')
   ellipsis_label = None

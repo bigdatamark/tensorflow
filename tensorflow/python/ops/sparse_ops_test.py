@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Unit tests for the sparse tensor operations in the sparse ops module (sparse_eye, from_dense,
+# sparse_to_dense, transpose, expand_dims, unary op dispatch on sparse tensors, dense-by-sparse
+# matmul, map_values, concat) and for a few raw generated sparse kernels such as
+# SparseFillEmptyRowsGrad. Tests run in both graph and eager modes through a class decorator.
+# Importing the module also imports the array and sparse gradient modules so that gradients for
+# Identity and SparseToDense are registered. Running it as a script starts the test runner.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -38,9 +45,21 @@ from tensorflow.python.platform import googletest
 
 @test_util.run_all_in_graph_and_eager_modes
 class SparseOpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case covering the public sparse ops (eye, conversion to and from dense, transpose,
+  # expand_dims, unary dispatch, gradients, matmul, map_values). Decorated so that every test
+  # method runs in both graph and eager modes. Holds no shared fixtures.
 
   def testSparseEye(self):
+    # [FUNCTION DOC]
+    # Checks sparse_eye against numpy's identity matrix for even sizes 2 to 8 in both
+    # dimensions, with sizes given as Python ints and as constant tensors. The sparse result is
+    # densified and compared for equality. Returns nothing; fails on mismatch.
     def test_one(n, m, as_tensors):
+      # [FUNCTION DOC]
+      # HELPER: nested helper of testSparseEye running one (rows, columns, as-tensors) case.
+      # Builds the expected dense identity, optionally wraps sizes as tensors, builds the sparse
+      # identity, densifies it and asserts equality with the expected matrix.
       expected = np.eye(n, m)
       if as_tensors:
         m = constant_op.constant(m)
@@ -56,6 +75,9 @@ class SparseOpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
         test_one(n, m, False)
 
   def testDenseFromConstantToSparse(self):
+    # [FUNCTION DOC]
+    # Converts a constant integer tensor of shape 3 by 4 by 2 to sparse with from_dense, converts
+    # it back with sparse_to_dense, and asserts the round trip equals the original array.
     expected_constant = np.reshape(np.arange(24, dtype=np.int64), (3, 4, 2))
     tensor = constant_op.constant(expected_constant)
     sparse = sparse_ops.from_dense(tensor)
@@ -65,6 +87,9 @@ class SparseOpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertAllEqual(expected_constant, constant)
 
   def testTransposePreservesShape(self):
+    # [FUNCTION DOC]
+    # In a fresh graph, builds a sparse tensor with dense shape 3 by 4, transposes it and asserts
+    # the static shape of the result is 4 by 3.
     with ops.Graph().as_default():
       t = sparse_tensor.SparseTensor(indices=[[0, 0]],
                                      values=[0.],
@@ -74,6 +99,10 @@ class SparseOpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       self.assertAllEqual(transposed.shape, [4, 3])
 
   def testSparseExpandDims(self):
+    # [FUNCTION DOC]
+    # For ranks 1 to 3, builds a random sparse array (about 20 percent non-zero), then for every
+    # valid axis (negative and positive) and with the axis given both as an int and as a tensor,
+    # applies sparse_expand_dims, densifies and asserts equality with numpy's expand_dims.
     for rank in range(1, 4):
       # Create a dummy input. When rank=3, shape=[2, 4, 6].
       shape = np.arange(1, rank + 1) * 2
@@ -140,6 +169,11 @@ class SparseOpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       ),
   ])
   def testUnarySparseDispatch(self, op, values, expected):
+    # [FUNCTION DOC]
+    # Parameterized by a unary math op (abs, negative, sign, square, asinh, sin, asin, tan, atan,
+    # atanh), input values and expected outputs. Applies the op directly to a 3 by 6 sparse tensor
+    # with four entries and asserts the result is sparse with unchanged indices and dense shape
+    # and with values close to the expected ones.
     st = sparse_tensor.SparseTensor(
         indices=[[0, 0], [0, 1], [2, 0], [2, 4]],
         values=values,
@@ -151,8 +185,15 @@ class SparseOpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertAllEqual(result_value.dense_shape, st.dense_shape)
 
   def testSparseToDenseGradient(self):
+    # [FUNCTION DOC]
+    # Numerically checks the gradient of sparse_tensor_to_dense with respect to both the sparse
+    # values and the default value, asserting the maximum error is below 1e-4.
 
     def f(sparse_values, default_value):
+      # [FUNCTION DOC]
+      # HELPER: function under gradient check for testSparseToDenseGradient. Builds a 3 by 6 by 9
+      # sparse tensor with three entries from the given values and returns its dense form using
+      # the given default value for missing entries.
       st = sparse_tensor.SparseTensor(
           indices=[[0, 3, 6], [1, 4, 7], [2, 5, 8]],
           values=sparse_values,
@@ -166,6 +207,9 @@ class SparseOpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertLess(gradient_checker.max_error(*grads), epsilon)
 
   def testSparseTensorToDenseString(self):
+    # [FUNCTION DOC]
+    # Densifies a string-valued sparse tensor and asserts missing entries become empty byte
+    # strings while present entries keep their values.
     sp = sparse_tensor.SparseTensor(
         indices=[[0, 0], [1, 2]], values=['a', 'b'], dense_shape=[2, 3])
     dense = sparse_ops.sparse_tensor_to_dense(sp)
@@ -174,6 +218,11 @@ class SparseOpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertAllEqual(expected_dense, result_dense)
 
   def testDenseSparseTensorMatMul(self):
+    # [FUNCTION DOC]
+    # Seeds numpy, builds a random 3 by 3 dense matrix and a 3 by 3 sparse matrix with two
+    # entries, then multiplies dense by sparse for all four combinations of adjoint_a and
+    # adjoint_b. Each result is asserted equal to a regular matmul of the dense matrix with the
+    # densified (and, where requested, transposed) operands.
 
     np.random.seed(42)
     dense_numpy_array = np.random.rand(3, 3)
@@ -210,6 +259,11 @@ class SparseOpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertAllEqual(expected, result)
 
   def testMapValues(self):
+    # [FUNCTION DOC]
+    # Tests map_values: passing no sparse tensor raises a value error; a single sparse argument
+    # with abs gives the expected sparse result; two sparse arguments plus a keyword argument are
+    # passed through correctly; sparse inputs with mismatched indices or mismatched dense shapes
+    # raise an invalid-argument or value error (at construction or evaluation).
     # supplying no sparse tensor should result in ValueError
     with self.assertRaises(ValueError):
       sparse_ops.map_values(math_ops.abs, 0.0)
@@ -218,6 +272,9 @@ class SparseOpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
     # helper function to check equality of sparse tensor
     def assert_sparse_equal(expected, result):
+      # [FUNCTION DOC]
+      # HELPER: asserts two sparse tensors have equal values, indices and dense shapes, with a
+      # distinct failure message for each component. Returns nothing.
       self.assertAllEqual(expected.values, result.values, msg='Values differ')
       self.assertAllEqual(
           expected.indices, result.indices, msg='Indices differ')
@@ -232,6 +289,9 @@ class SparseOpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     # check correct passing of keyword argument, and handling of two sparse
     # arguments at the same time
     def mapping(arg1, arg2, kwarg):
+      # [FUNCTION DOC]
+      # HELPER: mapping function for testMapValues. Asserts the keyword argument arrived with the
+      # expected string value and returns the sum of the two value arguments.
       self.assertEqual(kwarg, 'kwarg')
       return arg1 + arg2
 
@@ -253,6 +313,9 @@ class SparseOpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       self.evaluate(result)
 
   def testConstantStringToSparse(self):
+    # [FUNCTION DOC]
+    # Regression test for a GitHub issue: converting a constant string vector of five characters
+    # with from_dense yields indices 0 to 4, the same string values and dense shape of five.
     # Test case for GitHub issue 40633.
     tensor = constant_op.constant(list('ababa'))
     sparse = sparse_ops.from_dense(tensor)
@@ -262,6 +325,10 @@ class SparseOpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertAllEqual([5], result.dense_shape)
 
   def testSparseTensorToDenseQint(self):
+    # [FUNCTION DOC]
+    # For each quantized dtype (qint8, qint16, quint8, quint16), builds a 2 by 3 sparse tensor of
+    # that dtype, densifies it and asserts the result equals the expected dense array after both
+    # are cast to the matching numpy dtype.
     x = np.asarray([1, 2])
     y = np.asarray([[1, 0, 0], [0, 0, 2]])
     for dtype in [dtypes.qint8, dtypes.qint16, dtypes.quint8, dtypes.quint16]:
@@ -276,8 +343,16 @@ class SparseOpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
 @test_util.run_all_in_graph_and_eager_modes
 class RawOpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for raw generated sparse kernels: the gradient of SparseFillEmptyRowsGrad
+  # (valid and invalid inputs) and static shape inference of sparse concat. Runs in both graph
+  # and eager modes through the class decorator. Holds no shared fixtures.
 
   def testSparseFillEmptyRowsGrad(self):
+    # [FUNCTION DOC]
+    # Runs the raw fill-empty-rows gradient op with a reverse index map of two entries and four
+    # gradient values; asserts the value gradient is the gathered values (2, 1) and the default
+    # value gradient is the sum of the unused values (3).
     reverse_index_map = [2, 1]
     grad_values = [0, 1, 2, 3]
     d_values, d_default_value = self.evaluate(
@@ -287,6 +362,9 @@ class RawOpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqual(3, d_default_value)
 
   def testSparseFillEmptyRowsGradNegativeIndexMapValue(self):
+    # [FUNCTION DOC]
+    # Passes a reverse index map containing a negative entry and asserts an invalid-argument
+    # error saying reverse index elements must lie in the range zero to four (exclusive).
     reverse_index_map = [2, -1]
     grad_values = [0, 1, 2, 3]
     with self.assertRaisesRegex(
@@ -297,6 +375,9 @@ class RawOpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
               reverse_index_map=reverse_index_map, grad_values=grad_values))
 
   def testSparseFillEmptyRowsGradLargeIndexMapValue(self):
+    # [FUNCTION DOC]
+    # Passes a reverse index map containing an entry beyond the number of gradient values and
+    # asserts the same invalid-argument error about the allowed index range.
     reverse_index_map = [2, 10]
     grad_values = [0, 1, 2, 3]
     with self.assertRaisesRegex(
@@ -307,6 +388,10 @@ class RawOpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
               reverse_index_map=reverse_index_map, grad_values=grad_values))
 
   def testSparseFillEmptyRowsGradMatrix(self):
+    # [FUNCTION DOC]
+    # Passes a rank-2 gradient values input where a vector is required. In eager mode asserts an
+    # invalid-argument error saying grad_values must be a vector; in graph mode asserts a value
+    # error from shape checking saying the shape must be rank 1 but is rank 2.
     reverse_index_map = [0, 1]
     grad_values = [[0, 1], [2, 3]]
     # Note: Eager mode and graph mode throw different errors here. Graph mode
@@ -326,6 +411,10 @@ class RawOpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
                 reverse_index_map=reverse_index_map, grad_values=grad_values))
 
   def testSparseConcatStaticShape(self):
+    # [FUNCTION DOC]
+    # Graph-only test (skipped in eager mode since sparse placeholders need graph context).
+    # Concatenates sparse placeholders of shapes 2 by 1 and 2 by 2 along axis 1 and asserts the
+    # static result shape is 2 by 3.
     if context.executing_eagerly():
       self.skipTest('sparse_spaceholder is only available in graph context.')
     input_a = array_ops.sparse_placeholder(dtypes.float32, shape=(2, 1))
