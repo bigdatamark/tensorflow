@@ -1,3 +1,18 @@
+# [MODULE DOC]
+# KNOWN ISSUE: the file relies on removed numpy aliases (the bool, float and object aliases of
+#   numpy) and on legacy Keras optimizers; with a recent numpy those tests fail with attribute errors.
+# Test suite for the Apple Metal (MPS) TensorFlow plugin, run on macOS arm64 CI machines.
+# It is a standalone test script, not a library. It defines numpy-based reference helpers (tolerance
+# lookup, powerset, Adam update, direct pooling) and many test case classes that compare plugin
+# (GPU) results with CPU or numpy references for: optimizers (momentum, Adam, gradient descent),
+# arg-max, gather, slice, L2 loss, rounding, reverse-sequence, top-k, split, bilinear resize,
+# one-hot, 2D convolution (forward and backprop), pooling, random ops (stateful and stateless),
+# broadcast_to, binary and logical ops, softmax cross entropy, add_n, resource variables, bias add,
+# leaky relu, relu, relu6, softmax, concat, tile, pad, batch norm, reductions, min/max, fill,
+# squared difference, ones/zeros like, select/where, transpose and broadcasting arithmetic.
+# Also provides a small benchmark helper. Importing the module only defines names and module level
+# constants for arithmetic operator callables and a list of test dtypes; running it as a program
+# starts the TensorFlow test runner.
 """Copyright 2023 The TensorFlow Authors.
 
 All Rights Reserved.
@@ -88,6 +103,11 @@ _MAX_RANK = 5
 
 
 def _default_tolerance(dtype):
+  # [FUNCTION DOC]
+  # HELPER: numeric tolerance lookup used by the unary-op comparison helpers in the test classes.
+  # Maps a numpy dtype to a default comparison tolerance: 5e-3 for half precision, 1e-3 for single
+  # precision float or complex, 1e-5 for double precision float or complex. For any other dtype it
+  # returns the null value so that callers using it as a tolerance fail fast. No side effects.
   """Returns a sensible default tolerance for comparing results of a given type.
 
   Args:
@@ -104,6 +124,12 @@ def _default_tolerance(dtype):
 
 
 def _powerset(iterable):
+  # [FUNCTION DOC]
+  # HELPER: generates reduction-axes combinations for reduction tests (not used elsewhere in this file).
+  # KNOWN ISSUE: the docstring example calls it powerset without the leading underscore, and the
+  #   function is never called in this module, so it is dead code here.
+  # Takes any iterable, copies it into a list and returns a lazy iterator over all subsets of that
+  # list as tuples, ordered by increasing subset size, starting with the empty tuple. Nothing is mutated.
   """Helper for generating all possible reduction_axes arguments.
 
   Example: powerset([0,1,2]): () (0,) (1,) (2,) (0,1) (0,2) (1,2) (0,1,2)
@@ -123,6 +149,13 @@ def _powerset(iterable):
 def adam_update_numpy(
     param, g_t, t, m, v, alpha=0.001, beta1=0.9, beta2=0.999, epsilon=1e-8
 ):
+  # [FUNCTION DOC]
+  # HELPER: numpy reference implementation of one Adam step, used by the Adam optimizer tests.
+  # Inputs are the current parameter array, the gradient, the step number (starting at 1), the first
+  # and second moment estimates, and optional hyper parameters (learning rate 0.001, beta1 0.9,
+  # beta2 0.999, epsilon 1e-8). It computes the bias corrected step size, updates both moment
+  # estimates as exponential moving averages of the gradient and squared gradient, and returns a
+  # tuple of the new parameter, new first moment and new second moment. No side effects.
   alpha_t = alpha * np.sqrt(1 - beta2**t) / (1 - beta1**t)
 
   m_t = beta1 * m + (1 - beta1) * g_t
@@ -141,6 +174,14 @@ def pool_direct_single_axis(
     dilation_rate,
     stride,
 ):
+  # [FUNCTION DOC]
+  # HELPER: numpy reference for pooling along one axis, used by pool_direct and the pooling tests.
+  # Inputs: the input array, the axis to pool, the window size, the pooling type (max or average,
+  # given as an upper case string), the padding mode (same or valid), the dilation rate and the stride.
+  # It computes the output length and left padding from the padding mode, then for every output
+  # position slices the (dilated) window, clipped to the input bounds, and reduces it with maximum or
+  # mean. Returns the pooled array with the pooled axis resized. Raises a value error for an
+  # unsupported padding or pooling type. Padding cells are never included in a window.
   effective_window_size = (window_size - 1) * dilation_rate + 1
   input_size = input.shape[axis]
   if padding == "SAME":
@@ -188,6 +229,13 @@ def pool_direct(
     strides,
     data_format=None,
 ):
+  # [FUNCTION DOC]
+  # HELPER: numpy reference for N-dimensional pooling used by PoolingTest to validate the nn pool op.
+  # Pools sequentially along each spatial axis by calling the single-axis helper once per window
+  # dimension. Inputs: the input array, window shape, pooling type, padding, per-axis dilation rates,
+  # per-axis strides, and an optional data format; a format starting with the letters N and C means
+  # channels-first so spatial axes start at 1 index 2, otherwise they start at index 1. Returns the
+  # pooled array. Errors from the single-axis helper propagate.
   if data_format is None or not data_format.startswith("NC"):
     spatial_start_dim = 1
   else:
@@ -210,13 +258,30 @@ _TEST_TYPES = [dtypes.float32]
 
 
 class MomentumOptimizerTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests the legacy Keras SGD optimizer with momentum, run against both parameter variables and
+  # numpy references. Derives from the TensorFlow test case and the absl parameterized test case; it
+  # holds no state of its own beyond a numpy helper for Nesterov updates.
 
   def _update_nesterov_momentum_numpy(self, var, accum, g, lr, momentum):
+    # [FUNCTION DOC]
+    # HELPER: numpy reference for one Nesterov momentum update used by testNesterovMomentum.
+    # Inputs: the variable value, the accumulator, the gradient, the learning rate and the momentum.
+    # Computes the new accumulator as momentum times old accumulator minus learning rate times gradient,
+    # then updates the variable with the Nesterov look-ahead formula. The variable is updated in place
+    # when it is a numpy array. Returns the pair of updated variable and accumulator.
     accum = accum * momentum - g * lr
     var += accum * momentum - g * lr
     return var, accum
 
   def testBasic(self):
+    # [FUNCTION DOC]
+    # Scenario: momentum SGD with learning rate 2.0 and momentum 0.9 on two float32 variables with
+    # constant gradients. Creates the variables, applies the gradients, checks that slot variables
+    # named momentum exist with the right shapes, initializes variables and runs two update steps.
+    # Asserts that after step one the accumulators equal minus gradient times rate and the variables
+    # moved by that amount, and after step two the accumulators and variables match hand computed
+    # momentum values. Uses the case-level evaluate helper so it works in eager or graph mode.
     for _, dtype in enumerate([dtypes.float32]):
       var0 = variables.Variable([1.0, 2.0], dtype=dtype, name="var0")
       var1 = variables.Variable([3.0, 4.0], dtype=dtype, name="var1")
@@ -287,6 +352,11 @@ class MomentumOptimizerTest(test.TestCase, parameterized.TestCase):
       )
 
   def testNesterovMomentum(self):
+    # [FUNCTION DOC]
+    # Scenario: Nesterov momentum SGD (learning rate 2.0, momentum 0.9) minimizing a quadratic plus
+    # linear loss over two float32 variables in a fresh graph. Runs four optimizer steps and after each
+    # step advances numpy copies with the reference Nesterov update, then asserts both variables equal
+    # the numpy values. Exercises minimize with a callable loss.
     with ops.Graph().as_default():
       for dtype in [dtypes.float32]:
         var0 = variables.Variable([1.0, 2.0], dtype=dtype, name="var0")
@@ -314,6 +384,10 @@ class MomentumOptimizerTest(test.TestCase, parameterized.TestCase):
 
 
 class ArgMaxTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests the arg-max and arg-min ops against numpy. Holds helpers that run an op on GPU and CPU
+  # sessions and compare with expected values, plus several test scenarios; some scenarios are
+  # currently disabled by comments.
 
   def _testArg(
       self,
@@ -324,6 +398,13 @@ class ArgMaxTest(test.TestCase):
       use_gpu=False,
       expected_err_re=None,
   ):
+    # [FUNCTION DOC]
+    # HELPER: runs an arg-reduction op once and checks the outcome for the arg-max tests.
+    # Inputs: the op callable, the input array, the axis, the expected values, whether to use the GPU
+    # (default off) and an optional regular expression for an expected op error. Without an expected
+    # error it evaluates the op, asserts the result dtype is 64-bit integer, equals the expected values
+    # and has the expected shape. With an expected error it asserts that evaluation raises an op error
+    # matching the expression. Runs inside a session with the given device preference.
     with self.session(use_gpu=use_gpu):
       ans = method(x, axis=axis)
       if expected_err_re is None:
@@ -339,12 +420,19 @@ class ArgMaxTest(test.TestCase):
   def _testBothArg(
       self, method, x, axis, expected_values, expected_err_re=None
   ):
+    # [FUNCTION DOC]
+    # HELPER: runs _testArg on the GPU and, unless XLA is enabled, on the CPU too.
+    # Inputs as for _testArg minus the GPU flag. XLA is skipped on the CPU pass because compilation
+    # time is too large. Returns nothing.
     self._testArg(method, x, axis, expected_values, True, expected_err_re)
     # Compilation time is too large with XLA/CPU autojit.
     if not test_util.is_xla_enabled():
       self._testArg(method, x, axis, expected_values, False, expected_err_re)
 
   def _testBasic(self, dtype):
+    # [FUNCTION DOC]
+    # HELPER: shared body of testFloat. Builds a shuffled array of 200 zeros and ones of the given dtype
+    # and checks that the arg-max along axis 0 matches numpy. The arg-min check is commented out.
     x = np.arange(200, dtype=np.float32).astype(np.bool_).astype(dtype)
     np.random.shuffle(x)
 
@@ -353,6 +441,10 @@ class ArgMaxTest(test.TestCase):
     # self._testBothArg(math_ops.argmin, x, 0, x.argmin())
 
   def _testTieBreaking(self, dtype):
+    # [FUNCTION DOC]
+    # HELPER: checks tie breaking of arg-max and arg-min on a vector of 200 equal zeros against numpy
+    # KNOWN ISSUE: the only caller (testFloat) has this call commented out, so this helper is never run.
+    # (the lowest index must win). Input: a numpy dtype.
     x = np.zeros(200, dtype=dtype)
 
     # Check that argmin and argmax match numpy along the primary axis for
@@ -361,6 +453,10 @@ class ArgMaxTest(test.TestCase):
     self._testBothArg(math_ops.argmin, x, 0, x.argmin())
 
   def _testDim(self, dtype):
+    # [FUNCTION DOC]
+    # HELPER: builds a shuffled seven dimensional float array and compares arg-max and arg-min along
+    # KNOWN ISSUE: the only caller (testFloat) has this call commented out, so this helper is never run.
+    # every axis from minus 7 to 6 with numpy. Input: a numpy dtype for the array.
     shape = (3, 2, 4, 5, 6, 3, 7)
     x = np.arange(
         functools.reduce(lambda x, y: x * y, shape), dtype=np.float32
@@ -374,11 +470,18 @@ class ArgMaxTest(test.TestCase):
       self._testBothArg(math_ops.argmin, x, axis, x.argmin(axis))
 
   def testFloat(self):
+    # [FUNCTION DOC]
+    # Runs the basic arg-max check with float32 data. The tie breaking and per-dimension checks are
+    # commented out so only the basic arg-max comparison actually executes.
     self._testBasic(np.float32)
     # self._testTieBreaking(np.float32)
     # self._testDim(np.float32)
 
   def testFloatInt32Output(self):
+    # [FUNCTION DOC]
+    # Scenario: random float32 vector of 200 elements. Computes arg-max and arg-min with the output
+    # type set to 32-bit integer on a GPU-preferring session and asserts the result dtype is int32 and
+    # the values equal numpy. Values fit in 32 bits, so comparing to numpy's 64-bit results is valid.
     x = numpy_compat.np_asarray(100 * np.random.randn(200), dtype=np.float32)
     expected_values = x.argmax()
     with self.session(use_gpu=True):
@@ -397,8 +500,15 @@ class ArgMaxTest(test.TestCase):
 
 
 class GatherTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests the gather op for scalar and vector indices on one and two dimensional data. Uses the
+  # module level list of test dtypes (only float32 here) and a parameterized test case base.
 
   def _buildParams(self, data, dtype):
+    # [FUNCTION DOC]
+    # HELPER: converts numpy data to the target TensorFlow dtype's numpy type; for complex dtypes it adds
+    # an index dependent imaginary part (ten times the value) so wrong values are detectable. Returns the
+    # converted array.
     data = data.astype(dtype.as_numpy_dtype)
     # For complex types, add an index-dependent imaginary component so we can
     # tell we got the right value.
@@ -407,6 +517,9 @@ class GatherTest(test.TestCase, parameterized.TestCase):
     return data
 
   def testScalar1D(self):
+    # [FUNCTION DOC]
+    # Gathers with a scalar index and with a list of indices from a six element vector. Asserts the
+    # result equals numpy indexing and that the static shape matches the numpy result shape.
     with self.cached_session(use_gpu=True):
       data = np.array([0, 1, 2, 3, 7, 5])
       for dtype in _TEST_TYPES:
@@ -421,6 +534,10 @@ class GatherTest(test.TestCase, parameterized.TestCase):
           self.assertEqual(np_val.shape, gather_t.get_shape())
 
   def testScalar2D(self):
+    # [FUNCTION DOC]
+    # Gathers row/column index 2 from a five by three integer matrix along every axis. Prints the
+    # TensorFlow and CPU results, asserts equality with numpy take and that the static shape drops the
+    # gathered axis.
     with self.session(use_gpu=True):
       data = np.array(
           [[0, 1, 2], [3, 4, 5], [6, 7, 8], [9, 10, 11], [12, 13, 14]]
@@ -439,6 +556,9 @@ class GatherTest(test.TestCase, parameterized.TestCase):
           self.assertEqual(expected_shape, gather_t.get_shape())
 
   def testSimpleTwoD32(self):
+    # [FUNCTION DOC]
+    # Gathers a list of four indices along each axis of a five by three matrix. Asserts equality with
+    # numpy take and that the static output shape has four entries along the gathered axis.
     with self.session(use_gpu=True):
       data = np.array(
           [[0, 1, 2], [3, 4, 5], [6, 7, 8], [9, 10, 11], [12, 13, 14]]
@@ -459,8 +579,14 @@ class GatherTest(test.TestCase, parameterized.TestCase):
 
 
 class SliceTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests slicing via the slice op and Python style indexing, including empty, random, 3D conv based
+  # and partial shape inference cases.
 
   def testEmpty(self):
+    # [FUNCTION DOC]
+    # Takes an empty slice of a random four by four array for every start column and asserts that the
+    # result equals the numpy empty slice.
     inp = np.random.rand(4, 4).astype("f")
     for k in xrange(4):
       with self.cached_session(use_gpu=True):
@@ -470,6 +596,9 @@ class SliceTest(test.TestCase):
       self.assertAllEqual(slice_val, inp[2, k:k])
 
   def testSimple(self):
+    # [FUNCTION DOC]
+    # Slices the top-left two by two block of a random four by four tensor using both the slice op and
+    # indexing. Asserts both values equal numpy and the static shapes match the value shapes.
     with self.session(use_gpu=True) as _:
       inp = np.random.rand(4, 4).astype("f")
       a = constant_op.constant(
@@ -486,6 +615,9 @@ class SliceTest(test.TestCase):
     self.assertEqual(slice2_val.shape, slice2_t.get_shape())
 
   def testSingleDimension(self):
+    # [FUNCTION DOC]
+    # Repeats ten times: indexes a random vector with a scalar and a random range and asserts equality
+    # with numpy for the scalar element and the sub range.
     for _ in range(10):
       with self.cached_session(use_gpu=True):
         inp = np.random.rand(10).astype("f")
@@ -505,6 +637,10 @@ class SliceTest(test.TestCase):
         self.assertAllEqual(slice_val, inp[lo:hi])
 
   def test3Dimension(self):
+    # [FUNCTION DOC]
+    # Applies a 3D convolution with a one by one by one by eight by eight filter of incrementing values
+    # to a rank five input, slices out a single output position and asserts the eight values match
+    # precomputed expectations within a relative tolerance of one in a million.
     with self.cached_session():
       input_shape = [8, 16, 16, 16, 8]
       total_input_size = 1
@@ -544,6 +680,10 @@ class SliceTest(test.TestCase):
       self.assertAllClose(expected, result.flatten(), rtol=1e-6)
 
   def testRandom(self):
+    # [FUNCTION DOC]
+    # Builds a random rank six tensor with random dimensions, picks random start indices and sizes,
+    # slices with the slice op and with explicit strided indexing, and asserts both equal the numpy slice
+    # and have the same static shape. Randomness makes dimensions vary between runs.
     # Random dims of rank 6
     input_shape = np.random.randint(0, 20, size=6)
     inp = np.random.rand(*input_shape).astype("f")
@@ -584,6 +724,9 @@ class SliceTest(test.TestCase):
     self.assertEqual(expected_val.shape, slice2_t.get_shape())
 
   def testPartialShapeInference(self):
+    # [FUNCTION DOC]
+    # Checks static shape inference for slice on a zero tensor of shape one by two by three, using
+    # negative sizes and a partially dynamic size; asserts the inferred shape is one, two, three.
     z = array_ops.zeros((1, 2, 3))
     self.assertAllEqual(z.get_shape().as_list(), [1, 2, 3])
 
@@ -595,9 +738,14 @@ class SliceTest(test.TestCase):
 
 
 class L2LossTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests the L2 loss op for forward values and gradient accuracy.
 
   @test_util.run_in_graph_and_eager_modes
   def testL2Loss(self):
+    # [FUNCTION DOC]
+    # Runs in both graph and eager modes. For float32 and float64 computes the L2 loss of a two by two
+    # tensor and asserts it equals 7.0.
     for dtype in [dtypes.float32, dtypes.float64]:
       x = constant_op.constant(
           [1.0, 0.0, 3.0, 2.0], shape=[2, 2], name="x", dtype=dtype
@@ -608,6 +756,10 @@ class L2LossTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testGradient(self):
+    # [FUNCTION DOC]
+    # Deprecated-v1 graph test: seeds numpy, builds a random float64 tensor of shape 20 by 7 by 3, and
+    # uses the gradient checker to compute the error of the L2 loss gradient; prints it and asserts it
+    # is below 1e-10.
     x_shape = [20, 7, 3]
     np.random.seed(1)  # Make it reproducible.
     x_val = np.random.random_sample(x_shape).astype(np.float64)
@@ -621,8 +773,20 @@ class L2LossTest(test.TestCase):
 
 
 class AdamOptimizerTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests the TF1 Adam optimizer with resource variables, callable and tensor learning rates,
+  # sharing of the optimizer between updates, and multiple graphs and eager contexts.
 
   def doTestBasic(self, use_resource=False, use_callable_params=False):
+    # [FUNCTION DOC]
+    # HELPER: shared body for the basic Adam tests.
+    # Inputs: use_resource (default off) selects resource variables versus reference variables, and
+    # use_callable_params (default off) passes hyper parameters as callables. Skips the test when eager
+    # execution is on with non resource variables. Otherwise builds two float32 variables, applies Adam
+    # and checks the beta power accumulators exist, are in the optimizer variables and have the right
+    # variable kind; in graph mode checks no variables leak into another graph. Runs three steps and
+    # asserts the beta powers, the variables (against the numpy Adam reference) and, for resource
+    # variables, the slot name.
     if context.executing_eagerly() and not use_resource:
       self.skipTest(
           "Skipping test with use_resource=False and executing eagerly."
@@ -715,18 +879,28 @@ class AdamOptimizerTest(test.TestCase):
             )
 
   def testBasic(self):
+    # [FUNCTION DOC]
+    # Runs the basic Adam body with resource variables.
     self.doTestBasic(use_resource=True)
 
   @test_util.run_in_graph_and_eager_modes
   def testResourceBasic(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: it is functionally identical to testBasic (both pass resource variables).
+    # Same as testBasic but decorated to run in both graph and eager modes.
     self.doTestBasic(use_resource=True)
 
   def testBasicCallableParams(self):
+    # [FUNCTION DOC]
+    # Runs the basic Adam body in eager mode with resource variables and callable hyper parameters.
     with context.eager_mode():
       self.doTestBasic(use_resource=True, use_callable_params=True)
 
   @test_util.run_deprecated_v1
   def testTensorLearningRate(self):
+    # [FUNCTION DOC]
+    # Deprecated-v1 graph test: Adam with a constant tensor as learning rate. Runs three steps, checking
+    # the beta power accumulators and the variable values against the numpy Adam reference each step.
     for dtype in [dtypes.float32]:
       with self.cached_session():
         # Initialize variables for numpy implementation.
@@ -769,6 +943,10 @@ class AdamOptimizerTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testSharing(self):
+    # [FUNCTION DOC]
+    # Deprecated-v1 graph test: builds two update ops from one Adam optimizer and alternates running
+    # them over three steps. Asserts the beta powers advance as expected and the variables follow the
+    # numpy reference, showing shared state is consistent.
     for dtype in [dtypes.float32]:
       with self.cached_session():
         # Initialize variables for numpy implementation.
@@ -814,6 +992,9 @@ class AdamOptimizerTest(test.TestCase):
           self.assertAllCloseAccordingToType(var1_np, self.evaluate(var1))
 
   def testTwoSessions(self):
+    # [FUNCTION DOC]
+    # Uses one optimizer in an eager context, then in two separate graphs and sessions with different
+    # variable dtypes. Passes if no error is raised, showing optimizer state is keyed by graph.
     optimizer = adam.AdamOptimizer()
 
     with context.eager_mode():
@@ -843,6 +1024,9 @@ class AdamOptimizerTest(test.TestCase):
         optimizer.apply_gradients([(grads0, var0)])
 
   def testSlotsUniqueEager(self):
+    # [FUNCTION DOC]
+    # Eagerly minimizes the sum of two resource variables with Adam and asserts that the optimizer
+    # exposes six unique variables (two non slot accumulators plus per variable first and second moments).
     with context.eager_mode():
       v1 = resource_variable_ops.ResourceVariable(1.0)
       v2 = resource_variable_ops.ResourceVariable(1.0)
@@ -854,8 +1038,13 @@ class AdamOptimizerTest(test.TestCase):
 
 
 class RoundingTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests rounding ops (floor, ceil, rint) against numpy.
 
   def _compare_values(self, x, y=None):
+    # [FUNCTION DOC]
+    # HELPER: compares the rint op with an expected array. Input: values and an optional expected result
+    # (default numpy rint). Asserts equal values and matching shape.
     y = np.rint(x) if y is None else numpy_compat.np_asarray(y)
 
     tf_rint = math_ops.rint(x)
@@ -865,6 +1054,8 @@ class RoundingTest(test.TestCase):
     self.assertShapeEqual(y, tf_rint)
 
   def _compare(self, x):
+    # [FUNCTION DOC]
+    # HELPER: compares floor and ceil ops with numpy for an input array, asserting equal values and shapes.
     np_floor, np_ceil = np.floor(x), np.ceil(x)
 
     inx = ops.convert_to_tensor(x)
@@ -877,6 +1068,9 @@ class RoundingTest(test.TestCase):
     self.assertShapeEqual(np_ceil, oceil)
 
   def _testDtype(self, dtype):
+    # [FUNCTION DOC]
+    # HELPER: builds a small array of the given dtype, compares floor/ceil, then (except for half
+    # precision, where rint is unsupported) compares rint on the array and on two lists with tie cases.
     data = (np.arange(-3, 3) / 4.0).reshape(1, 3, 2).astype(dtype)
     self._compare(data)
     # TODO: rint op is not supported for float16
@@ -893,16 +1087,25 @@ class RoundingTest(test.TestCase):
     self._compare_values(x, y=y)
 
   def testTypes(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the test skips itself immediately (with a bug reference), so the loop over half,
+    #   single and double precision never executes.
     self.skipTest("b/131162241")
     for dtype in [np.float16, np.float32, np.float64]:
       self._testDtype(dtype)
 
 
 class ReverseSequenceTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests the reverse-sequence op on a five dimensional input with different sequence length dtypes.
 
   def _validateReverseSequence(
       self, x, batch_axis, seq_axis, seq_lengths, truth, use_gpu=False
   ):
+    # [FUNCTION DOC]
+    # HELPER: runs reverse-sequence with given batch axis, sequence axis and lengths and asserts the
+    # result is close to the expected truth and has its shape. The use_gpu flag (default off) picks the
+    # device preference of the session.
     with self.cached_session(use_gpu=use_gpu):
       ans = array_ops.reverse_sequence(
           x, batch_axis=batch_axis, seq_axis=seq_axis, seq_lengths=seq_lengths
@@ -912,6 +1115,10 @@ class ReverseSequenceTest(test.TestCase):
       self.assertShapeEqual(truth, ans)
 
   def _testBasic(self, dtype, len_dtype=np.int64):
+    # [FUNCTION DOC]
+    # HELPER: builds a three by two by four input, permutes axes, prepares expected reversed output for
+    # lengths three, zero and four, and validates with the permuted batch and sequence axes. Inputs: the
+    # data dtype and the length dtype (default 64-bit integer).
     x = numpy_compat.np_asarray(
         [
             [[1, 2, 3, 4], [5, 6, 7, 8]],
@@ -944,13 +1151,21 @@ class ReverseSequenceTest(test.TestCase):
     )
 
   def testFloat(self):
+    # [FUNCTION DOC]
+    # Runs the basic check with float32 data for both 32-bit and 64-bit length dtypes.
     self._testBasic(np.float32, len_dtype=np.int32)
     self._testBasic(np.float32, len_dtype=np.int64)
 
 
 class TopKTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests the top-k op on small and large vectors, with Python and tensor k values.
 
   def _validateTopK(self, inputs, k, expected_values, expected_indices):
+    # [FUNCTION DOC]
+    # HELPER: runs top-k and asserts the shapes of both outputs match the expectations and the values
+    # KNOWN ISSUE: the expected indices are only used for a shape check; their values are never compared.
+    # output is close to the expected values.
     np_expected_values = np.array(expected_values)
     np_expected_indices = np.array(expected_indices)
 
@@ -963,14 +1178,20 @@ class TopKTest(test.TestCase):
       self.assertAllClose(np_expected_values, values_op)
 
   def testTop1(self):
+    # [FUNCTION DOC]
+    # Top one over two rows with a tie in the second row; expected values and indices are passed in.
     inputs = [[0.1, 0.3, 0.2, 0.4], [0.1, 0.3, 0.3, 0.2]]
     self._validateTopK(inputs, 1, [[0.4], [0.3]], [[3], [1]])
 
   def testTop2(self):
+    # [FUNCTION DOC]
+    # Top two over two rows; expects values descending per row.
     inputs = [[0.1, 0.3, 0.2, 0.4], [0.1, 0.3, 0.4, 0.2]]
     self._validateTopK(inputs, 2, [[0.4, 0.3], [0.4, 0.3]], [[3, 1], [2, 1]])
 
   def testTop3(self):
+    # [FUNCTION DOC]
+    # Random permutation of 6140 linear values, k of five; expectations come from numpy sort.
     k = 5
     inputs = np.random.permutation(np.linspace(0, 100, 6140, dtype=np.float32))
     indices = np.argsort(-inputs)[:k]
@@ -978,14 +1199,22 @@ class TopKTest(test.TestCase):
     self._validateTopK(inputs, k, values, indices)
 
   def testTensorK(self):
+    # [FUNCTION DOC]
+    # Same as the top-two case but k is given as a constant tensor.
     inputs = [[0.1, 0.3, 0.2, 0.4], [0.1, 0.3, 0.4, 0.2]]
     k = constant_op.constant(2)
     self._validateTopK(inputs, k, [[0.4, 0.3], [0.4, 0.3]], [[3, 1], [2, 1]])
 
 
 class InTopKTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests the in-top-k op, which says whether each target class is among the k highest predictions.
 
   def _validateInTopK(self, predictions, target, k, expected):
+    # [FUNCTION DOC]
+    # HELPER: runs in-top-k for predictions, targets and k, and asserts the boolean result equals the
+    # KNOWN ISSUE: uses the removed numpy boolean alias to build the expected array; fails on new numpy.
+    # expected list and has matching shape.
     np_ans = np.array(expected, np.bool)
     with self.cached_session(use_gpu=True) as _:
       output = nn_ops.in_top_k(predictions, target, k)
@@ -994,27 +1223,37 @@ class InTopKTest(test.TestCase):
       self.assertShapeEqual(np_ans, output)
 
   def testInTop1(self):
+    # [FUNCTION DOC]
+    # Two rows, k of one: expects true for the first row and false for the second.
     predictions = [[0.1, 0.3, 0.2, 0.4], [0.1, 0.2, 0.3, 0.4]]
     target = [3, 2]
     self._validateInTopK(predictions, target, 1, [True, False])
 
   def testInTop2(self):
+    # [FUNCTION DOC]
+    # Two rows, k of two: expects false then true.
     predictions = [[0.1, 0.3, 0.2, 0.4], [0.1, 0.2, 0.3, 0.4]]
     target = [2, 2]
     self._validateInTopK(predictions, target, 2, [False, True])
 
   def testInTop2Tie(self):
+    # [FUNCTION DOC]
+    # Tied scores for classes two and three: both targets count as inside the top two, so both are true.
     # Class 2 and 3 tie for 2nd, so both are considered in top 2.
     predictions = [[0.1, 0.3, 0.2, 0.2], [0.1, 0.3, 0.2, 0.2]]
     target = [2, 3]
     self._validateInTopK(predictions, target, 2, [True, True])
 
   def testInTop2_int64Target(self):
+    # [FUNCTION DOC]
+    # Same as the top-two case but targets are 64-bit integers.
     predictions = [[0.1, 0.3, 0.2, 0.4], [0.1, 0.2, 0.3, 0.4]]
     target = numpy_compat.np_asarray([0, 2]).astype(np.int64)
     self._validateInTopK(predictions, target, 2, [False, True])
 
   def testTensorK(self):
+    # [FUNCTION DOC]
+    # k given as a constant tensor of three; expects false then true.
     predictions = [[0.1, 0.3, 0.2, 0.4], [0.1, 0.2, 0.3, 0.4]]
     target = [0, 2]
     k = constant_op.constant(3)
@@ -1022,8 +1261,13 @@ class InTopKTest(test.TestCase):
 
 
 class SplitTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests the split op with static sizes and random shapes.
 
   def testSpecialCase2(self):
+    # [FUNCTION DOC]
+    # Splits an 86 by 2 by 2 by 4 by 4 random array along axis zero into 19 uneven pieces. A regression
+    # check for a special case in the split kernel; there is no assertion, it passes if no error occurs.
     # Test that fails if the Special case 2 is enabled in split_v_op.cc
     split_dim = 0
     shape = (86, 2, 2, 4, 4)
@@ -1032,6 +1276,9 @@ class SplitTest(test.TestCase):
     _ = self.evaluate(array_ops.split(x, size_splits, split_dim))
 
   def testRandomVariableSlices(self):
+    # [FUNCTION DOC]
+    # Random rank five shape, random split axis and random uneven sizes; the split axis dimension is set
+    # to the sum of the sizes. Splits and asserts each piece equals the matching numpy slice.
     # Random dims of rank 5
     shape = np.random.randint(1, 5, size=5)
     split_dim = np.random.randint(-5, 5)
@@ -1049,6 +1296,8 @@ class SplitTest(test.TestCase):
       self.assertAllEqual(result[i], x[tuple(slices)])
 
   def testRegularSlices(self):
+    # [FUNCTION DOC]
+    # Same as above but with equal sized pieces from a requested number of splits.
     shape = np.random.randint(1, 5, size=5)
     split_dim = np.random.randint(-5, 5)
     num_split = np.random.randint(2, 10)
@@ -1066,8 +1315,13 @@ class SplitTest(test.TestCase):
 
 
 class ResizeBilinearTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests bilinear image resizing with half pixel centers against a Pillow based reference.
 
   def _testResize(self, x, y, use_gpu=False):
+    # [FUNCTION DOC]
+    # HELPER: resizes a batch with the resize-bilinear op and compares with the PIL reference result,
+    # asserting equal shape and close values. Inputs: images, target size pair, optional GPU flag.
     with self.cached_session(use_gpu=use_gpu):
       ans = image_ops.resize_bilinear(x, y, half_pixel_centers=True)
       tf_ans = self.evaluate(ans)
@@ -1076,6 +1330,9 @@ class ResizeBilinearTest(test.TestCase):
       self.assertAllClose(tf_ans, ref_ans)
 
   def _refResize(self, x, y):
+    # [FUNCTION DOC]
+    # HELPER: reference resize using Pillow for each image and channel separately; Pillow takes (width,
+    # height) while TensorFlow takes (height, width), so the size pair is swapped. Returns a numpy array.
     # pylint: disable=g-doc-args
     # pylint: disable=g-doc-return-or-yield
     """PIL has to treat each channel separately.
@@ -1100,18 +1357,24 @@ class ResizeBilinearTest(test.TestCase):
     return resized_array
 
   def testFloatBasic(self):
+    # [FUNCTION DOC]
+    # Random 3 by 24 by 24 by 3 float32 batch upscaled to 48 by 48.
     x = np.random.rand(3, 24, 24, 3)
     x = x.astype(np.float32)
     y = numpy_compat.np_asarray([48, 48], dtype=np.int32)
     self._testResize(x, y, use_gpu=True)
 
   def testFloatUneven(self):
+    # [FUNCTION DOC]
+    # Random 3 by 24 by 48 by 3 batch resized to 96 by 64 (uneven scaling).
     x = np.random.rand(3, 24, 48, 3)
     x = x.astype(np.float32)
     y = numpy_compat.np_asarray([96, 64])
     self._testResize(x, y, use_gpu=True)
 
   def testFloatLarge(self):
+    # [FUNCTION DOC]
+    # Random 3 by 256 by 256 by 3 batch resized to 1024 by 1024.
     x = np.random.rand(3, 256, 256, 3)
     x = x.astype(np.float32)
     y = numpy_compat.np_asarray([1024, 1024])
@@ -1119,10 +1382,17 @@ class ResizeBilinearTest(test.TestCase):
 
 
 class OneHotTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests the one-hot op with and without custom on/off values on both axes.
 
   def _testOneHot(
       self, truth, use_gpu=False, expected_err_re=None, raises=None, **inputs
   ):
+    # [FUNCTION DOC]
+    # HELPER: builds a one-hot tensor from keyword inputs and checks it. Inputs: expected truth, GPU flag,
+    # optional expected op error expression, optional exception type expected, and the op keyword args.
+    # If an exception type is given it asserts the op raises it. Otherwise it asserts shape and values
+    # equal the truth, or that evaluation raises the expected op error.
     with self.cached_session(use_gpu=use_gpu):
       if raises is not None:
         with self.assertRaises(raises):
@@ -1139,10 +1409,15 @@ class OneHotTest(test.TestCase):
             self.evaluate(ans)
 
   def _testBothOneHot(self, truth, expected_err_re=None, raises=None, **inputs):
+    # [FUNCTION DOC]
+    # HELPER: runs _testOneHot with the GPU on and then off.
     self._testOneHot(truth, True, expected_err_re, raises, **inputs)
     self._testOneHot(truth, False, expected_err_re, raises, **inputs)
 
   def _testBasic(self, dtype):
+    # [FUNCTION DOC]
+    # HELPER: with indices zero, two, minus one and one, depth three and on/off values of one and minus
+    # one, checks default axis and axis zero (transposed truth) for the given dtype.
     indices = numpy_compat.np_asarray([0, 2, -1, 1], dtype=np.int32)
     depth = 3
     on_value = numpy_compat.np_asarray(1.0, dtype=dtype)
@@ -1180,6 +1455,8 @@ class OneHotTest(test.TestCase):
     )  # Output is transpose version in this case
 
   def _testDefaultBasic(self, dtype):
+    # [FUNCTION DOC]
+    # HELPER: same indices with default on/off values zero and one, for the last axis and axis zero.
     indices = numpy_compat.np_asarray([0, 2, -1, 1], dtype=np.int32)
     depth = 3
 
@@ -1197,11 +1474,17 @@ class OneHotTest(test.TestCase):
     )  # Output is transpose version in this case
 
   def testFloatBasic(self):
+    # [FUNCTION DOC]
+    # Runs both helper scenarios with float32.
     self._testBasic(np.float32)
     self._testDefaultBasic(np.float32)
 
 
 def get_test_configs():
+  # [FUNCTION DOC]
+  # Returns the list of device/format configurations that the convolution tests iterate over:
+  # a list of pairs of data format name and a flag saying whether to use the GPU. Only the channels-last
+  # format is listed, once with the GPU off and once with it on. Takes no input and has no side effects.
   """Get all the valid tests configs to run.
 
   Returns:
@@ -1212,8 +1495,16 @@ def get_test_configs():
 
 
 class Conv2DTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests the 2D convolution op: forward values (with strides, padding, dilation, explicit padding)
+  # and input backprop. Helpers create numpy tensors, build graphs per device and data format, and
+  # compare against expected values or reference convolution.
 
   def _DtypesToTest(self, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: chooses the dtypes to test. Input: whether the GPU is used. Returns float32 and double
+    # (unless built for ROCm), plus half precision when the GPU is not used or supports half matmul/conv.
+    # Float32 must come before float16 because it serves as a reference.
     # double datatype is currently not supported for convolution ops
     # on the ROCm platform
     optional_float64 = [] if test.is_built_with_rocm() else [dtypes.float64]
@@ -1225,6 +1516,8 @@ class Conv2DTest(test.TestCase):
       return [dtypes.float32, dtypes.float16] + optional_float64
 
   def _CreateNumpyTensor(self, shape):
+    # [FUNCTION DOC]
+    # HELPER: returns a float32 array of the given shape filled with incrementing values from one.
     total_size = 1
     for s in shape:
       total_size *= s
@@ -1241,6 +1534,14 @@ class Conv2DTest(test.TestCase):
       dtype,
       use_gpu,
   ):
+    # [FUNCTION DOC]
+    # HELPER: builds a convolution op for given sizes, dilations, strides, padding, data format and dtype
+    # KNOWN ISSUE: docstring claims verification, but the function only constructs and returns the op.
+    # on the requested device and returns the result tensor, in channels-last layout.
+    # Pads strides and dilations with ones for batch/channel, adds zero padding for those dims when
+    # padding is explicit, and converts layouts when the format is channels-first. Asserts the result
+    # dtype matches. The docstring says "Verifies the output values", but it only builds and returns
+    # the symbolic tensor; comparison is done by callers.
     """Verifies the output values of the convolution function.
 
     Args:
@@ -1291,6 +1592,11 @@ class Conv2DTest(test.TestCase):
   def _CompareFwdValues(
       self, tensor_in_sizes, filter_in_sizes, conv_strides, padding
   ):
+    # [FUNCTION DOC]
+    # HELPER: checks that all device/format configurations give close forward convolution results.
+    # KNOWN ISSUE: never called in this file (dead helper).
+    # Inputs: input sizes, filter sizes, row/col strides and padding. Uses random float32 data, evaluates
+    # a convolution for each configuration, and asserts all results are close to the first.
     """Verifies that CPU and GPU produce the same values.
 
     Args:
@@ -1305,6 +1611,9 @@ class Conv2DTest(test.TestCase):
     x2 = np.random.rand(*filter_in_sizes).astype(np.float32)
 
     def _setup_val(data_format, use_gpu):
+      # [FUNCTION DOC]
+      # HELPER: builds the convolution tensor for one data format and device flag using the enclosing
+      # random inputs, converting layouts for channels-first, and returns the channels-last result.
       with test_util.device(use_gpu):
         t1 = constant_op.constant(x1, shape=tensor_in_sizes)
         t2 = constant_op.constant(x2, shape=filter_in_sizes)
@@ -1336,6 +1645,11 @@ class Conv2DTest(test.TestCase):
       data_format,
       use_gpu,
   ):
+    # [FUNCTION DOC]
+    # HELPER: computes expected and actual dilated convolutions. Inputs: sizes, stride (single value or
+    # iterable), dilation list, padding, data format and GPU flag. The expected value comes from the
+    # generic convolution op with a dilation rate, the computed one from the conv2d op with dilations.
+    # Both are converted to channels-last. Returns the pair (expected, computed).
     x1 = self._CreateNumpyTensor(tensor_in_sizes)
     x2 = self._CreateNumpyTensor(filter_in_sizes)
     with test_util.device(use_gpu):
@@ -1382,6 +1696,12 @@ class Conv2DTest(test.TestCase):
       dilations,
       rtol=1e-4,
   ):
+    # [FUNCTION DOC]
+    # HELPER: for each configuration compares conv2d with dilations against the generic convolution
+    # KNOWN ISSUE: the evaluate/compare code sits inside the loop and evaluates the accumulated lists on
+    #   every iteration, so earlier configurations are rechecked (harmless but redundant).
+    # reference, with tolerance larger on GPU. Inputs: sizes, strides, padding, dilations, relative
+    # tolerance (default 1e-4).
     expected_results = []
     computed_results = []
     for data_format, use_gpu in get_test_configs():
@@ -1419,6 +1739,13 @@ class Conv2DTest(test.TestCase):
       tol=1e-5,
       fp16_tol=1e-3,
   ):
+    # [FUNCTION DOC]
+    # HELPER: core forward verification. Inputs: input and filter sizes, strides, padding, flat expected
+    # values, dilations (default one by one), flag gpu_only, flag to keep layout optimizer behavior, a
+    # tolerance and a half precision tolerance. Builds the convolution for every configuration and dtype
+    # (adding int32 for channels-last when the layout optimizer path is off), evaluates, and compares to
+    # the expected values (exact for integers) and the shape and dtype. Returns early if gpu_only is set
+    # and no CUDA GPU exists.
     if gpu_only and not test.is_gpu_available(cuda_only=True):
       return
     tensors = []
@@ -1472,6 +1799,10 @@ class Conv2DTest(test.TestCase):
       tol=1e-5,
       fp16_tol=1e-3,
   ):
+    # [FUNCTION DOC]
+    # HELPER: verifies convolution with explicit padding by padding the input manually, running a valid
+    # convolution to get expected values, then calling _VerifyValues with the explicit padding.
+    # Inputs: sizes, strides, padding amounts, dilations, layout optimizer flag, tolerances.
     """Verifies Conv2D with explicit padding generates correct values.
 
     It does this by comparing with Conv2D without explicit padding. This
@@ -1516,6 +1847,8 @@ class Conv2DTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testConv2D1x1Filter(self):
+    # [FUNCTION DOC]
+    # One by one filter on a two by three by three image; expected output given as 18 numbers; valid padding.
     expected_output = [
         30.0,
         36.0,
@@ -1546,6 +1879,8 @@ class Conv2DTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testConv2D2x2Filter2x1Dilation(self):
+    # [FUNCTION DOC]
+    # Two by two filter with dilation two by one on a four by four image, compared against the reference.
     self._VerifyDilatedConvValues(
         tensor_in_sizes=[1, 4, 4, 1],
         filter_in_sizes=[2, 2, 1, 1],
@@ -1556,6 +1891,8 @@ class Conv2DTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testConv2DEmpty(self):
+    # [FUNCTION DOC]
+    # Convolution of an empty batch with one by one filter; expects an empty result.
     expected_output = []
     self._VerifyValues(
         tensor_in_sizes=[0, 2, 3, 3],
@@ -1567,6 +1904,8 @@ class Conv2DTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testConv2DEmptyDilation(self):
+    # [FUNCTION DOC]
+    # Empty batch with dilation two by one, compared against the dilated reference.
     self._VerifyDilatedConvValues(
         tensor_in_sizes=[0, 2, 3, 3],
         filter_in_sizes=[1, 1, 3, 3],
@@ -1577,6 +1916,8 @@ class Conv2DTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testConv2D2x2Filter(self):
+    # [FUNCTION DOC]
+    # Two by two filter on two by three by three input, valid padding; expected six values.
     # The outputs are computed using third_party/py/IPython/notebook.
     expected_output = [2271.0, 2367.0, 2463.0, 2901.0, 3033.0, 3165.0]
     self._VerifyValues(
@@ -1589,6 +1930,8 @@ class Conv2DTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testConv2D2x2FilterDilation(self):
+    # [FUNCTION DOC]
+    # Same sizes with dilation one by two against the reference.
     self._VerifyDilatedConvValues(
         tensor_in_sizes=[1, 2, 3, 3],
         filter_in_sizes=[2, 2, 3, 3],
@@ -1599,6 +1942,8 @@ class Conv2DTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testConv2D1x2Filter(self):
+    # [FUNCTION DOC]
+    # One by two filter, valid padding; expected twelve values.
     # The outputs are computed using third_party/py/IPython/notebook.
     expected_output = [
         231.0,
@@ -1624,6 +1969,8 @@ class Conv2DTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testConv2D1x2FilterDilation(self):
+    # [FUNCTION DOC]
+    # One by two filter with dilation two by one against the reference.
     self._VerifyDilatedConvValues(
         tensor_in_sizes=[1, 2, 3, 3],
         filter_in_sizes=[1, 2, 3, 3],
@@ -1634,6 +1981,8 @@ class Conv2DTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testConv2D2x2FilterStride2(self):
+    # [FUNCTION DOC]
+    # Two by two filter with stride two, valid padding; expected three values.
     expected_output = [2271.0, 2367.0, 2463.0]
     self._VerifyValues(
         tensor_in_sizes=[1, 2, 3, 3],
@@ -1645,6 +1994,8 @@ class Conv2DTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testConv2D2x2FilterStride2Same(self):
+    # [FUNCTION DOC]
+    # Two by two filter, stride two, same padding; expected six values.
     expected_output = [2271.0, 2367.0, 2463.0, 1230.0, 1305.0, 1380.0]
     self._VerifyValues(
         tensor_in_sizes=[1, 2, 3, 3],
@@ -1656,6 +2007,8 @@ class Conv2DTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testConv2D2x2FilterStride1x2(self):
+    # [FUNCTION DOC]
+    # Strides one and two on a three by six input; expected six values.
     expected_output = [58.0, 78.0, 98.0, 118.0, 138.0, 158.0]
     self._VerifyValues(
         tensor_in_sizes=[1, 3, 6, 1],
@@ -1667,6 +2020,8 @@ class Conv2DTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testConv2DKernelSmallerThanStrideValid(self):
+    # [FUNCTION DOC]
+    # Two by two kernel and stride three on seven by seven input, valid padding; four values expected.
     expected_output = [65, 95, 275, 305]
     self._VerifyValues(
         tensor_in_sizes=[1, 7, 7, 1],
@@ -1678,6 +2033,9 @@ class Conv2DTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testConv2DKernelSmallerThanStrideSame(self):
+    # [FUNCTION DOC]
+    # Three sub cases with same padding where the kernel is not larger than the stride, checking the
+    # strided sampling values.
     self._VerifyValues(
         tensor_in_sizes=[1, 3, 3, 1],
         filter_in_sizes=[1, 1, 1, 1],
@@ -1704,6 +2062,8 @@ class Conv2DTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testConv2DKernelSizeMatchesInputSize(self):
+    # [FUNCTION DOC]
+    # Kernel equal to the input size with two output channels; expects two values.
     self._VerifyValues(
         tensor_in_sizes=[1, 2, 2, 1],
         filter_in_sizes=[2, 2, 1, 2],
@@ -1714,6 +2074,8 @@ class Conv2DTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testConv2DKernelSizeMatchesInputSizeDilation(self):
+    # [FUNCTION DOC]
+    # Kernel equal to input size under dilation two by two, compared with the reference.
     self._VerifyDilatedConvValues(
         tensor_in_sizes=[1, 3, 3, 1],
         filter_in_sizes=[2, 2, 1, 2],
@@ -1724,6 +2086,8 @@ class Conv2DTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes()
   def testConv2D0x0Padding(self):
+    # [FUNCTION DOC]
+    # Explicit zero padding on two shapes, comparing to a padded valid convolution.
     self._VerifyExplicitPaddings(
         tensor_in_sizes=[1, 2, 3, 3],
         filter_in_sizes=[2, 2, 3, 3],
@@ -1740,6 +2104,8 @@ class Conv2DTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes()
   def testConv2D1x1Padding(self):
+    # [FUNCTION DOC]
+    # Explicit padding of one on every side for two shapes.
     self._VerifyExplicitPaddings(
         tensor_in_sizes=[1, 2, 3, 2],
         filter_in_sizes=[2, 2, 2, 2],
@@ -1756,6 +2122,8 @@ class Conv2DTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes()
   def testConv2D2x2Padding(self):
+    # [FUNCTION DOC]
+    # Explicit padding of two on every side for two shapes, one with strides two by one.
     self._VerifyExplicitPaddings(
         tensor_in_sizes=[1, 2, 1, 2],
         filter_in_sizes=[2, 1, 2, 1],
@@ -1772,6 +2140,8 @@ class Conv2DTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes()
   def testConv2DOnlyTopRightPadding(self):
+    # [FUNCTION DOC]
+    # Asymmetric padding (top and right only), with a looser tolerance for the first case.
     self._VerifyExplicitPaddings(
         tensor_in_sizes=[1, 2, 3, 3],
         filter_in_sizes=[2, 2, 3, 2],
@@ -1789,6 +2159,8 @@ class Conv2DTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes()
   def testConv2DLotsPadding(self):
+    # [FUNCTION DOC]
+    # Large asymmetric padding amounts larger than the kernel for two shapes.
     self._VerifyExplicitPaddings(
         tensor_in_sizes=[1, 1, 1, 3],
         filter_in_sizes=[2, 2, 3, 3],
@@ -1805,6 +2177,8 @@ class Conv2DTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes()
   def testConv2DExplicitPaddingWithDilations(self):
+    # [FUNCTION DOC]
+    # Explicit padding combined with dilations two by one and two by three.
     self._VerifyExplicitPaddings(
         tensor_in_sizes=[1, 3, 2, 1],
         filter_in_sizes=[1, 2, 1, 2],
@@ -1822,6 +2196,9 @@ class Conv2DTest(test.TestCase):
     )
 
   def testConv2DExplicitPaddingWithLayoutOptimizer(self):
+    # [FUNCTION DOC]
+    # Explicit padding with the layout optimizer flag enabled, two shapes, checking the optimizer
+    # handles padding correctly.
     # Test with Grappler's layout optimizer, to ensure the layout optimizer
     # handles explicit padding correctly.
     self._VerifyExplicitPaddings(
@@ -1856,6 +2233,12 @@ class Conv2DTest(test.TestCase):
       err,
       dilations=(1, 1),
   ):
+    # [FUNCTION DOC]
+    # HELPER: runs the conv2d input backprop op and checks the flattened result against expected values.
+    # KNOWN ISSUE: the parameter err is accepted but never used; tolerance is hard coded.
+    # Inputs: input sizes, filter sizes, output sizes, strides, padding, expected, data format, GPU flag,
+    # an error value, dilations (default one by one). Returns early when the GPU flag is set but no CUDA
+    # GPU exists. Converts layouts for channels-first, evaluates and asserts shape and closeness (atol 1e-5).
     if use_gpu and not test.is_gpu_available(cuda_only=True):
       return
     x1 = self._CreateNumpyTensor(filter_sizes)
@@ -1898,10 +2281,16 @@ class Conv2DTest(test.TestCase):
   def _CompareBackpropInput(
       self, input_sizes, filter_sizes, output_sizes, conv_strides, padding
   ):
+    # [FUNCTION DOC]
+    # HELPER: compares input backprop across all configurations; inputs are sizes, strides, padding.
+    # KNOWN ISSUE: never called in this file (dead helper).
     x1 = np.random.rand(*filter_sizes).astype(np.float32)
     x2 = np.random.rand(*output_sizes).astype(np.float32)
 
     def _get_val(data_format, use_gpu):
+      # [FUNCTION DOC]
+      # HELPER: builds and evaluates the backprop op for one data format and GPU flag using enclosing random
+      # data, asserts the shape matches, and returns the numpy value.
       with test_util.device(use_gpu):
         if data_format == "NCHW":
           new_input_sizes = test_util.NHWCToNCHW(input_sizes)
@@ -1937,6 +2326,8 @@ class Conv2DTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testConv2DEmptyBackpropInput(self):
+    # [FUNCTION DOC]
+    # Backprop input with an empty batch; expects an empty result for each configuration.
     expected_output = []
     for data_format, use_gpu in get_test_configs():
       self._RunAndVerifyBackpropInput(
@@ -1953,6 +2344,9 @@ class Conv2DTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testConv2DStrideTwoFilterOneSameBackpropInput(self):
+    # [FUNCTION DOC]
+    # Stride two, one by one filter, same padding: expects the output gradient scattered onto every
+    # second position of a four by four map (sixteen expected values) for each configuration.
     expected_output = [
         1.0,
         0.0,
@@ -1986,8 +2380,13 @@ class Conv2DTest(test.TestCase):
 
 
 class PoolingTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests the generic pool op against the numpy reference, for forward values and gradient error.
 
   def _test(self, input_shape, dtype, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: forward check. Input shape, dtype and keyword args for the pool op. Builds negative
+    # incrementing data (so zero padding would show), computes the reference and the op, asserts close.
     # Use negative numbers to make sure there isn't any zero padding getting
     # used.
     x = -np.arange(np.prod(input_shape), dtype=dtype).reshape(input_shape) - 1
@@ -1996,6 +2395,9 @@ class PoolingTest(test.TestCase):
     self.assertAllClose(y1, self.evaluate(y2), rtol=1e-2, atol=1e-2)
 
   def _test_gradient(self, input_shape, dtype, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: gradient check. Same inputs; computes the numeric gradient error of the pool op and asserts
+    # it is under 1e-2 (1.1 for half precision, noted as too high in a TODO).
     x_val = (
         -np.arange(np.prod(input_shape), dtype=dtype).reshape(input_shape) - 1
     )
@@ -2013,6 +2415,9 @@ class PoolingTest(test.TestCase):
     self.assertLess(err, err_tolerance)
 
   def testPoolSimple(self):
+    # [FUNCTION DOC]
+    # One dimensional style pooling on a one by one by ten by one tensor for both padding modes, both
+    # pooling types and float32/float16.
     with self.session(use_gpu=test.is_gpu_available()):
       for padding in ["SAME", "VALID"]:
         for pooling_type in ["MAX", "AVG"]:
@@ -2028,6 +2433,9 @@ class PoolingTest(test.TestCase):
             )
 
   def testPool1D(self):
+    # [FUNCTION DOC]
+    # Exhaustive 1D pooling over paddings, dtypes, pooling types, input and window shapes, dilation
+    # rates (valid only) and strides not larger than the window.
     with self.session(use_gpu=test.is_gpu_available()):
       for padding in ["SAME", "VALID"]:
         for dtype in [np.float32, np.float16]:
@@ -2059,6 +2467,8 @@ class PoolingTest(test.TestCase):
                   )
 
   def testPool2D(self):
+    # [FUNCTION DOC]
+    # Same as the 1D test but with two spatial dimensions.
     with self.session(use_gpu=test.is_gpu_available()):
       for padding in ["SAME", "VALID"]:
         for dtype in [np.float32, np.float16]:
@@ -2091,6 +2501,9 @@ class PoolingTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testGradient2D(self):
+    # [FUNCTION DOC]
+    # Deprecated-v1 test of 2D pooling gradients across paddings, dtypes, pooling types, shapes, windows,
+    # dilations and strides.
     with self.session(use_gpu=test.is_gpu_available()):
       for padding in ["SAME", "VALID"]:
         for dtype in [np.float32, np.float16]:
@@ -2123,10 +2536,17 @@ class PoolingTest(test.TestCase):
 
 
 class FractionalMaxPoolGradTest(test.TestCase):
+  # [CLASS DOC]
+  # KNOWN ISSUE: name and test method suggest fractional max pool, but the code only uses the plain
+  #   max pool and its grad op.
+  # Despite the name, tests the gradient of regular max pooling with non overlapping windows.
+  # Class attributes: a seeded random state and a seed.
   _PRNG = np.random.RandomState(341261)
   _SEED = 123456
 
   def _GenerateUniqueRandomInputTensor(self, shape):
+    # [FUNCTION DOC]
+    # HELPER: builds a shuffled array of distinct float32 values with the given shape, so the max is unique.
     num_elements = 1
     for size in shape:
       num_elements *= size
@@ -2135,6 +2555,10 @@ class FractionalMaxPoolGradTest(test.TestCase):
     return x.reshape(shape)
 
   def testDirectNotUseOverlapping(self):
+    # [FUNCTION DOC]
+    # For several window sizes, builds a tensor equal to one window, runs max pool with stride equal to
+    # the window, builds random output backprop and runs the max pool grad op. There is no value
+    # assertion; it passes if evaluation succeeds.
     for num_batches in [1]:
       for row_window_size in [2, 5]:
         for col_window_size in [2, 4]:
@@ -2166,6 +2590,8 @@ class FractionalMaxPoolGradTest(test.TestCase):
 
 
 class RandomOpTestCommon(test.TestCase):
+  # [CLASS DOC]
+  # Base class holding a shared check used by random op tests.
 
   # Checks that executing the same rng_func multiple times rarely produces the
   # same result.
@@ -2180,6 +2606,10 @@ class RandomOpTestCommon(test.TestCase):
       op_seed=None,
       graph_seed=None,
   ):
+    # [FUNCTION DOC]
+    # HELPER: evaluates the same random op three times in one session and asserts the three outputs are
+    # not all identical. Inputs: the generating callable, element count, dtype, min or mean, max or
+    # standard deviation, GPU flag, optional op seed and optional graph seed (which is set on the graph).
     with self.session(use_gpu=use_gpu, graph=ops.Graph()) as _:
       if graph_seed is not None:
         random_seed.set_random_seed(graph_seed)
@@ -2202,9 +2632,18 @@ class RandomOpTestCommon(test.TestCase):
     test_util.disable_xla, "This never passed on XLA"
 )
 class RandomUniformTest(RandomOpTestCommon):
+  # [CLASS DOC]
+  # Tests the uniform random op for range, distinctness, integer uniformity, seeds, determinism and
+  # common subexpression behavior. Decorated at class level to disable XLA runs since it never passed.
 
   def _Sampler(self, num, minv, maxv, dtype, use_gpu, seed=None):
+    # [FUNCTION DOC]
+    # HELPER: returns a callable that draws ten rounds of samples from the uniform op in a fresh graph.
+    # Inputs: count, min, max, dtype, GPU flag, optional seed.
     def func():
+      # [FUNCTION DOC]
+      # HELPER: the callable returned by the sampler; builds the op in a new graph and returns a ten row
+      # numpy array of evaluated samples.
       with self.session(use_gpu=use_gpu, graph=ops.Graph()) as _:
         rng = random_ops.random_uniform(
             [num], minval=minv, maxval=maxv, dtype=dtype, seed=seed
@@ -2217,6 +2656,8 @@ class RandomUniformTest(RandomOpTestCommon):
     return func
 
   def testRange(self):
+    # [FUNCTION DOC]
+    # For five dtypes draws 1000 values in the range minus two to eight and asserts bounds.
     for dt in (
         dtypes.float16,
         dtypes.float32,
@@ -2233,6 +2674,9 @@ class RandomUniformTest(RandomOpTestCommon):
   # to see the same sequence of values. Will catch buggy
   # implementations which uses the same random number seed.
   def testDistinct(self):
+    # [FUNCTION DOC]
+    # Draws two samples per dtype and asserts few equal entries, catching implementations that reuse
+    # the seed. Prints diagnostic values when too many are equal.
     for dt in (
         dtypes.float16,
         dtypes.float32,
@@ -2254,6 +2698,8 @@ class RandomUniformTest(RandomOpTestCommon):
 
   @test_util.run_deprecated_v1
   def testUniformIntsWithInvalidShape(self):
+    # [FUNCTION DOC]
+    # Asserts that integer uniform with non scalar min or max raises a value error with a specific message.
     for dtype in dtypes.int32, dtypes.int64:
       with self.assertRaisesRegex(
           ValueError, "minval must be a scalar; got a tensor of shape"
@@ -2267,6 +2713,9 @@ class RandomUniformTest(RandomOpTestCommon):
   # Check that uniform ints actually follow a uniform distribution.
   @test_util.run_deprecated_v1
   def testUniformInts(self):
+    # [FUNCTION DOC]
+    # Draws 100000 integers in minus two to fifteen with a fixed seed and checks the histogram counts
+    # are within five standard deviations of the binomial mean.
     minv = -2
     maxv = 15
     n = 100000
@@ -2290,9 +2739,14 @@ class RandomUniformTest(RandomOpTestCommon):
 
   # Check that minval = maxval is fine iff we're producing no numbers
   def testUniformIntsDegenerate(self):
+    # [FUNCTION DOC]
+    # Min equal to max is fine only when zero numbers are produced: zero samples give an empty result of
+    # the right shape, one sample raises an op error saying min must be less than max.
     for dt in dtypes.int32, dtypes.int64:
 
       def sample(n, dtype=dt):
+        # [FUNCTION DOC]
+        # HELPER: draws count samples with min and max zero using the sampler; dtype default from the loop.
         return self._Sampler(n, minv=0, maxv=0, dtype=dtype, use_gpu=True)()
 
       self.assertEqual(sample(0, dt).shape, (10, 0))
@@ -2301,6 +2755,8 @@ class RandomUniformTest(RandomOpTestCommon):
 
   @test_util.run_deprecated_v1
   def testSeed(self):
+    # [FUNCTION DOC]
+    # With the same seed (including huge ones) two samplers produce equal outputs for all dtypes.
     for dt in (
         dtypes.float16,
         dtypes.float32,
@@ -2315,6 +2771,9 @@ class RandomUniformTest(RandomOpTestCommon):
 
   @test_util.run_deprecated_v1
   def testNoCSE(self):
+    # [FUNCTION DOC]
+    # Two independent uniform ops of equal shape must differ (not merged by common subexpression
+    # elimination); asserts norm of the difference exceeds 0.1.
     shape = [2, 3, 4]
     for dtype in dtypes.float16, dtypes.float32, dtypes.int32:
       with self.session(use_gpu=True):
@@ -2325,6 +2784,8 @@ class RandomUniformTest(RandomOpTestCommon):
 
   @test_util.run_deprecated_v1
   def testSingleSessionNotConstant(self):
+    # [FUNCTION DOC]
+    # Uses the common check for every dtype and both device flags without seeds.
     for use_gpu in [False, True]:
       for dt in (
           dtypes.float16,
@@ -2339,6 +2800,8 @@ class RandomUniformTest(RandomOpTestCommon):
 
   @test_util.run_deprecated_v1
   def testSingleSessionOpSeedNotConstant(self):
+    # [FUNCTION DOC]
+    # Same with an op seed of 1345 and range 10 to 20.
     for use_gpu in [False, True]:
       for dt in (
           dtypes.float16,
@@ -2359,6 +2822,8 @@ class RandomUniformTest(RandomOpTestCommon):
 
   @test_util.run_deprecated_v1
   def testSingleSessionGraphSeedNotConstant(self):
+    # [FUNCTION DOC]
+    # Same with a graph seed of 965 and range 20 to 200.
     for use_gpu in [False, True]:
       for dt in (
           dtypes.float16,
@@ -2379,9 +2844,15 @@ class RandomUniformTest(RandomOpTestCommon):
 
 
 class BroadcastToTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests the broadcast-to op: values and static shapes for many dtypes and ranks, error handling for
+  # impossible shapes, and gradient error for several broadcast patterns.
 
   @test_util.run_deprecated_v1
   def testBroadcastToBasic(self):
+    # [FUNCTION DOC]
+    # Broadcasts a three element vector of each small integer dtype to three by three and compares with
+    # numpy broadcast.
     for dtype in [np.uint8, np.uint16, np.int8, np.int16, np.int32, np.int64]:
       with self.session(use_gpu=True):
         x = np.array([1, 2, 3], dtype=dtype)
@@ -2391,6 +2862,8 @@ class BroadcastToTest(test_util.TensorFlowTestCase):
 
   @test_util.run_deprecated_v1
   def testBroadcastToString(self):
+    # [FUNCTION DOC]
+    # Broadcasts a vector of byte strings to three by three and compares with numpy.
     with self.session(use_gpu=True):
       x = np.array([b"1", b"2", b"3"])
       v_tf = array_ops.broadcast_to(constant_op.constant(x), [3, 3])
@@ -2399,6 +2872,9 @@ class BroadcastToTest(test_util.TensorFlowTestCase):
 
   @test_util.run_deprecated_v1
   def testBroadcastToBool(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: builds the input with the removed numpy boolean alias; fails on new numpy.
+    # Broadcasts a boolean vector to three by three and compares with numpy.
     with self.session(use_gpu=True):
       x = np.array([True, False, True], dtype=np.bool)
       v_tf = array_ops.broadcast_to(constant_op.constant(x), [3, 3])
@@ -2407,6 +2883,9 @@ class BroadcastToTest(test_util.TensorFlowTestCase):
 
   @test_util.run_deprecated_v1
   def testBroadcastToShape(self):
+    # [FUNCTION DOC]
+    # For every input rank from one to five and output rank from that up to five (all dims of size
+    # two) broadcasts a random integer array and compares with numpy.
     for input_dim in range(1, 6):
       for output_dim in range(input_dim, 6):
         with self.cached_session(use_gpu=True):
@@ -2419,6 +2898,8 @@ class BroadcastToTest(test_util.TensorFlowTestCase):
 
   @test_util.run_deprecated_v1
   def testBroadcastToShapeInnerDim(self):
+    # [FUNCTION DOC]
+    # Expands an inner dimension from one to five (shape two, one, three to two, five, three).
     input_shape = [2, 1, 3]
     output_shape = [2, 5, 3]
     with self.cached_session(use_gpu=True):
@@ -2429,6 +2910,8 @@ class BroadcastToTest(test_util.TensorFlowTestCase):
 
   @test_util.run_deprecated_v1
   def testBroadcastToShapeLargerDim(self):
+    # [FUNCTION DOC]
+    # Broadcasts a rank six array to a rank fifteen shape that has many leading size one dims.
     input_shape = [2, 1, 3, 2, 2, 2]
     output_shape = [1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 15, 3, 2, 2, 2]
     with self.cached_session(use_gpu=True):
@@ -2439,6 +2922,8 @@ class BroadcastToTest(test_util.TensorFlowTestCase):
 
   @test_util.run_deprecated_v1
   def testBroadcastToShapeLargerDim2(self):
+    # [FUNCTION DOC]
+    # Broadcasts a rank nine array to a rank twelve shape with size changes in several dims.
     input_shape = [2, 1, 3, 2, 2, 2, 1, 1, 1]
     output_shape = [1, 1, 1, 2, 5, 3, 2, 2, 2, 3, 3, 3]
     with self.cached_session(use_gpu=True):
@@ -2449,6 +2934,8 @@ class BroadcastToTest(test_util.TensorFlowTestCase):
 
   @test_util.run_deprecated_v1
   def testBroadcastToScalar(self):
+    # [FUNCTION DOC]
+    # Broadcasts a scalar integer to three by three and compares with numpy.
     with self.session(use_gpu=True):
       x = np.array(1, dtype=np.int32)
       v_tf = array_ops.broadcast_to(constant_op.constant(x), [3, 3])
@@ -2457,6 +2944,9 @@ class BroadcastToTest(test_util.TensorFlowTestCase):
 
   @test_util.run_deprecated_v1
   def testBroadcastScalarToNonScalar(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: uses the removed numpy float alias to build the reference; fails on new numpy.
+    # Broadcasts the scalar 1.0 to a rank six shape and compares with numpy.
     with self.session(use_gpu=True):
       x = np.array(1.0, dtype=np.float)
       v_tf = array_ops.broadcast_to(
@@ -2467,6 +2957,9 @@ class BroadcastToTest(test_util.TensorFlowTestCase):
 
   @test_util.run_deprecated_v1
   def testBroadcastToShapeTypeAndInference(self):
+    # [FUNCTION DOC]
+    # For a 32-bit and a 64-bit shape tensor, broadcasts a vector to three by three and asserts both
+    # the value and the statically inferred shape equal the numpy result.
     for dtype in [dtypes.int32, dtypes.int64]:
       with self.cached_session(use_gpu=True):
         x = np.array([1, 2, 3])
@@ -2480,6 +2973,9 @@ class BroadcastToTest(test_util.TensorFlowTestCase):
         self.assertAllEqual(shape, v_np.shape)
 
   def testBroadcastToBadOutputShape(self):
+    # [FUNCTION DOC]
+    # In eager mode, broadcasting a two element vector to shape two by one must raise an invalid
+    # argument error mentioning inability to broadcast.
     with context.eager_mode():
       with self.assertRaisesRegex(
           errors.InvalidArgumentError, "Unable to broadcast tensor of shape"
@@ -2492,6 +2988,8 @@ class BroadcastToTest(test_util.TensorFlowTestCase):
 
   @test_util.run_deprecated_v1
   def testGradientForScalar(self):
+    # [FUNCTION DOC]
+    # Gradient error check (below 1e-4) of twice a scalar broadcast to two by four by three.
     x = constant_op.constant(1, dtype=dtypes.float32)
     v = array_ops.broadcast_to(x, [2, 4, 3])
     out = 2 * v
@@ -2503,6 +3001,8 @@ class BroadcastToTest(test_util.TensorFlowTestCase):
 
   @test_util.run_deprecated_v1
   def testGradientWithSameRank(self):
+    # [FUNCTION DOC]
+    # Gradient error check when input and output have the same rank (two, one, three to two, five, three).
     x = constant_op.constant(
         np.reshape(np.arange(6), (2, 1, 3)), dtype=dtypes.float32
     )
@@ -2516,6 +3016,8 @@ class BroadcastToTest(test_util.TensorFlowTestCase):
 
   @test_util.run_deprecated_v1
   def testGradientWithIncreasingRank(self):
+    # [FUNCTION DOC]
+    # Gradient error check when the output has higher rank than the input.
     x = constant_op.constant([[1], [2]], dtype=dtypes.float32)
     v = array_ops.broadcast_to(x, [5, 2, 3])
     out = 2 * v
@@ -2527,6 +3029,8 @@ class BroadcastToTest(test_util.TensorFlowTestCase):
 
   @test_util.run_deprecated_v1
   def testGradientWithBroadcastAllDimensions(self):
+    # [FUNCTION DOC]
+    # Gradient error check when a one element input is broadcast along all dimensions.
     x = constant_op.constant([1], dtype=dtypes.float32)
     v = array_ops.broadcast_to(x, [5, 2, 3])
     out = 2 * v
@@ -2538,6 +3042,8 @@ class BroadcastToTest(test_util.TensorFlowTestCase):
 
   @test_util.run_deprecated_v1
   def testGradientWithLargeDim(self):
+    # [FUNCTION DOC]
+    # Gradient error check for a rank nine input broadcast to a rank twelve output.
     input_shape = [2, 1, 3, 2, 2, 2, 1, 1, 1]
     output_shape = [1, 1, 1, 2, 5, 3, 2, 2, 2, 3, 3, 3]
     x = constant_op.constant(
@@ -2553,8 +3059,14 @@ class BroadcastToTest(test_util.TensorFlowTestCase):
 
 
 class GPUBinaryOpsTest(test.TestCase):
+  # [CLASS DOC]
+  # Compares binary arithmetic ops run on the GPU with CPU results.
 
   def _compareGPU(self, x, y, np_func, tf_func):
+    # [FUNCTION DOC]
+    # HELPER: runs the given TensorFlow binary function on the GPU-preferring session, then on a CPU
+    # session, with the same inputs, and asserts the two results are close. The numpy function argument
+    # is accepted but unused.
     with self.cached_session(use_gpu=True) as _:
       inx = ops.convert_to_tensor(x)
       iny = ops.convert_to_tensor(y)
@@ -2570,6 +3082,8 @@ class GPUBinaryOpsTest(test.TestCase):
     self.assertAllClose(tf_cpu, tf_gpu)
 
   def testFloatBasic(self):
+    # [FUNCTION DOC]
+    # Compares add, subtract, multiply, true division, floor division and power for float32 vectors.
     x = np.linspace(-5, 20, 15).reshape((1, 3, 5)).astype(np.float32)
     y = np.linspace(20, -5, 15).reshape((1, 3, 5)).astype(np.float32)
     self._compareGPU(x, y, np.add, math_ops.add)
@@ -2580,6 +3094,9 @@ class GPUBinaryOpsTest(test.TestCase):
     self._compareGPU(x, y, np.power, math_ops.pow)
 
   def testFloatWithBCast(self):
+    # [FUNCTION DOC]
+    # Same as the basic case for add, subtract, multiply and divide, with broadcasting between shapes
+    # three by five and two by three by five.
     x = np.linspace(-5, 20, 15).reshape((3, 5)).astype(np.float32)
     y = np.linspace(20, -5, 30).reshape((2, 3, 5)).astype(np.float32)
     self._compareGPU(x, y, np.add, math_ops.add)
@@ -2588,6 +3105,8 @@ class GPUBinaryOpsTest(test.TestCase):
     self._compareGPU(x, y + 0.1, np.true_divide, math_ops.truediv)
 
   def testHalfBasic(self):
+    # [FUNCTION DOC]
+    # Same operations as the float test but with float16 data.
     x = (
         np.linspace(-5, 20, 15, dtype=np.float16)
         .reshape((1, 3, 5))
@@ -2607,8 +3126,13 @@ class GPUBinaryOpsTest(test.TestCase):
 
 
 class LogicalOpTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests logical and, or, xor and not against numpy on CPU and GPU, including broadcasting.
 
   def _compareBinary(self, x, y, np_func, tf_func, use_gpu=False):
+    # [FUNCTION DOC]
+    # HELPER: applies a TensorFlow binary function on the chosen device and asserts the dtype is boolean,
+    # values equal numpy's result and shapes match.
     np_ans = np_func(x, y)
     with test_util.device(use_gpu=use_gpu):
       inx = ops.convert_to_tensor(x)
@@ -2620,6 +3144,8 @@ class LogicalOpTest(test.TestCase):
     self.assertShapeEqual(np_ans, out)
 
   def _not(self, x, use_gpu=False):
+    # [FUNCTION DOC]
+    # HELPER: same as above for logical not.
     np_ans = np.logical_not(x)
     with test_util.device(use_gpu=use_gpu):
       out = math_ops.logical_not(ops.convert_to_tensor(x))
@@ -2629,6 +3155,8 @@ class LogicalOpTest(test.TestCase):
     self.assertShapeEqual(np_ans, out)
 
   def testScalar(self):
+    # [FUNCTION DOC]
+    # All combinations of true/false single element arrays for not, and, or, xor on both devices.
     data = [np.array([True]), np.array([False])]
     for use_gpu in [True, False]:
       for x in data:
@@ -2644,6 +3172,9 @@ class LogicalOpTest(test.TestCase):
           )
 
   def testTensor(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: uses the removed numpy boolean alias to cast random data; fails on new numpy.
+    # Random boolean arrays of shape one by three by two for all four ops on both devices.
     x = np.random.randint(0, 2, 6).astype(np.bool).reshape(1, 3, 2)
     y = np.random.randint(0, 2, 6).astype(np.bool).reshape(1, 3, 2)
     for use_gpu in [True, False]:
@@ -2653,6 +3184,9 @@ class LogicalOpTest(test.TestCase):
       self._compareBinary(x, y, np.logical_xor, math_ops.logical_xor, use_gpu)
 
   def testBCast(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: uses the removed numpy boolean alias to cast random data; fails on new numpy.
+    # Binary ops over a list of shape pairs requiring broadcasting, including zero sized dimensions.
     shapes = [
         ([1, 3, 2], [1]),
         ([1, 3, 2], [2]),
@@ -2676,8 +3210,15 @@ class LogicalOpTest(test.TestCase):
 
 
 class XentTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests the softmax cross-entropy op's backprop against a numpy reference.
 
   def _npXent(self, features, labels, dim=-1):
+    # [FUNCTION DOC]
+    # HELPER: numpy reference. Inputs: features, labels and a dimension (default last). Computes
+    # softmax probabilities with max subtraction for stability, the backprop (probabilities minus labels)
+    # and the loss as negative sum of labels times log probabilities. Prints the dimension and the
+    # intermediate product. Returns the pair (loss, backprop).
     if dim == -1:
       dim = len(features.shape) - 1
     print("dim ", dim)
@@ -2698,6 +3239,10 @@ class XentTest(test.TestCase):
   def _testXent(
       self, np_features, np_labels, use_gpu=True, with_placeholders=False
   ):
+    # [FUNCTION DOC]
+    # HELPER: runs the fused softmax cross-entropy op and compares the backprop with the numpy one,
+    # according to dtype. Inputs: features, labels, GPU flag (default on) and a flag to feed through
+    # placeholders in a session (needed for XLA, which constant folds otherwise).
     _, np_backprop = self._npXent(np_features, np_labels)
     with self.cached_session(use_gpu=use_gpu) as sess:
       if with_placeholders:
@@ -2721,6 +3266,9 @@ class XentTest(test.TestCase):
     self.assertAllCloseAccordingToType(np_backprop, tf_backprop)
 
   def _testXentWrapper(self, np_features, np_labels, dim=-1, use_gpu=False):
+    # [FUNCTION DOC]
+    # HELPER: compares the loss only (passing a dimension argument to the op). Never called in this
+    # file, so it is currently dead code.
     np_loss, _ = self._npXent(np_features, np_labels, dim=dim)
     with self.cached_session(use_gpu=use_gpu) as _:
       loss = gen_nn_ops.softmax_cross_entropy_with_logits(
@@ -2730,11 +3278,15 @@ class XentTest(test.TestCase):
     self.assertAllCloseAccordingToType(np_loss, tf_loss)
 
   def _testAll(self, features, labels, with_placeholders=False):
+    # [FUNCTION DOC]
+    # HELPER: runs _testXent on the GPU with the placeholder flag passed through.
     self._testXent(
         features, labels, use_gpu=True, with_placeholders=with_placeholders
     )
 
   def testFloat(self):
+    # [FUNCTION DOC]
+    # Two rows of float32 features and labels, one with a one hot label and one with soft labels.
     self._testAll(
         np.array([[1.0, 1.0, 1.0, 1.0], [1.0, 2.0, 3.0, 4.0]]).astype(
             np.float32
@@ -2745,6 +3297,8 @@ class XentTest(test.TestCase):
     )
 
   def testHalf(self):
+    # [FUNCTION DOC]
+    # Same data as float16.
     self._testAll(
         np.array([[1.0, 1.0, 1.0, 1.0], [1.0, 2.0, 3.0, 4.0]]).astype(
             np.float16
@@ -2756,6 +3310,9 @@ class XentTest(test.TestCase):
 
 
 class AddNTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests the add_n op for counts one to thirty and several dtypes. The class comment explains that
+  # add_n has special cases for small counts and then loops over groups of eight.
   # AddN special-cases adding the first M inputs to make (N - M) divisible by 8,
   # after which it adds the remaining (N - M) tensors 8 at a time in a loop.
   # Test N in [1, 10] so we check each special-case from 1 to 9 and one
@@ -2763,6 +3320,8 @@ class AddNTest(test.TestCase):
   _MAX_N = 10
 
   def _supported_types(self):
+    # [FUNCTION DOC]
+    # HELPER: returns the dtype list to test, shorter when a GPU is available (no small integer types).
     if test.is_gpu_available():
       return [
           dtypes.float16,
@@ -2787,6 +3346,9 @@ class AddNTest(test.TestCase):
     ]
 
   def _buildData(self, shape, dtype):
+    # [FUNCTION DOC]
+    # HELPER: random normal array of the given shape and dtype; for complex types adds an imaginary part
+    # that is ten times the real part.
     data = np.random.randn(*shape).astype(dtype.as_numpy_dtype)
     # For complex types, add an index-dependent imaginary component so we can
     # tell we got the right value.
@@ -2795,6 +3357,9 @@ class AddNTest(test.TestCase):
     return data
 
   def testAddN(self):
+    # [FUNCTION DOC]
+    # Seeds numpy, then for each dtype and count from one to ten adds that many random two by two
+    # arrays with add_n and compares to the numpy sum, with looser tolerances for half and bfloat16.
     np.random.seed(12345)
     with self.session(use_gpu=True) as _:
       for dtype in self._supported_types():
@@ -2810,6 +3375,8 @@ class AddNTest(test.TestCase):
           self.assertAllClose(expected, actual, rtol=tol, atol=tol)
 
   def testBigAddN(self):
+    # [FUNCTION DOC]
+    # Same but for counts from ten to thirty, with larger tolerances for half-width floats.
     np.random.seed(12345)
     with self.session(use_gpu=True) as _:
       for dtype in self._supported_types():
@@ -2826,8 +3393,13 @@ class AddNTest(test.TestCase):
 class ResourceVariableOpsTest(
     test_util.TensorFlowTestCase, parameterized.TestCase
 ):
+  # [CLASS DOC]
+  # Tests resource variable ops (creation, read, assign, scatter variants) in eager and graph modes.
 
   def tearDown(self):
+    # [FUNCTION DOC]
+    # Forces garbage collection after each test and asserts there is no uncollectable garbage (cycles
+    # with finalizers), then calls the parent tear down.
     gc.collect()
     # This will only contain uncollectable garbage, i.e. reference cycles
     # involving objects with __del__ defined.
@@ -2836,11 +3408,16 @@ class ResourceVariableOpsTest(
 
   @test_util.run_gpu_only
   def testGPUInt64(self):
+    # [FUNCTION DOC]
+    # GPU only test: creates a 64-bit integer resource variable on the first GPU in eager mode and
+    # asserts its value is one.
     with context.eager_mode(), context.device("gpu:0"):
       v = resource_variable_ops.ResourceVariable(1, dtype=dtypes.int64)
       self.assertAllEqual(1, v.numpy())
 
   def testEagerNameNotIdentity(self):
+    # [FUNCTION DOC]
+    # Two eager variables with the same name keep independent values (one and two).
     with context.eager_mode():
       v0 = resource_variable_ops.ResourceVariable(1.0, name="a")
       v1 = resource_variable_ops.ResourceVariable(2.0, name="a")
@@ -2848,11 +3425,16 @@ class ResourceVariableOpsTest(
       self.assertAllEqual(v1.numpy(), 2.0)
 
   def testEagerNameNotNeeded(self):
+    # [FUNCTION DOC]
+    # An eager variable can be created without a name and holds its initial value.
     with context.eager_mode():
       v0 = resource_variable_ops.ResourceVariable(1.0)
       self.assertAllEqual(v0.numpy(), 1.0)
 
   def testReadVariableDtypeMismatchEager(self):
+    # [FUNCTION DOC]
+    # Creates an integer variable handle, assigns one, then reads it as float; expects an invalid
+    # argument error about reading with the wrong dtype.
     with context.eager_mode():
       handle = resource_variable_ops.var_handle_op(
           dtype=dtypes.int32, shape=[1], name="foo"
@@ -2865,12 +3447,16 @@ class ResourceVariableOpsTest(
         _ = resource_variable_ops.read_variable_op(handle, dtype=dtypes.float32)
 
   def testEagerInitializedValue(self):
+    # [FUNCTION DOC]
+    # Eager variable value and its initialized value are both 1.0.
     with context.eager_mode():
       variable = resource_variable_ops.ResourceVariable(1.0, name="eager-init")
       self.assertAllEqual(variable.numpy(), 1.0)
       self.assertAllEqual(variable.initialized_value().numpy(), 1.0)
 
   def testInitializeVariableUsingInitializedValue(self):
+    # [FUNCTION DOC]
+    # Creates a variable whose initial value is another variable's initialized value; asserts it is 1.0.
     var1 = resource_variable_ops.ResourceVariable(1.0, name="var1")
     var2 = resource_variable_ops.ResourceVariable(
         var1.initialized_value(), name="var2"
@@ -2878,11 +3464,16 @@ class ResourceVariableOpsTest(
     self.assertAllEqual(var2.initialized_value(), 1.0)
 
   def testEagerBool(self):
+    # [FUNCTION DOC]
+    # Converting an eager boolean variable holding false to a bool gives false.
     with context.eager_mode():
       v = resource_variable_ops.ResourceVariable(False, name="bool_test")
       self.assertAllEqual(bool(v), False)
 
   def testEagerDeepCopy(self):
+    # [FUNCTION DOC]
+    # Deep copies an eager variable; asserts name, shape and device are equal, values equal, and that
+    # assigning to the copy does not change the original.
     with context.eager_mode():
       init_value = np.ones((4, 4, 4))
       variable = resource_variable_ops.ResourceVariable(init_value, name="init")
@@ -2900,6 +3491,8 @@ class ResourceVariableOpsTest(
       self.assertNotAllEqual(variable.numpy(), copied_variable.numpy())
 
   def testVariableShape(self):
+    # [FUNCTION DOC]
+    # Gets the shape op result for a two element variable handle and asserts it is two.
     v = resource_variable_ops.ResourceVariable([1.0, 1.0])
     self.assertAllEqual(
         tensor_util.constant_value(
@@ -2909,6 +3502,9 @@ class ResourceVariableOpsTest(
     )
 
   def testAssignVariableDtypeMismatchEager(self):
+    # [FUNCTION DOC]
+    # Assigns an integer then tries assigning a float to the same handle; expects an invalid argument
+    # error about a wrong dtype.
     with context.eager_mode():
       handle = resource_variable_ops.var_handle_op(
           dtype=dtypes.int32, shape=[1], name="foo"
@@ -2927,6 +3523,9 @@ class ResourceVariableOpsTest(
 
   @test_util.run_in_graph_and_eager_modes
   def testCreateRead(self):
+    # [FUNCTION DOC]
+    # Runs in graph and eager modes: creates a scalar int variable, assigns one, reads it back and
+    # asserts the value is one.
     handle = resource_variable_ops.var_handle_op(dtype=dtypes.int32, shape=[])
     self.evaluate(
         resource_variable_ops.assign_variable_op(
@@ -2940,6 +3539,8 @@ class ResourceVariableOpsTest(
 
   @test_util.run_in_graph_and_eager_modes
   def testManyAssigns(self):
+    # [FUNCTION DOC]
+    # Chains read, assign two and read with control dependencies; asserts the reads give one and two.
     handle = resource_variable_ops.var_handle_op(dtype=dtypes.int32, shape=[])
     create = resource_variable_ops.assign_variable_op(
         handle, constant_op.constant(1, dtype=dtypes.int32)
@@ -2961,6 +3562,8 @@ class ResourceVariableOpsTest(
     self.assertEqual(s, 2)
 
   def testAssignAdd(self):
+    # [FUNCTION DOC]
+    # Creates, assigns one, adds one with the assign-add op and asserts the read value is two.
     handle = resource_variable_ops.var_handle_op(dtype=dtypes.int32, shape=[])
     self.evaluate(
         resource_variable_ops.assign_variable_op(
@@ -2979,6 +3582,9 @@ class ResourceVariableOpsTest(
 
   @test_util.run_in_graph_and_eager_modes
   def testAssignAddMethod(self):
+    # [FUNCTION DOC]
+    # Uses the variable method to add one; checks the value, then the read_value option: with it the
+    # result is the value; without it the result is null in eager mode or an operation in graph mode.
     v = resource_variable_ops.ResourceVariable(1.0, name="var0")
     self.evaluate(variables.global_variables_initializer())
     self.evaluate(v.assign_add(1.0))
@@ -2997,6 +3603,8 @@ class ResourceVariableOpsTest(
 
   @test_util.run_in_graph_and_eager_modes
   def testAssignSubMethod(self):
+    # [FUNCTION DOC]
+    # Mirror of the previous test for subtraction starting from three.
     v = resource_variable_ops.ResourceVariable(3.0, name="var0")
     self.evaluate(variables.global_variables_initializer())
     self.evaluate(v.assign_sub(1.0))
@@ -3015,6 +3623,8 @@ class ResourceVariableOpsTest(
 
   @test_util.run_in_graph_and_eager_modes
   def testScatterAdd(self):
+    # [FUNCTION DOC]
+    # Scatter-add of two into index zero of a one by one integer variable holding one; expects three.
     handle = resource_variable_ops.var_handle_op(
         dtype=dtypes.int32, shape=[1, 1]
     )
@@ -3033,6 +3643,8 @@ class ResourceVariableOpsTest(
 
   @test_util.run_in_graph_and_eager_modes
   def testScatterSub(self):
+    # [FUNCTION DOC]
+    # Scatter-sub of two from one; expects minus one.
     handle = resource_variable_ops.var_handle_op(
         dtype=dtypes.int32, shape=[1, 1]
     )
@@ -3051,6 +3663,8 @@ class ResourceVariableOpsTest(
 
   @test_util.run_in_graph_and_eager_modes
   def testScatterMul(self):
+    # [FUNCTION DOC]
+    # Scatter-mul of five into one; expects five.
     handle = resource_variable_ops.var_handle_op(
         dtype=dtypes.int32, shape=[1, 1]
     )
@@ -3069,6 +3683,8 @@ class ResourceVariableOpsTest(
 
   @test_util.run_in_graph_and_eager_modes
   def testScatterDiv(self):
+    # [FUNCTION DOC]
+    # Scatter-div of six by three; expects two.
     handle = resource_variable_ops.var_handle_op(
         dtype=dtypes.int32, shape=[1, 1]
     )
@@ -3087,6 +3703,8 @@ class ResourceVariableOpsTest(
 
   @test_util.run_in_graph_and_eager_modes
   def testScatterMin(self):
+    # [FUNCTION DOC]
+    # Scatter-min of three into six, pinned to the CPU device; expects three.
     with ops.device("cpu:0"):
       handle = resource_variable_ops.var_handle_op(
           dtype=dtypes.int32, shape=[1, 1]
@@ -3106,6 +3724,8 @@ class ResourceVariableOpsTest(
 
   @test_util.run_in_graph_and_eager_modes
   def testScatterMax(self):
+    # [FUNCTION DOC]
+    # Scatter-max of three into six; expects six.
     handle = resource_variable_ops.var_handle_op(
         dtype=dtypes.int32, shape=[1, 1]
     )
@@ -3124,6 +3744,8 @@ class ResourceVariableOpsTest(
 
   @test_util.run_in_graph_and_eager_modes
   def testScatterSubScalar(self):
+    # [FUNCTION DOC]
+    # Scatter-sub with a scalar update value; expects minus one.
     handle = resource_variable_ops.var_handle_op(
         dtype=dtypes.int32, shape=[1, 1]
     )
@@ -3142,6 +3764,8 @@ class ResourceVariableOpsTest(
 
   @test_util.run_in_graph_and_eager_modes
   def testScatterMulScalar(self):
+    # [FUNCTION DOC]
+    # Scatter-mul with a scalar update value; expects five.
     handle = resource_variable_ops.var_handle_op(
         dtype=dtypes.int32, shape=[1, 1]
     )
@@ -3160,6 +3784,8 @@ class ResourceVariableOpsTest(
 
   @test_util.run_in_graph_and_eager_modes
   def testScatterDivScalar(self):
+    # [FUNCTION DOC]
+    # Scatter-div with a scalar update value; expects two.
     handle = resource_variable_ops.var_handle_op(
         dtype=dtypes.int32, shape=[1, 1]
     )
@@ -3178,6 +3804,8 @@ class ResourceVariableOpsTest(
 
   @test_util.run_in_graph_and_eager_modes
   def testScatterMinScalar(self):
+    # [FUNCTION DOC]
+    # Scatter-min with a scalar update value; expects three.
     handle = resource_variable_ops.var_handle_op(
         dtype=dtypes.int32, shape=[1, 1]
     )
@@ -3196,6 +3824,8 @@ class ResourceVariableOpsTest(
 
   @test_util.run_in_graph_and_eager_modes
   def testScatterMaxScalar(self):
+    # [FUNCTION DOC]
+    # Scatter-max with a scalar update value; expects six.
     handle = resource_variable_ops.var_handle_op(
         dtype=dtypes.int32, shape=[1, 1]
     )
@@ -3214,9 +3844,15 @@ class ResourceVariableOpsTest(
 
 
 class GradientDescentOptimizerTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests the TF1 gradient descent optimizer with dense, sparse, resource and reference variables.
+  # Class attribute: the list of dtypes tested (half and single precision).
   dtypes_ = [dtypes.float16, dtypes.float32]
 
   def testBasic(self):
+    # [FUNCTION DOC]
+    # In a fresh graph, applies one step of learning rate three to two variables; checks initial and
+    # updated values and that the optimizer owns no variables.
     for dtype in self.dtypes_:
       # train.GradientDescentOptimizer is V1 only API.
       with ops.Graph().as_default(), self.cached_session():
@@ -3242,6 +3878,8 @@ class GradientDescentOptimizerTest(test.TestCase):
         self.assertEqual(0, len(optimizer.variables()))
 
   def testBasicResourceVariable(self):
+    # [FUNCTION DOC]
+    # Same with resource variables, initialized through the resources helper.
     for dtype in self.dtypes_:
       # train.GradientDescentOptimizer is V1 only API.
       with ops.Graph().as_default(), self.cached_session():
@@ -3271,6 +3909,8 @@ class GradientDescentOptimizerTest(test.TestCase):
         )
 
   def testBasicCallableParams(self):
+    # [FUNCTION DOC]
+    # Same with the learning rate given as a callable.
     for dtype in self.dtypes_:
       # train.GradientDescentOptimizer is V1 only API.
       with ops.Graph().as_default(), self.cached_session():
@@ -3301,6 +3941,9 @@ class GradientDescentOptimizerTest(test.TestCase):
         )
 
   def testMinimizeResourceVariable(self):
+    # [FUNCTION DOC]
+    # Minimizes a squared prediction of a matrix product plus bias for one step; checks updated values
+    # against hand computed gradients.
     for dtype in self.dtypes_:
       # train.GradientDescentOptimizer is V1 only API.
       with ops.Graph().as_default(), self.cached_session():
@@ -3329,6 +3972,8 @@ class GradientDescentOptimizerTest(test.TestCase):
         self.assertAllCloseAccordingToType([3.0 - np_grad], self.evaluate(var1))
 
   def testMinimizeSparseResourceVariable(self):
+    # [FUNCTION DOC]
+    # Same but the matrix variable is read through an embedding lookup, giving sparse gradients.
     for dtype in self.dtypes_:
       # train.GradientDescentOptimizer is V1 only API.
       with ops.Graph().as_default(), self.cached_session():
@@ -3358,6 +4003,8 @@ class GradientDescentOptimizerTest(test.TestCase):
         self.assertAllCloseAccordingToType([3.0 - np_grad], self.evaluate(var1))
 
   def testTensorLearningRate(self):
+    # [FUNCTION DOC]
+    # Learning rate given as a constant tensor; checks one step.
     for dtype in self.dtypes_:
       # train.GradientDescentOptimizer is V1 only API.
       with ops.Graph().as_default(), self.cached_session():
@@ -3384,6 +4031,8 @@ class GradientDescentOptimizerTest(test.TestCase):
         )
 
   def testGradWrtRef(self):
+    # [FUNCTION DOC]
+    # Computes gradients of the sum of two variables with the optimizer and asserts each is one.
     for dtype in self.dtypes_:
       # train.GradientDescentOptimizer is V1 only API.
       with ops.Graph().as_default(), self.cached_session():
@@ -3396,6 +4045,8 @@ class GradientDescentOptimizerTest(test.TestCase):
           self.assertAllCloseAccordingToType([1.0], self.evaluate(grad))
 
   def testWithGlobalStep(self):
+    # [FUNCTION DOC]
+    # Applies gradients with a global step variable; asserts the variables updated and the step is one.
     for dtype in self.dtypes_:
       # train.GradientDescentOptimizer is V1 only API.
       with ops.Graph().as_default(), self.cached_session():
@@ -3423,6 +4074,8 @@ class GradientDescentOptimizerTest(test.TestCase):
         self.assertAllCloseAccordingToType(1, self.evaluate(global_step))
 
   def testSparseBasic(self):
+    # [FUNCTION DOC]
+    # Applies indexed-slices gradients; only the indexed rows must change.
     for dtype in self.dtypes_:
       # train.GradientDescentOptimizer is V1 only API.
       with ops.Graph().as_default(), self.cached_session():
@@ -3457,8 +4110,14 @@ class GradientDescentOptimizerTest(test.TestCase):
 
 
 class BiasAddTestBase(test.TestCase):
+  # [CLASS DOC]
+  # Tests the bias-add op for forward values (both data formats) and gradient error, including empty
+  # inputs. Despite the name Base, it is a runnable test case.
 
   def _npBias(self, inputs, bias):
+    # [FUNCTION DOC]
+    # HELPER: numpy reference; adds a vector bias along the last axis (asserts the bias is rank one and
+    # matches the last dimension). Returns the sum.
     assert len(bias.shape) == 1
     assert inputs.shape[-1] == bias.shape[0]
     return inputs + bias.reshape(
@@ -3466,6 +4125,8 @@ class BiasAddTestBase(test.TestCase):
     )
 
   def testNpBias(self):
+    # [FUNCTION DOC]
+    # Checks the numpy helper on a small two by three example.
     self.assertAllClose(
         np.array([[11, 22, 33], [41, 52, 63]]),
         self._npBias(
@@ -3474,17 +4135,24 @@ class BiasAddTestBase(test.TestCase):
     )
 
   def _testBias(self, np_inputs, np_bias, use_gpu=False):
+    # [FUNCTION DOC]
+    # HELPER: compares bias-add with the numpy helper. The use_gpu flag is accepted but unused.
     np_val = self._npBias(np_inputs, np_bias)
     tf_val = nn_ops.bias_add(np_inputs, np_bias)
     self.assertAllCloseAccordingToType(np_val, tf_val)
 
   def _AtLeast3d(self, np_value):
+    # [FUNCTION DOC]
+    # HELPER: reshapes an array with fewer than three dimensions by adding leading size one dims.
     # fill the input value to at least 3-dimension
     if np_value.ndim < 3:
       return np.reshape(np_value, (1,) * (3 - np_value.ndim) + np_value.shape)
     return np_value
 
   def _NHWCToNCHW(self, np_value):
+    # [FUNCTION DOC]
+    # HELPER: numpy transpose moving the last dimension to position one (first making the array at least
+    # three dimensional).
     # fill the input value to at least 3-dimension
     np_value = self._AtLeast3d(np_value)
     # move the last dimension to second
@@ -3493,6 +4161,8 @@ class BiasAddTestBase(test.TestCase):
     return np.transpose(np_value, np_dim_new)
 
   def _NCHWToNHWC(self, np_value):
+    # [FUNCTION DOC]
+    # HELPER: inverse transpose moving dimension one to the end; asserts at least rank three.
     assert len(np_value.shape) >= 3
     np_dim = list(range(np_value.ndim))
     # move the second dimension to the last
@@ -3500,6 +4170,9 @@ class BiasAddTestBase(test.TestCase):
     return np.transpose(np_value, np_dim_new)
 
   def _testBiasNCHW(self, np_inputs, np_bias, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: runs bias-add in channels-first format on a converted input, converts back and compares
+    # with the numpy reference. use_gpu is unused.
     np_val = self._npBias(np_inputs, np_bias)
     np_inputs = self._NHWCToNCHW(np_inputs)
     tf_val = nn_ops.bias_add(np_inputs, np_bias, data_format="NCHW")
@@ -3507,11 +4180,15 @@ class BiasAddTestBase(test.TestCase):
     self.assertAllCloseAccordingToType(self._AtLeast3d(np_val), tf_val)
 
   def _testAll(self, np_inputs, np_bias):
+    # [FUNCTION DOC]
+    # HELPER: for float32 and float16 inputs runs the NHWC and NCHW comparisons.
     if np_inputs.dtype in [np.float32, np.float16]:
       self._testBias(np_inputs, np_bias, use_gpu=True)
       self._testBiasNCHW(np_inputs, np_bias, use_gpu=True)
 
   def testFloatTypes(self):
+    # [FUNCTION DOC]
+    # Random float32 and float16 inputs of three shapes with matching bias sizes.
     for t in [np.float32, np.float16]:
       self._testAll(
           np.random.rand(4, 3, 3).astype(t), np.random.rand(3).astype(t)
@@ -3522,6 +4199,10 @@ class BiasAddTestBase(test.TestCase):
       self._testAll(np.random.rand(9, 9).astype(t), np.random.rand(9).astype(t))
 
   def _testGradient(self, np_input, bias, dtype, data_format, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: gradient test. Inputs: input array, bias, dtype, data format, GPU flag. Builds tensors,
+    # computes theoretical and numeric Jacobians for input and bias and for the gradient of the
+    # bias gradient (via an L2 loss), and asserts them close with a threshold depending on dtype.
     with self.cached_session(use_gpu=use_gpu):
       if data_format == "NCHW":
         np_input = self._NHWCToNCHW(np_input)
@@ -3570,6 +4251,8 @@ class BiasAddTestBase(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testGradientTensor2D(self):
+    # [FUNCTION DOC]
+    # Deprecated-v1 gradient test on a two dimensional input for float32 and float16.
     for data_format, use_gpu in [("NHWC", True)]:
       for dtype in [dtypes.float32, dtypes.float16]:
         np_input = np.array(
@@ -3580,6 +4263,8 @@ class BiasAddTestBase(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testGradientTensor3D(self):
+    # [FUNCTION DOC]
+    # Gradient test on a three dimensional input for three dtypes (prints the format).
     for data_format, use_gpu in [("NHWC", True)]:
       for dtype in (dtypes.float32, dtypes.float64, dtypes.float16):
         print(data_format)
@@ -3592,12 +4277,16 @@ class BiasAddTestBase(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testEmpty(self):
+    # [FUNCTION DOC]
+    # Empty inputs of several shapes with random biases, verified by _testAll.
     np.random.seed(7)
     for shape in (0, 0), (2, 0), (0, 2), (4, 3, 0), (4, 0, 3), (0, 4, 3):
       self._testAll(np.random.randn(*shape), np.random.randn(shape[-1]))
 
   @test_util.run_deprecated_v1
   def testEmptyGradient(self):
+    # [FUNCTION DOC]
+    # Gradient test with empty inputs in channels-last, then also channels-first formats.
     for data_format, use_gpu in ("NHWC", False), ("NHWC", True):
       for shape in (0, 0), (2, 0), (0, 2):
         self._testGradient(
@@ -3625,11 +4314,18 @@ class BiasAddTestBase(test.TestCase):
 
 
 class LeakyReluTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests leaky relu: forward values on CPU/GPU for several dtypes and gradients (first and second
+  # order) with the gradient checker.
 
   def _npLeakyRelu(self, np_features, alpha=0.1):
+    # [FUNCTION DOC]
+    # HELPER: numpy reference; maximum of the features and alpha times features (alpha default 0.1).
     return np.maximum(np_features, alpha * np_features)
 
   def testNpLeakyRelu(self):
+    # [FUNCTION DOC]
+    # Checks the numpy helper on a hand computed example.
     self.assertAllClose(
         np.array(
             [[-0.09, 0.7, -0.05, 0.3, -0.01], [0.1, -0.03, 0.5, -0.07, 0.9]]
@@ -3643,12 +4339,16 @@ class LeakyReluTest(test.TestCase):
     )
 
   def _testLeakyRelu(self, np_features, alpha):
+    # [FUNCTION DOC]
+    # HELPER: compares the op with the numpy reference for given features and alpha.
     np_leaky_relu = self._npLeakyRelu(np_features, alpha)
     tf_leaky_relu = nn_ops.leaky_relu(np_features, alpha)
     self.assertAllClose(np_leaky_relu, tf_leaky_relu)
     self.assertShapeEqual(np_leaky_relu, tf_leaky_relu)
 
   def testNumbersCPU(self):
+    # [FUNCTION DOC]
+    # Pins to the CPU and checks integers, half, single and double precision with alpha 0.2.
     for t in [np.int32, np.int64, np.float16, np.float32, np.float64]:
       # Force execution on CPU even if a GPU kernel is available for the type.
       with ops.device("/device:CPU:0"):
@@ -3658,6 +4358,8 @@ class LeakyReluTest(test.TestCase):
         )
 
   def testNumbersGPU(self):
+    # [FUNCTION DOC]
+    # Skipped when no GPU is available; otherwise checks floating dtypes with alpha 0.1.
     if not test.is_gpu_available():
       self.skipTest("No GPU available")
     for t in [np.float16, np.float32, np.float64]:
@@ -3666,9 +4368,14 @@ class LeakyReluTest(test.TestCase):
       )
 
   def testGradGradFloat16(self):
+    # [FUNCTION DOC]
+    # Second order gradient check for float16 using a nested function that returns the first gradient.
     with self.cached_session():
 
       def f(x):
+        # [FUNCTION DOC]
+        # HELPER: function under test; asserts the input is float16, records a tape, applies leaky relu and
+        # returns the gradient of the output with respect to the input.
         assert x.dtype == dtypes.float16
         with backprop.GradientTape() as tape:
           tape.watch(x)
@@ -3686,6 +4393,8 @@ class LeakyReluTest(test.TestCase):
     self.assertLess(err, 1e-4)
 
   def testGradientFloat16(self):
+    # [FUNCTION DOC]
+    # Gradient check for float16, error below 6e-2 (the comment questions whether that is too high).
     with self.cached_session():
       x = numpy_compat.np_asarray(
           [[-0.9, -0.7, -0.5, -0.3, -0.1], [0.1, 0.3, 0.5, 0.7, 0.9]],
@@ -3699,6 +4408,8 @@ class LeakyReluTest(test.TestCase):
     self.assertLess(err, 6e-2)  # check if this is too high.
 
   def testGradientFloat32(self):
+    # [FUNCTION DOC]
+    # Gradient check for float32, error below 1e-4.
     with self.cached_session():
       x = numpy_compat.np_asarray(
           [[-0.9, -0.7, -0.5, -0.3, -0.1], [0.1, 0.3, 0.5, 0.7, 0.9]],
@@ -3711,6 +4422,8 @@ class LeakyReluTest(test.TestCase):
     self.assertLess(err, 1e-4)
 
   def testGradientFloat64(self):
+    # [FUNCTION DOC]
+    # Gradient check for float64, error below 1e-10.
     with self.cached_session():
       x = numpy_compat.np_asarray(
           [[-0.9, -0.7, -0.5, -0.3, -0.1], [0.1, 0.3, 0.5, 0.7, 0.9]],
@@ -3723,9 +4436,13 @@ class LeakyReluTest(test.TestCase):
     self.assertLess(err, 1e-10)
 
   def testGradGradFloat32(self):
+    # [FUNCTION DOC]
+    # Second order gradient check for float32.
     with self.cached_session():
 
       def f(x):
+        # [FUNCTION DOC]
+        # HELPER: function under test; asserts float32 input, returns the gradient of leaky relu.
         assert x.dtype == dtypes.float32
         with backprop.GradientTape() as tape:
           tape.watch(x)
@@ -3744,11 +4461,17 @@ class LeakyReluTest(test.TestCase):
 
 
 class ReluTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests relu forward values and second order gradients.
 
   def _npRelu(self, np_features):
+    # [FUNCTION DOC]
+    # HELPER: numpy reference, maximum of features and zero.
     return np.maximum(np_features, np.zeros(np_features.shape))
 
   def testNpRelu(self):
+    # [FUNCTION DOC]
+    # Checks the numpy helper on a hand computed example.
     self.assertAllClose(
         np.array([[0.0, 0.7, 0.0, 0.3, 0.0], [0.1, 0.0, 0.5, 0.0, 0.9]]),
         self._npRelu(
@@ -3759,12 +4482,16 @@ class ReluTest(test.TestCase):
     )
 
   def _testRelu(self, np_features):
+    # [FUNCTION DOC]
+    # HELPER: compares the relu op with the numpy reference and the shape.
     np_relu = self._npRelu(np_features)
     tf_relu = nn_ops.relu(np_features)
     self.assertAllClose(np_relu, tf_relu)
     self.assertShapeEqual(np_relu, tf_relu)
 
   def testNumbersCPU(self):
+    # [FUNCTION DOC]
+    # CPU pinned check for integer and floating dtypes.
     for t in [np.int32, np.int64, np.float16, np.float32, np.float64]:
       # Force execution on CPU even if a GPU kernel is available for the type.
       with ops.device("/device:CPU:0"):
@@ -3773,6 +4500,8 @@ class ReluTest(test.TestCase):
         )
 
   def testNumbersGPU(self):
+    # [FUNCTION DOC]
+    # Skipped without a GPU; checks half and single precision.
     if not test.is_gpu_available():
       self.skipTest("No GPU available")
     for t in [np.float16, np.float32]:
@@ -3781,12 +4510,18 @@ class ReluTest(test.TestCase):
       )
 
   def testNoElement(self):
+    # [FUNCTION DOC]
+    # Relu on an empty two by zero array.
     self._testRelu(np.array([[], []], dtype=np.float32))
 
   def testGradGradFloat32(self):
+    # [FUNCTION DOC]
+    # Second order gradient check for float32.
     with self.cached_session():
 
       def f(x):
+        # [FUNCTION DOC]
+        # HELPER: function under test, asserts float32 and returns the first gradient of relu.
         assert x.dtype == dtypes.float32
         with backprop.GradientTape() as tape:
           tape.watch(x)
@@ -3805,9 +4540,13 @@ class ReluTest(test.TestCase):
     self.assertLess(err, 1e-4)
 
   def testGradGradFloat16(self):
+    # [FUNCTION DOC]
+    # Second order gradient check for float16.
     with self.cached_session():
 
       def f(x):
+        # [FUNCTION DOC]
+        # HELPER: function under test, asserts float16 and returns the first gradient of relu.
         assert x.dtype == dtypes.float16
         with backprop.GradientTape() as tape:
           tape.watch(x)
@@ -3827,8 +4566,12 @@ class ReluTest(test.TestCase):
 
 
 class Relu6Test(test.TestCase):
+  # [CLASS DOC]
+  # Tests relu6 forward values and gradients.
 
   def _npRelu6(self, np_features):
+    # [FUNCTION DOC]
+    # HELPER: numpy reference, features clipped between zero and six.
     sixes = np.copy(np_features)
     sixes.fill(6.0)
     return np.minimum(
@@ -3836,6 +4579,8 @@ class Relu6Test(test.TestCase):
     )
 
   def testNpRelu6(self):
+    # [FUNCTION DOC]
+    # Checks the numpy helper on a hand computed example.
     self.assertAllClose(
         np.array([[0.0, 0.7, 0.0, 0.3, 6.0], [0.1, 0.0, 6.0, 0.0, 0.9]]),
         self._npRelu6(
@@ -3844,12 +4589,16 @@ class Relu6Test(test.TestCase):
     )
 
   def _testRelu6(self, np_features):
+    # [FUNCTION DOC]
+    # HELPER: compares the relu6 op with the numpy reference and shape.
     np_relu6 = self._npRelu6(np_features)
     tf_relu6 = nn_ops.relu6(np_features)
     self.assertAllClose(np_relu6, tf_relu6)
     self.assertShapeEqual(np_relu6, tf_relu6)
 
   def testNumbersCPU(self):
+    # [FUNCTION DOC]
+    # CPU pinned check for integer and floating dtypes.
     for t in [np.int32, np.int64, np.float16, np.float32, np.float64]:
       # Force execution on CPU even if a GPU kernel is available for the type.
       with ops.device("/device:CPU:0"):
@@ -3858,6 +4607,9 @@ class Relu6Test(test.TestCase):
         )
 
   def testNumbersGPU(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: uses the removed numpy float alias in the dtype list; fails on new numpy.
+    # Skipped without a GPU; checks half, float and double, printing each dtype.
     if not test.is_gpu_available():
       self.skipTest("No GPU available")
     for t in [np.float16, np.float, np.double]:
@@ -3870,6 +4622,8 @@ class Relu6Test(test.TestCase):
   # not well defined at around zero and six and we want to avoid that
   # in terms of input values.
   def testGradientFloat32(self):
+    # [FUNCTION DOC]
+    # Gradient check away from the non differentiable points zero and six (see comment above it).
     with self.cached_session():
       x = numpy_compat.np_asarray(
           [[-0.9, -0.7, -0.5, -0.3, -0.1], [6.1, 6.3, 6.5, 6.7, 6.9]],
@@ -3882,6 +4636,8 @@ class Relu6Test(test.TestCase):
     self.assertLess(err, 1e-4)
 
   def testGradientFloat16(self):
+    # [FUNCTION DOC]
+    # Same for float16.
     with self.cached_session():
       x = numpy_compat.np_asarray(
           [[-0.9, -0.7, -0.5, -0.3, -0.1], [6.1, 6.3, 6.5, 6.7, 6.9]],
@@ -3894,6 +4650,8 @@ class Relu6Test(test.TestCase):
     self.assertLess(err, 1e-4)
 
   def testGradientFloat64(self):
+    # [FUNCTION DOC]
+    # Same for float64, error below 1e-10.
     with self.cached_session():
       x = numpy_compat.np_asarray(
           [[-0.9, -0.7, -0.5, -0.3, -0.1], [6.1, 6.3, 6.5, 6.7, 6.9]],
@@ -3907,8 +4665,13 @@ class Relu6Test(test.TestCase):
 
 
 class SoftmaxTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests softmax and log-softmax against numpy, including overflow behavior.
 
   def _npSoftmax(self, features, dim=-1, log=False):
+    # [FUNCTION DOC]
+    # HELPER: numpy reference. Inputs: features, dimension (default last) and a flag for log softmax.
+    # Subtracts the maximum for stability, computes in float32 for half inputs and casts back.
     if dim == -1:
       dim = len(features.shape) - 1
     one_only_on_dim = list(features.shape)
@@ -3930,6 +4693,10 @@ class SoftmaxTest(test.TestCase):
     return res
 
   def _testSoftmax(self, np_features, dim=-1, log=False, use_gpu=False):
+    # [FUNCTION DOC]
+    # HELPER: compares softmax or log-softmax with the reference using an arbitrary op name (to catch a
+    # past bug that inferred the op kind from the name), checks shape and, for softmax, that the
+    # results sum to one along the dimension.
     # A previous version of the code checked the op name rather than the op type
     # to distinguish between log and non-log.  Use an arbitrary name to catch
     # this bug in future.
@@ -3951,11 +4718,15 @@ class SoftmaxTest(test.TestCase):
       )
 
   def _testAll(self, features):
+    # [FUNCTION DOC]
+    # HELPER: runs softmax, log softmax and the overflow check, on the GPU preference.
     self._testSoftmax(features, use_gpu=True)
     self._testSoftmax(features, log=True, use_gpu=True)
     self._testOverflow(use_gpu=True)
 
   def testNpSoftmax(self):
+    # [FUNCTION DOC]
+    # Verifies the numpy helper against hand computed values for softmax and log softmax.
     features = [[1.0, 1.0, 1.0, 1.0], [1.0, 2.0, 3.0, 4.0]]
     # Batch 0: All exps are 1.  The expected result is
     # Softmaxes = [0.25, 0.25, 0.25, 0.25]
@@ -3988,6 +4759,9 @@ class SoftmaxTest(test.TestCase):
     )
 
   def _testOverflow(self, use_gpu=False):
+    # [FUNCTION DOC]
+    # HELPER: log-softmax with a feature equal to the largest finite value of the dtype (float32 with
+    # GPU preference, otherwise float64); expects the large entry to give zero and others minus max.
     if use_gpu:
       type = np.float32  # pylint: disable=redefined-builtin
     else:
@@ -4010,6 +4784,8 @@ class SoftmaxTest(test.TestCase):
     )
 
   def testFloat(self):
+    # [FUNCTION DOC]
+    # Runs the complete check for float32.
     self._testAll(
         np.array([[1.0, 1.0, 1.0, 1.0], [1.0, 2.0, 3.0, 4.0]]).astype(
             np.float32
@@ -4017,6 +4793,8 @@ class SoftmaxTest(test.TestCase):
     )
 
   def testHalf(self):
+    # [FUNCTION DOC]
+    # Runs the complete check for float16.
     self._testAll(
         np.array([[1.0, 1.0, 1.0, 1.0], [1.0, 2.0, 3.0, 4.0]]).astype(
             np.float16
@@ -4025,26 +4803,42 @@ class SoftmaxTest(test.TestCase):
 
 
 class BaseReductionTest(test.TestCase):
+  # [CLASS DOC]
+  # Abstract base for reduction op tests; subclasses override the TensorFlow and numpy reducers.
+  # Has no test methods of its own.
 
   def _tf_reduce(self, x, reduction_axes, keepdims):
+    # [FUNCTION DOC]
+    # Abstract hook; always raises a not-implemented error. Subclasses return the TensorFlow reduction
+    # of the input over the given axes with keepdims.
     raise NotImplementedError()
 
   def _np_reduce(self, x, reduction_axes, keepdims):
+    # [FUNCTION DOC]
+    # Abstract hook; always raises a not-implemented error. Subclasses return the numpy reduction.
     raise NotImplementedError()
 
   def _makeIncremental(self, shape, dtype):
+    # [FUNCTION DOC]
+    # HELPER: array of incrementing values of the given shape and dtype; complex dtypes get a negative
+    # imaginary part (minus twice the value).
     data = np.arange(np.prod(shape)).reshape(shape).astype(dtype.as_numpy_dtype)
     if dtype.is_complex:
       data -= 2j * data
     return data
 
   def _makeRandom(self, shape, dtype):
+    # [FUNCTION DOC]
+    # HELPER: uniform random array of given shape and dtype, with the same complex adjustment.
     data = np.random.rand(*shape).astype(dtype.as_numpy_dtype)
     if dtype.is_complex:
       data -= 2j * data
     return data
 
   def _compareGradient(self, x, reduction_axes, rtol=1e-8, atol=1e-8):
+    # [FUNCTION DOC]
+    # HELPER: compares theoretical and numeric Jacobians for the reduction of x over given axes with
+    # tolerances. When the axes is a single element list, it also recursively tests a scalar axis.
     if reduction_axes is not None and np.shape(reduction_axes) == (1,):
       # Test scalar reduction_axes argument
       self._compareGradient(x, reduction_axes[0], rtol=rtol, atol=atol)
@@ -4057,6 +4851,8 @@ class BaseReductionTest(test.TestCase):
     self.assertAllClose(jacob_t, jacob_n, rtol=rtol, atol=atol)
 
   def _compareGradientAxes(self, x, rtol=1e-8, atol=1e-8):
+    # [FUNCTION DOC]
+    # HELPER: runs the gradient comparison for no axes, empty axes, and several single and combined axes.
     self._compareGradient(x, None, rtol=rtol, atol=atol)
     self._compareGradient(x, [], rtol=rtol, atol=atol)
     self._compareGradient(x, 0, rtol=rtol, atol=atol)
@@ -4067,8 +4863,14 @@ class BaseReductionTest(test.TestCase):
 
 
 class ConcatOpTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests the concat op with random shapes and its gradient.
 
   def _testRandom(self, dtype):
+    # [FUNCTION DOC]
+    # HELPER: random rank five shapes, several placeholders concatenated along a random dimension.
+    # Input: dtype (bfloat16 values are fed as float32 and cast around the op). Asserts the result shape
+    # and that each slice of the output equals the fed input (exactly or within 0.01 for casts).
     # Random dims of rank 5
     shape = np.random.randint(1, 5, size=5)
     # Random number of tensors, but always > 1.
@@ -4119,6 +4921,8 @@ class ConcatOpTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testRandom(self):
+    # [FUNCTION DOC]
+    # Deprecated-v1 test calling the helper for bfloat16, float16, float32, int32 and int64.
     self._testRandom(dtypes.bfloat16.as_numpy_dtype)
     self._testRandom(dtypes.float16)
     self._testRandom(dtypes.float32)
@@ -4126,6 +4930,9 @@ class ConcatOpTest(test.TestCase):
     self._testRandom(dtypes.int64)
 
   def _RunAndVerifyGradientsRandom(self, dtype=dtypes.float32.as_numpy_dtype):
+    # [FUNCTION DOC]
+    # HELPER: concatenates 12 to 19 random tensors, backpropagates a random gradient and asserts the
+    # concatenated gradients equal that gradient. Input: numpy dtype (default float32).
     # Random dims of rank 5
     input_shape = np.random.randint(1, 5, size=5)
     # Random number of tensors
@@ -4157,14 +4964,21 @@ class ConcatOpTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testGradientsRandom(self):
+    # [FUNCTION DOC]
+    # Deprecated-v1 test; five rounds with float32 and bfloat16.
     for _ in range(5):
       self._RunAndVerifyGradientsRandom()
       self._RunAndVerifyGradientsRandom(dtypes.bfloat16.as_numpy_dtype)
 
 
 class TileTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests the tile op.
 
   def testSimple(self):
+    # [FUNCTION DOC]
+    # Tiles a random four by one array by multiples one and four (32-bit or 64-bit multiples) for float32
+    # and bfloat16, asserting shape, static shape and values.
     # multiples could be int32 or int64
     for dtype in [dtypes.int32, dtypes.int64]:
       for in_type in [np.float32, dtypes.bfloat16.as_numpy_dtype]:
@@ -4179,8 +4993,12 @@ class TileTest(test.TestCase, parameterized.TestCase):
 
 
 class PadOpTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests the pad op in constant, reflect and symmetric modes, with gradient checks.
 
   def _npPad(self, inp, paddings, mode, constant_values=0):
+    # [FUNCTION DOC]
+    # HELPER: numpy pad reference with a lower-cased mode and constant values for constant mode only.
     mode = mode.lower()
     if mode == "constant":
       return np.pad(inp, paddings, mode=mode, constant_values=constant_values)
@@ -4188,6 +5006,8 @@ class PadOpTest(test.TestCase):
       return np.pad(inp, paddings, mode=mode)
 
   def _testPad(self, np_inputs, paddings, mode, constant_values):
+    # [FUNCTION DOC]
+    # HELPER: compares pad op output with the numpy reference and shape.
     np_val = self._npPad(
         np_inputs, paddings, mode=mode, constant_values=constant_values
     )
@@ -4200,6 +5020,8 @@ class PadOpTest(test.TestCase):
     self.assertShapeEqual(np_val, tf_val)
 
   def _testPadGradient(self, x, a, mode, constant_values):
+    # [FUNCTION DOC]
+    # HELPER: gradient check of the pad op with given paddings and mode.
     with self.cached_session(use_gpu=True):
       inx = ops.convert_to_tensor(x)
       xs = list(x.shape)
@@ -4213,6 +5035,9 @@ class PadOpTest(test.TestCase):
     self.assertAllClose(jacob_t, jacob_n, rtol=1e-5, atol=1e-5)
 
   def _testPaddingAll(self, np_inputs, paddings, constant_values):
+    # [FUNCTION DOC]
+    # HELPER: loops over six mode spellings; skips reflect for empty inputs; checks values, and the
+    # gradient for float32 inputs.
     for mode in (
         "CONSTANT",
         "REFLECT",
@@ -4234,6 +5059,8 @@ class PadOpTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testPadding(self):
+    # [FUNCTION DOC]
+    # Deprecated-v1 test for three input shapes (including an empty one) with different paddings.
     for t in [np.float32]:
       self._testPaddingAll(
           np.random.rand(2, 5).astype(t), [[1, 0], [2, 0]], 0.0
@@ -4247,6 +5074,10 @@ class PadOpTest(test.TestCase):
 
 
 class RandomOpsCorrectnessTest(test.TestCase):
+  # [CLASS DOC]
+  # Checks that GPU random ops with a fixed seed match CPU results, for uniform, normal and
+  # truncated normal ops, over several shapes. Class attributes hold shapes, seeds, ranges, means
+  # and standard deviations.
   shapes = [[1, 5], [2, 6, 5], [5, 3, 6, 2], [100, 100]]
   seeds = [2, 16, 1582, 12]
   minvals = [-10.0, 0.5, 10.0, 1000.0]
@@ -4255,6 +5086,9 @@ class RandomOpsCorrectnessTest(test.TestCase):
   stddevs = [0.1, 1.0, 10.0, 100.0]
 
   def _testRandomDefault(self, rnfunc, shape, seed, dtype):
+    # [FUNCTION DOC]
+    # HELPER: runs the generator on CPU and GPU with the same seed and dtype and asserts closeness
+    # (looser tolerance for half precision).
     with test_util.device(use_gpu=False):
       ref = rnfunc(shape, seed=seed, dtype=dtype)
     with test_util.device(use_gpu=True):
@@ -4267,6 +5101,8 @@ class RandomOpsCorrectnessTest(test.TestCase):
   def _testRandomMinvalMaxval(
       self, rnfunc, shape, seed, minvalue, maxvalue, dtype
   ):
+    # [FUNCTION DOC]
+    # HELPER: same with a range.
     with test_util.device(use_gpu=False):
       ref = rnfunc(
           shape, seed=seed, minval=minvalue, maxval=maxvalue, dtype=dtype
@@ -4281,6 +5117,9 @@ class RandomOpsCorrectnessTest(test.TestCase):
       self.assertAllClose(result, ref, atol=1e-5)
 
   def _testRandomMeanStd(self, rnfunc, shape, seed, mean, stddev, dtype):
+    # [FUNCTION DOC]
+    # HELPER: same with mean and standard deviation, using a very loose half precision tolerance
+    # (a TODO says it is too high).
     with test_util.device(use_gpu=False):
       ref = rnfunc(shape, seed=seed, mean=mean, stddev=stddev, dtype=dtype)
     with test_util.device(use_gpu=True):
@@ -4294,6 +5133,8 @@ class RandomOpsCorrectnessTest(test.TestCase):
       self.assertAllClose(result, ref, atol=1e-5)
 
   def testRandomUniformCorrectness_1(self):
+    # [FUNCTION DOC]
+    # Uniform default-range check across dtypes and shapes.
     for dtype in [dtypes.float32, dtypes.float16]:
       for i in range(len(self.shapes)):
         self._testRandomDefault(
@@ -4301,6 +5142,8 @@ class RandomOpsCorrectnessTest(test.TestCase):
         )
 
   def testRandomUniformCorrectness_2(self):
+    # [FUNCTION DOC]
+    # Uniform check with the min and max for each shape.
     for dtype in [dtypes.float32, dtypes.float16]:
       for i in range(len(self.shapes)):
         self._testRandomMinvalMaxval(
@@ -4313,6 +5156,8 @@ class RandomOpsCorrectnessTest(test.TestCase):
         )
 
   def testRandomNormalCorrectness_1(self):
+    # [FUNCTION DOC]
+    # Normal default check.
     for dtype in [dtypes.float32, dtypes.float16]:
       for i in range(len(self.shapes)):
         self._testRandomDefault(
@@ -4320,6 +5165,8 @@ class RandomOpsCorrectnessTest(test.TestCase):
         )
 
   def testRandomNormalCorrectness_2(self):
+    # [FUNCTION DOC]
+    # Normal check with mean and standard deviation.
     for dtype in [dtypes.float32, dtypes.float16]:
       for i in range(len(self.shapes)):
         self._testRandomMeanStd(
@@ -4332,6 +5179,8 @@ class RandomOpsCorrectnessTest(test.TestCase):
         )
 
   def testRandomTruncatedCorrectness_1(self):
+    # [FUNCTION DOC]
+    # Truncated normal default check.
     for dtype in [dtypes.float32, dtypes.float16]:
       for i in range(len(self.shapes)):
         self._testRandomDefault(
@@ -4339,6 +5188,8 @@ class RandomOpsCorrectnessTest(test.TestCase):
         )
 
   def testRandomTruncatedCorrectness_2(self):
+    # [FUNCTION DOC]
+    # Truncated normal check with mean and standard deviation.
     for dtype in [dtypes.float32, dtypes.float16]:
       for i in range(len(self.shapes)):
         self._testRandomMeanStd(
@@ -4352,11 +5203,18 @@ class RandomOpsCorrectnessTest(test.TestCase):
 
 
 class StatelessRandomOpsCorrectnessTest(test.TestCase):
+  # [CLASS DOC]
+  # KNOWN ISSUE: the class attribute named dtypes hides the module name inside the class body, which is
+  #   confusing; methods still use the module through global lookup.
+  # Checks stateless random raw ops give the same results on CPU and GPU for a given seed.
   shapes = [[1, 5], [2, 6, 5], [5, 3, 6, 2], [100, 100]]
   seeds = [[2, 1], [16, 12], [1582, 10230], [12, 23101]]
   dtypes = [dtypes.float32, dtypes.float32, dtypes.half, dtypes.half]
 
   def _testStatelessRandomDefault(self, rnfunc, shape, seed, dtype):
+    # [FUNCTION DOC]
+    # HELPER: runs the raw op on CPU and GPU with the same shape, seed and dtype; compares with a
+    # tolerance depending on dtype (no comparison for other dtypes).
     with test_util.device(use_gpu=False):
       ref = rnfunc(shape=shape, seed=seed, dtype=dtype)
     with test_util.device(use_gpu=True):
@@ -4367,6 +5225,8 @@ class StatelessRandomOpsCorrectnessTest(test.TestCase):
       self.assertAllClose(result, ref, atol=1e-3)
 
   def testRandomUniformCorrectness_1(self):
+    # [FUNCTION DOC]
+    # Stateless uniform over the shapes, seeds and dtypes.
     for i in range(len(self.shapes)):
       self._testStatelessRandomDefault(
           raw_ops.StatelessRandomUniform,
@@ -4376,6 +5236,8 @@ class StatelessRandomOpsCorrectnessTest(test.TestCase):
       )
 
   def testRandomNormalCorrectness_1(self):
+    # [FUNCTION DOC]
+    # Stateless normal.
     for i in range(len(self.shapes)):
       self._testStatelessRandomDefault(
           raw_ops.StatelessRandomNormal,
@@ -4385,6 +5247,8 @@ class StatelessRandomOpsCorrectnessTest(test.TestCase):
       )
 
   def testTruncatedNormalCorrectness_1(self):
+    # [FUNCTION DOC]
+    # Stateless truncated normal.
     for i in range(len(self.shapes)):
       self._testStatelessRandomDefault(
           raw_ops.StatelessTruncatedNormal,
@@ -4395,6 +5259,9 @@ class StatelessRandomOpsCorrectnessTest(test.TestCase):
 
 
 class StatelessRandomOpsCorrectnessTestV2(test.TestCase):
+  # [CLASS DOC]
+  # KNOWN ISSUE: the class attribute named dtypes hides the module name inside the class body.
+  # Same idea for the V1 and V2 stateless ops (V2 take a key, counter and algorithm).
   shapes = [[1, 5], [2, 6, 5], [5, 3, 6, 2], [100, 100]]
   seeds = [[2, 1], [16, 12], [1582, 10230], [12, 23101]]
   key = [[2], [16], [1582], [12]]
@@ -4403,6 +5270,8 @@ class StatelessRandomOpsCorrectnessTestV2(test.TestCase):
   dtypes = [dtypes.float32, dtypes.float32, dtypes.half, dtypes.half]
 
   def _testStatelessRandomDefault(self, rnfunc, shape, seed, dtype):
+    # [FUNCTION DOC]
+    # HELPER: same as the V1 class: compare CPU and GPU output for a seed and dtype.
     with test_util.device(use_gpu=False):
       ref = rnfunc(shape=shape, seed=seed, dtype=dtype)
     with test_util.device(use_gpu=True):
@@ -4415,6 +5284,9 @@ class StatelessRandomOpsCorrectnessTestV2(test.TestCase):
   def _testStatelessRandomDefaultV2(
       self, rnfunc, shape, key, counter, dtype, alg=1
   ):
+    # [FUNCTION DOC]
+    # HELPER: runs a V2 op with shape, key (only the first key element is used), algorithm one and counter
+    # on CPU and GPU and asserts closeness. The dtype argument is unused.
     with test_util.device(use_gpu=False):
       ref = rnfunc(shape=shape, key=[key[0]], alg=alg, counter=counter)
     with test_util.device(use_gpu=True):
@@ -4424,6 +5296,8 @@ class StatelessRandomOpsCorrectnessTestV2(test.TestCase):
   def _testStatelessRandomUniformFullIntV2(
       self, rnfunc, shape, key, counter, dtype
   ):
+    # [FUNCTION DOC]
+    # HELPER: runs the full-integer uniform op on CPU and GPU and asserts only that the shapes are equal.
     with test_util.device(use_gpu=False):
       ref = rnfunc(shape=shape, alg=1, key=key, counter=counter, dtype=dtype)
     with test_util.device(use_gpu=True):
@@ -4431,6 +5305,8 @@ class StatelessRandomOpsCorrectnessTestV2(test.TestCase):
     self.assertEqual(result.shape, ref.shape)
 
   def testRandomUniformCorrectness_1(self):
+    # [FUNCTION DOC]
+    # V1 stateless uniform.
     for i in range(len(self.shapes)):
       self._testStatelessRandomDefault(
           raw_ops.StatelessRandomUniform,
@@ -4440,6 +5316,8 @@ class StatelessRandomOpsCorrectnessTestV2(test.TestCase):
       )
 
   def testRandomUniformV2Correctness_1(self):
+    # [FUNCTION DOC]
+    # V2 stateless uniform; the seeds list is passed as the key and counters as counters.
     for i in range(len(self.shapes)):
       self._testStatelessRandomDefaultV2(
           raw_ops.StatelessRandomUniformV2,
@@ -4450,6 +5328,8 @@ class StatelessRandomOpsCorrectnessTestV2(test.TestCase):
       )
 
   def testRandomNormalCorrectness_1(self):
+    # [FUNCTION DOC]
+    # V1 stateless normal.
     for i in range(len(self.shapes)):
       self._testStatelessRandomDefault(
           raw_ops.StatelessRandomNormal,
@@ -4459,6 +5339,8 @@ class StatelessRandomOpsCorrectnessTestV2(test.TestCase):
       )
 
   def testRandomNormalV2Correctness_1(self):
+    # [FUNCTION DOC]
+    # V2 stateless normal.
     for i in range(len(self.shapes)):
       self._testStatelessRandomDefaultV2(
           raw_ops.StatelessRandomNormalV2,
@@ -4469,6 +5351,8 @@ class StatelessRandomOpsCorrectnessTestV2(test.TestCase):
       )
 
   def testTruncatedNormalCorrectness_1(self):
+    # [FUNCTION DOC]
+    # V1 stateless truncated normal.
     for i in range(len(self.shapes)):
       self._testStatelessRandomDefault(
           raw_ops.StatelessTruncatedNormal,
@@ -4478,6 +5362,8 @@ class StatelessRandomOpsCorrectnessTestV2(test.TestCase):
       )
 
   def testTruncatedNormalV2Correctness_1(self):
+    # [FUNCTION DOC]
+    # V2 stateless truncated normal.
     for i in range(len(self.shapes)):
       self._testStatelessRandomDefaultV2(
           raw_ops.StatelessTruncatedNormalV2,
@@ -4488,6 +5374,8 @@ class StatelessRandomOpsCorrectnessTestV2(test.TestCase):
       )
 
   def testRandomUniformFullIntV2Functional_1(self):
+    # [FUNCTION DOC]
+    # Full-integer uniform for 32/64-bit signed and unsigned integer types, checking shapes only.
     for i in range(len(self.shapes)):
       self._testStatelessRandomUniformFullIntV2(
           raw_ops.StatelessRandomUniformFullIntV2,
@@ -4499,8 +5387,14 @@ class StatelessRandomOpsCorrectnessTestV2(test.TestCase):
 
 
 class BatchNormTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests fused batch normalization (training and inference, both data formats, half and single
+  # precision, several shapes) against a manual reference, and its gradients.
 
   def _batch_norm(self, x, mean, var, offset, scale, epsilon):
+    # [FUNCTION DOC]
+    # HELPER: manual batch norm reference (the library function lacks float16 support, see TODO).
+    # Computes inverse std times scale, applies to the input and returns the result cast back.
     # We compute the batch norm manually in this function because
     # nn_impl.batch_normalization does not support float16 yet.
     # TODO(reedwm): Add float16 support to nn_impl.batch_normalization.
@@ -4509,6 +5403,8 @@ class BatchNormTest(test.TestCase):
     return math_ops.cast(y, x.dtype)
 
   def _running_mean(self, old_mean, new_val, factor):
+    # [FUNCTION DOC]
+    # HELPER: exponential moving average update; returns the new value if the factor is one, else a blend.
     if factor == 1.0:
       return new_val
     else:
@@ -4525,6 +5421,10 @@ class BatchNormTest(test.TestCase):
       epsilon,
       data_format,
   ):
+    # [FUNCTION DOC]
+    # HELPER: reference for training mode. Computes the batch mean and variance (moments), the output,
+    # Bessel corrected variance and updated running statistics. Raises a value error for a data format
+    # other than the two supported ones. Returns evaluated output, mean and variance.
     if data_format not in ["NHWC", "NCHW"]:
       raise ValueError(
           "data_format must be NCHW or NHWC, got %s." % data_format
@@ -4565,6 +5465,9 @@ class BatchNormTest(test.TestCase):
       exponential_avg_factor=1.0,
       data_format="NHWC",
   ):
+    # [FUNCTION DOC]
+    # HELPER: random inputs; calls the fused batch norm in training mode and asserts output, mean and
+    # variance close to the reference, with a looser output tolerance for half precision.
     np.random.seed(1)
     x_val = np.random.random_sample(x_shape).astype(x_dtype)
     scale_val = np.random.random_sample(scale_shape).astype(scale_dtype)
@@ -4609,6 +5512,8 @@ class BatchNormTest(test.TestCase):
     self.assertAllClose(var_ref, var_val, atol=1e-3)
 
   def _inference_ref(self, x, scale, offset, mean, var, epsilon, data_format):
+    # [FUNCTION DOC]
+    # HELPER: reference for inference mode (value error for bad data format). Returns the evaluated output.
     if data_format not in ["NHWC", "NCHW"]:
       raise ValueError(
           "data_format must be NCHW or NHWC, got %s." % data_format
@@ -4630,6 +5535,9 @@ class BatchNormTest(test.TestCase):
       exponential_avg_factor=1.0,
       data_format="NHWC",
   ):
+    # [FUNCTION DOC]
+    # HELPER: random inputs; calls the fused batch norm in inference mode with given mean and variance
+    # and compares with the reference.
     np.random.seed(1)
     x_val = np.random.random_sample(x_shape).astype(x_dtype)
     scale_val = np.random.random_sample(scale_shape).astype(scale_dtype)
@@ -4666,6 +5574,10 @@ class BatchNormTest(test.TestCase):
     self.assertAllClose(y_ref, y_val, atol=atol)
 
   def _runtests(self, x_shape, is_training, gradient_test=False):
+    # [FUNCTION DOC]
+    # HELPER: drives a shape through all combinations of dtype (half, single), GPU flags (CPU, plus GPU
+    # when CUDA is available), data format and averaging factors (one, plus 0.6 under a forward
+    # compatibility check), calling the gradient, training or inference checks.
     use_gpu_vals = [False]
     if test.is_gpu_available(cuda_only=True):
       use_gpu_vals += [True]
@@ -4717,38 +5629,56 @@ class BatchNormTest(test.TestCase):
                 )
 
   def testInferenceShape1(self):
+    # [FUNCTION DOC]
+    # Inference on shape one, one, six, one.
     x_shape = [1, 1, 6, 1]
     self._runtests(x_shape, False)
 
   def testInferenceShape2(self):
+    # [FUNCTION DOC]
+    # Inference on shape one, one, six, two.
     x_shape = [1, 1, 6, 2]
     self._runtests(x_shape, False)
 
   def testInferenceShape3(self):
+    # [FUNCTION DOC]
+    # Inference on shape one, two, one, six.
     x_shape = [1, 2, 1, 6]
     self._runtests(x_shape, False)
 
   def testInferenceShape4(self):
+    # [FUNCTION DOC]
+    # Inference on a large 27 by 131 by 127 by 6 shape.
     x_shape = [27, 131, 127, 6]
     self._runtests(x_shape, False)
 
   def testInferenceShape5(self):
+    # [FUNCTION DOC]
+    # Inference on an empty batch.
     x_shape = [0, 131, 127, 6]
     self._runtests(x_shape, False)
 
   def testTrainingShape1(self):
+    # [FUNCTION DOC]
+    # Training on shape one, one, six, one.
     x_shape = [1, 1, 6, 1]
     self._runtests(x_shape, True)
 
   def testTrainingShape2(self):
+    # [FUNCTION DOC]
+    # Training on shape one, one, six, two.
     x_shape = [1, 1, 6, 2]
     self._runtests(x_shape, True)
 
   def testTrainingShape3(self):
+    # [FUNCTION DOC]
+    # Training on shape one, two, one, six.
     x_shape = [1, 2, 1, 6]
     self._runtests(x_shape, True)
 
   def testTrainingShape4(self):
+    # [FUNCTION DOC]
+    # Training on the large shape.
     x_shape = [27, 131, 127, 6]
     self._runtests(x_shape, True)
 
@@ -4762,6 +5692,11 @@ class BatchNormTest(test.TestCase):
       data_format="NHWC",
       is_training=True,
   ):
+    # [FUNCTION DOC]
+    # HELPER: gradient error check of the fused batch norm w.r.t. input, scale and offset.
+    # KNOWN ISSUE: the half precision branch calls a method of the class that does not exist in this
+    #   file, so that branch would raise an attribute error if reached.
+    # Inputs: shape, dtype, scale shape and dtype, GPU flag, data format, and training flag.
     np.random.seed(1)
     x_val = np.random.random_sample(x_shape).astype(x_dtype)
     scale_val = np.random.random_sample(scale_shape).astype(scale_dtype)
@@ -4823,6 +5758,9 @@ class BatchNormTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testBatchNormGradShape1(self):
+    # [FUNCTION DOC]
+    # Deprecated-v1 gradient test on shape one, one, six, one for training and inference, both formats,
+    # adding GPU runs when CUDA exists.
     for is_training in [True, False]:
       x_shape = [1, 1, 6, 1]
       for dtype in [np.float32]:
@@ -4866,6 +5804,8 @@ class BatchNormTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testBatchNormGradShape2(self):
+    # [FUNCTION DOC]
+    # Gradient test on shape one, one, six, two in the channels-last format.
     for is_training in [True, False]:
       x_shape = [1, 1, 6, 2]
       for dtype in [np.float32]:
@@ -4891,6 +5831,8 @@ class BatchNormTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testBatchNormGradShape3(self):
+    # [FUNCTION DOC]
+    # Gradient test on shape one, two, one, six in the channels-first format.
     for is_training in [True, False]:
       x_shape = [1, 2, 1, 6]
       for dtype in [np.float32]:
@@ -4916,11 +5858,17 @@ class BatchNormTest(test.TestCase):
 
 
 class SumReductionTest(BaseReductionTest):
+  # [CLASS DOC]
+  # Tests the sum reduction using the base class hooks.
 
   def _tf_reduce(self, x, reduction_axes, keepdims):
+    # [FUNCTION DOC]
+    # Returns the TensorFlow reduce-sum.
     return math_ops.reduce_sum(x, reduction_axes, keepdims)
 
   def _np_reduce(self, x, reduction_axes, keepdims):
+    # [FUNCTION DOC]
+    # Returns the numpy sum, converting a list or array of axes to a tuple.
     if isinstance(reduction_axes, list) or isinstance(
         reduction_axes, np.ndarray
     ):
@@ -4928,6 +5876,8 @@ class SumReductionTest(BaseReductionTest):
     return np.sum(x, axis=reduction_axes, keepdims=keepdims)
 
   def testAxesType(self):
+    # [FUNCTION DOC]
+    # Reduce-sum with an axis tensor of 32-bit or 64-bit integer type; asserts zero.
     for dtype in [dtypes.int64, dtypes.int32]:
       with self.cached_session(use_gpu=True) as _:
         v = math_ops.reduce_sum([0, 0], constant_op.constant(0, dtype=dtype))
@@ -4935,6 +5885,9 @@ class SumReductionTest(BaseReductionTest):
       self.assertAllEqual(tf_v, 0)
 
   def testFloat32(self):
+    # [FUNCTION DOC]
+    # Random sizes of ones matrices, checks column, row and last-axis sums, then a grid of 3D sizes
+    # checking sums over combined axes.
     for _ in range(5):
       size_x = int(2 ** np.random.uniform(0, 15))
       size_y = int(2 ** np.random.uniform(0, 15))
@@ -4975,8 +5928,12 @@ class SumReductionTest(BaseReductionTest):
 
 
 class MinMaxOpTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests element-wise minimum and maximum, broadcast and gradients.
 
   def _compare(self, x, y, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: compares minimum and maximum ops with numpy on the chosen device.
     np_min, np_max = np.minimum(x, y), np.maximum(x, y)
     with test_util.device(use_gpu=use_gpu):
       inx = ops.convert_to_tensor(x)
@@ -4987,6 +5944,8 @@ class MinMaxOpTest(test.TestCase):
     self.assertAllEqual(np_max, tf_max)
 
   def testBasic(self):
+    # [FUNCTION DOC]
+    # Several dtypes on CPU and GPU.
     x = np.random.rand(1, 3, 2) * 100.0
     y = np.random.rand(1, 3, 2) * 100.0
     for t in [np.float16, np.float32, np.float64, np.int32, np.int64]:
@@ -4994,6 +5953,8 @@ class MinMaxOpTest(test.TestCase):
       self._compare(x.astype(t), y.astype(t), use_gpu=True)
 
   def testDifferentShapes(self):
+    # [FUNCTION DOC]
+    # Broadcasting a vector against a three dimensional array.
     x = np.random.rand(1, 3, 2) * 100.0
     y = np.random.rand(2) * 100.0  # should broadcast
     for t in [np.float16, np.float32, np.float64, np.int32, np.int64]:
@@ -5001,6 +5962,8 @@ class MinMaxOpTest(test.TestCase):
       self._compare(x.astype(t), y.astype(t), use_gpu=True)
 
   def testScalar(self):
+    # [FUNCTION DOC]
+    # Broadcasting a scalar (float32 and int32 only, since double is converted).
     x = np.random.rand(1, 3, 2) * 100.0
     y = np.random.rand(1).item() * 100.0  # should broadcast
     # dropped np.float64, int64 because TF automatically converts to 32 bit
@@ -5009,6 +5972,8 @@ class MinMaxOpTest(test.TestCase):
       self._compare(x.astype(t), t(y), use_gpu=True)
 
   def _compareGradientX(self, func, x, y):
+    # [FUNCTION DOC]
+    # HELPER: numeric versus theoretical gradient for the first input with dtype dependent tolerance.
     with self.cached_session():
       inx = ops.convert_to_tensor(x)
       iny = ops.convert_to_tensor(y)
@@ -5025,6 +5990,8 @@ class MinMaxOpTest(test.TestCase):
       self.assertAllClose(jacob_t, jacob_n, rtol=1e-5, atol=1e-5)
 
   def _compareGradientY(self, func, x, y):
+    # [FUNCTION DOC]
+    # HELPER: same for the second input.
     with self.cached_session():
       inx = ops.convert_to_tensor(x)
       iny = ops.convert_to_tensor(y)
@@ -5042,6 +6009,8 @@ class MinMaxOpTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testGradients(self):
+    # [FUNCTION DOC]
+    # Chooses y distinct from x (plus or minus one) and checks both gradients of maximum and minimum.
     x = np.random.rand(1, 3, 2) * 100.0
     # ensure x != y
     y = x + (np.random.randint(2, size=x.shape) - 0.5) * 2  # -1 or +1
@@ -5052,8 +6021,12 @@ class MinMaxOpTest(test.TestCase):
 
 
 class MPSFillTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests the fill op on the GPU against CPU.
 
   def _compare(self, dims, val, np_ans, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: fills on the GPU (when available) or CPU and compares with the expected array.
     ctx = context.context()
     device = "GPU:0" if (use_gpu and ctx.num_gpus()) else "CPU:0"
     with ops.device(device):
@@ -5062,18 +6035,26 @@ class MPSFillTest(test.TestCase):
     self.assertAllClose(np_ans, out)
 
   def _compareAll(self, dims, val, np_ans):
+    # [FUNCTION DOC]
+    # HELPER: runs the comparison with both device flags.
     self._compare(dims, val, np_ans, False)
     self._compare(dims, val, np_ans, True)
 
   def testFillFloat(self):
+    # [FUNCTION DOC]
+    # Fills a two by three tensor with pi-like float32 and checks it.
     np_ans = np.array([[3.1415] * 3] * 2).astype(np.float32)
     self._compareAll([2, 3], np_ans[0][0], np_ans)
 
 
 @test_util.run_all_in_graph_and_eager_modes
 class SquaredDifferenceTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests squared difference; class decorated to run in graph and eager modes.
 
   def testSquaredDifference(self):
+    # [FUNCTION DOC]
+    # Checks real dtypes with broadcasting against the explicit formula.
     for dtype in [np.float16, np.float32, np.float64, np.int32, np.int64]:
       x = np.array([[1, 2, 3], [4, 5, 6]], dtype=dtype)
       y = np.array([-3, -2, -1], dtype=dtype)
@@ -5083,6 +6064,8 @@ class SquaredDifferenceTest(test_util.TensorFlowTestCase):
         self.assertAllClose(z, z_tf)
 
   def testComplexSquaredDifference(self):
+    # [FUNCTION DOC]
+    # Checks complex dtypes against conjugate-based formula, on CPU.
     for dtype in [np.complex64, np.complex128]:
       x = np.array(
           [[1 + 3j, 2 + 2j, 3 + 1j], [4 - 1j, 5 - 2j, 6 - 3j]], dtype=dtype
@@ -5095,8 +6078,13 @@ class SquaredDifferenceTest(test_util.TensorFlowTestCase):
 
 
 class MPSOnesLikeTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests the ones-like op.
 
   def testOnesLike(self):
+    # [FUNCTION DOC]
+    # For many dtypes, builds a two by three tensor of ones, applies ones-like and asserts dtype, values
+    # and static shape. The inline comment inside it says zeros where ones are meant.
     for dtype in [
         dtypes.float32,
         dtypes.float64,
@@ -5123,8 +6111,12 @@ class MPSOnesLikeTest(test.TestCase):
 
 
 class SelectOpTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests select/where ops (V1 and V2) with broadcasting, gradients, errors and NaNs.
 
   def _compare(self, fn, c, x, y, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: compares the op result with numpy where for the chosen device.
     np_ans = np.where(c, x, y)
     with test_util.device(use_gpu=use_gpu):
       out = fn(c, x, y)
@@ -5135,6 +6127,8 @@ class SelectOpTest(test.TestCase):
   def _compareGradientX(
       self, fn, c, x, y, numeric_gradient_type=None, x_init_value=None
   ):
+    # [FUNCTION DOC]
+    # HELPER: gradient check for the first value input, optionally with a numeric gradient in another type.
     with self.cached_session():
       inx = ops.convert_to_tensor(x)
       iny = ops.convert_to_tensor(y)
@@ -5165,6 +6159,8 @@ class SelectOpTest(test.TestCase):
       self.assertAllClose(jacob_t, jacob_n, rtol=1e-5, atol=1e-5)
 
   def _compareGradientY(self, fn, c, x, y, numeric_gradient_type=None):
+    # [FUNCTION DOC]
+    # HELPER: same for the second value input.
     with self.cached_session():
       inx = ops.convert_to_tensor(x)
       iny = ops.convert_to_tensor(y)
@@ -5191,6 +6187,8 @@ class SelectOpTest(test.TestCase):
       self.assertAllClose(jacob_t, jacob_n, rtol=1e-5, atol=1e-5)
 
   def _testScalar(self, fn):
+    # [FUNCTION DOC]
+    # HELPER: scalar condition over seven dtypes, GPU for float types.
     c = True
     x = np.random.rand(1, 3, 2) * 100
     y = np.random.rand(1, 3, 2) * 100
@@ -5210,10 +6208,14 @@ class SelectOpTest(test.TestCase):
         self._compare(fn, c, xt, yt, use_gpu=True)
 
   def testScalar(self):
+    # [FUNCTION DOC]
+    # Runs scalar test for where and where_v2.
     self._testScalar(array_ops.where)
     self._testScalar(array_ops.where_v2)
 
   def _testScalarBroadcast(self, fn, c, x, y):
+    # [FUNCTION DOC]
+    # HELPER: scalar condition with broadcast values.
     for t in [
         np.float16,
         np.float32,
@@ -5230,6 +6232,8 @@ class SelectOpTest(test.TestCase):
         self._compare(fn, c, xt, yt, use_gpu=True)
 
   def testScalarBroadcast(self):
+    # [FUNCTION DOC]
+    # Many broadcast shape pairs, both orders (V2 only).
     c = True
     # where_v2 only
     x = np.random.rand(1, 3, 2) * 100
@@ -5262,6 +6266,10 @@ class SelectOpTest(test.TestCase):
     self._testScalarBroadcast(array_ops.where_v2, c, y, x)
 
   def _testBasic(self, fn):
+    # [FUNCTION DOC]
+    # HELPER: basic element-wise select.
+    # KNOWN ISSUE: uses the removed numpy boolean alias; also the CPU comparison is commented out, so
+    #   only float32 on the GPU is checked.
     c = np.random.randint(0, 2, 6).astype(np.bool).reshape(1, 3, 2)
     x = np.random.rand(1, 3, 2) * 100
     y = np.random.rand(1, 3, 2) * 100
@@ -5273,10 +6281,14 @@ class SelectOpTest(test.TestCase):
         self._compare(fn, c, xt, yt, use_gpu=True)
 
   def testBasic(self):
+    # [FUNCTION DOC]
+    # Runs basic select for where and where_v2.
     self._testBasic(array_ops.where)
     self._testBasic(array_ops.where_v2)
 
   def _testBasicBroadcast(self, fn, c, x, y):
+    # [FUNCTION DOC]
+    # HELPER: condition tensor with broadcast values.
     for t in [
         np.float16,
         np.float32,
@@ -5293,6 +6305,9 @@ class SelectOpTest(test.TestCase):
         self._compare(fn, c, xt, yt, use_gpu=True)
 
   def testBasicBroadcast(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: uses the removed numpy boolean alias to build conditions; fails on new numpy.
+    # Four condition shapes against many value shapes (V2 only).
     c0 = np.random.randint(0, 2, 6).astype(np.bool).reshape(1, 3, 2)
     c1 = np.random.randint(0, 2, 2).astype(np.bool).reshape(1, 1, 2)
     c2 = np.random.randint(0, 2, 3).astype(np.bool).reshape(1, 3, 1)
@@ -5329,6 +6344,9 @@ class SelectOpTest(test.TestCase):
       self._testBasicBroadcast(array_ops.where_v2, c, y, x)
 
   def _testGradients(self, fn):
+    # [FUNCTION DOC]
+    # HELPER: gradient checks for half precision (against single precision numeric gradients), single and double.
+    # KNOWN ISSUE: uses the removed numpy boolean and float aliases; fails on new numpy.
     c = np.random.randint(0, 2, 6).astype(np.bool).reshape(1, 3, 2)
     x = np.random.rand(1, 3, 2) * 100
     y = np.random.rand(1, 3, 2) * 100
@@ -5349,11 +6367,15 @@ class SelectOpTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testGradients(self):
+    # [FUNCTION DOC]
+    # Gradient tests for where and where_v2.
     self._testGradients(array_ops.where)
     self._testGradients(array_ops.where_v2)
 
   @test_util.run_deprecated_v1
   def testGradientsBroadcast(self):
+    # [FUNCTION DOC]
+    # Gradient with broadcast values (V2), single and double precision.
     c = np.random.randint(0, 2, 6).astype(np.bool).reshape(1, 3, 2)
     for t in [np.float32, np.float64]:
       # where_v2 only
@@ -5380,6 +6402,8 @@ class SelectOpTest(test.TestCase):
       self._compareGradientX(array_ops.where_v2, c, x.astype(t), y.astype(t))
 
   def _testShapeMismatch(self, fn):
+    # [FUNCTION DOC]
+    # HELPER: asserts a value error when value shapes are incompatible.
     c = np.random.randint(0, 2, 6).astype(np.bool).reshape(1, 3, 2)
     x = np.random.rand(1, 3, 2) * 100
     y = np.random.rand(2, 5, 3) * 100
@@ -5399,10 +6423,15 @@ class SelectOpTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testShapeMismatch(self):
+    # [FUNCTION DOC]
+    # Shape mismatch tests for both ops.
     self._testShapeMismatch(array_ops.where)
     self._testShapeMismatch(array_ops.where_v2)
 
   def _testEmptyTensor(self, fn):
+    # [FUNCTION DOC]
+    # HELPER: empty condition and values give an empty float32 result.
+    # KNOWN ISSUE: uses the removed numpy boolean alias; fails on new numpy.
     c = np.random.randint(0, 3, 0).astype(np.bool).reshape(1, 3, 0)
     x = np.random.rand(1, 3, 0) * 100
     y = np.random.rand(1, 3, 0) * 100
@@ -5415,10 +6444,15 @@ class SelectOpTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testEmptyTensor(self):
+    # [FUNCTION DOC]
+    # Empty tensor tests for both ops.
     self._testEmptyTensor(array_ops.where)
     self._testEmptyTensor(array_ops.where_v2)
 
   def _testNan(self, fn):
+    # [FUNCTION DOC]
+    # HELPER: for all combinations of condition and NaN or regular values, asserts NaN propagation
+    # matches the selected element only.
     with self.cached_session():
       for c in False, True:
         for a in 7.0, np.nan:
@@ -5429,14 +6463,21 @@ class SelectOpTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testNan(self):
+    # [FUNCTION DOC]
+    # Verifies that NaNs do not propagate from the unselected branch.
     """Verify that nans don't propagate where they shouldn't."""
     self._testNan(array_ops.where)
     self._testNan(array_ops.where_v2)
 
 
 class ZerosLikeTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests the zeros-like op.
 
   def _compareZeros(self, dtype, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: builds ones of two by three of the dtype (strings use byte strings), applies zeros-like and
+    # asserts dtype, static shape and all zero values. The use_gpu flag is unused.
     # Creates a tensor of non-zero values with shape 2 x 3.
     # NOTE(kearnes): The default numpy dtype associated with tf.string is
     # np.object (and can't be changed without breaking a lot things), which
@@ -5460,6 +6501,8 @@ class ZerosLikeTest(test.TestCase):
     self.assertEqual((2, 3), z_value.shape)
 
   def testZerosLikeCPU(self):
+    # [FUNCTION DOC]
+    # Several numeric dtypes, flag off.
     for dtype in [
         dtypes.float32,
         dtypes.float64,
@@ -5474,6 +6517,8 @@ class ZerosLikeTest(test.TestCase):
       self._compareZeros(dtype, use_gpu=False)
 
   def testZerosLikeGPU(self):
+    # [FUNCTION DOC]
+    # Fewer dtypes including boolean, flag on.
     for dtype in [
         dtypes.float32,
         dtypes.float64,
@@ -5484,6 +6529,8 @@ class ZerosLikeTest(test.TestCase):
       self._compareZeros(dtype, use_gpu=True)
 
   def testZerosLikeDtype(self):
+    # [FUNCTION DOC]
+    # Zeros-like with dtype conversions between single float and complex; asserts dtype, shape, values.
     # Make sure zeros_like works even for dtypes that cannot be cast between
     shape = (3, 5)
     dtypes_ = np.float32, np.complex64
@@ -5497,8 +6544,17 @@ class ZerosLikeTest(test.TestCase):
 
 
 class MpsTest(test.TestCase):
+  # [CLASS DOC]
+  # Main plugin test: compares GPU results with CPU or numpy for arithmetic, comparison, gradients,
+  # unary ops, convolution, transpose and broadcasting, plus variable assign tests.
+  # Class attribute: gradient tolerance per dtype.
 
   def _compareCpu(self, x, y, np_func, tf_func, also_compare_variables=False):
+    # [FUNCTION DOC]
+    # HELPER: compares a TensorFlow binary function on the CPU with the numpy function; also with numpy
+    # KNOWN ISSUE: uses the removed numpy object alias in a dtype comparison; fails on new numpy.
+    # operands on either side (to check precedence) and optionally with variable operands. Prints types
+    # in the variable case. Skips the value comparison for object dtype results, then checks shape.
     np_ans = np_func(x, y)
     with test_util.force_cpu():
       inx = ops.convert_to_tensor(x)
@@ -5528,19 +6584,32 @@ class MpsTest(test.TestCase):
     self.assertShapeEqual(np_ans, out)
 
   def _inv(self, x):
+    # [FUNCTION DOC]
+    # HELPER: reciprocal reference.
     return 1.0 / x
 
   def _rsqrt(self, x):
+    # [FUNCTION DOC]
+    # HELPER: reciprocal square root reference.
     return self._inv(np.sqrt(x))
 
   def _sigmoid(self, x):
+    # [FUNCTION DOC]
+    # HELPER: logistic sigmoid reference.
     return 1.0 / (1.0 + np.exp(-x))
 
   def _log_sigmoid(self, x):
+    # [FUNCTION DOC]
+    # HELPER: log of sigmoid reference; not used elsewhere in this file.
     return np.log(self._sigmoid(x))
 
   def _replace_domain_error_with_inf(self, fn):
+    # [FUNCTION DOC]
+    # HELPER: wraps a function so that a value error mentioning a domain error becomes an infinity
+    # array of the same shape; other errors are re-raised. Not used elsewhere in this file.
     def func(x):
+      # [FUNCTION DOC]
+      # HELPER: the wrapper returned: calls the function and maps domain errors to infinity.
       try:
         return fn(x)
       except ValueError as e:
@@ -5552,6 +6621,8 @@ class MpsTest(test.TestCase):
     return func
 
   def _compareTanhGrad(self, x, y):
+    # [FUNCTION DOC]
+    # HELPER: compares the tanh gradient op on the default device with the CPU.
     default = gen_math_ops.tanh_grad(x, y)
 
     with test_util.device(use_gpu=False):
@@ -5560,6 +6631,8 @@ class MpsTest(test.TestCase):
     self.assertAllClose(cpu, default)
 
   def testTanhGrad(self):
+    # [FUNCTION DOC]
+    # Random inputs in the range minus two to two.
     x = np.random.uniform(-2.0, 2.0, size=[4, 4]).astype(np.float32)
     y = np.random.uniform(-2.0, 2.0, size=[4, 4]).astype(np.float32)
     self._compareTanhGrad(x, y)
@@ -5575,6 +6648,9 @@ class MpsTest(test.TestCase):
   def _compareGradientX(
       self, x, y, np_func, tf_func, numeric_gradient_type=None
   ):
+    # [FUNCTION DOC]
+    # HELPER: numeric vs theoretical gradient for the first input; scales output by 1.1 for float32 and
+    # float64; dtype specific tolerance; optional numeric gradient dtype.
     z = np_func(x, y)
     zs = list(z.shape)
     with self.cached_session():
@@ -5604,6 +6680,8 @@ class MpsTest(test.TestCase):
   def _compareGradientY(
       self, x, y, np_func, tf_func, numeric_gradient_type=None
   ):
+    # [FUNCTION DOC]
+    # HELPER: same for the second input.
     z = np_func(x, y)
     zs = list(z.shape)
     with self.cached_session():
@@ -5631,6 +6709,8 @@ class MpsTest(test.TestCase):
     self.assertAllClose(jacob_t, jacob_n, rtol=tol, atol=tol)
 
   def compareUnaryGradient_CPU_GPU(self, inx, func, test_name):
+    # [FUNCTION DOC]
+    # HELPER: records a gradient tape on the CPU and then the GPU, prints each and asserts closeness.
     with test_util.force_cpu():
       with backprop.GradientTape() as t:
         t.watch(inx)
@@ -5649,6 +6729,8 @@ class MpsTest(test.TestCase):
     self.assertAllClose(cpu_gradient, gpu_gradient, rtol=tol, atol=tol)
 
   def _compareGpu(self, x, y, np_func, tf_func):
+    # [FUNCTION DOC]
+    # HELPER: GPU result compared with numpy, plus shape.
     np_ans = np_func(x, y)
     with test_util.use_gpu():
       inx = ops.convert_to_tensor(x)
@@ -5659,10 +6741,14 @@ class MpsTest(test.TestCase):
     self.assertShapeEqual(np_ans, out)
 
   def _compareBoth(self, x, y, np_func, tf_func, also_compare_variables=False):
+    # [FUNCTION DOC]
+    # HELPER: runs the CPU comparison then the GPU comparison.
     self._compareCpu(x, y, np_func, tf_func, also_compare_variables)
     self._compareGpu(x, y, np_func, tf_func)
 
   def _compare(self, x, y, np_func, tf_func):
+    # [FUNCTION DOC]
+    # HELPER: GPU result compared exactly with numpy (used for comparisons).
     np_ans = np_func(x, y)
     with test_util.use_gpu():
       out = tf_func(ops.convert_to_tensor(x), ops.convert_to_tensor(y))
@@ -5671,6 +6757,9 @@ class MpsTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testGradGrad(self):
+    # [FUNCTION DOC]
+    # Deprecated-v1 test; checks tanh-grad second order derivatives with the gradient checker over
+    # several dtypes.
     np.random.seed(7)
     shape = (5,)
     dtype_tols = [
@@ -5684,6 +6773,8 @@ class MpsTest(test.TestCase):
     ]
 
     def rand(dtype, real_range):
+      # [FUNCTION DOC]
+      # HELPER: random array in a range of given dtype and the enclosing shape.
       x = np.random.uniform(real_range[0], real_range[1], size=shape[0]).astype(
           dtype
       )
@@ -5708,6 +6799,8 @@ class MpsTest(test.TestCase):
             self.assertAllClose(analytical, numerical, rtol=tol, atol=tol)
 
   def testFloatCompareTensor(self):
+    # [FUNCTION DOC]
+    # Compares less, less-equal, greater, greater-equal, equal and not-equal on GPU for two float types.
     x = np.linspace(-15, 15, 6).reshape((1, 3, 2))
     y = np.linspace(20, -10, 6).reshape((1, 3, 2))
     for t in [np.float32, np.float16]:
@@ -5721,6 +6814,8 @@ class MpsTest(test.TestCase):
       self._compare(xt, yt, np.not_equal, math_ops.not_equal)
 
   def testFloatBasic(self):
+    # [FUNCTION DOC]
+    # Add, subtract, multiply, divide and floor-divide for float32, plus operator overloads.
     x = np.linspace(-5, 20, 30).reshape((1, 2, 3, 5)).astype(np.float32)
     y = np.linspace(20, -5, 30).reshape((1, 2, 3, 5)).astype(np.float32)
     self._compareBoth(x, y, np.add, math_ops.add, True)
@@ -5733,6 +6828,8 @@ class MpsTest(test.TestCase):
     self._compareBoth(x, y, np.multiply, _MUL)
 
   def testHalfBasic(self):
+    # [FUNCTION DOC]
+    # Same for float16.
     x = np.linspace(-5, 20, 30).reshape((1, 2, 3, 5)).astype(np.float16)
     y = np.linspace(20, -5, 30).reshape((1, 2, 3, 5)).astype(np.float16)
     self._compareBoth(x, y, np.add, math_ops.add, True)
@@ -5745,6 +6842,8 @@ class MpsTest(test.TestCase):
     self._compareBoth(x, y, np.multiply, _MUL)
 
   def testIntBasic(self):
+    # [FUNCTION DOC]
+    # Same for int32 including modulus and a GPU-only modulus check.
     x = np.arange(1, 13, 2).reshape(1, 3, 2).astype(np.int32)
     y = np.arange(1, 7, 1).reshape(1, 3, 2).astype(np.int32)
     self._compareBoth(x, y, np.add, math_ops.add)
@@ -5764,6 +6863,8 @@ class MpsTest(test.TestCase):
     self._compareGpu(x, y, np.mod, _MOD)
 
   def testZeroElementBinaryOp(self):
+    # [FUNCTION DOC]
+    # Binary ops with a zero element tensor and a scalar.
     x = array_ops.ones([0, 3])
     y = 4.0
     self._compareBoth(x, y, np.add, math_ops.add, True)
@@ -5775,6 +6876,8 @@ class MpsTest(test.TestCase):
     self._compareBoth(x, y, np.multiply, _MUL)
 
   def testAssignMethod(self):
+    # [FUNCTION DOC]
+    # Assign with and without read_value; checks the values, null in eager or an operation in graph.
     v = resource_variable_ops.ResourceVariable(1.0, name="var0")
     self.evaluate(variables.global_variables_initializer())
     self.evaluate(v.assign(2.0))
@@ -5793,6 +6896,8 @@ class MpsTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testAssignIncompatibleShape(self):
+    # [FUNCTION DOC]
+    # Assign-add of a scalar into a vector variable; expects an error mentioning shapes.
     v = resource_variable_ops.ResourceVariable([0, 1, 2, 3])
     self.evaluate(v.initializer)
     pattern = re.compile("shapes must be equal", re.IGNORECASE)
@@ -5802,6 +6907,10 @@ class MpsTest(test.TestCase):
   def _compareUnaryCpu(
       self, x, np_func, tf_func, grad_rtol=None, grad_atol=None
   ):
+    # [FUNCTION DOC]
+    # HELPER: unary op accuracy and gradient check against numpy on the CPU. Inputs: array, numpy
+    # KNOWN ISSUE: uses the removed numpy float alias; fails on new numpy. Also never called in this file.
+    # function, TensorFlow function, optional gradient tolerances (defaults per dtype).
     if grad_rtol is None:
       grad_rtol = _default_tolerance(x.dtype)
     if grad_atol is None:
@@ -5857,6 +6966,8 @@ class MpsTest(test.TestCase):
         self.assertAllClose(jacob_t, jacob_n, rtol=grad_rtol, atol=grad_atol)
 
   def _compareUnaryGpu(self, x, np_func, tf_func):
+    # [FUNCTION DOC]
+    # HELPER: unary op on GPU compared with numpy.
     np_ans = np_func(x)
     with test_util.use_gpu():
       result = tf_func(ops.convert_to_tensor(x))
@@ -5867,11 +6978,18 @@ class MpsTest(test.TestCase):
       self.assertAllClose(np_ans, tf_gpu)
 
   def _compareUnaryBoth(self, x, np_func, tf_func):
+    # [FUNCTION DOC]
+    # HELPER: wrapper around the GPU comparison.
+    # KNOWN ISSUE: name says both devices but only the GPU comparison runs.
     self._compareUnaryGpu(x, np_func, tf_func)
 
   def compareConv2d(
       self, input, filter, padding, format="NHWC", dilations=None
   ):
+    # [FUNCTION DOC]
+    # HELPER: runs conv2d with stride two on GPU and CPU for a padding, format and dilations; prints
+    # pass or error information and asserts equality. Input, filter, padding (string or list), data
+    # format (default channels-last), dilations (default none). Channels-first CPU inputs are transposed.
     stride = 2
 
     strides = [stride, stride]
@@ -5922,6 +7040,9 @@ class MpsTest(test.TestCase):
     self.assertAllEqual(cpu, gpu)
 
   def testConvolution(self):
+    # [FUNCTION DOC]
+    # Many input and filter combinations, with valid, same and explicit padding, dilations and
+    # channels-first.
     input = constant_op.constant([[
         [[1], [2.0], [3.0], [4.0]],
         [[6], [7], [8], [9]],
@@ -6041,6 +7162,8 @@ class MpsTest(test.TestCase):
     )
 
   def compareTranspose(self, input, perm):
+    # [FUNCTION DOC]
+    # HELPER: transpose on GPU and CPU compared for a permutation; prints the outcome.
     with test_util.force_gpu():
       gpu = array_ops.transpose(input, perm)
 
@@ -6057,6 +7180,8 @@ class MpsTest(test.TestCase):
     self.assertAllEqual(cpu, gpu)
 
   def testTranspose(self):
+    # [FUNCTION DOC]
+    # Rank three and four tensors, float32 and bfloat16, with several permutations.
     for dtype in [dtypes.float32, dtypes.bfloat16]:
       input = tf.convert_to_tensor(np.arange(0.0, 5 * 2 * 13), dtype=dtype)
       input = array_ops.reshape(input, [5, 2, 13])
@@ -6074,6 +7199,9 @@ class MpsTest(test.TestCase):
       self.compareTranspose(input, [3, 2, 1, 0])
 
   def testUnaryHalfBasic(self):
+    # [FUNCTION DOC]
+    # Several unary ops (abs, negative, reciprocal, log, sigmoid, sqrt, rsqrt, exp, square, sign, tanh)
+    # for float16 on GPU.
     x = np.arange(-3, 3).reshape(1, 3, 2).astype(np.float16)
     _ = x - x.min() + 1.02  # all greater than 1
     y = (x + 0.5).astype(np.float16)  # no zero
@@ -6096,6 +7224,9 @@ class MpsTest(test.TestCase):
     self._compareUnaryBoth(x, np.tanh, math_ops.tanh)
 
   def testUnaryFloatBasic(self):
+    # [FUNCTION DOC]
+    # Same for float32 plus log1p, then compares the sigmoid gradient CPU vs GPU and prints the result of
+    # the sigmoid-grad op.
     x = np.arange(-3, 3).reshape(1, 3, 2).astype(np.float32)
     _ = x - x.min() + 1.02  # all greater than 1
     y = (x + 0.5).astype(np.float32)  # no zero
@@ -6132,6 +7263,8 @@ class MpsTest(test.TestCase):
     print("gen_math_ops.sigmoid_grad(y) = ", gradient)
 
   def _compareBCast(self, xs, ys, dtype, np_func, tf_func):
+    # [FUNCTION DOC]
+    # HELPER: builds ranges of given shapes and compares CPU, plus GPU for float types.
     x = (1 + np.linspace(0, 5, np.prod(xs))).astype(dtype).reshape(xs)
     y = (1 + np.linspace(0, 5, np.prod(ys))).astype(dtype).reshape(ys)
     self._compareCpu(x, y, np_func, tf_func)
@@ -6139,6 +7272,8 @@ class MpsTest(test.TestCase):
       self._compareGpu(x, y, np_func, tf_func)
 
   def _testBCastByFunc(self, funcs, xs, ys):
+    # [FUNCTION DOC]
+    # HELPER: for each function pair compares both operand orders.
     dtypes_ = [
         np.float32,
     ]
@@ -6148,6 +7283,8 @@ class MpsTest(test.TestCase):
         self._compareBCast(ys, xs, dtype, np_func, tf_func)
 
   def _testBCastA(self, xs, ys):
+    # [FUNCTION DOC]
+    # HELPER: add.
     funcs = [
         (np.add, math_ops.add),
         (np.add, _ADD),
@@ -6155,6 +7292,8 @@ class MpsTest(test.TestCase):
     self._testBCastByFunc(funcs, xs, ys)
 
   def _testBCastB(self, xs, ys):
+    # [FUNCTION DOC]
+    # HELPER: subtract and power.
     funcs = [
         (np.subtract, math_ops.subtract),
         (np.subtract, _SUB),
@@ -6163,6 +7302,8 @@ class MpsTest(test.TestCase):
     self._testBCastByFunc(funcs, xs, ys)
 
   def _testBCastC(self, xs, ys):
+    # [FUNCTION DOC]
+    # HELPER: multiply.
     funcs = [
         (np.multiply, math_ops.multiply),
         (np.multiply, _MUL),
@@ -6170,6 +7311,8 @@ class MpsTest(test.TestCase):
     self._testBCastByFunc(funcs, xs, ys)
 
   def _testBCastD(self, xs, ys):
+    # [FUNCTION DOC]
+    # HELPER: true division.
     funcs = [
         (np.true_divide, math_ops.truediv),
         (np.true_divide, _TRUEDIV),
@@ -6177,79 +7320,133 @@ class MpsTest(test.TestCase):
     self._testBCastByFunc(funcs, xs, ys)
 
   def testBCast_0A(self):
+    # [FUNCTION DOC]
+    # Broadcast addition of shape one, three, two with shape one.
     self._testBCastA([1, 3, 2], [1])
 
   def testBCast_0B(self):
+    # [FUNCTION DOC]
+    # Subtract and power for the same shapes.
     self._testBCastB([1, 3, 2], [1])
 
   def testBCast_0C(self):
+    # [FUNCTION DOC]
+    # Multiply for the same shapes.
     self._testBCastC([1, 3, 2], [1])
 
   def testBCast_0D(self):
+    # [FUNCTION DOC]
+    # Division for the same shapes.
     self._testBCastD([1, 3, 2], [1])
 
   def testBCast_1A(self):
+    # [FUNCTION DOC]
+    # Addition of shape two, three, two with shape two.
     self._testBCastA([2, 3, 2], [2])
 
   def testBCast_1B(self):
+    # [FUNCTION DOC]
+    # Subtract and power of one, three, two with two.
     self._testBCastB([1, 3, 2], [2])
 
   def testBCast_1C(self):
+    # [FUNCTION DOC]
+    # Multiply of those shapes.
     self._testBCastC([1, 3, 2], [2])
 
   def testBCast_1D(self):
+    # [FUNCTION DOC]
+    # Division of those shapes.
     self._testBCastD([1, 3, 2], [2])
 
   def testBCast_2A(self):
+    # [FUNCTION DOC]
+    # Addition of two, three, two with three, two.
     self._testBCastA([2, 3, 2], [3, 2])
 
   def testBCast_2B(self):
+    # [FUNCTION DOC]
+    # Subtract and power of one, three, two with three, two.
     self._testBCastB([1, 3, 2], [3, 2])
 
   def testBCast_2C(self):
+    # [FUNCTION DOC]
+    # Multiply of those shapes.
     self._testBCastC([1, 3, 2], [3, 2])
 
   def testBCast_2D(self):
+    # [FUNCTION DOC]
+    # Division of those shapes.
     self._testBCastD([1, 3, 2], [3, 2])
 
   def testBCast_3A(self):
+    # [FUNCTION DOC]
+    # Addition of one, three, two with three, one.
     self._testBCastA([1, 3, 2], [3, 1])
 
   def testBCast_3B(self):
+    # [FUNCTION DOC]
+    # Subtract and power.
     self._testBCastB([1, 3, 2], [3, 1])
 
   def testBCast_3C(self):
+    # [FUNCTION DOC]
+    # Multiply.
     self._testBCastC([1, 3, 2], [3, 1])
 
   def testBCast_3D(self):
+    # [FUNCTION DOC]
+    # Division.
     self._testBCastD([1, 3, 2], [3, 1])
 
   def testBCast_4A(self):
+    # [FUNCTION DOC]
+    # Addition of identical shapes.
     self._testBCastA([1, 3, 2], [1, 3, 2])
 
   def testBCast_4B(self):
+    # [FUNCTION DOC]
+    # Subtract and power of identical shapes.
     self._testBCastB([1, 3, 2], [1, 3, 2])
 
   def testBCast_4C(self):
+    # [FUNCTION DOC]
+    # Multiply of identical shapes.
     self._testBCastC([1, 3, 2], [1, 3, 2])
 
   def testBCast_4D(self):
+    # [FUNCTION DOC]
+    # Division of identical shapes.
     self._testBCastD([1, 3, 2], [1, 3, 2])
 
   def testBCast_5A(self):
+    # [FUNCTION DOC]
+    # Addition of one, three, two with two, three, one.
     self._testBCastA([1, 3, 2], [2, 3, 1])
 
   def testBCast_5B(self):
+    # [FUNCTION DOC]
+    # Subtract and power.
     self._testBCastB([1, 3, 2], [2, 3, 1])
 
   def testBCast_5C(self):
+    # [FUNCTION DOC]
+    # Multiply.
     self._testBCastC([1, 3, 2], [2, 3, 1])
 
   def testBCast_5D(self):
+    # [FUNCTION DOC]
+    # Division.
     self._testBCastD([1, 3, 2], [2, 3, 1])
 
 
 def run_benchmark(func, num_iters, execution_mode=None):
+  # [FUNCTION DOC]
+  # HELPER: simple wall-clock benchmarking utility (not referenced by any test in this file).
+  # Runs the given callable once to warm up, then the requested number of times inside the given
+  # execution mode of the eager context (synchronous or asynchronous), waiting for the asynchronous
+  # executor before and after timing when the mode is asynchronous. Returns the elapsed time in
+  # seconds as a number. The execution mode is optional and defaults to the null value.
   ctx = context.context()
   with context.execution_mode(execution_mode):
     # call func to warm up
