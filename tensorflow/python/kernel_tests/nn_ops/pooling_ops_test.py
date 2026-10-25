@@ -1,3 +1,18 @@
+# [MODULE DOC]
+# KNOWN ISSUE: the three factory-built comparison tests are only registered inside the main-script
+# guard, so they never run under a test runner that imports the module.
+# Functional tests for the TensorFlow 2D/1D pooling operations: average pooling and max pooling
+# (including the v2 max pool with tensor-valued window and stride, explicit padding, depthwise
+# max pooling, max pooling with argmax, and the first- and second-order gradient ops).
+# It defines one parameterized test case class (PoolingTest) plus module-level helpers that
+# enumerate the (data format, device, data type) configurations to run, a generator of shrunk
+# Inception max-pool shapes, and three factories that build CPU-vs-GPU comparison test methods.
+# Tests verify numeric outputs against hand-computed expected values, check gradients with the
+# numerical gradient checker, and check that invalid arguments raise the expected errors.
+# Import-time side effects: imports the nn gradient registrations; the parameterized test
+# configurations are computed at class-definition time (which queries GPU availability).
+# The comparison tests built by the factories are attached to the test class only when the file
+# is run as a script, not when it is collected by another runner.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -40,6 +55,12 @@ from tensorflow.python.platform import tf_logging
 
 
 def GetDeviceScope(self, use_gpu=False):
+  # [FUNCTION DOC]
+  # HELPER: picks the device or session context in which the pooling tests build and run ops.
+  # Takes the test case instance and a flag asking for GPU (default false). When executing eagerly
+  # it returns a device context for the first GPU if a GPU was requested and is available,
+  # otherwise for the first CPU. In graph mode it returns a test session context created by the
+  # test case with the same GPU flag. Returns a context manager; no other side effects.
   if context.executing_eagerly():
     if use_gpu and test.is_gpu_available():
       return ops.device("GPU:0")
@@ -54,6 +75,19 @@ def GetTestConfigsDicts(v1_fn,
                         v2_fn=None,
                         one_dimensional=False,
                         allow_gpu=True):
+  # [FUNCTION DOC]
+  # HELPER: builds the list of parameter sets that drive the parameterized pooling tests.
+  # Inputs: v1_fn is the pooling function to test; v2_fn is an optional second (v2-style) pooling
+  # function; one_dimensional selects 1D layouts (width-channel formats) instead of 2D ones;
+  # allow_gpu (default true) controls whether GPU entries are kept.
+  # Behavior: starts from (data format, GPU flag) pairs; for 2D adds a vectorized-channel format
+  # only when the function under test is a max pool. Each pair is expanded to float32 and, except
+  # for the vectorized format (which always uses float32), float16, float64 and bfloat16.
+  # Each expansion yields a mapping with the pool function, data format, data type, GPU flag and a
+  # v2 flag. With v2_fn present, two more mappings are added: v2_fn with v2 false and v2_fn with
+  # v2 true. If GPUs are not allowed, all GPU entries are dropped.
+  # Returns the list of mappings (suitable as keyword arguments of the test methods); no side
+  # effects and no exceptions.
   # (data_format, use_gpu) tuple
   if one_dimensional:
     configs0 = [
@@ -122,6 +156,16 @@ def GetTestConfigsDicts(v1_fn,
 
 
 def GetTestConfigs(include_nchw_vect_c=False, one_dimensional=False):
+  # [FUNCTION DOC]
+  # HELPER: enumerates the (data format, use GPU) combinations that the older non-parameterized
+  # tests loop over.
+  # Inputs: include_nchw_vect_c (default false) asks for the vectorized-channel format when the
+  # hardware supports it; one_dimensional (default false) selects 1D formats.
+  # Behavior: always includes the channels-last format on CPU and GPU. Channels-first formats are
+  # added only when a CUDA GPU is available (the 1D channels-first format) or, for 2D, the
+  # channels-first format; the vectorized-channel format additionally needs compute capability
+  # 6.1 or newer. When skipping, it logs an informational message.
+  # Returns a list of (data format string, boolean) tuples. Queries GPU availability.
   """Get all the valid tests configs to run.
 
   Args:
@@ -155,6 +199,13 @@ def GetTestConfigs(include_nchw_vect_c=False, one_dimensional=False):
 
 
 def GetShrunkInceptionMaxPoolShapes(shrink=30):
+  # [FUNCTION DOC]
+  # HELPER: generator of max pool test shapes taken from four max pool layers of the Inception
+  # 2015 model, with the depth dimension reduced to keep the tests small.
+  # Input: shrink (default 30) is the integer factor by which each input and output depth is
+  # divided (integer division). Yields, for each of the four layers, a tuple of name, input
+  # size, filter size, output size, strides and padding type. Only the lists local to the
+  # call are modified; no external side effects.
   """Iterator for some of the max pool ops in the Inception 2015 model.
 
   Args:
@@ -183,8 +234,21 @@ def GetShrunkInceptionMaxPoolShapes(shrink=30):
 
 @test_util.with_eager_op_as_function
 class PoolingTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case covering average pooling, max pooling (v1 and v2 ops, explicit padding, depthwise
+  # pooling, argmax variants) and their first- and second-order gradients, plus error handling.
+  # Combines the TensorFlow test case base class with parameterized testing; the class is
+  # wrapped so that eager ops run as functions. Holds no instance state. Shared fixtures are the
+  # private verification helpers (_VerifyOneType, _VerifyOneTest, _VerifyValues,
+  # _ConstructAndTestGradient, _ConstructAndTestSecondGradient, the _Compare* methods and the
+  # direct gradient helpers). Additional comparison tests are attached to the class at run time
+  # from the main-script section when the file is run directly.
 
   def _isMaxPool(self, func):
+    # [FUNCTION DOC]
+    # HELPER: tells whether a pooling function is one of the max pool entry points.
+    # Input: func, a pooling function. Returns true if it is the v1 or v2 max pool function,
+    # false otherwise. No side effects.
     return func in (nn_ops.max_pool, nn_ops.max_pool_v2)
 
   def _VerifyOneType(
@@ -202,6 +266,24 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
       use_negative_input=False,
       bfloat16_rtol=1e-2,
   ):
+    # [FUNCTION DOC]
+    # HELPER: core check shared by most pooling tests (one pooling run per configuration).
+    # KNOWN ISSUE: the docstring says pool_func is the max or avg pool op "or the Lua version",
+    # which is stale; any pooling function with the same keyword signature is accepted.
+    # Runs one pooling op for one configuration and compares the flattened result with expected values.
+    # Inputs: pool_func (pooling function), input_sizes (4D shape, or 3D for 1D pooling), ksize
+    # and strides (window and stride lists), padding (string or explicit list), data_format,
+    # data_type, expected (flat list of expected outputs), use_gpu, v2 (use tensor-valued window
+    # and stride placeholders fed at run time), use_negative_input (negate the generated input,
+    # default false), bfloat16_rtol (relative tolerance used for bfloat16, default 1e-2).
+    # Behavior: skips the test (via the skip mechanism) when a GPU is requested but missing, for
+    # float64 on ROCm, for the vectorized-channel format without a capable GPU, for v2 with
+    # non-channels-last formats or explicit padding, and for the vectorized format with non-float32
+    # type or depth not divisible by four. Otherwise builds an input of incrementing values that
+    # wrap into the int8 range, converts layout (and quantizes for the vectorized format) as
+    # needed, applies the pooling function, converts back, evaluates and compares with expected
+    # using type-dependent tolerances. For non-v2 it also checks the static shape matches.
+    # Returns nothing; raises assertion failures on mismatch.
     """Verifies the output values of the pooling function.
 
     Args:
@@ -299,6 +381,17 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
   def _VerifyOneTest(self, pool_func, input_sizes, ksize, strides, padding,
                      data_format, expected, use_gpu, v2,
                      use_negative_input=False):
+    # [FUNCTION DOC]
+    # HELPER: runs the value check for one data format across several data types.
+    # KNOWN ISSUE: the docstring does not say that three data types are exercised, and its
+    # use_negative_input line ends with a stray quote character.
+    # Inputs: same as the per-type helper except that the data type is chosen internally:
+    # pooling function, input sizes, window sizes, strides, padding, data format, expected
+    # outputs, GPU flag, v2 flag and optional negative-input flag (default false).
+    # Behavior: for the vectorized-channel format it returns silently (logging a message) when
+    # the function is average pool, or max pool with explicit padding, since those are not
+    # implemented. Otherwise it runs the per-type check for float32, then float64 (skipped on
+    # ROCm), then float16 (only on CPU or on a GPU that supports half precision). Returns nothing.
     """Verifies the output values of the pooling function.
 
     Args:
@@ -350,6 +443,14 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
                     v2=False,
                     one_dim=False,
                     use_negative_input=False):
+    # [FUNCTION DOC]
+    # HELPER: runs the value check over every applicable (data format, device) configuration.
+    # Inputs: pool_func, input_sizes, ksize, strides, padding, expected outputs, use_gpu (only
+    # configurations whose device matches this flag are run), v2 (default false), one_dim (use 1D
+    # configurations, default false) and use_negative_input (default false).
+    # Behavior: loops over the configurations from the test-config helper, including the
+    # vectorized-channel format, and for each matching device calls the multi-type check.
+    # Returns nothing; failures surface as assertion errors or skips from the callee.
     """Verifies the output values of the pooling function.
 
     Args:
@@ -376,6 +477,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
   @parameterized.parameters(GetTestConfigsDicts(nn_ops.avg_pool))
   @test_util.run_deprecated_v1
   def testAvgPoolValidPadding(self, **kwargs):
+    # [FUNCTION DOC]
+    # Parameterized test (one run per data format, device and data type configuration passed as
+    # keyword arguments). Average-pools a 1x3x3x3 input with a 2x2 window, stride 2 and valid
+    # padding; expects the three depth values 7, 8, 9 as the only output window.
     self._VerifyOneType(
         input_sizes=[1, 3, 3, 3],
         ksize=[1, 2, 2, 1],
@@ -387,6 +492,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
   @parameterized.parameters(GetTestConfigsDicts(nn_ops.avg_pool))
   @test_util.run_deprecated_v1
   def testAvgPoolEmpty(self, **kwargs):
+    # [FUNCTION DOC]
+    # Parameterized test (configuration passed as keyword arguments). Average pooling over an
+    # input whose depth dimension is zero (1x3x3x0) with a 2x2 window, stride 2, valid padding;
+    # expects an empty output without errors.
     self._VerifyOneType(
         input_sizes=[1, 3, 3, 0],
         ksize=[1, 2, 2, 1],
@@ -398,6 +507,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
   @parameterized.parameters(GetTestConfigsDicts(nn_ops.avg_pool))
   @test_util.run_deprecated_v1
   def testAvgPoolSamePadding(self, **kwargs):
+    # [FUNCTION DOC]
+    # Parameterized test (configuration passed as keyword arguments). Average pooling of a
+    # 1x2x4x3 input with a 2x2 window, stride 2 and same padding; expects six averaged values
+    # (two window positions across three channels).
     self._VerifyOneType(
         input_sizes=[1, 2, 4, 3],
         ksize=[1, 2, 2, 1],
@@ -409,6 +522,11 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
   @parameterized.parameters(GetTestConfigsDicts(nn_ops.avg_pool))
   @test_util.run_deprecated_v1
   def testAvgPoolSamePaddingNonSquareWindow(self, **kwargs):
+    # [FUNCTION DOC]
+    # Parameterized test (configuration passed as keyword arguments). Average pooling of a 2x2
+    # single-channel image with a 1x2 (one row, two columns) window, stride 1 and same padding.
+    # Expects 1.5, 2.0, 3.5, 4.0: the window at the right edge averages only the in-image value
+    # (padding is not counted in the divisor).
     # input is:
     # [1.0, 2.0
     #  3.0  4.0]
@@ -427,6 +545,11 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
   @parameterized.parameters(GetTestConfigsDicts(nn_ops.avg_pool))
   @test_util.run_deprecated_v1
   def testAvgPoolSamePaddingNonSquareWindow_2(self, **kwargs):
+    # [FUNCTION DOC]
+    # Parameterized test (configuration passed as keyword arguments). Same as the previous
+    # non-square case but with a 2x1 (two rows, one column) window: average pooling of a 2x2
+    # image with stride 1 and same padding; expects 2.0, 3.0, 3.0, 4.0 (bottom row windows only
+    # average the real pixel).
     # Window of [x,
     #            x] should do:
     #  [avg(1.0, 3.0), avg(2.0, 4.0)
@@ -442,6 +565,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
   @parameterized.parameters(GetTestConfigsDicts(nn_ops.avg_pool))
   @test_util.run_deprecated_v1
   def testAvgPoolSamePaddingNonSquareWindowMultiBatch(self, **kwargs):
+    # [FUNCTION DOC]
+    # Parameterized test (configuration passed as keyword arguments). Average pooling of a
+    # 2x2x2x2 input (two batches, two channels) with a 1x2 window, stride 1, same padding;
+    # expects sixteen values checking that batches and channels are pooled independently.
     self._VerifyOneType(
         input_sizes=[2, 2, 2, 2],
         ksize=[1, 1, 2, 1],
@@ -456,6 +583,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
   @parameterized.parameters(GetTestConfigsDicts(nn_ops.avg_pool))
   @test_util.run_deprecated_v1
   def testAvgPoolSamePaddingNonSquareWindowMultiBatch_2(self, **kwargs):
+    # [FUNCTION DOC]
+    # Parameterized test (configuration passed as keyword arguments). Multi-batch,
+    # multi-channel 2x2x2x2 input average-pooled with a 2x1 window, stride 1, same padding;
+    # expects sixteen values (the column-direction counterpart of the previous test).
     self._VerifyOneType(
         input_sizes=[2, 2, 2, 2],
         ksize=[1, 2, 1, 1],
@@ -470,6 +601,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
   @parameterized.parameters(GetTestConfigsDicts(nn_ops.avg_pool))
   @test_util.run_deprecated_v1
   def testAvgPoolValidPaddingUnevenStride(self, **kwargs):
+    # [FUNCTION DOC]
+    # Parameterized test (configuration passed as keyword arguments). Average pooling of a
+    # 1x3x3x3 input, 2x2 window, strides 1 along rows and 2 along columns, valid padding;
+    # expects two output positions of three channels each (six values).
     self._VerifyOneType(
         input_sizes=[1, 3, 3, 3],
         ksize=[1, 2, 2, 1],
@@ -481,6 +616,9 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
   @parameterized.parameters(GetTestConfigsDicts(nn_ops.avg_pool))
   @test_util.run_deprecated_v1
   def testAvgPoolValidPaddingUnevenStride_2(self, **kwargs):
+    # [FUNCTION DOC]
+    # Parameterized test (configuration passed as keyword arguments). Same as the previous test
+    # with the strides swapped (2 along rows, 1 along columns); expects six values.
     self._VerifyOneType(
         input_sizes=[1, 3, 3, 3],
         ksize=[1, 2, 2, 1],
@@ -492,6 +630,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
   @parameterized.parameters(GetTestConfigsDicts(nn_ops.avg_pool))
   @test_util.run_deprecated_v1
   def testAvgPoolSamePadding_2(self, **kwargs):
+    # [FUNCTION DOC]
+    # Parameterized test (configuration passed as keyword arguments). Average pooling of a
+    # 1x4x4x4 input with a 2x2 window, stride 2, same padding; expects sixteen averaged values
+    # (2x2 positions times four channels).
     expected_output = [
         11.0, 12.0, 13.0, 14.0, 19.0, 20.0, 21.0, 22.0, 43.0, 44.0, 45.0, 46.0,
         51.0, 52.0, 53.0, 54.0
@@ -507,6 +649,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
   @parameterized.parameters(GetTestConfigsDicts(nn_ops.avg_pool))
   @test_util.run_deprecated_v1
   def testAvgPoolSamePaddingPacket_4(self, **kwargs):
+    # [FUNCTION DOC]
+    # Parameterized test (configuration passed as keyword arguments). Average pooling of a
+    # 1x4x4x4 input (depth four, a vector-friendly packet size) with a 3x3 window, stride 2 and
+    # same padding; expects sixteen values, with edge windows averaging fewer elements.
     expected_output = [
         21.0, 22.0, 23.0, 24.0, 27.0, 28.0, 29.0, 30.0, 45.0, 46.0, 47.0, 48.0,
         51.0, 52.0, 53.0, 54.0
@@ -522,6 +668,11 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
   @parameterized.parameters(GetTestConfigsDicts(nn_ops.avg_pool))
   @test_util.run_deprecated_v1
   def testAvgPoolSamePaddingPacket_8(self, **kwargs):
+    # [FUNCTION DOC]
+    # Parameterized test (configuration passed as keyword arguments). Average pooling of a
+    # 1x8x8x8 input (depth eight, a wider vector packet size) with a 3x3 window, stride 2, same
+    # padding, comparing against a long list of precomputed values. Uses a looser relative
+    # tolerance (3e-2) for bfloat16.
     expected_output = [
         -12.0, -11.0, -10.0, -9.0, -8.0, -7.0, -6.0, -5.0, 4.0, 5.0, 6.0, 7.0,
         8.0, 9.0, 10.0, 11.0, 20.0, 21.0, 22.0, 23.0, 24.0, 25.0, 26.0, 27.0,
@@ -549,6 +700,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
   @parameterized.parameters(GetTestConfigsDicts(nn_ops.avg_pool))
   @test_util.run_deprecated_v1
   def testAvgPoolEmptyInput(self, **kwargs):
+    # [FUNCTION DOC]
+    # Parameterized test (configuration passed as keyword arguments). Average pooling of an
+    # input with zero batch size (0x8x8x8), 3x3 window, stride 2, same padding; expects an empty
+    # result without errors.
     self._VerifyOneType(
         input_sizes=[0, 8, 8, 8],
         ksize=[1, 3, 3, 1],
@@ -559,6 +714,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testRawAvgPoolLargeKsizeRaiseError(self):
+    # [FUNCTION DOC]
+    # Runs in both graph and eager modes. Calls the raw average pool op on a 1x1x1x1 input with
+    # an enormous window height (the largest signed 64-bit value) and expects either a value
+    # error or an invalid-argument error rather than a crash or overflow.
     with self.assertRaises((ValueError, errors_impl.InvalidArgumentError)):
       with self.cached_session():
         t = gen_nn_ops.avg_pool(
@@ -573,6 +732,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
       GetTestConfigsDicts(nn_ops.max_pool, gen_nn_ops.max_pool_v2))
   @test_util.run_deprecated_v1
   def testMaxPoolValidPadding(self, **kwargs):
+    # [FUNCTION DOC]
+    # Parameterized test over v1 and v2 max pool configurations (passed as keyword arguments).
+    # Max-pools a 1x3x3x3 input with a 2x2 window, stride 2, valid padding; expects the three
+    # channel maxima 13, 14, 15.
     self._VerifyOneType(
         input_sizes=[1, 3, 3, 3],
         ksize=[1, 2, 2, 1],
@@ -585,6 +748,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
       GetTestConfigsDicts(nn_ops.max_pool, gen_nn_ops.max_pool_v2))
   @test_util.run_deprecated_v1
   def testMaxPoolSamePadding(self, **kwargs):
+    # [FUNCTION DOC]
+    # Parameterized test over v1 and v2 max pool configurations. Max pooling of a 1x2x3x3 input
+    # with a 2x2 window, stride 2, same padding; expects six values (two window positions by
+    # three channels).
     self._VerifyOneType(
         input_sizes=[1, 2, 3, 3],
         ksize=[1, 2, 2, 1],
@@ -598,6 +765,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
   @test_util.xla_allow_fallback("XLA doesn't support explicit padding")
   @test_util.run_deprecated_v1
   def testMaxPoolZeroExplicitPadding(self, **kwargs):
+    # [FUNCTION DOC]
+    # Parameterized test (XLA may fall back since it lacks explicit padding). Max pooling of a
+    # 3x3 single-channel image with a 3x3 window, stride 2 and an explicit padding list of all
+    # zeros; expects the single maximum 9.
     self._VerifyOneType(
         input_sizes=[1, 3, 3, 1],
         ksize=[1, 3, 3, 1],
@@ -611,6 +782,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
   @test_util.xla_allow_fallback("XLA doesn't support explicit padding")
   @test_util.run_deprecated_v1
   def testMaxPoolNegativeInputExpPadding(self, **kwargs):
+    # [FUNCTION DOC]
+    # Parameterized test with explicit padding and negative input values. Pads a 3x3 image by 2
+    # before and 1 after in both spatial dimensions, 3x3 window, stride 2; expects four outputs
+    # of -1, showing that padding cells never win the maximum when all real values are negative.
     self._VerifyOneType(
         input_sizes=[1, 3, 3, 1],
         ksize=[1, 3, 3, 1],
@@ -625,6 +800,9 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
   @test_util.xla_allow_fallback("XLA doesn't support explicit padding")
   @test_util.run_deprecated_v1
   def testMaxPoolExplicitPadding(self, **kwargs):
+    # [FUNCTION DOC]
+    # Parameterized test with explicit padding. 3x3 image, 3x3 window, stride 2, padding of 2 at
+    # the bottom and 1 at the right; expects two outputs, both 9.
     expected_output = [9.0, 9.0]
     self._VerifyOneType(
         input_sizes=[1, 3, 3, 1],
@@ -639,6 +817,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
   @test_util.xla_allow_fallback("XLA doesn't support explicit padding")
   @test_util.run_deprecated_v1
   def testMaxPoolExplicitPaddingAdvanced(self, **kwargs):
+    # [FUNCTION DOC]
+    # Parameterized test with asymmetric explicit padding on a 6x6 single-channel image, 3x3
+    # window, stride 2; padding is 1 top, 2 bottom, 2 left, 1 right. Expects sixteen precomputed
+    # window maxima.
     expected_output = [7, 9, 11, 12, 19, 21, 23, 24, 31, 33, 35, 36, 31, 33,
                        35, 36]
     self._VerifyOneType(
@@ -654,6 +836,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
   @test_util.xla_allow_fallback("XLA doesn't support explicit padding")
   @test_util.run_deprecated_v1
   def testMaxPoolNegativeInputExpPaddingAdv(self, **kwargs):
+    # [FUNCTION DOC]
+    # Parameterized test: the asymmetric explicit padding scenario of the advanced test but with
+    # the input negated (negative-input flag set), so the expected maxima are the negated
+    # smallest-magnitude values and padding must not leak in as zeros. Sixteen expected values.
     expected_output = [-1, -1, -3, -5, -7, -7, -9, -11, -19, -19, -21, -23, -31,
                        -31, -33, -35]
 
@@ -671,6 +857,11 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
   @test_util.xla_allow_fallback("XLA doesn't support explicit padding")
   @test_util.run_deprecated_v1
   def testMaxPoolExplicitPadding2_(self, **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the body is identical to the test of explicit padding without the suffix
+    # (same input, window, strides, padding and expected output), so it adds no coverage.
+    # Parameterized max pool test with explicit padding: 3x3 image, 3x3 window, stride 2,
+    # bottom padding 2 and right padding 1; expects two outputs, both 9.
     expected_output = [9.0, 9.0]
     self._VerifyOneType(
         input_sizes=[1, 3, 3, 1],
@@ -686,6 +877,9 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
   @test_util.xla_allow_fallback("XLA doesn't support explicit padding")
   @test_util.run_deprecated_v1
   def testMaxPoolExplicitPadding_1D(self, **kwargs):
+    # [FUNCTION DOC]
+    # Parameterized one-dimensional max pool test using 1D configurations (width-channel
+    # formats). Input shape 1x3x1, window 2, stride 2, padding of 1 at the end; expects 2 and 3.
     self._VerifyOneType(
         input_sizes=[1, 3, 1],
         ksize=[1, 2, 1],
@@ -698,6 +892,9 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
       GetTestConfigsDicts(nn_ops.max_pool, gen_nn_ops.max_pool_v2))
   @test_util.run_deprecated_v1
   def testMaxPoolSamePaddingNonSquareWindow(self, **kwargs):
+    # [FUNCTION DOC]
+    # Parameterized max pool test: 2x2 single-channel image, 1x2 window, stride 1, same padding;
+    # expects 2, 2, 4, 4 (right-edge windows see only the real pixel).
     # input is:
     # [1.0, 2.0
     #  3.0  4.0]
@@ -718,6 +915,9 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
       GetTestConfigsDicts(nn_ops.max_pool, gen_nn_ops.max_pool_v2))
   @test_util.run_deprecated_v1
   def testMaxPoolValidPaddingUnevenStride(self, **kwargs):
+    # [FUNCTION DOC]
+    # Parameterized max pool test: 4x4 single-channel image, 2x2 window, stride 1 along rows and
+    # 2 along columns, valid padding; expects six values.
     self._VerifyOneType(
         input_sizes=[1, 4, 4, 1],
         ksize=[1, 2, 2, 1],
@@ -730,6 +930,9 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
       GetTestConfigsDicts(nn_ops.max_pool, gen_nn_ops.max_pool_v2))
   @test_util.run_deprecated_v1
   def testMaxPoolValidPaddingUnevenStride2_(self, **kwargs):
+    # [FUNCTION DOC]
+    # Parameterized max pool test with the strides swapped relative to the previous test (2 along
+    # rows, 1 along columns) on a 4x4 image, 2x2 window, valid padding; expects six values.
     self._VerifyOneType(
         input_sizes=[1, 4, 4, 1],
         ksize=[1, 2, 2, 1],
@@ -742,6 +945,9 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
       GetTestConfigsDicts(nn_ops.max_pool, gen_nn_ops.max_pool_v2))
   @test_util.run_deprecated_v1
   def testMaxPoolSamePaddingPacket4_(self, **kwargs):
+    # [FUNCTION DOC]
+    # Parameterized max pool test on a 1x4x4x4 input (depth four) with a 2x2 window, stride 2,
+    # same padding; expects sixteen window maxima.
     expected_output = [
         21.0, 22.0, 23.0, 24.0, 29.0, 30.0, 31.0, 32.0, 53.0, 54.0, 55.0, 56.0,
         61.0, 62.0, 63.0, 64.0
@@ -758,6 +964,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
       GetTestConfigsDicts(nn_ops.max_pool, gen_nn_ops.max_pool_v2))
   @test_util.run_deprecated_v1
   def testMaxPoolSamePaddingPacket8_(self, **kwargs):
+    # [FUNCTION DOC]
+    # Parameterized max pool test on a 1x8x8x8 input (depth eight) with a 3x3 window, stride 2,
+    # same padding, compared against a long list of precomputed maxima. The input values wrap
+    # around the signed 8-bit range, which explains the negative and wrapped entries.
     expected_output = [
         81.0, 82.0, 83.0, 84.0, 85.0, 86.0, 87.0, 88.0, 97.0, 98.0, 99.0, 100.0,
         101.0, 102.0, 103.0, 104.0, 113.0, 114.0, 115.0, 116.0, 117.0, 118.0,
@@ -784,6 +994,9 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
       GetTestConfigsDicts(nn_ops.max_pool, gen_nn_ops.max_pool_v2))
   @test_util.run_deprecated_v1
   def testMaxPoolEmptyInput(self, **kwargs):
+    # [FUNCTION DOC]
+    # Parameterized max pool test with an empty batch (0x8x8x8 input), 3x3 window, stride 2, same
+    # padding; expects an empty result and no error.
     self._VerifyOneType(
         input_sizes=[0, 8, 8, 8],
         ksize=[1, 3, 3, 1],
@@ -796,6 +1009,11 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
       GetTestConfigsDicts(nn_ops.max_pool, gen_nn_ops.max_pool_v2))
   @test_util.run_deprecated_v1
   def testMaxPoolInvalidFilterSize(self, **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: it is parameterized over many configurations but ignores all of them; the
+    # body never uses the keyword arguments, so every parameter set runs the same check.
+    # Max-pools a 1x1x1x1 tensor with a window of width 2 and valid padding and expects an
+    # invalid-argument or value error mentioning a negative dimension size.
     with self.cached_session(use_gpu=test.is_gpu_available()):
       t = constant_op.constant(1.0, shape=[1, 1, 1, 1])
       with self.assertRaisesRegex(
@@ -806,6 +1024,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testMaxPoolWithArgmaxKsizeOverflow(self):
+    # [FUNCTION DOC]
+    # Runs in graph and eager modes. Calls the raw max-pool-with-argmax op with a window height
+    # of minus two to the power of 31 and a huge stride; expects a value error or invalid-argument
+    # error saying the window size must be a positive 32-bit integer.
     with self.assertRaisesRegex(
         (ValueError, errors_impl.InvalidArgumentError),
         "ksize must be a positive int32 value",
@@ -824,6 +1046,9 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
           nn_ops.max_pool, gen_nn_ops.max_pool_v2, allow_gpu=False))
   @test_util.run_deprecated_v1
   def testDepthwiseMaxPool1x1DepthWindow(self, **kwargs):
+    # [FUNCTION DOC]
+    # Parameterized CPU-only depthwise max pool test. Input is a single pixel with ten channels
+    # of 1 to 10; pools along depth with window and stride 2; expects 2, 4, 6, 8, 10.
     # input is:
     # [1.0, ..., 10.0] along depth,
     #
@@ -841,6 +1066,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
           nn_ops.max_pool, gen_nn_ops.max_pool_v2, allow_gpu=False))
   @test_util.run_deprecated_v1
   def testDepthwiseMaxPool2x2DepthWindow(self, **kwargs):
+    # [FUNCTION DOC]
+    # Parameterized CPU-only depthwise max pool test. A 2x2 spatial input with six channels is
+    # pooled along depth with window and stride 3, giving a 2x2x2 output whose values are
+    # multiples of 3.
     # input is:
     #
     # a 2x2x6 cube, and we depthwise max across 3 to produce a 2x2x2
@@ -859,6 +1088,9 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
           nn_ops.max_pool, gen_nn_ops.max_pool_v2, allow_gpu=False))
   @test_util.run_deprecated_v1
   def testMaxPoolKernelSmallerThanStrideValid(self, **kwargs):
+    # [FUNCTION DOC]
+    # Parameterized CPU-only max pool test where the window (2x2) is smaller than the stride (3)
+    # on a 7x7 single-channel image with valid padding; expects four maxima (9, 12, 30, 33).
     self._VerifyOneType(
         input_sizes=[1, 7, 7, 1],
         ksize=[1, 2, 2, 1],
@@ -870,6 +1102,9 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
   @parameterized.parameters(GetTestConfigsDicts(nn_ops.avg_pool))
   @test_util.run_deprecated_v1
   def testAvgPoolKernelSmallerThanStride(self, **kwargs):
+    # [FUNCTION DOC]
+    # Parameterized average pool test where the 2x2 window is smaller than the stride of 3 on a
+    # 7x7 single-channel image with valid padding; expects four averages (5, 8, 26, 29).
     self._VerifyOneType(
         input_sizes=[1, 7, 7, 1],
         ksize=[1, 2, 2, 1],
@@ -883,6 +1118,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
       GetTestConfigsDicts(nn_ops.avg_pool))
   @test_util.run_deprecated_v1
   def testKernelSmallerThanStrideSame1_(self, **kwargs):
+    # [FUNCTION DOC]
+    # Parameterized over both max pool and average pool configurations. A 1x1 window with stride
+    # 2 and same padding on a 3x3 single-channel image samples every other pixel; expects 1, 3,
+    # 7, 9.
     self._VerifyOneType(
         input_sizes=[1, 3, 3, 1],
         ksize=[1, 1, 1, 1],
@@ -896,6 +1135,9 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
       GetTestConfigsDicts(nn_ops.avg_pool))
   @test_util.run_deprecated_v1
   def testKernelSmallerThanStrideSame2_(self, **kwargs):
+    # [FUNCTION DOC]
+    # Parameterized over both max pool and average pool configurations. A 1x1 window with stride
+    # 2 and same padding on a 4x4 single-channel image; expects 1, 3, 9, 11.
     self._VerifyOneType(
         input_sizes=[1, 4, 4, 1],
         ksize=[1, 1, 1, 1],
@@ -910,6 +1152,12 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
                                          strides,
                                          error_msg,
                                          use_gpu=False):
+    # [FUNCTION DOC]
+    # HELPER: for testDepthwiseMaxPoolInvalidConfigs; asserts one depthwise max pool config is rejected.
+    # Inputs: in_size (shape of an all-ones input), ksize and strides (window and stride lists),
+    # error_msg (regular expression the error text must match), use_gpu (default false).
+    # Builds the input, applies same-padded max pooling and evaluates it, expecting an
+    # unimplemented-operation error whose message matches error_msg. Returns nothing.
     with self.cached_session(use_gpu=use_gpu):
       t = constant_op.constant(1.0, shape=in_size)
       with self.assertRaisesRegex(errors_impl.UnimplementedError, error_msg):
@@ -918,6 +1166,12 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
 
   @test_util.disable_xla("b/123338077")  # Passes with XLA
   def testDepthwiseMaxPoolInvalidConfigs(self):
+    # [FUNCTION DOC]
+    # Checks that unsupported depthwise max pool configurations are rejected with an
+    # unimplemented error: pooling over depth and space at once, depth window different from
+    # depth stride, and a depth window that does not evenly divide the depth. When a GPU is
+    # present it also checks that depthwise pooling reports it is only supported on CPU devices.
+    # XLA is disabled for this test because it behaves differently.
     self._testDepthwiseMaxPoolInvalidConfig(
         [1, 2, 2, 4], [1, 2, 2, 2], [1, 1, 1, 2],
         "exactly one of pooling across depth")
@@ -938,6 +1192,15 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
   # The following are tests that verify that the CPU and GPU implementations
   # produce the same results.
   def _CompareMaxPoolingFwd(self, input_shape, ksize, strides, padding):
+    # [FUNCTION DOC]
+    # HELPER: used by the factory-built forward comparison tests.
+    # KNOWN ISSUE: operator precedence makes the loop list be the float32/float16 list plus float64
+    # when not on ROCm, but an empty list on ROCm, so on ROCm no data type is compared at all
+    # (the intent was only to drop float64). Also the variable named gpu_val is computed with
+    # the argmax op using the default session, not necessarily on the GPU.
+    # Inputs: input_shape, ksize, strides, padding. For each data type, builds a random input,
+    # runs max-pool-with-argmax (first output only) and the plain max pool on CPU, and asserts
+    # the two results agree within type-dependent tolerance. Returns nothing.
     # double datatype is currently not supported for pooling ops
     # on the ROCm platform
     for dtype in [np.float32, np.float16
@@ -955,6 +1218,15 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
 
   def _CompareMaxPoolingBk(self, input_shape, output_shape, ksize, strides,
                            padding):
+    # [FUNCTION DOC]
+    # HELPER: used by the factory-built gradient comparison tests.
+    # KNOWN ISSUE: the data-type list has the same precedence bug as the forward comparison
+    # helper: on ROCm the list is empty so nothing is compared. Also uses a deprecated random
+    # integer generator from the numerical library.
+    # Inputs: input_shape, output_shape, ksize, strides, padding. For each data type, builds a
+    # random input with few distinct values (many ties) and a random output gradient; computes
+    # the argmax-based max pool gradient and the standard max pool gradient on CPU, and
+    # asserts they match within loosened half/bfloat16 tolerances. Returns nothing.
     # double datatype is currently not supported for pooling ops
     # on the ROCm platform
     for dtype in [np.float32, np.float16, dtypes.bfloat16.as_numpy_dtype
@@ -993,6 +1265,15 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
 
   def _CompareMaxPoolingGradBk(self, input_shape, output_shape, ksize, strides,
                                padding):
+    # [FUNCTION DOC]
+    # HELPER: used by the factory-built second-order gradient comparison tests.
+    # KNOWN ISSUE: same precedence bug in the data-type list (empty on ROCm); both halves of the
+    # comparison run under a CPU-only session although one is labelled as the GPU value; and it
+    # uses a deprecated random integer generator.
+    # Inputs: input_shape, output_shape (unused except by callers), ksize, strides, padding. For
+    # each data type, builds a tie-heavy random input, computes the argmax-based grad-of-grad and
+    # the standard max pool grad-of-grad, and asserts they agree within half-precision tolerances.
+    # Returns nothing.
     # double datatype is currently not supported for pooling ops
     # on the ROCm platform
     for dtype in [np.float32, np.float16, dtypes.bfloat16.as_numpy_dtype
@@ -1024,6 +1305,11 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
           cpu_val, gpu_val, half_rtol=0.01, half_atol=0.01)
 
   def testMaxPoolingWithArgmax(self):
+    # [FUNCTION DOC]
+    # Runs max-pool-with-argmax on a two-batch 3x3 input, 2x2 window, stride 1, valid padding for
+    # several configurations of device, whether argmax indices include the batch offset, and the
+    # argmax integer type. Asserts the output shapes, that all pooled values are 1, and that the
+    # argmax indices equal the expected flat positions (with batch offsets when requested).
     tensor_input = [
         1.0, 1.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 1.0, 0.0, 0.0,
         0.0, 1.0, 0.0, 1.0
@@ -1058,6 +1344,12 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
         self.assertAllEqual(argmax.ravel(), config.argmax)
 
   def testDepthwiseMaxPoolingWithArgmax(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: shape assertions are commented out pending a bug (b/259733542), so only values
+    # are checked.
+    # Max-pool-with-argmax along the depth dimension (window and stride 3) of a one-pixel,
+    # three-channel input, on CPU and GPU scope with same and valid padding. Asserts the output
+    # is the original three values and argmax is 0, 1, 2.
     tensor_input = [89, 73, -109]
     Config = collections.namedtuple("Config", ["use_gpu", "padding"])
     configs = [
@@ -1084,6 +1376,11 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
         self.assertAllClose(argmax.ravel(), [0, 1, 2])
 
   def testMaxPoolingGradWithArgmax(self):
+    # [FUNCTION DOC]
+    # Tests the argmax-based max pool gradient op on a two-batch 3x3 input with a 2x2 window,
+    # stride 1, valid padding, with and without batch offsets in the argmax indices, on CPU and
+    # GPU scopes. Asserts the gradient scatters each incoming value to its argmax position and
+    # accumulates where indices coincide, matching an explicit eighteen-element list.
     orig_input = [
         1.0, 1.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 1.0, 0.0, 0.0,
         0.0, 1.0, 0.0, 1.0
@@ -1120,6 +1417,11 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
         ])
 
   def testMaxPoolingGradThrowDeterminismError(self):
+    # [FUNCTION DOC]
+    # Enables op determinism, then runs the argmax-based max pool gradient. With a CUDA GPU it
+    # expects an unimplemented error saying determinism is not supported for that op; without a
+    # GPU it runs on CPU and expects success. Side effect: toggles global op determinism, always
+    # disabling it again in a cleanup block.
     if test.is_gpu_available(cuda_only=True):
       try:
         config_exec.enable_op_determinism()
@@ -1175,6 +1477,11 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
         config_exec.disable_op_determinism()
 
   def testMaxPoolingGradGradWithArgmax(self):
+    # [FUNCTION DOC]
+    # Tests the argmax-based second-order max pool gradient on GPU only (returns immediately,
+    # reporting a pass, when no CUDA GPU exists). Uses a two-batch 3x3 input, 2x2 window,
+    # stride 1, valid padding, with and without batch offsets in the indices, and asserts the
+    # output equals the eight gathered values 11, 12, 14, 16, 21, 23, 27, 29.
     # MaxPoolWithArgMax is implemented only on CUDA.
     if not test.is_gpu_available(cuda_only=True):
       return
@@ -1224,6 +1531,18 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
                                 data_format,
                                 use_gpu,
                                 x_init_value=None):
+    # [FUNCTION DOC]
+    # HELPER: numerical first-order gradient check shared by the max/avg gradient tests.
+    # Inputs: pool_func (max or average pool function), input_sizes and output_sizes (4D shapes in
+    # channels-last order), window_rows/window_cols (window size), row_stride/col_stride,
+    # padding (string or explicit list), data_format (channels-last or channels-first), use_gpu,
+    # x_init_value (optional point at which to evaluate; defaults to increasing values for max
+    # pool so that maxima are unambiguous).
+    # Behavior: asserts batch and depth sizes of input and output agree, builds an input of
+    # increasing values, converts layout for the channels-first format, applies the pooling,
+    # converts back and computes the maximum error between analytic and numeric Jacobians with a
+    # step of 0.01. Asserts the error is below 1e-4 for average pool or 1e-3 for max pool, and
+    # logs it. Returns nothing.
     """Verifies the gradients of the max or avg pooling function.
 
     Args:
@@ -1302,6 +1621,19 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
                                       data_format,
                                       use_gpu,
                                       x_init_value=None):
+    # [FUNCTION DOC]
+    # HELPER: numerical second-order gradient check shared by the max pool grad-grad tests.
+    # KNOWN ISSUE: the channels-first branch builds the kernel size from the row window size twice
+    # (the column window size parameter is ignored), and after pooling it converts the result with
+    # the channels-last-to-channels-first conversion again instead of converting back, so the
+    # channels-first path is wrong (only exercised when a GPU is available). Callers always pass
+    # equal row and column windows so the ksize slip is hidden. The channels-last path also uses
+    # the row window size for both window dimensions.
+    # Inputs: same as the first-order helper (pool function, shapes, window and stride sizes,
+    # padding, data format, GPU flag, optional initial value).
+    # Behavior: pools the input, takes the gradient of the squared output with respect to the
+    # input, and computes the numerical error of that gradient; asserts it is below 1e-3 for
+    # average pool or 1e-2 for max pool. Returns nothing.
     """Verifies the second-order gradients of the pooling function.
 
     Args:
@@ -1368,6 +1700,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
     self.assertLess(err, err_tolerance)
 
   def _testMaxPoolGradValidPadding1_1(self, data_format, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testMaxPoolGrad. For both the v2 and v1 max pool functions, runs the
+    # numerical gradient check on a 1x3x3x1 input with a 1x1 window, stride 1, valid padding.
+    # Inputs: data_format and use_gpu. Returns nothing; fails by assertion.
     for pool_func in [gen_nn_ops.max_pool_v2, nn_ops.max_pool]:
       self._ConstructAndTestGradient(
           pool_func,
@@ -1382,6 +1718,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
           use_gpu=use_gpu)
 
   def _testMaxPoolGradValidPadding2_1_6(self, data_format, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testMaxPoolGrad. Gradient check for v2 and v1 max pool on a 2x6x6x3
+    # input, 2x2 window, stride 1, valid padding (output 2x5x5x3).
+    # Inputs: data_format and use_gpu. Returns nothing.
     for pool_func in [gen_nn_ops.max_pool_v2, nn_ops.max_pool]:
       self._ConstructAndTestGradient(
           pool_func,
@@ -1396,6 +1736,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
           use_gpu=use_gpu)
 
   def _testMaxPoolGradValidPadding2_1_7(self, data_format, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testMaxPoolGrad. Gradient check for v2 and v1 max pool on a 2x7x7x3
+    # input (odd spatial size), 2x2 window, stride 1, valid padding (output 2x6x6x3).
+    # Inputs: data_format and use_gpu. Returns nothing.
     for pool_func in [gen_nn_ops.max_pool_v2, nn_ops.max_pool]:
       self._ConstructAndTestGradient(
           pool_func,
@@ -1410,6 +1754,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
           use_gpu=use_gpu)
 
   def _testMaxPoolGradValidPadding1_2(self, data_format, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testMaxPoolGrad. Gradient check for v2 and v1 max pool on a 1x3x3x1
+    # input, 1x1 window, stride 2, valid padding (output 1x2x2x1).
+    # Inputs: data_format and use_gpu. Returns nothing.
     for pool_func in [gen_nn_ops.max_pool_v2, nn_ops.max_pool]:
       self._ConstructAndTestGradient(
           pool_func,
@@ -1424,6 +1772,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
           use_gpu=use_gpu)
 
   def _testMaxPoolGradValidPadding2_2(self, data_format, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testMaxPoolGrad. Gradient check for v2 and v1 max pool on a 2x2x2x3
+    # input, 2x2 window, stride 2, valid padding (output 2x1x1x3).
+    # Inputs: data_format and use_gpu. Returns nothing.
     for pool_func in [gen_nn_ops.max_pool_v2, nn_ops.max_pool]:
       self._ConstructAndTestGradient(
           pool_func,
@@ -1438,6 +1790,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
           use_gpu=use_gpu)
 
   def _testMaxPoolGradSamePadding1_1(self, data_format, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testMaxPoolGrad. Gradient check for v2 and v1 max pool on a 2x2x4x3
+    # input, 1x1 window, stride 1, same padding (output same shape as input).
+    # Inputs: data_format and use_gpu. Returns nothing.
     for pool_func in [gen_nn_ops.max_pool_v2, nn_ops.max_pool]:
       self._ConstructAndTestGradient(
           pool_func,
@@ -1452,6 +1808,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
           use_gpu=use_gpu)
 
   def _testMaxPoolGradSamePadding1_2(self, data_format, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testMaxPoolGrad. Gradient check for v2 and v1 max pool on a 2x2x4x3
+    # input, 1x1 window, stride 2, same padding (output 2x1x2x3).
+    # Inputs: data_format and use_gpu. Returns nothing.
     for pool_func in [gen_nn_ops.max_pool_v2, nn_ops.max_pool]:
       self._ConstructAndTestGradient(
           pool_func,
@@ -1466,6 +1826,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
           use_gpu=use_gpu)
 
   def _testMaxPoolGradSamePadding2_1(self, data_format, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testMaxPoolGrad. Gradient check for v2 and v1 max pool on a 2x2x4x3
+    # input, 2x2 window, stride 1, same padding (output same shape as input).
+    # Inputs: data_format and use_gpu. Returns nothing.
     for pool_func in [gen_nn_ops.max_pool_v2, nn_ops.max_pool]:
       self._ConstructAndTestGradient(
           pool_func,
@@ -1480,6 +1844,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
           use_gpu=use_gpu)
 
   def _testMaxPoolGradSamePadding2_2(self, data_format, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testMaxPoolGrad. Gradient check for v2 and v1 max pool on a 2x2x4x3
+    # input, 2x2 window, stride 2, same padding (output 2x1x2x3).
+    # Inputs: data_format and use_gpu. Returns nothing.
     for pool_func in [gen_nn_ops.max_pool_v2, nn_ops.max_pool]:
       self._ConstructAndTestGradient(
           pool_func,
@@ -1494,6 +1862,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
           use_gpu=use_gpu)
 
   def _testMaxPoolGradSamePadding3_1(self, data_format, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testMaxPoolGrad. Gradient check for v2 and v1 max pool on a 1x7x7x1
+    # input, 3x3 window, stride 1, same padding (output same shape as input).
+    # Inputs: data_format and use_gpu. Returns nothing.
     for pool_func in [gen_nn_ops.max_pool_v2, nn_ops.max_pool]:
       self._ConstructAndTestGradient(
           pool_func,
@@ -1508,6 +1880,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
           use_gpu=use_gpu)
 
   def _testMaxPoolExplicitPadding_1(self, data_format, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testMaxPoolGrad. Gradient check for the v1 max pool only on a 1x7x7x1
+    # input, 3x3 window, stride 1, explicit padding of one on every spatial side (same size
+    # output). Inputs: data_format and use_gpu. Returns nothing.
     for pool_func in [nn_ops.max_pool]:
       self._ConstructAndTestGradient(
           pool_func,
@@ -1522,6 +1898,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
           use_gpu=use_gpu)
 
   def _testMaxPoolExplicitPadding_2(self, data_format, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testMaxPoolGrad. Gradient check for the v1 max pool on a 1x7x7x1
+    # input with a 3x5 window, stride 1 and asymmetric explicit padding (rows 0 and 1, columns 2
+    # and 3), giving a 1x6x8x1 output. Inputs: data_format and use_gpu. Returns nothing.
     for pool_func in [nn_ops.max_pool]:
       self._ConstructAndTestGradient(
           pool_func,
@@ -1536,6 +1916,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
           use_gpu=use_gpu)
 
   def _testMaxPoolExplicitPaddingLeftGreater(self, data_format, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testMaxPoolGrad. Gradient check for the v1 max pool on a 1x7x7x1
+    # input, 3x5 window, stride 1, explicit padding where the left column padding (3) exceeds the
+    # right (2); output 1x6x8x1. Inputs: data_format and use_gpu. Returns nothing.
     for pool_func in [nn_ops.max_pool]:
       self._ConstructAndTestGradient(
           pool_func,
@@ -1550,6 +1934,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
           use_gpu=use_gpu)
 
   def _testMaxPoolExplicitPaddingBatchChannel(self, data_format, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testMaxPoolGrad. Gradient check for the v1 max pool with explicit
+    # padding on a 4x7x7x3 input (several batches and channels), 3x5 window, stride 1; output
+    # 4x6x8x3. Inputs: data_format and use_gpu. Returns nothing.
     for pool_func in [nn_ops.max_pool]:
       self._ConstructAndTestGradient(
           pool_func,
@@ -1564,6 +1952,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
           use_gpu=use_gpu)
 
   def _testMaxPoolExplicitPaddingStrides(self, data_format, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testMaxPoolGrad. Gradient check for the v1 max pool on a 1x7x7x1
+    # input, 3x3 window, row stride 2, column stride 3, explicit padding of one on each spatial
+    # side; output 1x4x3x1. Inputs: data_format and use_gpu. Returns nothing.
     for pool_func in [nn_ops.max_pool]:
       self._ConstructAndTestGradient(
           pool_func,
@@ -1579,6 +1971,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_deprecated_v1
   def testMaxPoolGrad(self):
+    # [FUNCTION DOC]
+    # Runs every max pool gradient scenario helper (valid, same and explicit padding variants)
+    # for each (data format, GPU) configuration returned by the config helper, asserting
+    # the numerical gradient error is within tolerance. Graph-mode only (deprecated v1 style).
     for (data_format, use_gpu) in GetTestConfigs():
       self._testMaxPoolGradValidPadding1_1(data_format, use_gpu)
       self._testMaxPoolGradValidPadding1_2(data_format, use_gpu)
@@ -1598,6 +1994,14 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
 
   def _MaxPoolGrad(self, orig_input, orig_output, grad, window_rows,
                    window_cols, row_stride, col_stride, padding, v2):
+    # [FUNCTION DOC]
+    # HELPER: invokes the raw max pool gradient op for the direct gradient tests.
+    # KNOWN ISSUE: the docstring omits the v2 parameter, and says padding is a padding enum
+    # type while it is a padding string or explicit padding list.
+    # Inputs: original input and output tensors, incoming gradient, window sizes, strides,
+    # padding, and v2 (choose the gradient op taking tensor window and stride). For v2 it passes
+    # the padding as given; otherwise it first converts the padding into a padding string plus
+    # explicit padding list. Returns the resulting input-gradient tensor.
     """Max Pooling Gradient.
 
     Args:
@@ -1630,6 +2034,15 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
                              expected_input_backprop, input_sizes, output_sizes,
                              window_rows, window_cols, row_stride, col_stride,
                              padding, use_gpu, v2):
+    # [FUNCTION DOC]
+    # HELPER: verifies the max pool gradient op against hand-computed values.
+    # Inputs: input_data (flat list of input values), output_backprop (flat incoming gradient),
+    # expected_input_backprop (flat expected result), input_sizes and output_sizes (shapes),
+    # window sizes, strides, padding, use_gpu, and v2 (use the tensor-window variants).
+    # Behavior: puts the input in an initialized variable, runs the max pool, then the gradient op
+    # and compares the flattened gradient with the expected values (tolerance 1e-6), also
+    # checking the static shape. It also evaluates the forward output (unused afterwards).
+    # Returns nothing; failures are assertion errors.
     pool_func = gen_nn_ops.max_pool_v2 if v2 else nn_ops.max_pool
     with self.cached_session(use_gpu=use_gpu):
       input_tensor = variables.Variable(
@@ -1656,6 +2069,11 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
           expected_input_backprop, actual_input_backprop, rtol=1e-6, atol=1e-6)
 
   def _testMaxPoolGradDirect1_1(self):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testMaxPoolGradDirect. All-ones 4x4 input, 2x2 window, stride 1,
+    # valid padding, so ties go to the first element of each window; runs on GPU and CPU flags
+    # and for v2 true and false, expecting the gradient values to land on the top-left cells of
+    # each window.
     input_data = [
         1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
         1.0, 1.0
@@ -1683,6 +2101,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
             v2=v2)
 
   def _testMaxPoolGradDirect1_2(self):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testMaxPoolGradDirect. 4x4 input with a checkerboard of ones and zeros,
+    # 2x2 window, stride 1, valid padding; gradients overlap and accumulate on the ones. Runs
+    # both device flags and both v2 settings.
     input_data = [
         1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0,
         0.0, 1.0
@@ -1710,6 +2132,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
             v2=v2)
 
   def _testMaxPoolGradDirect1_3(self):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testMaxPoolGradDirect. Checkerboard 4x4 input, 3x3 window, stride 1,
+    # same padding, sixteen incoming gradient values; checks accumulation of gradients where
+    # several windows pick the same maximum. Runs both device flags and both v2 settings.
     input_data = [
         1.0,
         0.0,
@@ -1768,6 +2194,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
             v2=v2)
 
   def _testMaxPoolGradZeroExplicitPadding(self):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testMaxPoolGradDirect. Same data as the checkerboard valid-padding case
+    # but with an explicit padding list of all zeros; v1 only (explicit padding unsupported by v2).
+    # Runs on both device flags and expects the same gradient as valid padding.
     input_data = [
         1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0,
         0.0, 1.0
@@ -1795,6 +2225,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
             v2=v2)
 
   def _testMaxPoolGradExplicitPadding_1(self):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testMaxPoolGradDirect. Checkerboard 4x4 input, 2x2 window, stride 1,
+    # explicit padding of one extra column on the right (output 3x4); v1 only; both device flags.
+    # Checks gradient routing when windows overlap the padded column.
     input_data = [
         1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0,
         0.0, 1.0
@@ -1823,6 +2257,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
             v2=v2)
 
   def _testMaxPoolGradExplicitPadding_2(self):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testMaxPoolGradDirect. Checkerboard 4x4 input, 3x3 window, stride 2,
+    # explicit padding of 2 before and 1 after in both spatial dimensions (output 3x3); v1 only;
+    # both device flags. Checks gradient placement with large leading padding.
     input_data = [
         1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0,
         0.0, 1.0
@@ -1850,6 +2288,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
             v2=v2)
 
   def _testMaxPoolGradExplicitPadding_3(self):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testMaxPoolGradDirect. Same shapes as the first explicit-padding
+    # scenario but with a negative-valued checkerboard input (minus one and minus five), so
+    # padding cells must not win; expects the same gradient as that scenario. v1 only.
     input_data = [
         -1.0, -5.0, -1.0, -5.0, -5.0, -1.0, -5.0, -1.0, -1.0, -5.0, -1.0, -5.0,
         -5.0, -1.0, -5.0, -1.0
@@ -1879,6 +2321,16 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
 
   @test_util.no_xla_auto_jit("b/123923733")  # NaNs handled differently
   def _testMaxPoolGradDirectWithNans2_1(self):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testMaxPoolGradDirect with NaN inputs.
+    # KNOWN ISSUE: the environment variable is restored only on success; a failed assertion in
+    # between leaves it modified for the rest of the process.
+    # Input made entirely of not-a-number
+    # values, 2x2 window, stride 1, valid padding. The CPU result must propagate the incoming
+    # gradient to the first window cell. If a non-ROCm GPU exists it temporarily sets the
+    # NaN-propagation environment variable: with it off the expected gradient is all zeros; with
+    # it on the expected gradient equals the CPU result. Side effect: modifies the process
+    # environment variable and restores or removes it at the end (not restored on failure).
     input_data = [float("nan")] * 16
     output_backprop = [11.0, 12.0, 13.0, 15.0, 16.0, 17.0, 19.0, 20.0, 21.0]
     # Test the CPU implementation, which propagates diffs in case of NaN
@@ -1961,6 +2413,13 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
 
   @test_util.no_xla_auto_jit("b/123923733")  # NaNs handled differently
   def _testMaxPoolGradDirectWithNans2_2(self):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testMaxPoolGradDirect with NaN inputs.
+    # KNOWN ISSUE: the environment variable is restored only on success; a failed assertion in
+    # between leaves it modified for the rest of the process.
+    # All-NaN input, 2x2 window, stride 1, valid padding, where some incoming gradient values are
+    # themselves NaN. Same CPU and GPU expectations and the same environment variable handling
+    # as the first NaN scenario.
     input_data = [float("nan")] * 16
     output_backprop = [
         float("nan"), 12.0, 13.0, 15.0,
@@ -2048,6 +2507,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_deprecated_v1
   def testMaxPoolGradDirect(self):
+    # [FUNCTION DOC]
+    # Runs all direct max pool gradient scenarios in turn: the three basic cases, two NaN cases,
+    # zero explicit padding and three explicit-padding cases. Each scenario asserts the computed
+    # input gradient against hard-coded expected values. Graph-mode only.
     self._testMaxPoolGradDirect1_1()
     self._testMaxPoolGradDirect1_2()
     self._testMaxPoolGradDirect1_3()
@@ -2059,6 +2522,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
     self._testMaxPoolGradExplicitPadding_3()
 
   def _testMaxPoolGradGradValidPadding1_1(self, data_format, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testMaxPoolGradGrad. Second-order gradient check for v2 and v1 max
+    # pool on a 1x3x3x1 input, 1x1 window, stride 1, valid padding.
+    # Inputs: data_format and use_gpu. Returns nothing.
     for pool_func in [gen_nn_ops.max_pool_v2, nn_ops.max_pool]:
       self._ConstructAndTestSecondGradient(
           pool_func,
@@ -2073,6 +2540,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
           use_gpu=use_gpu)
 
   def _testMaxPoolGradGradValidPadding2_1_6(self, data_format, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testMaxPoolGradGrad. Second-order gradient check for v2 and v1 max
+    # pool on a 2x6x6x3 input, 2x2 window, stride 1, valid padding.
+    # Inputs: data_format and use_gpu. Returns nothing.
     for pool_func in [gen_nn_ops.max_pool_v2, nn_ops.max_pool]:
       self._ConstructAndTestSecondGradient(
           pool_func,
@@ -2087,6 +2558,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
           use_gpu=use_gpu)
 
   def _testMaxPoolGradGradValidPadding2_1_7(self, data_format, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testMaxPoolGradGrad. Second-order gradient check for v2 and v1 max
+    # pool on a 2x7x7x3 input, 2x2 window, stride 1, valid padding.
+    # Inputs: data_format and use_gpu. Returns nothing.
     for pool_func in [gen_nn_ops.max_pool_v2, nn_ops.max_pool]:
       self._ConstructAndTestSecondGradient(
           pool_func,
@@ -2101,6 +2576,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
           use_gpu=use_gpu)
 
   def _testMaxPoolGradGradValidPadding2_2(self, data_format, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testMaxPoolGradGrad. Second-order gradient check for v2 and v1 max
+    # pool on a 2x2x2x3 input, 2x2 window, stride 2, valid padding.
+    # Inputs: data_format and use_gpu. Returns nothing.
     for pool_func in [gen_nn_ops.max_pool_v2, nn_ops.max_pool]:
       self._ConstructAndTestSecondGradient(
           pool_func,
@@ -2115,6 +2594,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
           use_gpu=use_gpu)
 
   def _testMaxPoolGradGradSamePadding1_1(self, data_format, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testMaxPoolGradGrad. Second-order gradient check for v2 and v1 max
+    # pool on a 2x2x4x3 input, 1x1 window, stride 1, same padding.
+    # Inputs: data_format and use_gpu. Returns nothing.
     for pool_func in [gen_nn_ops.max_pool_v2, nn_ops.max_pool]:
       self._ConstructAndTestSecondGradient(
           pool_func,
@@ -2129,6 +2612,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
           use_gpu=use_gpu)
 
   def _testMaxPoolGradGradSamePadding2_1(self, data_format, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testMaxPoolGradGrad. Second-order gradient check for v2 and v1 max
+    # pool on a 2x2x4x3 input, 2x2 window, stride 1, same padding.
+    # Inputs: data_format and use_gpu. Returns nothing.
     for pool_func in [gen_nn_ops.max_pool_v2, nn_ops.max_pool]:
       self._ConstructAndTestSecondGradient(
           pool_func,
@@ -2143,6 +2630,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
           use_gpu=use_gpu)
 
   def _testMaxPoolGradGradSamePadding2_2(self, data_format, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testMaxPoolGradGrad. Second-order gradient check for v2 and v1 max
+    # pool on a 2x2x4x3 input, 2x2 window, stride 2, same padding.
+    # Inputs: data_format and use_gpu. Returns nothing.
     for pool_func in [gen_nn_ops.max_pool_v2, nn_ops.max_pool]:
       self._ConstructAndTestSecondGradient(
           pool_func,
@@ -2157,6 +2648,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
           use_gpu=use_gpu)
 
   def _testMaxPoolGradGradSamePadding3_1(self, data_format, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testMaxPoolGradGrad. Second-order gradient check for v2 and v1 max
+    # pool on a 1x7x7x1 input, 3x3 window, stride 1, same padding.
+    # Inputs: data_format and use_gpu. Returns nothing.
     for pool_func in [gen_nn_ops.max_pool_v2, nn_ops.max_pool]:
       self._ConstructAndTestSecondGradient(
           pool_func,
@@ -2172,6 +2667,9 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_deprecated_v1
   def testMaxPoolGradGrad(self):
+    # [FUNCTION DOC]
+    # Runs every second-order max pool gradient scenario helper for each (data format, GPU)
+    # configuration, asserting numerical error bounds. Graph-mode only.
     for (data_format, use_gpu) in GetTestConfigs():
       self._testMaxPoolGradGradValidPadding1_1(data_format, use_gpu)
       self._testMaxPoolGradGradValidPadding2_1_6(data_format, use_gpu)
@@ -2184,6 +2682,13 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
 
   def _MaxPoolGradGrad(self, orig_input, orig_output, grad, window_rows,
                        window_cols, row_stride, col_stride, padding):
+    # [FUNCTION DOC]
+    # HELPER: thin wrapper over the raw max pool grad-of-grad op.
+    # KNOWN ISSUE: unused anywhere in this file (dead code); the docstring's padding type
+    # description is also not accurate since a padding string is expected.
+    # Inputs: original input and output tensors, the gradient tensor, window sizes, strides and
+    # padding string. Returns the second-order gradient tensor computed with channels-last
+    # window and stride lists.
     """Max Pooling Second-Order Gradient.
 
     Args:
@@ -2206,6 +2711,9 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_deprecated_v1
   def testAvgPoolGrad(self):
+    # [FUNCTION DOC]
+    # Runs every average pool gradient scenario helper (valid and same padding variants) for each
+    # (data format, GPU) configuration, asserting numerical gradient error bounds. Graph-mode only.
     for (data_format, use_gpu) in GetTestConfigs():
       self._testAvgPoolGradValidPadding1_1(data_format, use_gpu)
       self._testAvgPoolGradValidPadding1_2(data_format, use_gpu)
@@ -2218,6 +2726,9 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
       self._testAvgPoolGradSamePadding3_1(data_format, use_gpu)
 
   def _testAvgPoolGradValidPadding1_1(self, data_format, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testAvgPoolGrad. Gradient check for average pool on a 2x3x3x3 input,
+    # 1x1 window, stride 1, valid padding. Inputs: data_format and use_gpu. Returns nothing.
     self._ConstructAndTestGradient(
         nn_ops.avg_pool,
         input_sizes=[2, 3, 3, 3],
@@ -2231,6 +2742,9 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
         use_gpu=use_gpu)
 
   def _testAvgPoolGradValidPadding1_2(self, data_format, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testAvgPoolGrad. Gradient check for average pool on a 2x3x3x3 input,
+    # 1x1 window, stride 2, valid padding. Inputs: data_format and use_gpu. Returns nothing.
     self._ConstructAndTestGradient(
         nn_ops.avg_pool,
         input_sizes=[2, 3, 3, 3],
@@ -2244,6 +2758,9 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
         use_gpu=use_gpu)
 
   def _testAvgPoolGradValidPadding2_1(self, data_format, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testAvgPoolGrad. Gradient check for average pool on a 2x3x3x3 input,
+    # 2x2 window, stride 1, valid padding. Inputs: data_format and use_gpu. Returns nothing.
     self._ConstructAndTestGradient(
         nn_ops.avg_pool,
         input_sizes=[2, 3, 3, 3],
@@ -2257,6 +2774,9 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
         use_gpu=use_gpu)
 
   def _testAvgPoolGradValidPadding2_2(self, data_format, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testAvgPoolGrad. Gradient check for average pool on a 2x2x2x3 input,
+    # 2x2 window, stride 2, valid padding. Inputs: data_format and use_gpu. Returns nothing.
     self._ConstructAndTestGradient(
         nn_ops.avg_pool,
         input_sizes=[2, 2, 2, 3],
@@ -2270,6 +2790,9 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
         use_gpu=use_gpu)
 
   def _testAvgPoolGradSamePadding1_1(self, data_format, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testAvgPoolGrad. Gradient check for average pool on a 2x2x4x3 input,
+    # 1x1 window, stride 1, same padding. Inputs: data_format and use_gpu. Returns nothing.
     self._ConstructAndTestGradient(
         nn_ops.avg_pool,
         input_sizes=[2, 2, 4, 3],
@@ -2283,6 +2806,9 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
         use_gpu=use_gpu)
 
   def _testAvgPoolGradSamePadding1_2(self, data_format, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testAvgPoolGrad. Gradient check for average pool on a 2x2x4x3 input,
+    # 1x1 window, stride 2, same padding. Inputs: data_format and use_gpu. Returns nothing.
     self._ConstructAndTestGradient(
         nn_ops.avg_pool,
         input_sizes=[2, 2, 4, 3],
@@ -2296,6 +2822,9 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
         use_gpu=use_gpu)
 
   def _testAvgPoolGradSamePadding2_1(self, data_format, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testAvgPoolGrad. Gradient check for average pool on a 2x2x4x3 input,
+    # 2x2 window, stride 1, same padding. Inputs: data_format and use_gpu. Returns nothing.
     self._ConstructAndTestGradient(
         nn_ops.avg_pool,
         input_sizes=[2, 2, 4, 3],
@@ -2309,6 +2838,9 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
         use_gpu=use_gpu)
 
   def _testAvgPoolGradSamePadding2_2(self, data_format, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testAvgPoolGrad. Gradient check for average pool on a 2x2x4x3 input,
+    # 2x2 window, stride 2, same padding. Inputs: data_format and use_gpu. Returns nothing.
     self._ConstructAndTestGradient(
         nn_ops.avg_pool,
         input_sizes=[2, 2, 4, 3],
@@ -2322,6 +2854,9 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
         use_gpu=use_gpu)
 
   def _testAvgPoolGradSamePadding3_1(self, data_format, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testAvgPoolGrad. Gradient check for average pool on a 1x7x7x1 input,
+    # 3x3 window, stride 1, same padding. Inputs: data_format and use_gpu. Returns nothing.
     self._ConstructAndTestGradient(
         nn_ops.avg_pool,
         input_sizes=[1, 7, 7, 1],
@@ -2336,6 +2871,12 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
 
   @test_util.disable_xla("Xla does not raise error on out of bounds access")
   def testAvgPoolGradOutputMemoryOutOfBounds(self):
+    # [FUNCTION DOC]
+    # Regression test (XLA disabled, since it does not raise on out-of-bounds access). Calls the
+    # raw average pool gradient op with a gradient whose shape (3 rows) does not match the
+    # original input shape (1 row) given strides that would index past the output. Expects an
+    # invalid-argument error with either the CPU message about output elements or the GPU
+    # message about the expected gradient shape.
     with self.assertRaisesRegex(
         errors_impl.InvalidArgumentError,
         (
@@ -2364,6 +2905,11 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_deprecated_v1
   def testShapeFunctionEdgeCases(self):
+    # [FUNCTION DOC]
+    # Checks static shape inference for pooling ops: with a fully unknown input shape, max pool,
+    # average pool and max-pool-with-argmax produce outputs of unknown size in four dimensions;
+    # with an input of the wrong rank (two dimensions) all three raise a value error.
+    # Graph-mode only.
     # All shapes unknown.
     for pool_func in [nn_ops.max_pool, nn_ops.avg_pool]:
       p = pool_func(
@@ -2394,6 +2940,12 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
   @test_util.run_deprecated_v1
   @test_util.disable_xla("b/123337890")  # Error messages differ
   def testOpEdgeCases(self):
+    # [FUNCTION DOC]
+    # Checks error handling for pooling ops in a session (XLA disabled; messages differ).
+    # For average pool (and argmax pool on GPU) a batch stride of 2 must raise an unimplemented
+    # error about batch pooling; for all functions a window larger than the input with valid
+    # padding must raise a value error about a negative dimension size, both at run time and at
+    # graph construction. Graph-mode only.
     with self.session(use_gpu=test.is_gpu_available()) as sess:
       pool_funcs = [nn_ops.max_pool, nn_ops.avg_pool]
       if test.is_gpu_available():
@@ -2428,6 +2980,11 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_deprecated_v1
   def testEdgeCasesRaiseErrors(self):
+    # [FUNCTION DOC]
+    # Checks argument validation errors: explicit padding with the vectorized-channel format (or
+    # XLA's lack of explicit padding), explicit padding with a rank-5 input to the v2 max pool,
+    # and the raw v2 max pool op given padding mode "explicit" without a padding list. Each case
+    # expects a value error with the matching message. Graph-mode only.
     with self.assertRaisesRegex(
         ValueError, "NCHW_VECT_C.*is not supported with "
         "explicit padding|XLA does not support pooling ops with explicit "
@@ -2459,6 +3016,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_deprecated_v1
   def testEdgeCasesExcessPadding(self):
+    # [FUNCTION DOC]
+    # Runs the raw max pool op on a 3x3 image, 2x2 window, with explicit right padding of 2 (not
+    # smaller than the window); expects an unimplemented or invalid-argument error saying right
+    # padding must be smaller than the window size (or XLA's explicit padding message).
     with self.session(use_gpu=test.is_gpu_available()) as sess:
       with self.assertRaisesRegex(
           (errors_impl.UnimplementedError, errors_impl.InvalidArgumentError),
@@ -2477,6 +3038,9 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_deprecated_v1
   def testNegativePadding(self):
+    # [FUNCTION DOC]
+    # Runs the raw max pool op with explicit padding containing negative numbers; expects a value
+    # error saying all elements of the explicit padding must be nonnegative.
     with self.session(use_gpu=test.is_gpu_available()) as sess:
       with self.assertRaisesRegex(
           ValueError, "All elements of explicit_paddings must be "
@@ -2494,6 +3058,9 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_deprecated_v1
   def testExplicitPaddingBatch(self):
+    # [FUNCTION DOC]
+    # Runs the raw max pool op with nonzero explicit padding on the batch and depth dimensions;
+    # expects a value error saying such padding is not supported.
     with self.session(use_gpu=test.is_gpu_available()) as sess:
       with self.assertRaisesRegex(
           ValueError, "Nonzero explicit padding in the batch or depth "
@@ -2512,6 +3079,11 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
   @test_util.disable_xla(
       "b/205634417")  # XLA is not throwing shape errors for multiple *Grad ops.
   def testMaxPoolGradEagerShapeErrors(self):
+    # [FUNCTION DOC]
+    # Eager-mode test (XLA disabled: it does not raise shape errors for gradient ops). Calls the
+    # raw max pool gradient and grad-of-grad ops with an original output whose depth is wrong,
+    # and then with a gradient whose depth is wrong; each call must raise an invalid-argument
+    # error stating the expected shape and the shape received.
     with context.eager_mode():
       orig_in = array_ops.ones((1, 1, 1, 1))
 
@@ -2548,6 +3120,11 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
             padding="VALID")
 
   def testMaxPoolGradWithArgmaxEagerShapeErrors(self):
+    # [FUNCTION DOC]
+    # Eager-mode test. Calls the argmax-based max pool gradient op with a wrong-shaped gradient
+    # and then a wrong-shaped argmax tensor; each must raise an invalid-argument error stating the
+    # expected and received shape. The grad-of-grad argmax op is checked the same way only when
+    # a GPU is available since it is implemented only there.
     with context.eager_mode():
       inp = array_ops.ones((1, 1, 1, 1))
 
@@ -2588,6 +3165,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
               padding="VALID")
 
   def testAvgPoolGradInvalidInputShapeRaiseError(self):
+    # [FUNCTION DOC]
+    # Calls the raw average pool gradient op with a hugely negative original input shape
+    # (minus 536870912 in each dimension) and a mismatched gradient; expects a value error or
+    # invalid-argument error instead of a crash.
     with self.assertRaises((ValueError, errors_impl.InvalidArgumentError)):
       with self.cached_session():
         orig_input_shape = constant_op.constant(
@@ -2604,6 +3185,10 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
         self.evaluate(t)
 
   def testAvgPoolGradInvalidStrideRaiseErrorProperly(self):
+    # [FUNCTION DOC]
+    # Calls the raw average pool gradient op with a very large window and strides that are
+    # inconsistent with the supplied gradient shape (float64 gradient of shape 16x16x16x16) and
+    # expects an invalid-argument error rather than a crash.
     with self.assertRaises(errors_impl.InvalidArgumentError):
       with self.cached_session():
         orig_input_shape = [11, 9, 78, 9]
@@ -2620,8 +3205,15 @@ class PoolingTest(test.TestCase, parameterized.TestCase):
 
 
 def GetMaxPoolFwdTest(input_size, filter_size, strides, padding):
+  # [FUNCTION DOC]
+  # HELPER: factory producing a test method that compares the forward max pool on CPU with
+  # the argmax-based max pool for one shape. Inputs: input shape, window (filter) size, strides
+  # and padding. Returns a function to attach to the test class; no side effects at creation.
 
   def Test(self):
+    # [FUNCTION DOC]
+    # HELPER: the generated test body (takes the test case). Returns immediately without CUDA GPU;
+    # otherwise runs the forward comparison helper with the captured shape parameters.
     # MaxPoolWithArgMax is implemented only on CUDA.
     if not test.is_gpu_available(cuda_only=True):
       return
@@ -2631,8 +3223,15 @@ def GetMaxPoolFwdTest(input_size, filter_size, strides, padding):
 
 
 def GetMaxPoolGradTest(input_size, filter_size, output_size, strides, padding):
+  # [FUNCTION DOC]
+  # HELPER: factory producing a test method that compares the argmax-based max pool gradient
+  # with the standard max pool gradient for one shape. Inputs: input shape, window size, output
+  # shape, strides and padding. Returns a function to attach to the test class.
 
   def Test(self):
+    # [FUNCTION DOC]
+    # HELPER: the generated test body. Returns immediately without a CUDA GPU; otherwise runs the
+    # gradient comparison helper with the captured parameters.
     # MaxPoolWithArgMax is implemented only on CUDA.
     if not test.is_gpu_available(cuda_only=True):
       return
@@ -2644,8 +3243,15 @@ def GetMaxPoolGradTest(input_size, filter_size, output_size, strides, padding):
 
 def GetMaxPoolGradGradTest(input_size, filter_size, output_size, strides,
                            padding):
+  # [FUNCTION DOC]
+  # HELPER: factory producing a test method that compares the argmax-based second-order max pool
+  # gradient with the standard one for one shape. Inputs: input shape, window size, output shape,
+  # strides and padding. Returns a function to attach to the test class.
 
   def Test(self):
+    # [FUNCTION DOC]
+    # HELPER: the generated test body. Returns immediately without a CUDA GPU; otherwise runs the
+    # second-order gradient comparison helper with the captured parameters.
     # MaxPoolWithArgMax is implemented only on CUDA.
     if not test.is_gpu_available(cuda_only=True):
       return
