@@ -1,3 +1,15 @@
+# [MODULE DOC]
+# HELPER: test-support module used by the numpy_ops test suite (not part of the public API).
+# Provides JAX-flavoured "extensions" on top of the TF NumPy wrapper (np_wrapper): trace compilation
+# (jit, eval_on_shapes), automatic differentiation (grad, vjp, custom_grad, stop_gradient), pure
+# indexed updates (index_update/add/min/max), special functions (logsumexp, expit, erf), general
+# dot and convolution (tf_dot_general, tf_conv_general_dilated, conv), pooling, sorting by key,
+# scan/map loops, dynamic slicing, stateless random number helpers (prng, split, uniform, normal,
+# bernoulli), conversion of datasets to numpy-like iterables, multi-device execution (pmap, psum,
+# pmean, ShardedNdArray, device discovery) and vectorization (vmap).
+# Import-time side effects: defines module-level constants and a thread-local pmap configuration
+# object, aliases remat to the recompute-gradient decorator, and registers a tensor conversion
+# function for ShardedNdArray with the tensor conversion registry.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -79,6 +91,12 @@ remat = custom_gradient.recompute_grad
 
 
 def most_precise_int_dtype(x):
+  # [FUNCTION DOC]
+  # Picks the smallest integer dtype able to hold a Python integer, preferring unsigned types
+  # when they are equally precise. Input x is any value; output is a TF integer dtype, or nothing
+  # (null) if x is not a Python integer or is a boolean. Raises a value error if the integer is
+  # outside the range of every supported dtype (below the int64 minimum or at/above 2**64).
+  # An internal assertion checks the bounds table and dtype list lengths are consistent.
   if not isinstance(x, six.integer_types) or isinstance(x, bool):
     return None
   i = bisect.bisect_right(_int_dtype_lower_bounds, x)
@@ -89,6 +107,13 @@ def most_precise_int_dtype(x):
 
 
 def _canonicalize_jit_arg(x):  # pylint: disable=missing-function-docstring
+  # [FUNCTION DOC]
+  # HELPER: argument canonicalization for jit and eval_on_shapes.
+  # Converts one argument x into a tensor when possible. Existing TF NumPy arrays are returned
+  # unchanged. Python integers are converted using the most precise (smallest) integer dtype and
+  # Python floats using the default float type, so that later type promotion matches NumPy.
+  # Anything else is passed to the tensor conversion; if conversion raises a type or value error
+  # the original object is returned as-is (treated as a static argument). No side effects.
   if isinstance(x, tf_np.ndarray):
     return x
   try:
@@ -126,6 +151,10 @@ def _canonicalize_jit_arg(x):  # pylint: disable=missing-function-docstring
 
 
 def _canonicalize_jit_arguments(inp):
+  # [FUNCTION DOC]
+  # HELPER: applies the per-argument canonicalization over nested structures for jit.
+  # Input inp is a nested structure of arguments; output is the same structure with every leaf
+  # passed through the single-argument canonicalizer. Returns a new structure, no side effects.
   """Canonicalize arguments to be used for jit.
 
   Args:
@@ -140,8 +169,15 @@ def _canonicalize_jit_arguments(inp):
 
 
 def _tf_to_np(inp):
+  # [FUNCTION DOC]
+  # HELPER: converts results coming out of TF code into TF NumPy values.
+  # Input inp is a nested structure; every indexed-slices leaf is densified into a TF NumPy array
+  # and all other leaves are kept as they are. Returns a structure of the same shape.
 
   def f(x):
+    # [FUNCTION DOC]
+    # HELPER: leaf converter for the enclosing structure mapper.
+    # Returns a TF NumPy array for an indexed-slices value, otherwise returns x unchanged.
     if isinstance(x, indexed_slices.IndexedSlices):
       return tf_np.asarray(x)
     else:
@@ -151,8 +187,16 @@ def _tf_to_np(inp):
 
 
 def stop_gradient(x):
+  # [FUNCTION DOC]
+  # Blocks gradient flow through every tensor in the nested structure x (like JAX's stop_gradient).
+  # Non-tensor leaves are returned unchanged. The result is converted via the TF-to-NumPy helper
+  # so indexed slices become arrays. Returns a structure matching x. No side effects.
 
   def static_stop_gradient(x):
+    # [FUNCTION DOC]
+    # HELPER: leaf function for stop_gradient.
+    # Applies the TF stop-gradient op to a tensor leaf; any non-tensor value is returned as-is so
+    # that static Python values can still be used in ordinary conditionals.
     # `tf.stop_gradient` is a no-op for non-Tensor. Returning the original type
     # allows it to be used in the conditional without Autograph, if static. For
     # example:
@@ -163,6 +207,12 @@ def stop_gradient(x):
 
 
 def custom_grad(f_vjp, f_original=None):
+  # [FUNCTION DOC]
+  # Wraps a function with a user supplied vector-Jacobian product into a function with a custom
+  # gradient, using the TF custom gradient decorator. f_vjp takes the inputs and returns a pair of
+  # outputs and a backward function; f_original is accepted for API compatibility and ignored
+  # (deleted immediately). Returns a function taking NumPy-style arguments and returning outputs
+  # converted to TF NumPy values. No other side effects.
   """Decorator to define a function with a custom gradient.
 
   This function is very similar to `tf.custom_gradient`. See the documentation
@@ -188,12 +238,21 @@ def custom_grad(f_vjp, f_original=None):
 
   @custom_gradient.custom_gradient
   def tf_f(*tf_args, **tf_kwargs):
+    # [FUNCTION DOC]
+    # HELPER: TF-level forward function registered with the custom gradient decorator.
+    # Converts incoming tensors to NumPy values, calls the user supplied forward-with-vjp function
+    # and returns the outputs together with a TF-level backward function.
     np_args = _tf_to_np(tf_args)
     np_kwargs = _tf_to_np(tf_kwargs)
     np_y, np_vjp = f_vjp(*np_args, **np_kwargs)
     tf_y = np_y
 
     def tf_vjp(*flat_tf_dy):
+      # [FUNCTION DOC]
+      # HELPER: TF-level backward function for the custom gradient.
+      # Takes the flattened output cotangents, repacks them into the structure of the outputs,
+      # converts them to NumPy values, calls the user vjp and returns the flattened input
+      # cotangents as a list.
       tf_dy = nest.pack_sequence_as(tf_y, flat_tf_dy)
       np_dy = _tf_to_np(tf_dy)
       np_dx = np_vjp(np_dy)
@@ -202,12 +261,25 @@ def custom_grad(f_vjp, f_original=None):
     return tf_y, tf_vjp
 
   def np_f(*args, **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the keyword arguments are passed to the TF-to-NumPy conversion helper instead of
+    # to the wrapped function, so calling with any keyword argument raises a type error and
+    # keyword arguments never reach the user function.
+    # The function returned by custom_grad: calls the gradient-aware function on the positional
+    # arguments and converts the result to TF NumPy values.
     return _tf_to_np(tf_f(*args), **kwargs)
 
   return np_f
 
 
 def vjp(f, *primals, has_aux=False):
+  # [FUNCTION DOC]
+  # Evaluates f at the given primal inputs under a persistent gradient tape and returns the
+  # output together with a function computing vector-Jacobian products. Inputs: f (callable),
+  # primals (positional inputs, watched by the tape), has_aux (if true f returns an extra
+  # auxiliary output that is excluded from differentiation). Returns a pair (output, vjp function)
+  # or a triple that adds the auxiliary value. Side effect: calls f once, creates a persistent
+  # tape that stays alive as long as the returned vjp function is referenced.
   """Returns the result and the VJP function of `f`.
 
   This function returns the result and the vector-Jacobian-product (VJP)
@@ -238,6 +310,10 @@ def vjp(f, *primals, has_aux=False):
       np_out = outputs
 
     def _vjp(dy):
+      # [FUNCTION DOC]
+      # The returned backward function: given output cotangents dy (same structure as the
+      # output), asks the persistent tape for gradients with respect to the primals using dy as
+      # the output gradients, and returns them converted to TF NumPy values.
       tf_dx = tape.gradient(np_out, primals, output_gradients=dy)
       return _tf_to_np(tf_dx)
 
@@ -250,6 +326,12 @@ def vjp(f, *primals, has_aux=False):
 
 # TODO(wangpeng): match JAX's handling of kwargs and non-ndarray args
 def grad(f, has_aux=False):
+  # [FUNCTION DOC]
+  # Builds a gradient function for a scalar-valued f. Inputs: f (callable taking parameters then
+  # extra arguments and returning a scalar array, or a pair of scalar and auxiliary data when
+  # has_aux is true). Returns a function taking (params, *args) that returns gradients with the
+  # structure of params (plus the auxiliary data when has_aux). Extra keyword arguments are not
+  # supported. No side effects when called itself; the returned function runs f under a tape.
   """Returns a function that computes gradient of f.
 
   Gradients can only be computed through numpy and tensorflow operations and not
@@ -269,6 +351,10 @@ def grad(f, has_aux=False):
   """
 
   def check_loss_shape(np_loss):
+    # [FUNCTION DOC]
+    # HELPER: validates the loss produced by the function being differentiated.
+    # Raises a value error if the loss is not a TF NumPy array or if its shape is not compatible
+    # with a scalar. Returns nothing.
     if not isinstance(np_loss, tf_np.ndarray):
       raise ValueError(
           "The result of the function to take gradient must be an ndarray.")
@@ -277,6 +363,11 @@ def grad(f, has_aux=False):
           "The result of the function to take gradient must be a scalar.")
 
   def _f(params, *args):
+    # [FUNCTION DOC]
+    # The gradient function returned by grad: watches the flattened params on a tape, runs the
+    # user function, validates the loss is a scalar array (value error otherwise), computes the
+    # gradient of the loss with respect to params and returns it as TF NumPy values, paired with
+    # the auxiliary data if the user function produced any.
     """The gradient function to be returned."""
     with backprop.GradientTape() as g:
       g.watch(nest.flatten(params))
@@ -297,6 +388,11 @@ def grad(f, has_aux=False):
 
 
 def _record_result_type(recorder, f):
+  # [FUNCTION DOC]
+  # HELPER: wraps a function so a recorder callback can observe and rewrite its result (used by
+  # jit with XLA forced compilation, eval_on_shapes and pmap on TPU).
+  # Inputs: recorder (callback taking args, kwargs and result and returning a result) and f (the
+  # function to wrap). Returns the wrapper function. No side effects of its own.
   """A decorator that records some information about the function.
 
   Args:
@@ -308,6 +404,9 @@ def _record_result_type(recorder, f):
     recorder afterwards.
   """
   def wrapper(*args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: calls the wrapped function with all arguments, passes arguments and result to the
+    # recorder callback, and returns whatever the recorder returns.
     res = f(*args, **kwargs)
     res = recorder(args, kwargs, res)
     return res
@@ -321,6 +420,16 @@ def jit(f,
         input_signature=None,
         autograph=False,
         experimental_compile=False):
+  # [FUNCTION DOC]
+  # Trace-compiles f with the TF function mechanism and returns a NumPy-style wrapper.
+  # Inputs: f (callable), static_argnums (positions treated as static, never converted to
+  # tensors), xla_forced_compile (compile the whole body into a single XLA op), input_signature
+  # (optional tensor specs controlling tracing), autograph (convert Python control flow),
+  # experimental_compile (compile with XLA via the function flag). Returns a function that
+  # canonicalizes arguments, runs the compiled function and converts outputs to TF NumPy values;
+  # the underlying compiled function is exposed as an attribute named tf_function. Compilation
+  # happens lazily on first call. With XLA forced compile, list/empty outputs are patched to
+  # work around an XLA compile quirk.
   """Returns a function that runs a trace-compiled version of `f`.
 
   A trace-compiled version of a function `f` has the same behavior as `f` (when
@@ -373,6 +482,10 @@ def jit(f,
       experimental_compile=experimental_compile,
   )
   def _tf_f(*args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: the traced function. Converts tensor inputs to TF NumPy values and runs f, either
+    # directly or inside an XLA compile call that records whether outputs were a list or empty
+    # so the original output structure can be restored afterwards.
     """Accelerated function with tensor inputs/outputs."""
     np_args = _tf_to_np(args)
     kwargs = {k: _tf_to_np(v) for k, v in kwargs.items()}
@@ -382,6 +495,10 @@ def jit(f,
       output_is_empty = [False]
       output_structure = [None]
       def recorder(args, kwargs, res):
+        # [FUNCTION DOC]
+        # HELPER: result recorder for XLA forced compile. Ignores args and kwargs, records into
+        # shared mutable lists whether the result is a list and whether it is empty (saving a deep
+        # copy of an empty structure), and returns the result unchanged.
         del args, kwargs
         # Workaround b/121383831
         output_is_list[0] = isinstance(res, list)
@@ -409,6 +526,10 @@ def jit(f,
     return np_out
 
   def _f(*args, **kwargs):
+    # [FUNCTION DOC]
+    # The wrapper returned by jit: canonicalizes positional arguments (except those at static
+    # positions) and keyword arguments, calls the traced function and converts the result to TF
+    # NumPy values.
     args = [
         _canonicalize_jit_arguments(arg) if i not in static_argnums else arg
         for i, arg in enumerate(args)
@@ -423,6 +544,13 @@ def jit(f,
 
 
 def eval_on_shapes(f, static_argnums=(), allow_static_outputs=False):
+  # [FUNCTION DOC]
+  # Turns f into a shape-inference function. Inputs: f (callable), static_argnums (positions
+  # passed through untouched), allow_static_outputs (if true, non-tensor outputs are remembered
+  # per traced graph and returned as-is). Returns a function that accepts real values or tensor
+  # specs, traces f to a concrete function and returns the output structure with tensors replaced
+  # by tensor specs. The traced function is exposed on the result for testing. Side effects:
+  # records Python outputs in a dictionary keyed by graph identity when static outputs are allowed.
   """Returns a function that evaluates `f` given input shapes and dtypes.
 
   It transforms function `f` to a function that performs the same computation as
@@ -445,7 +573,12 @@ def eval_on_shapes(f, static_argnums=(), allow_static_outputs=False):
     as-is instead of returning `tf.TensorSpec`s for them.
   """
   def abstractify(args):
+    # [FUNCTION DOC]
+    # HELPER: converts the argument list into a list where non-static arguments are replaced by
+    # tensor specs (shape and dtype) and static positions are kept unchanged.
     def _abstractify(x):
+      # [FUNCTION DOC]
+      # HELPER: canonicalizes a leaf and returns a tensor spec for tensors/arrays, else the leaf.
       x = _canonicalize_jit_arg(x)
       if isinstance(x, (tensor_lib.Tensor, tf_np.ndarray)):
         return tensor_lib.TensorSpec(x.shape, x.dtype)
@@ -466,10 +599,17 @@ def eval_on_shapes(f, static_argnums=(), allow_static_outputs=False):
     # before that correspond the arguments.
     python_outputs_map = {}
     def recorder(args, kwargs, res):
+      # [FUNCTION DOC]
+      # HELPER: records the non-tensor parts of the result of f under the id of the current
+      # default graph, and returns the result with those non-tensor parts replaced by nothing
+      # (null) so the TF function does not try to convert them to tensors. Ignores args, kwargs.
       # Since the get_concrete_function below only uses positional args, we also
       # only positional args here.
       del args, kwargs
       def is_tensor_like(x):
+        # [FUNCTION DOC]
+        # HELPER: true for composite tensors (objects with a type spec), TF NumPy arrays and
+        # tensors; false otherwise.
         if hasattr(x, "_type_spec"):
           return True  # x is a CompositeTensor
         return isinstance(x, (tf_np.ndarray, tensor_lib.Tensor))
@@ -493,7 +633,14 @@ def eval_on_shapes(f, static_argnums=(), allow_static_outputs=False):
 
   # pylint: disable=missing-docstring
   def f_return(*args):
+    # [FUNCTION DOC]
+    # The function returned by eval_on_shapes: abstracts its arguments, gets the concrete function
+    # for them, maps tensor outputs to tensor specs and, when static outputs are allowed, puts the
+    # remembered Python values back in place of the null placeholders. Returns the output structure.
     def to_tensor_spec(x):
+      # [FUNCTION DOC]
+      # HELPER: converts a tensor into a tensor spec of the same shape and dtype; other values
+      # are returned unchanged.
       if isinstance(x, tensor_lib.Tensor):
         return tensor_lib.TensorSpec(x.shape, x.dtype)
       else:
@@ -525,6 +672,11 @@ def eval_on_shapes(f, static_argnums=(), allow_static_outputs=False):
 
 
 def _index_update_helper(updater, x, idx, y):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation of the pure indexed update functions.
+  # Converts x and y to arrays, broadcasts y to the shape of the indexed region of x (a manual
+  # workaround until the TF ops support broadcasting) and applies the given updater method with
+  # (x, idx, y). Returns the updated array; x is not modified.
   x = tf_np.asarray(x)
   y = tf_np.asarray(y)
   # TODO(b/164251540): Remove this expensive manual broadcasting once
@@ -536,6 +688,9 @@ def _index_update_helper(updater, x, idx, y):
 
 # pylint: disable=protected-access
 def index_update(x, idx, y):
+  # [FUNCTION DOC]
+  # Pure equivalent of assigning y into x at idx. Inputs: x (array), idx (NumPy-style index),
+  # y (updates broadcastable to the indexed region). Returns a new array with the region replaced.
   """Pure equivalent of `x[idx] = y`.
 
   Returns the value of x that would result from the NumPy-style indexed
@@ -556,6 +711,9 @@ def index_update(x, idx, y):
 
 
 def index_add(x, idx, y):
+  # [FUNCTION DOC]
+  # Pure equivalent of adding y into x at idx. Inputs: x (array), idx (NumPy-style index), y
+  # (values broadcastable to the indexed region). Returns a new array with the sum written in.
   """Pure equivalent of `x[idx] += y`.
 
   Returns the value of x that would result from the NumPy-style indexed
@@ -576,6 +734,9 @@ def index_add(x, idx, y):
 
 
 def index_min(x, idx, y):
+  # [FUNCTION DOC]
+  # Pure equivalent of replacing x at idx by the element-wise minimum of x and y. Inputs: x
+  # (array), idx (NumPy-style index), y (broadcastable values). Returns a new array.
   """Pure equivalent of `x[idx] = minimum(x[idx], y)`.
 
   Returns the value of x that would result from the NumPy-style indexed
@@ -596,6 +757,9 @@ def index_min(x, idx, y):
 
 
 def index_max(x, idx, y):
+  # [FUNCTION DOC]
+  # Pure equivalent of replacing x at idx by the element-wise maximum of x and y. Inputs: x
+  # (array), idx (NumPy-style index), y (broadcastable values). Returns a new array.
   """Pure equivalent of `x[idx] = maximum(x[idx], y)`.
 
   Returns the value of x that would result from the NumPy-style indexed
@@ -617,6 +781,10 @@ def index_max(x, idx, y):
 
 
 def logsumexp(x, axis=None, keepdims=None):
+  # [FUNCTION DOC]
+  # Numerically stable log of the sum of exponentials, using the TF reduce operation.
+  # Inputs: x (numeric tensor), axis (dimensions to reduce, all if null), keepdims (keep reduced
+  # dimensions with length one if true). Returns the reduced result as a TF NumPy array.
   """Computes log(sum(exp(elements across dimensions of a tensor))).
 
   Reduces `x` along the dimensions given in `axis`.
@@ -644,21 +812,35 @@ def logsumexp(x, axis=None, keepdims=None):
 
 
 def expit(x):
+  # [FUNCTION DOC]
+  # Logistic sigmoid (the inverse of logit), element-wise, computed with the TF sigmoid op.
+  # Input x is a tensor or array; returns a TF NumPy array of the same shape.
   """Compute 1 / (1 + exp(-x))."""
   return tf_np.asarray(math_ops.sigmoid(x))
 
 
 def erf(x):
+  # [FUNCTION DOC]
+  # Element-wise Gauss error function using the TF erf op. Input x is a tensor or array; returns
+  # a TF NumPy array of the same shape.
   """Computes the Gauss error function of x element-wise."""
   return tf_np.asarray(math_ops.erf(x))
 
 
 def _minus(a, b):
+  # [FUNCTION DOC]
+  # HELPER: ordered set difference for the dot-general code. Returns a list of the elements of a
+  # (an iterable) that are not contained in b (a container), preserving the order of a.
   return [x for x in a if x not in b]
 
 
 def _compose_output_rep(lhs_rep, rhs_rep, lhs_contraction, rhs_contraction,
                         lhs_batch, rhs_batch):
+  # [FUNCTION DOC]
+  # HELPER: builds the output subscript string for the einsum equation made by tf_dot_general.
+  # Inputs: lhs_rep and rhs_rep (lists/strings of one letter per dimension of each operand), and
+  # the contraction and batch dimension index sequences of each side. Output: a string made of the
+  # batch letters, then the free (non-batch, non-contracted) letters of lhs, then those of rhs.
   """Compose the output string representation.
 
   e.g., ij, jk, (((1,), (0,)), ((), ())) -> ik
@@ -687,6 +869,9 @@ def _compose_output_rep(lhs_rep, rhs_rep, lhs_contraction, rhs_contraction,
 
 
 def _non_batched_matmul(lhs, rhs, lhs_contraction, rhs_contraction):
+  # [FUNCTION DOC]
+  # HELPER: non-batched case of tf_dot_general. Contracts the given dimensions of lhs and rhs
+  # with the TF tensordot op and returns the resulting array. No side effects.
   """Compute the non-batched matrix multiplication.
 
   If it is the general non-batched/single-batched matrix multiplication,
@@ -707,6 +892,12 @@ def _non_batched_matmul(lhs, rhs, lhs_contraction, rhs_contraction):
 
 
 def tf_dot_general(lhs, rhs, dimension_numbers):
+  # [FUNCTION DOC]
+  # JAX-style general dot product. Inputs: lhs and rhs (arrays) and dimension_numbers (pair of
+  # pairs: contraction dimensions of each side, then batch dimensions of each side). Raises a
+  # value error if the contraction counts or the batch counts differ. Without batch dimensions it
+  # uses tensordot; for the common rank-3 batch-matmul layout it uses matmul; otherwise it builds
+  # an einsum equation from letter labels and evaluates it. Returns the product array.
   """The general dot operation for TensorFlow.
 
   An equivalent general dot operation as that in JAX -
@@ -766,6 +957,11 @@ def tf_dot_general(lhs, rhs, dimension_numbers):
 
 def _conv_general_param_type_converter(window_strides, lhs_dilation,
                                        rhs_dilation, dim):
+  # [FUNCTION DOC]
+  # HELPER: normalizes convolution parameters for tf_conv_general_dilated.
+  # Each of window_strides, lhs_dilation and rhs_dilation may be null, a single integer (repeated
+  # dim times) or a sequence (copied into a list). Returns the three results as a tuple, null
+  # staying null.
   """Convert strides, lhs_dilation, rhs_dilation to match TF convention.
 
   For example,
@@ -782,6 +978,9 @@ def _conv_general_param_type_converter(window_strides, lhs_dilation,
     The updated window_strides, lhs_dilation and rhs_dilation
   """
   def _as_list_of_size(item, size):
+    # [FUNCTION DOC]
+    # HELPER: returns null for null, a list repeating an integer size times, or a list copy of a
+    # sequence.
     if item is None:
       return None
     return [item] * size if isinstance(item, int) else list(item)
@@ -800,6 +999,19 @@ def tf_conv_general_dilated(lhs, rhs, window_strides, padding, output_shape,
                             lhs_dilation=None, rhs_dilation=None,
                             dimension_numbers=None, feature_group_count=1,
                             batch_group_count=1, precision=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: several error messages pass the offending value as a second argument instead of
+  # formatting it into the message, so the message shows a tuple; the "4 or higher" check also
+  # rejects specs of length 6 or more only, and the data format check requires lhs and output
+  # specs to be equal. Only SAME/VALID string padding, feature_group_count of 1, batch_group_count
+  # of 1 and no precision are supported, despite the docstring describing padding pairs.
+  # Convolution (or transposed convolution when only lhs_dilation is given) in the JAX
+  # conv_general_dilated style. dimension_numbers is a triple of lhs, rhs and output specs; strings
+  # or index tuples are accepted. Raises value errors for unequal lhs/output specs, spatial rank
+  # above 3, combined lhs and rhs dilation (unless both are all ones) or bad padding, and
+  # not-implemented errors for group counts other than 1 or a non-null precision. Moves the batch
+  # and channel axes to the TF layout, calls the matching TF convolution or transposed convolution
+  # (output_shape is used only for the transposed case) and moves axes back. Returns the array.
   """A general conv API for TensorFlow.
 
   According JAX version:
@@ -909,6 +1121,12 @@ def conv(inp,
          padding,
          dimension_numbers,
          filter_dilation=None):
+  # [FUNCTION DOC]
+  # N-D convolution built on the TF convolution op. Inputs: inp and fltr arrays, window_strides,
+  # padding string, dimension_numbers (triple of input, filter and output format strings) and an
+  # optional filter_dilation. Raises value errors if input and output formats differ, the filter
+  # format is not one of the supported channel-last layouts, or the spatial parts of input and
+  # filter formats disagree. Both operands are cast to their common result type. Returns an array.
   """Convolution over an N-D array.
 
   See https://www.tensorflow.org/api_docs/python/tf/nn/convolution and
@@ -960,6 +1178,10 @@ def conv(inp,
 
 
 def avg_pool(x, pool_size, strides, padding):
+  # [FUNCTION DOC]
+  # N-D average pooling over the spatial dimensions of a channel-last array x, using the TF pool
+  # op. pool_size and strides are sequences of N integers; padding is SAME or VALID. Returns the
+  # pooled TF NumPy array.
   """Performs an N-D average pooling.
 
   Args:
@@ -992,6 +1214,10 @@ def avg_pool(x, pool_size, strides, padding):
 
 
 def max_pool(x, pool_size, strides, padding):
+  # [FUNCTION DOC]
+  # N-D max pooling over the spatial dimensions of a channel-last array x, using the TF pool op.
+  # pool_size and strides are sequences of N integers; padding is SAME or VALID. Returns the
+  # pooled TF NumPy array.
   """Performs an N-D max pooling.
 
   Args:
@@ -1024,6 +1250,11 @@ def max_pool(x, pool_size, strides, padding):
 
 
 def sort_key_val(keys, values, dimension=-1):
+  # [FUNCTION DOC]
+  # Sorts keys along a dimension and reorders values with the same permutation. Inputs: keys and
+  # values (arrays of the same shape), dimension (integer, default last). Raises a value error if
+  # the rank of both is unknown. Swaps the dimension to the end if needed, argsorts the keys,
+  # gathers keys and values with it and swaps back. Returns a pair (sorted keys, permuted values).
   """Sorts keys along a dimension and applies same permutation to values.
 
   Args:
@@ -1046,10 +1277,15 @@ def sort_key_val(keys, values, dimension=-1):
   if dimension in (-1, rank - 1):
 
     def maybe_swapaxes(a):
+      # [FUNCTION DOC]
+      # HELPER: identity variant used when the sort dimension is already last.
       return a
   else:
 
     def maybe_swapaxes(a):
+      # [FUNCTION DOC]
+      # HELPER: swaps the sort dimension with the last axis (self-inverse) so gather batch
+      # dimensions are on the left.
       return tf_np.swapaxes(a, dimension, -1)
 
   # We need to swap axes because tf.gather (and tf.gather_nd) supports
@@ -1061,6 +1297,9 @@ def sort_key_val(keys, values, dimension=-1):
 
   # Using tf.gather rather than np.take because the former supports batch_dims
   def gather(a):
+    # [FUNCTION DOC]
+    # HELPER: reorders the last axis of a using the argsort indices, treating all earlier axes as
+    # batch dimensions; returns a TF NumPy array.
     return tf_np.asarray(array_ops.gather_v2(a, idxs, batch_dims=rank - 1))
 
   keys = gather(keys)
@@ -1071,6 +1310,14 @@ def sort_key_val(keys, values, dimension=-1):
 
 
 def scan(f, init, xs, length=None, reverse=False):
+  # [FUNCTION DOC]
+  # JAX-style scan implemented with a TF while loop and tensor arrays. Inputs: f (step function
+  # taking carry and one slice, returning new carry and output slice), init (initial carry,
+  # structure may contain null entries), xs (structure of arrays scanned along the leading axis,
+  # null entries allowed), length (optional iteration count, must agree with the leading sizes),
+  # reverse (iterate backwards). Raises value errors for a rank-zero array in xs, inconsistent
+  # leading sizes, or when the length cannot be determined. Output structure is inferred by
+  # abstract evaluation of f on shapes. Returns a pair (final carry, stacked outputs).
   """Scan a function over leading array axes while carrying along state.
 
   See the docstring of `jax.lax.scan`
@@ -1109,6 +1356,8 @@ def scan(f, init, xs, length=None, reverse=False):
   if length is not None:
     length = int(length)
   def get_length(x):
+    # [FUNCTION DOC]
+    # HELPER: leading dimension of x; null for null, value error for a rank-zero array.
     if x is None:
       return None
     if x.shape.rank == 0:
@@ -1140,16 +1389,25 @@ def scan(f, init, xs, length=None, reverse=False):
   # tf.while_loop doesn't allow None in loop_vars, so we mask them.
   is_init_none = nest.map_structure(lambda x: x is None, init)
   def to_safe(carry):
+    # [FUNCTION DOC]
+    # HELPER: replaces null carry entries by scalar zeros since the while loop forbids nulls.
     return nest.map_structure(
         lambda x, is_none: array_ops.zeros([]) if is_none else x,
         carry,
         is_init_none,
     )
   def from_safe(safe_carry):
+    # [FUNCTION DOC]
+    # HELPER: inverse of the null masking: restores nulls where the initial carry had nulls.
     return nest.map_structure(
         lambda x, is_none: None if is_none else x, safe_carry, is_init_none
     )
   def body(i, safe_carry, ys_ta):
+    # [FUNCTION DOC]
+    # HELPER: while-loop body. Reads the i-th slice (counted from the end if reverse) of the input
+    # tensor arrays, calls f with the carry and slice, writes the non-null output slices into the
+    # output tensor arrays at that position and returns the incremented counter, the masked new
+    # carry and the output tensor arrays.
     carry = from_safe(safe_carry)
     if reverse:
       i_ = length - 1 - i
@@ -1193,6 +1451,9 @@ def scan(f, init, xs, length=None, reverse=False):
   )
   carry = from_safe(safe_carry)
   def _stack(a, spec):
+    # [FUNCTION DOC]
+    # HELPER: stacks an output tensor array into a tensor with the known leading length; returns
+    # null when the output spec is null.
     if spec is None:
       return None
     a = a.stack()
@@ -1204,6 +1465,10 @@ def scan(f, init, xs, length=None, reverse=False):
 
 # named "tf_map" instead of "map" as in JAX to avoid conflict with Python `map`
 def tf_map(f, xs):
+  # [FUNCTION DOC]
+  # Maps f over the leading axis of xs (JAX map equivalent) by running scan with a dummy null
+  # carry. Inputs: f (callable on one slice), xs (structure of arrays). Returns the stacked
+  # results.
   """Map a function over leading array axes.
 
   See the docstring of `jax.lax.map`
@@ -1219,12 +1484,22 @@ def tf_map(f, xs):
     Mapped values.
   """
   def g(unused, x):
+    # [FUNCTION DOC]
+    # HELPER: scan step for tf_map: passes the unused carry through and applies f to the slice.
     return unused, f(x)
   carry = nest.map_structure(lambda _: None, xs)
   return scan(g, carry, xs)[1]
 
 
 def _get_dynamic_indices(operand, start_indices, slice_sizes):
+  # [FUNCTION DOC]
+  # HELPER: index computation for dynamic_slice and dynamic_update_slice.
+  # KNOWN ISSUE: the assertion ops are created but their results are discarded, so in graph mode
+  # the rank and size checks may never execute; they only fail eagerly.
+  # Inputs: operand tensor, start_indices (rank-one integer tensor, one per dimension, negative
+  # values count from the end), slice_sizes (sizes per dimension). Clamps each start so the slice
+  # fits, builds broadcast index ranges per dimension and stacks them on a last axis. Returns that
+  # index tensor, or null when the operand is a scalar.
   """Calcuates the indices for `tf.gather_nd` from slices.
 
   Args:
@@ -1276,6 +1551,10 @@ def _get_dynamic_indices(operand, start_indices, slice_sizes):
 
 
 def dynamic_slice(operand, start_indices, slice_sizes):
+  # [FUNCTION DOC]
+  # Extracts a slice with possibly dynamic start positions via gather. Inputs: operand (array),
+  # start_indices (vector of integers, one per dimension), slice_sizes (sizes). Returns an array of
+  # shape slice_sizes; a scalar operand is returned unchanged. Starts are clamped into range.
   """Slicing operation where the indices can be dynamic vlaues.
 
   See the docstring of `jax.lax.dynamic_slice`
@@ -1303,6 +1582,11 @@ def dynamic_slice(operand, start_indices, slice_sizes):
 
 
 def dynamic_update_slice(operand, update, start_indices):
+  # [FUNCTION DOC]
+  # Writes update into operand at dynamic start positions via scatter. Inputs: operand (array),
+  # update (array with fully defined shape), start_indices (vector of integers). Raises a value
+  # error if the update shape is not fully defined. For a scalar operand returns the update.
+  # Returns a new array; the operand is not modified.
   """Updates a dynamic slice.
 
   See the docstring of `jax.lax.dynamic_update_slice`
@@ -1333,6 +1617,9 @@ def dynamic_update_slice(operand, update, start_indices):
 
 
 def dynamic_slice_in_dim(operand, start_index, slice_size, axis=0):
+  # [FUNCTION DOC]
+  # HELPER: convenience wrapper over dynamic_slice for a single axis (default 0). Uses start_index
+  # on that axis (zero elsewhere) and slice_size on it (full size elsewhere). Returns the slice.
   """Convenience wrapper around dynamic_slice applying to one dimension."""
   operand = tf_np.asarray(operand)
   start_indices = [0] * operand.ndim
@@ -1344,6 +1631,9 @@ def dynamic_slice_in_dim(operand, start_index, slice_size, axis=0):
 
 
 def dynamic_update_slice_in_dim(operand, update, start_index, axis):
+  # [FUNCTION DOC]
+  # HELPER: convenience wrapper over dynamic_update_slice that places update at start_index along
+  # one axis (zero on the other axes). Returns the updated array.
   """Convenience wrapper around dynamic_update_slice for one dimension."""
   operand = tf_np.asarray(operand)
   axis = int(axis)
@@ -1357,6 +1647,9 @@ _RNG_KEY_DTYPE = np.int64
 
 
 def _key2seed(a):
+  # [FUNCTION DOC]
+  # HELPER: converts an RNG key (scalar int64 array) into a TF stateless-RNG seed (int32 tensor
+  # of shape two) by splitting the 64 bits into low and high 32-bit halves. Pure function.
   """Converts an RNG key to an RNG seed.
 
   Args:
@@ -1367,6 +1660,9 @@ def _key2seed(a):
   """
 
   def int64_to_int32s(a):
+    # [FUNCTION DOC]
+    # HELPER: reinterprets a scalar int64 as unsigned, extracts the low and high 32-bit halves and
+    # returns them stacked as an int32 tensor of shape two.
     """Converts an int64 tensor of shape [] to an int32 tensor of shape [2]."""
     a = math_ops.cast(a, dtypes.uint64)
     fst = math_ops.cast(a, dtypes.uint32)
@@ -1383,6 +1679,9 @@ def _key2seed(a):
 
 
 def _seed2key(a):
+  # [FUNCTION DOC]
+  # HELPER: inverse of the key-to-seed conversion. Takes an int32 seed tensor of shape two and
+  # returns a scalar int64 TF NumPy array combining the two halves (second half in the high bits).
   """Converts an RNG seed to an RNG key.
 
   Args:
@@ -1393,6 +1692,9 @@ def _seed2key(a):
   """
 
   def int32s_to_int64(a):
+    # [FUNCTION DOC]
+    # HELPER: ORs the first element with the second element shifted left 32 bits (both as
+    # unsigned 64-bit) and casts the result to int64, giving a scalar tensor.
     """Converts an int32 tensor of shape [2] to an int64 tensor of shape []."""
     a = math_ops.bitwise_or(
         math_ops.cast(a[0], dtypes.uint64),
@@ -1408,6 +1710,9 @@ def _seed2key(a):
 
 
 def prng(s):
+  # [FUNCTION DOC]
+  # Creates an RNG state (key) from an integer seed s, as a scalar int64 TF NumPy array. It is
+  # not bitwise identical to JAX. Pure function.
   """Creates RNG state from seed.
 
   Args:
@@ -1422,6 +1727,12 @@ def prng(s):
 
 
 def stateless_split(seed, num=2):
+  # [FUNCTION DOC]
+  # HELPER: fallback used by split on old TF versions lacking the built-in stateless split.
+  # KNOWN ISSUE: the new seeds are drawn as independent uniform values with no minimum or maximum
+  # given, so they are random draws from the seed rather than a true counter-based split.
+  # Inputs: seed (shape two int32/int64 tensor), num (number of seeds, default 2). Returns a
+  # tensor of shape num by two with the same dtype as seed.
   """Splits an RNG seed into `num` new seeds by adding a leading axis.
 
   Example:
@@ -1455,6 +1766,10 @@ def stateless_split(seed, num=2):
 
 
 def split(state, num):
+  # [FUNCTION DOC]
+  # Derives num independent RNG states (keys) from state. Converts the key to a seed, splits it
+  # with the TF stateless split (falling back to the local helper if the TF function does not
+  # exist), unstacks into num seeds and converts each back to a key. Returns a list of keys.
   """Creates new independent RNG states from an existing state.
 
   Args:
@@ -1481,6 +1796,10 @@ def uniform(key,
             dtype=tf_np.random.DEFAULT_RANDN_DTYPE,
             minval=0.,
             maxval=1.):
+  # [FUNCTION DOC]
+  # Deterministic uniform sampling from an RNG key. Inputs: key (scalar int64 state), shape of the
+  # result, dtype (default from the TF NumPy random module), minval (inclusive, default zero),
+  # maxval (exclusive, default one). Returns a TF NumPy array of that shape and dtype.
   """Sample uniform random values in range [`minval`, `maxval`).
 
   Args:
@@ -1505,6 +1824,9 @@ def uniform(key,
 
 
 def normal(key, shape, dtype=dtypes.float32):
+  # [FUNCTION DOC]
+  # Deterministic standard-normal sampling from an RNG key. Inputs: key, shape, dtype (default
+  # float32). Returns a TF NumPy array of that shape and dtype.
   """Sample standard-normal random values.
 
   Args:
@@ -1524,6 +1846,10 @@ def normal(key, shape, dtype=dtypes.float32):
 
 
 def bernoulli(key, mean=np.float32(0.5), shape=None):
+  # [FUNCTION DOC]
+  # Samples boolean values that are true with probability mean, by comparing uniform samples
+  # with mean. Inputs: key, mean (default 0.5, broadcastable to shape), shape (default the shape
+  # of mean). Returns a boolean array.
   """Sample Bernoulli random values with given shape and mean.
 
   Args:
@@ -1543,11 +1869,18 @@ def bernoulli(key, mean=np.float32(0.5), shape=None):
 
 
 def _eager_dataset_iterator(dataset):
+  # [FUNCTION DOC]
+  # HELPER: generator for dataset_as_numpy. Iterates over a dataset in eager mode and yields each
+  # element with all tensors converted to TF NumPy arrays (structure preserved).
   for item in dataset:
     yield nest.map_structure(tf_np.asarray, item)
 
 
 def dataset_as_numpy(dataset):
+  # [FUNCTION DOC]
+  # Converts a nested structure of datasets and tensors: tensors become arrays, datasets become
+  # generators of arrays. Raises a value error when not executing eagerly, or when any leaf is
+  # neither a tensor nor a dataset. Returns a structure with the same nesting as the input.
   """Converts a `tf.data.Dataset` to an iterable of ndarrays.
 
   `dataset_as_numpy` converts a possibly nested structure of `tf.data.Dataset`s
@@ -1604,6 +1937,9 @@ _INSTANCE_LOCK = threading.Lock()
 # TODO(b/142565636): Ensure that multiple concurrent calls to a tf.function
 # containing a collective op run reasonably.
 def _get_instance_key():
+  # [FUNCTION DOC]
+  # HELPER: returns a fresh collective-op instance key for pmap collectives. Thread-safe: takes
+  # the module lock, increments the module-level counter and returns the new value.
   global _INSTANCE_KEY
   global _INSTANCE_LOCK
   with _INSTANCE_LOCK:
@@ -1614,6 +1950,11 @@ def _get_instance_key():
 # Don't use a namedtuple since nest considers that a tuple and unflattens and
 # flattens it.
 class ShardedNdArray(object):
+  # [CLASS DOC]
+  # Result type of pmap: holds one eager tensor per device (attribute tensors, in device order)
+  # plus the device count. It is deliberately not a named tuple so nest does not flatten it.
+  # Indexing by device gives that device's tensor as an array; shape and dtype properties describe
+  # the stacked view. A conversion function registered below stacks the tensors into one tensor.
   """Wrapper over ndarray that can contain tensors on multiple devices.
 
     This is returned by extensions.pmap, and contains the individual tensors on
@@ -1621,6 +1962,9 @@ class ShardedNdArray(object):
   """
 
   def __init__(self, tensors):
+    # [FUNCTION DOC]
+    # Stores the per-device tensors and their count. Input: tensors, a non-empty list or tuple
+    # of eager tensors ordered like the pmap devices. Raises a value error otherwise.
     """Initializes the ShardedNdArray.
 
     Note that the tensors should be ordered in the way the pmap producing these
@@ -1637,18 +1981,30 @@ class ShardedNdArray(object):
     self.n_devices = len(tensors)
 
   def __getitem__(self, i):
+    # [FUNCTION DOC]
+    # Returns the tensor of device index i as a TF NumPy array (index errors propagate from the
+    # underlying list).
     return tf_np.asarray(self.tensors[i])
 
   @property
   def shape(self):
+    # [FUNCTION DOC]
+    # Shape of the stacked view: device count followed by the per-device shape (taken from the
+    # first tensor).
     return (self.n_devices,) + self.tensors[0]._shape_tuple()  # pylint: disable=protected-access
 
   @property
   def dtype(self):
+    # [FUNCTION DOC]
+    # Element dtype, taken from the first device tensor.
     return self.tensors[0].dtype
 
 
 def convert_sharded_tensor_to_eager_tensor(value, *args, **kwargs):
+  # [FUNCTION DOC]
+  # Tensor conversion function registered for ShardedNdArray. Ignores the extra arguments
+  # (dtype, name and so on) and returns a tensor stacking the per-device tensors on a new
+  # leading axis.
   del args, kwargs
   # TODO(nareshmodi): Consider a collective op to gather the tensors from the
   # various devices for performance reasons.
@@ -1661,23 +2017,37 @@ tensor_conversion_registry.register_tensor_conversion_function(
 
 
 class _PmapConfig(threading.local):
+  # [CLASS DOC]
+  # HELPER: thread-local holder of the axis name and device list of the pmap call currently
+  # running in this thread; both are null outside a pmap. A single module-level instance is
+  # used by pmap, psum and pmean.
   """Simple config used to maintain state related to a current pmap call."""
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Initializes the thread-local state with no axis name and no devices.
     super(_PmapConfig, self).__init__()
     self._axis_name = None
     self._devices = None
 
   def axis_name(self):
+    # [FUNCTION DOC]
+    # Returns the axis name of the surrounding pmap, or null if none.
     return self._axis_name
 
   def set_axis_name(self, axis_name):
+    # [FUNCTION DOC]
+    # Sets the axis name for this thread. Returns nothing.
     self._axis_name = axis_name
 
   def devices(self):
+    # [FUNCTION DOC]
+    # Returns the device list of the surrounding pmap, or null if none.
     return self._devices
 
   def set_devices(self, devices):
+    # [FUNCTION DOC]
+    # Sets the device list for this thread. Returns nothing.
     self._devices = devices
 
 
@@ -1686,6 +2056,10 @@ _pmap_config = _PmapConfig()
 
 @contextlib.contextmanager
 def pmap_config(axis_name, devices):
+  # [FUNCTION DOC]
+  # HELPER: context manager used by pmap. Saves the current thread-local axis name and devices,
+  # sets the given ones for the duration of the with-block and restores the old values on exit,
+  # even if an exception occurs. Yields nothing.
   """Records axis_name and devices for this context."""
   old_axis_name = _pmap_config.axis_name()
   old_devices = _pmap_config.devices()
@@ -1699,6 +2073,12 @@ def pmap_config(axis_name, devices):
 
 
 def _psum(tensor, axis_name=None):
+  # [FUNCTION DOC]
+  # HELPER: single-tensor implementation of psum. Raises a value error if axis_name differs from
+  # the surrounding pmap's or if no device list is available. On TPU it uses a cross-replica sum
+  # (temporarily narrowing 64-bit ints/floats to 32 bits and casting back); otherwise it uses a
+  # collective reduce with add, using a fresh instance key (side effect: bumps the global counter).
+  # Returns a TF NumPy array holding the sum over replicas.
   """Sum all-reduction.
 
   Args:
@@ -1748,6 +2128,10 @@ def _psum(tensor, axis_name=None):
 
 
 def psum(tensors, axis_name=None):
+  # [FUNCTION DOC]
+  # Sum all-reduce across the devices of the surrounding pmap, applied to every tensor in the
+  # nested structure tensors. axis_name must match the pmap's (value error otherwise, via the
+  # per-tensor helper). Returns a structure of summed arrays.
   return nest.map_structure(
       functools.partial(_psum, axis_name=axis_name), tensors
   )
@@ -1756,6 +2140,11 @@ def psum(tensors, axis_name=None):
 # Note this is not available in the jax api, but seemed like a reasonable API
 # to have.
 def pmean(tensor, axis_name=None):
+  # [FUNCTION DOC]
+  # Mean all-reduce across the devices of the surrounding pmap using a collective reduce (add then
+  # divide), with a fresh instance key. Raises a value error for mismatching axis name, missing
+  # device list, or when the devices are TPUs (unsupported). Unlike psum it takes a single tensor
+  # and returns a raw tensor, not converted to a TF NumPy array.
   """Mean all-reduction.
 
   Args:
@@ -1788,6 +2177,12 @@ def pmean(tensor, axis_name=None):
 
 
 def _get_pmap_impl(f, devices, has_tpu):
+  # [FUNCTION DOC]
+  # HELPER: builds the multi-device implementation used by pmap. Inputs: f (function on arrays),
+  # devices (list of device name strings), has_tpu (true if devices are TPUs). For TPU it returns a
+  # compiled function replicating f over the inputs via the TPU replicate op (fixing the output
+  # list shape quirk); otherwise it returns a compiled function that calls a compiled f once per
+  # device under a device scope. Returns a function taking the per-device arguments.
   """This is a helper function to return the pmap impl.
 
   Args:
@@ -1802,12 +2197,16 @@ def _get_pmap_impl(f, devices, has_tpu):
     # Workaround b/121383831
     output_is_list = [False]  # Use list for mutability
     def recorder(args, kwargs, res):
+      # [FUNCTION DOC]
+      # HELPER: records into a shared list whether the result is a list; returns it unchanged.
       del args, kwargs
       output_is_list[0] = isinstance(res, list)
       return res
     f = _record_result_type(recorder, f)
 
   def tf_f(*tf_args):
+    # [FUNCTION DOC]
+    # HELPER: calls f on the arguments converted to TF NumPy values and returns its output.
     """A wrapper for `f` that takes/returns tensors."""
     np_args = _tf_to_np(tf_args)
     np_out = f(*np_args)
@@ -1817,6 +2216,9 @@ def _get_pmap_impl(f, devices, has_tpu):
 
     @polymorphic_function.function(autograph=False)
     def fn(inputs):
+      # [FUNCTION DOC]
+      # TPU variant: replicates tf_f over the per-replica inputs and unwraps single-element result
+      # lists when the original function did not return a list. Returns the replica results.
       # TODO(wangpeng): Supply the `device_assignment` argument to
       # tpu.replicate, calculated from `devices`.
       res = tpu.replicate(tf_f, inputs)
@@ -1837,6 +2239,9 @@ def _get_pmap_impl(f, devices, has_tpu):
 
     @polymorphic_function.function(autograph=False)
     def fn(all_per_device_args):
+      # [FUNCTION DOC]
+      # Non-TPU variant: for every (arguments, device) pair calls the compiled function under that
+      # device scope and returns the list of per-device results.
       """Multi-device function with calls placed on the correct device."""
 
       results = []
@@ -1849,6 +2254,13 @@ def _get_pmap_impl(f, devices, has_tpu):
 
 
 def pmap(f, axis_name=None, devices=None):
+  # [FUNCTION DOC]
+  # Transforms f into a function running on several devices (JAX pmap-like). Inputs: f, axis_name
+  # (for collectives; nesting unsupported), devices (list or tuple of names; defaults to the
+  # accelerators found). Raises a value error if devices is not a list/tuple or is empty. Returns
+  # a wrapper that splits tensor arguments along the first axis across devices, passes sharded
+  # arrays piecewise, replicates other objects, runs the implementation inside a pmap configuration
+  # scope and returns ShardedNdArray results.
   """Transforms a function into a multi-device function.
 
   The semantics are similar to JAX's pmap.
@@ -1878,6 +2290,12 @@ def pmap(f, axis_name=None, devices=None):
   pmap_fn = _get_pmap_impl(f, devices, has_tpu)
 
   def wrapper(*args):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: result checking uses an assertion, so non-tensor outputs fail with an assertion
+    # error (and not at all under optimized mode) instead of a proper exception.
+    # Runs the multi-device function. Raises a value error inside another pmap or when a tensor
+    # argument's first dimension differs from the device count. Returns the structure of results
+    # with each output wrapped in a ShardedNdArray.
     """Wrapper that wraps/unwraps args, retvals, and runs the function."""
     if _pmap_config.devices() is not None:
       raise ValueError("Found a surrounding pmap. Nested pmap is not supported "
@@ -1943,6 +2361,10 @@ def pmap(f, axis_name=None, devices=None):
 
 
 def find_devices(device_type, devices=None):
+  # [FUNCTION DOC]
+  # Returns the names of devices whose type equals device_type (for example TPU or GPU). Input
+  # devices is a list of name strings; if empty or null, all logical devices known to the runtime
+  # are used (this queries the TF runtime configuration).
   if not devices:
     devices = [d.name for d in config.list_logical_devices()]
   devices = [(d, device_spec.DeviceSpecV2.from_string(d)) for d in devices]
@@ -1951,6 +2373,8 @@ def find_devices(device_type, devices=None):
 
 
 def tpu_devices(devices=None):
+  # [FUNCTION DOC]
+  # Returns the TPU devices among devices (all logical devices when null) as a list of names.
   """Gets TPU devices out of `devices`.
 
   Args:
@@ -1964,6 +2388,8 @@ def tpu_devices(devices=None):
 
 
 def gpu_devices(devices=None):
+  # [FUNCTION DOC]
+  # Returns the GPU devices among devices (all logical devices when null) as a list of names.
   """Gets GPU devices out of `devices`.
 
   Args:
@@ -1977,10 +2403,17 @@ def gpu_devices(devices=None):
 
 
 def accelerators(devices=None):
+  # [FUNCTION DOC]
+  # Returns the TPU devices if any exist, otherwise the GPU devices (possibly an empty list).
   return tpu_devices(devices) or gpu_devices(devices)
 
 
 def _tree_broadcast(to, s):
+  # [FUNCTION DOC]
+  # HELPER: expands the axis specification s (an integer, null, or a tree prefix) to the full
+  # nested structure to, for vmap. A leaf target requires an integer or null spec; a scalar spec
+  # is repeated over the structure; lists/tuples need equal lengths and dicts are matched by key.
+  # Raises a bare value error on mismatches and a type error for unsupported container types.
   """Broadcasts `s` to the nested structure `to`."""
   if not isinstance(to, (list, tuple, dict)):
     if not isinstance(s, (int, type(None))):
@@ -2002,6 +2435,11 @@ def _tree_broadcast(to, s):
 
 
 def vmap(f, in_axes=0, out_axes=0):
+  # [FUNCTION DOC]
+  # Vectorizing map in the JAX style, built on the TF vectorized map. Inputs: f, in_axes (integer,
+  # null, or tree prefix of them: which axis of each argument is mapped, null means unbatched),
+  # out_axes (same for outputs). Raises a type error for invalid axis leaves, and a value error if
+  # every in_axes entry is null. Returns a function mapping f over the chosen axes.
   """Returns a function that maps `f` over first dimension of inputs."""
   in_axes_flat = nest.flatten(in_axes)
   if not all(isinstance(l, (type(None), int))
@@ -2020,6 +2458,11 @@ def vmap(f, in_axes=0, out_axes=0):
         "those types as leaves, but got {}.".format(out_axes))
 
   def _f(*args):
+    # [FUNCTION DOC]
+    # The function returned by vmap: broadcasts in_axes to the arguments (value error if not a tree
+    # prefix), moves mapped axes to the front, runs the vectorized map of the inner function over
+    # them, broadcasts out_axes to the outputs (value error if not a prefix) and moves output axes
+    # to their requested positions. Returns the outputs in the structure of f's outputs.
     flat_args = nest.flatten(args)
     try:
       f_in_axes = _tree_broadcast(args, in_axes)
@@ -2034,6 +2477,9 @@ def vmap(f, in_axes=0, out_axes=0):
     f_in_axes_flat = nest.flatten(f_in_axes)
 
     def tf_f(tf_args):
+      # [FUNCTION DOC]
+      # HELPER: per-example function given to the vectorized map. Receives only the batched
+      # arguments, re-inserts the unbatched ones in their original positions and calls f.
       """Function passed to tf.vectorized_map call."""
       # Note that unbatched arguments are not passed to tf_f. Here we fill thos
       # arguments back before calling `f`.
@@ -2074,6 +2520,10 @@ def vmap(f, in_axes=0, out_axes=0):
           sys.exc_info()[2])
 
     def map_output(x, axis):
+      # [FUNCTION DOC]
+      # HELPER: post-processes one output of the vectorized map. Null axis: drops the batch
+      # dimension by taking the first entry; axis zero: unchanged; otherwise moves the leading
+      # axis to the requested position. Returns a TF NumPy array.
       """Maps output of tf.vectorized_map to the final output."""
       x = tf_np.asarray(x)
       if axis is None:
