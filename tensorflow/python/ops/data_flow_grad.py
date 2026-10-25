@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: helper module registering gradients for data-flow operations. Registers gradient
+# functions for dynamic partition, dynamic stitch and parallel dynamic stitch, and marks queue,
+# stack and session-handle operations as not differentiable. All effects happen at import time
+# in the global gradient registry; nothing is exported.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +30,13 @@ from tensorflow.python.ops import math_ops
 
 @ops.RegisterGradient("DynamicPartition")
 def _DynamicPartitionGrads(op, *grads):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient function for the dynamic partition op.
+  # Inputs: op, the forward operation (data and partition indices, with a partition count
+  # attribute); grads, one gradient per output partition. Partitions a range of positions
+  # with the same indices, then stitches the partition gradients back together in the original
+  # order and reshapes to the data shape. Returns a list: the reconstructed data gradient and
+  # null for the indices (not differentiable). No side effects beyond adding graph ops.
   """Gradients for DynamicPartition."""
   data = op.inputs[0]
   indices = op.inputs[1]
@@ -44,12 +56,22 @@ def _DynamicPartitionGrads(op, *grads):
 @ops.RegisterGradient("DynamicStitch")
 @ops.RegisterGradient("ParallelDynamicStitch")
 def _DynamicStitchGrads(op, grad):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient function for the dynamic stitch and parallel dynamic stitch ops.
+  # Inputs: op, the forward operation (its inputs are half index tensors, half data tensors);
+  # grad, the gradient of the single output, either dense or in indexed-slices form (converted
+  # to dense with an unsorted segment sum over the output row count). Returns a list: null
+  # for each index input, then for each data input the rows of grad gathered at its indices.
+  # No side effects beyond adding graph ops.
   """Gradients for DynamicStitch and ParallelDynamicStitch."""
 
   num_values = len(op.inputs) // 2
   indices_grad = [None] * num_values
 
   def AsInt32(x):
+    # [FUNCTION DOC]
+    # HELPER: casts a tensor to 32-bit integer unless the first op input already is 32-bit
+    # integer, in which case it is returned unchanged. Used to normalize index tensors.
     return (x if op.inputs[0].dtype == dtypes.int32 else
             math_ops.cast(x, dtypes.int32))
 

@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Implements the public gradient-customization decorators: custom_gradient (user supplies the
+# backward function, with separate eager and graph mode implementations), recompute_grad (tape
+# checkpointing that re-runs a function during back-propagation) and grad_pass_through (identity
+# backward pass). Also holds a few internal helpers: a binding class that makes decorators work
+# on methods, variable discovery utilities and a unique-name generator. Registers a new
+# gradient in the global registry for each graph-mode use; no other import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -44,6 +51,14 @@ VAR_OP_TYPES = [
 
 @tf_export("custom_gradient")
 def custom_gradient(f=None):
+  # [FUNCTION DOC]
+  # Public API (exported as custom_gradient). Decorator that lets a function define its own
+  # gradient. Input: f, a function returning a pair of outputs and a gradient function; it is
+  # optional, and when omitted (null) a decorator is returned so the call can be used with
+  # arguments. Returns a wrapper (metadata preserved) that returns the forward outputs of f and
+  # uses the returned gradient function for back-propagation, dispatching at call time to eager
+  # or graph implementation. The gradient function must accept a keyword named variables if
+  # variables are used. Errors (type, value) are raised at call time by the implementations.
   """Decorator to define a function with a custom gradient.
 
   This decorator allows fine grained control over the gradients of a sequence
@@ -288,6 +303,11 @@ def custom_gradient(f=None):
 
   @Bind.decorator
   def decorated(wrapped, args, kwargs):
+    # [FUNCTION DOC]
+    # HELPER: dispatcher used by custom_gradient. Given the wrapped user function and the call's
+    # positional and keyword arguments, runs the eager-mode implementation when eager execution
+    # is active and the graph-mode implementation otherwise, returning its result. Errors come
+    # from those implementations.
     """Decorated function with custom gradient."""
     if context.executing_eagerly():
       return _eager_mode_decorator(wrapped, args, kwargs)
@@ -298,6 +318,13 @@ def custom_gradient(f=None):
 
 
 class Bind:
+  # [CLASS DOC]
+  # HELPER: internal support class for the custom-gradient decorator.
+  # Callable wrapper pairing a function with a decorator that expects the function, the
+  # positional arguments and the keyword arguments. Holds the function and the decorator as
+  # private state. Created through the class method decorator; calling an instance runs the
+  # decorator on the call. Implements the descriptor protocol so it also works on methods,
+  # binding the function to the instance on attribute access.
   """When called evaluates `d(f, args, kwargs)` but supports binding `f`.
 
   >>> @Bind.decorator
@@ -322,13 +349,25 @@ class Bind:
 
   @classmethod
   def decorator(cls, d):
+    # [FUNCTION DOC]
+    # Class method that turns a three-argument decorator d (function, positional arguments,
+    # keyword arguments) into a regular decorator: returns a callable that takes a function f
+    # and gives back a binding object combining f and d. No side effects.
     return lambda f: Bind(f, d)
 
   def __init__(self, f, d):
+    # [FUNCTION DOC]
+    # Constructor: stores the function f to be decorated and the decorator d, a callable taking
+    # the function, its positional arguments and its keyword arguments. Returns nothing.
     self._f = f
     self._d = d
 
   def __get__(self, instance, owner):
+    # [FUNCTION DOC]
+    # Descriptor hook that lets a bound decorator work on methods. When accessed through an
+    # instance, binds the stored function to that instance and returns a new binding of the
+    # bound function with the same decorator, wrapped to preserve metadata. When accessed
+    # through the class (instance is null), returns this object unchanged.
     if instance is not None:
       f = self._f.__get__(instance, owner)
       return tf_decorator.make_decorator(f, Bind(f, self._d))
@@ -336,14 +375,28 @@ class Bind:
       return self
 
   def __call__(self, *a, **k):
+    # [FUNCTION DOC]
+    # Invokes the stored decorator with the stored function, the tuple of positional arguments
+    # and the mapping of keyword arguments, and returns its result. Exceptions propagate.
     return self._d(self._f, a, k)
 
 
 def get_variable_by_name(var_name):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it retrieves a variable handle, but it can also return
+  # nothing (null) when the matching variable is not trainable, and it raises a value error
+  # when no variable matches or when several trainable variables match; neither is documented.
+  # Looks through the global variables collection of the default graph for variables whose
+  # operation name equals var_name (a string). Returns the single trainable match, null if
+  # matches exist but none are trainable, and raises a value error otherwise as described.
   """Given a variable name, retrieves a handle on the tensorflow Variable."""
   global_vars = ops.get_collection(ops.GraphKeys.GLOBAL_VARIABLES)
 
   def _filter_fn(item):
+    # [FUNCTION DOC]
+    # HELPER: predicate for get_variable_by_name. Returns true when the collection item has an
+    # operation whose name equals the requested variable name; items lacking an operation
+    # (attribute error) are treated as non-matching and give false.
     try:
       return var_name == item.op.name
     except AttributeError:
@@ -371,6 +424,14 @@ def get_variable_by_name(var_name):
 
 
 def _get_dependent_variables(input_ops, output_ops):
+  # [FUNCTION DOC]
+  # HELPER: used by the graph-mode custom-gradient decorator to find captured variables.
+  # Inputs: input_ops, flattened list of input tensors at which the backward walk stops;
+  # output_ops, flattened list of output tensors to start from. Passes the outputs through an
+  # identity (to handle inputs equal to outputs), walks backward over differentiable ops, picks
+  # ops of variable types and looks up each variable by name. Returns a list of trainable
+  # variables found (non-trainable ones are dropped). May raise a value error from the name
+  # lookup. Adds identity ops to the current graph.
   """Finds variables involved in the subgraph between input_ops and output_ops.
 
   Args:
@@ -396,10 +457,27 @@ def _get_dependent_variables(input_ops, output_ops):
 
 
 def generate_name():
+  # [FUNCTION DOC]
+  # HELPER: builds a unique gradient-registry name for a custom gradient, using a fixed prefix
+  # followed by a process-wide unique integer from the ops module. Takes no input and returns
+  # the string; consumes one unique id.
   return "CustomGradient-%s" % ops.uid()
 
 
 def _graph_mode_decorator(f, args, kwargs):
+  # [FUNCTION DOC]
+  # HELPER: graph-mode implementation behind the custom-gradient decorator.
+  # Inputs: f, the user function returning results and a gradient function; args, positional
+  # arguments (converted to tensors); kwargs, which must be empty. Raises a value error if
+  # keyword arguments are given, if outputs come from different graphs, or the gradient
+  # function returns the wrong variable count; raises a type error if non-resource variables
+  # were created or if variables are used but the gradient function does not accept them.
+  # Runs f, discovers variables used (via the tape watcher and a backward graph walk), logs at
+  # verbose level when the gradient function takes variables but none are found, then routes
+  # the results through an identity-n operation whose gradient is overridden by a freshly
+  # registered gradient function with a unique generated name, copies handle data, and records
+  # the operation on the tape. Returns the results in the original structure.
+  # Side effects: registers a global gradient, modifies the default graph.
   """Implement custom gradient decorator for graph mode."""
   # TODO(rsepassi): Add support for kwargs
   if kwargs:
@@ -487,6 +565,13 @@ def _graph_mode_decorator(f, args, kwargs):
   all_tensors = flat_result + flat_args + variables
 
   def tape_grad_fn(*result_grad_components):
+    # [FUNCTION DOC]
+    # Backward function for graph mode. Input: upstream gradients for the flattened results
+    # followed by the other identity-n outputs (only the leading result part is used). Rebuilds
+    # the result structure, calls the user grad function (with the variables keyword if any
+    # variables were found), raising a value error if the variable gradient count differs from
+    # the variable count. Returns a list: null entries for the results, then the flattened input
+    # gradients, then the variable gradients, so there is one entry per identity-n input.
     """Custom grad fn wrapper."""
     result_grads = composite_tensor_gradient.replace_flat_tensors_for_gradients(
         nest.flatten(result), result_grad_components[:flat_result_len])
@@ -511,6 +596,10 @@ def _graph_mode_decorator(f, args, kwargs):
 
   @ops.RegisterGradient(name)
   def internal_grad_fn(unused_op, *result_grads):  # pylint: disable=unused-variable
+    # [FUNCTION DOC]
+    # HELPER: registered graph gradient function for the identity-n operation created by the
+    # graph-mode decorator. Ignores the operation argument and forwards the upstream gradients
+    # to the tape gradient function, returning its list of gradients.
     """Custom grad fn wrapper."""
     return tape_grad_fn(*result_grads)
 
@@ -534,6 +623,15 @@ def _graph_mode_decorator(f, args, kwargs):
 
 
 def _eager_mode_decorator(f, args, kwargs):
+  # [FUNCTION DOC]
+  # HELPER: eager-mode implementation behind the custom-gradient decorator.
+  # Inputs: f, the user function returning a pair of results and a gradient function; args and
+  # kwargs, the positional and keyword arguments of the call. Calls f while watching variable
+  # use, determines the variables used that are not inputs, and checks that the gradient
+  # function accepts a keyword named variables when such variables exist (raises a type error
+  # otherwise). Makes identity copies of the flattened results and records an operation on the
+  # active tape linking inputs and variables to results with a gradient callback. Returns the
+  # results repacked into the original structure. Side effect: records on the gradient tape.
   """Implement custom gradient decorator for eager mode."""
   with record.VariableWatcher() as variable_watcher:
     result, grad_fn = f(*args, **kwargs)
@@ -568,6 +666,14 @@ def _eager_mode_decorator(f, args, kwargs):
   arg_count = len(flat_args)
 
   def actual_grad_fn(*result_grad_components):
+    # [FUNCTION DOC]
+    # Backward function recorded on the tape for eager mode. Input: the flattened upstream
+    # gradient components for the results. Rebuilds the original result structure from them,
+    # wraps a single non-sequence into a list, calls the user grad function (passing the
+    # captured variables by keyword if there are any) and flattens its input gradients.
+    # Raises a value error if the user function returns the wrong number of variable gradients
+    # or if the number of flattened input gradients differs from the number of flattened
+    # positional arguments. Returns the flat input gradients followed by the variable gradients.
     """Custom grad fn wrapper."""
     result_grads = composite_tensor_gradient.replace_flat_tensors_for_gradients(
         nest.flatten(result), result_grad_components)
@@ -599,6 +705,15 @@ def _eager_mode_decorator(f, args, kwargs):
 
 @tf_export("recompute_grad")
 def recompute_grad(f):
+  # [FUNCTION DOC]
+  # Public API (exported as recompute_grad). Tape checkpointing: returns a wrapped version of
+  # the callable f whose intermediate values are not recorded on the gradient tape. During
+  # back-propagation f is re-executed under a local tape to obtain gradients, trading extra
+  # computation for lower memory. Input: f, a callable taking tensors and returning a tensor or
+  # sequence of tensors. Output: a function wrapping f (via the decorator utility, so the
+  # original is reachable through its wrapped attribute) that returns the same values as f.
+  # Forward-mode autodiff is unsupported (raises a not-implemented error when transposing).
+  # No side effects at wrapping time.
   """Defines a function as a recompute-checkpoint for the tape auto-diff.
 
   Tape checkpointing is a technique to reduce the memory consumption of the
@@ -705,16 +820,40 @@ def recompute_grad(f):
 
   @custom_gradient
   def inner(*args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: forward function that recompute_grad wraps with the custom-gradient decorator.
+    # Takes arbitrary positional and keyword arguments for f. Captures the current variable
+    # scope, then runs f once with tape recording stopped so no intermediate operations are
+    # stored. Returns a pair: the result of f, and the gradient wrapper function that will
+    # recompute f during back-propagation. Side effects: executes f once (e.g. printing).
     """Inner function closure for calculating gradients."""
     current_var_scope = variable_scope.get_variable_scope()
     with record.stop_recording():
       result = f(*args, **kwargs)
 
     def grad_wrapper(*wrapper_args, variables=None):
+      # [FUNCTION DOC]
+      # HELPER: gradient function handed to the custom-gradient decorator by recompute_grad.
+      # Takes the upstream gradients as positional arguments and an optional keyword argument
+      # variables (list of variables used by f, or null). Defines a nested custom-gradient
+      # function that recomputes f and returns the result of calling it on the upstream
+      # gradients, i.e. the gradients for the inputs and variables. No side effects itself.
       """Wrapper function to accomodate lack of kwargs in graph mode custom_gradient."""
 
       @custom_gradient
       def inner_recompute_grad(*dresult):
+        # [FUNCTION DOC]
+        # Custom-gradient function that does the actual recomputation. Input: dresult, the
+        # upstream gradients for the outputs of f (at least one required, checked by an
+        # assertion that raises an assertion error when empty). Re-runs f under a fresh gradient
+        # tape on identity copies of the original arguments (and under the captured variable
+        # scope), watching the arguments and any variables. In graph mode it adds an artificial
+        # data dependency on the first upstream gradient so XLA schedules recomputation after it.
+        # Then computes gradients of the recomputed result with respect to the arguments plus
+        # variables, using the upstream gradients as output gradients and zeros for unconnected
+        # entries. Returns a pair: a tuple of (argument gradients, variable gradients), and the
+        # transpose function that raises for forward mode. Side effects: re-executes f, so any
+        # side effects of f (such as printing) happen again.
         """Nested custom gradient function for computing grads in reverse and forward mode autodiff."""
         # Gradient calculation for reverse mode autodiff.
         with backprop.GradientTape() as t:
@@ -753,6 +892,13 @@ def recompute_grad(f):
             unconnected_gradients=UnconnectedGradients.ZERO)
 
         def transpose(*t_args, **t_kwargs):
+          # [FUNCTION DOC]
+          # KNOWN ISSUE: the error message is missing a space ("forward mode" and "autodiff" run
+          # together) because adjacent string pieces are joined without one.
+          # Stand-in transpose rule used for forward-mode autodiff. Accepts any arguments and
+          # ignores them; always raises a not-implemented error naming the wrapped function f,
+          # advising against recompute_grad in forward mode, since recompute does not store
+          # activations on the tape. Never returns.
           """Gradient function calculation for forward mode autodiff."""
           # Just throw an error since gradients / activations are not stored on
           # tape for recompute.
@@ -772,6 +918,15 @@ def recompute_grad(f):
 
 @tf_export("grad_pass_through")
 def grad_pass_through(f):
+  # [FUNCTION DOC]
+  # Public API (exported as grad_pass_through). Wraps a callable f so that the forward pass
+  # behaves exactly like f while the backward pass treats it as an identity: upstream gradients
+  # are passed straight to the inputs, and any variables used by f receive null gradients.
+  # Input: f, a callable taking tensors and returning a tensor or nested structure of tensors.
+  # Output: a new function (wrapping f via the decorator utility so name and docs are kept)
+  # returning the same values as f. Built on the custom-gradient decorator, so it inherits its
+  # eager and graph mode behavior and its errors. Calling grad_pass_through itself has no side
+  # effects beyond creating the wrapper.
   """Creates a grad-pass-through op with the forward behavior provided in f.
 
   Use this function to wrap any op, maintaining its behavior in the forward
@@ -813,7 +968,20 @@ def grad_pass_through(f):
   """
   @custom_gradient
   def _grad_pass_through_op(*args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: inner function of grad_pass_through, decorated with the custom-gradient decorator.
+    # Runs the user function f on the given positional and keyword arguments and returns a pair
+    # of its result (forward value, unchanged) and an identity-style backward function. Side
+    # effects and exceptions are whatever f itself produces when called.
     def grad(*args, **kwargs):
+      # [FUNCTION DOC]
+      # Backward function used by the pass-through wrapper: acts as an identity on the incoming
+      # gradients. Takes any positional upstream gradients and optionally a keyword argument
+      # named variables (supplied by the custom-gradient machinery when the wrapped function
+      # touches variables). If variables is present and not null, returns a pair: the upstream
+      # gradients unchanged, and a list of null gradients with one entry per variable (those
+      # variables get no gradient). Otherwise returns the upstream gradients unchanged.
+      # No side effects and no exceptions of its own.
       variables = kwargs.get("variables")
       if variables is not None:
         # Variables involved in the wrapped op will not receive gradients.
