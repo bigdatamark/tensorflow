@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Tests that RaggedTensor and RaggedTensorSpec accept custom "supported value types". Defines a
+# test-only extension type (WrappedTensor) and a global op dispatcher that unwraps it, then tests
+# construction, with_values, elementwise ops, slicing, spec serialization, component specs,
+# compatibility, conversion to list and spec inference. Import-time side effects: registers the
+# dispatcher globally and registers WrappedTensor as a supported ragged value type.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -40,34 +46,66 @@ from tensorflow.python.util import dispatch
 
 
 class WrappedTensor(extension_type.BatchableExtensionType):
+  # [CLASS DOC]
+  # HELPER: test-only batchable extension type wrapping a single tensor field named value, used
+  # to verify that ragged tensors can hold non-Tensor value types. Exposes shape, dtype,
+  # indexing and set_shape by delegating to the wrapped tensor. Has a nested Spec type.
   value: tensor.Tensor
 
   @property
   def shape(self):
+    # [FUNCTION DOC]
+    # HELPER: delegation for the wrapped value. Returns the static shape of the wrapped tensor.
     return self.value.shape
 
   @property
   def dtype(self):
+    # [FUNCTION DOC]
+    # HELPER: delegation for the wrapped value. Returns the dtype of the wrapped tensor.
     return self.value.dtype
 
   def __getitem__(self, idx):
+    # [FUNCTION DOC]
+    # HELPER: delegation for the wrapped value. Indexes or slices the wrapped tensor with the
+    # given index and returns the result wrapped in a new WrappedTensor.
     return WrappedTensor(self.value.__getitem__(idx))
 
   def set_shape(self, shape):
+    # [FUNCTION DOC]
+    # HELPER: delegation for the wrapped value. Calls set_shape on the wrapped tensor with the
+    # given shape, which updates static shape information, and returns what that call returns
+    # (nothing).
     return self.value.set_shape(shape)
 
   class Spec(type_spec.TypeSpec):
+    # [CLASS DOC]
+    # HELPER: nested type specification for WrappedTensor, used as the flat-values spec in the
+    # spec tests. KNOWN ISSUE: its shape and dtype properties read an attribute named value that
+    # a plain type spec does not define, so accessing them would fail unless provided elsewhere.
 
     @property
     def shape(self):
+      # [FUNCTION DOC]
+      # KNOWN ISSUE: reads the value attribute, which this spec class does not define, so it
+      # likely fails if accessed (it appears to be copied from the wrapper class).
+      # Intended to return the shape of the wrapped value.
       return self.value.shape
 
     @property
     def dtype(self):
+      # [FUNCTION DOC]
+      # KNOWN ISSUE: reads the value attribute, which this spec class does not define, so it
+      # likely fails if accessed (it appears to be copied from the wrapper class).
+      # Intended to return the dtype of the wrapped value.
       return self.value.dtype
 
 
 class WrappedTensorOpDispatcher(dispatch.GlobalOpDispatcher):
+  # [CLASS DOC]
+  # HELPER: global op dispatcher that lets any TensorFlow op accept WrappedTensor arguments. It
+  # unwraps them, runs the op on plain tensors and rewraps the result, except for ops listed in
+  # OPS_THAT_RETURN_UNTRACED_RESULTS (shape queries and rank assertions) whose results stay
+  # plain. Registered globally at import time.
   """Global op dispatcher for WrappedTensor."""
 
   # For these ops, just return plain Tensors (not WrappedTensors).
@@ -75,9 +113,17 @@ class WrappedTensorOpDispatcher(dispatch.GlobalOpDispatcher):
                                       check_ops.assert_rank_at_least)
 
   def call_op(self, op, *args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: invokes the given op with the given positional and keyword arguments and returns
+    # its result; a hook point separated from handle.
     return op(*args, **kwargs)
 
   def handle(self, op, args, kwargs):
+    # [FUNCTION DOC]
+    # Dispatcher entry point. Inputs: the op, its positional argument list and keyword mapping.
+    # Returns the not-supported marker unless some argument is (or directly contains) a
+    # WrappedTensor. Otherwise unwraps all arguments, calls the op, and returns the plain result
+    # for the untraced-result ops, else the result wrapped in a WrappedTensor.
     # Dispatcher only applies if at least one arg is a WrappedTensor.
     if not (any(self.is_wrapped_tensor_arg(x) for x in args) or
             any(self.is_wrapped_tensor_arg(x) for x in kwargs.values())):
@@ -92,6 +138,9 @@ class WrappedTensorOpDispatcher(dispatch.GlobalOpDispatcher):
       return WrappedTensor(value)
 
   def unwrap(self, value):
+    # [FUNCTION DOC]
+    # HELPER: returns the wrapped tensor for a WrappedTensor, a same-typed list or tuple with
+    # each element unwrapped recursively, or the value unchanged otherwise.
     if isinstance(value, WrappedTensor):
       return value.value
     elif isinstance(value, (list, tuple)):
@@ -100,6 +149,9 @@ class WrappedTensorOpDispatcher(dispatch.GlobalOpDispatcher):
       return value
 
   def is_wrapped_tensor_arg(self, value):
+    # [FUNCTION DOC]
+    # HELPER: returns true if the value is a WrappedTensor or a list or tuple directly
+    # containing one (only one level deep); false otherwise.
     if isinstance(value, WrappedTensor):
       return True
     if isinstance(value, (list, tuple)):
@@ -116,13 +168,23 @@ ragged_tensor._add_supported_value_type(WrappedTensor)
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedTensorSupportedValuesTest(test_util.TensorFlowTestCase,
                                       parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests that RaggedTensor works with WrappedTensor values: construction, replacing values,
+  # elementwise unary and binary ops, and slicing. Run in graph and eager modes.
 
   def assertAllTensorsEqual(self, list1, list2):
+    # [FUNCTION DOC]
+    # HELPER: asserts two sequences of tensors have the same length and are equal pairwise.
     self.assertLen(list1, len(list2))
     for (t1, t2) in zip(list1, list2):
       self.assertAllEqual(t1, t2)
 
   def testConstruction(self):
+    # [FUNCTION DOC]
+    # Scenario: a WrappedTensor of eight strings. Action: build ragged tensors with each
+    # row-partitioning factory (splits, starts, limits, lengths, uniform row length). Expected:
+    # values stay a WrappedTensor holding the original tensor, and the partitioning accessor
+    # returns the supplied values.
     tensor_values = constant_op.constant(
         ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'])
     values = WrappedTensor(tensor_values)
@@ -157,6 +219,10 @@ class RaggedTensorSupportedValuesTest(test_util.TensorFlowTestCase,
     self.assertAllEqual(rt.uniform_row_length, 4)
 
   def testWithValues(self):
+    # [FUNCTION DOC]
+    # Scenario: a two-level ragged tensor over wrapped strings. Action: replace its values with a
+    # plain integer tensor and with a wrapped integer tensor. Expected: the new values equal the
+    # given ones and the wrapped case remains a WrappedTensor.
     tensor_values = constant_op.constant(['a', 'b', 'c', 'd', 'e', 'f', 'g'])
     values = WrappedTensor(tensor_values)
     nested_row_splits = [[0, 2, 5], [0, 2, 2, 5, 6, 7]]
@@ -171,6 +237,10 @@ class RaggedTensorSupportedValuesTest(test_util.TensorFlowTestCase,
     self.assertAllEqual(rt_wrapped_int.values.value, tensor_int)
 
   def testWithFlatValues(self):
+    # [FUNCTION DOC]
+    # Scenario: a two-level ragged tensor over wrapped strings. Action: replace the flat values
+    # with a plain integer tensor and with a wrapped one. Expected: flat values equal the given
+    # tensors and the wrapped case remains a WrappedTensor.
     tensor_values = constant_op.constant(['a', 'b', 'c', 'd', 'e', 'f', 'g'])
     values = WrappedTensor(tensor_values)
     nested_row_splits = [[0, 2, 5], [0, 2, 2, 5, 6, 7]]
@@ -251,6 +321,13 @@ class RaggedTensorSupportedValuesTest(test_util.TensorFlowTestCase,
                              x_dtype=None,
                              op=math_ops.abs,
                              **extra_args):
+    # [FUNCTION DOC]
+    # Scenario: each unary op (float, bool, int, string ops and several ops needing extra
+    # arguments) applied to a ragged tensor and to the same data with wrapped flat values.
+    # Inputs: nested list x, optional dtype, the op (default absolute value), extra keyword
+    # arguments for the op. Action: seed randomness identically, apply the op to both versions.
+    # Expected: the wrapped result has WrappedTensor flat values equal to the plain result's, and
+    # equal row splits. Side effect: sets the global random seed.
     x = ragged_factory_ops.constant(x, x_dtype)
     wrapped_x = ragged_tensor.RaggedTensor.from_nested_row_splits(
         WrappedTensor(x.flat_values), x.nested_row_splits)
@@ -281,6 +358,11 @@ class RaggedTensorSupportedValuesTest(test_util.TensorFlowTestCase,
        for op in test_ops.BINARY_BOOL_OPS]
       )  # pyformat: disable
   def testBinaryElementwiseOp(self, x, y, op=math_ops.add):
+    # [FUNCTION DOC]
+    # Scenario: each binary op (float, int, bool) on two ragged operands, once plain and once
+    # with wrapped flat values. Inputs: nested lists x and y and the op (default addition).
+    # Expected: the wrapped result has WrappedTensor flat values equal to the plain result's and
+    # equal row splits.
     x = ragged_factory_ops.constant(x)
     y = ragged_factory_ops.constant(y)
     wrapped_x = ragged_tensor.RaggedTensor.from_nested_row_splits(
@@ -305,6 +387,11 @@ class RaggedTensorSupportedValuesTest(test_util.TensorFlowTestCase,
       (lambda x: x[0:2, ::2], True),
   )
   def testSlicing(self, slice_fn, is_ragged_output):
+    # [FUNCTION DOC]
+    # Scenario: a ragged tensor with wrapped values and an identical plain one. Inputs: a slicing
+    # function and whether it yields a ragged result. Expected: for ragged output the sliced
+    # wrapped tensor is ragged with WrappedTensor flat values and the same values and row splits
+    # as the plain slice; otherwise the result is a WrappedTensor equal to the plain slice.
     tensor_values = constant_op.constant([[1.0, 2], [3, 4], [5, 6], [7, 8]])
     row_splits = constant_op.constant([0, 2, 3, 4], dtypes.int32)
     raw_rt = RaggedTensor.from_row_splits(tensor_values, row_splits)
@@ -328,13 +415,23 @@ class RaggedTensorSupportedValuesTest(test_util.TensorFlowTestCase,
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedTensorSpecSupportedValuesTest(test_util.TensorFlowTestCase,
                                           parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests RaggedTensorSpec with a WrappedTensor flat-values spec: construction, serialization,
+  # component specs, component conversion, compatibility, list conversion and spec inference.
 
   def assertAllTensorsEqual(self, list1, list2):
+    # [FUNCTION DOC]
+    # HELPER: asserts two sequences of tensors have the same length and are equal pairwise.
     self.assertLen(list1, len(list2))
     for (t1, t2) in zip(list1, list2):
       self.assertAllEqual(t1, t2)
 
   def testConstruction(self):
+    # [FUNCTION DOC]
+    # Scenario: build a spec with a wrapped flat-values spec. Expected: private and public
+    # accessors report the given shape rank, dtype, row-splits dtype, ragged rank and flat-values
+    # spec; building one with a dtype that differs from the flat-values spec dtype raises a
+    # value error about the dtype mismatch.
     flat_values_spec = WrappedTensor.Spec(
         tensor.TensorSpec(shape=(None, 5), dtype=dtypes.float32))
     spec1 = RaggedTensorSpec(
@@ -397,6 +494,10 @@ class RaggedTensorSpecSupportedValuesTest(test_util.TensorFlowTestCase,
       ),
   ])
   def testSerialize(self, rt_spec, expected):
+    # [FUNCTION DOC]
+    # Scenario: specs with a plain tensor flat-values spec. Action: serialize the spec.
+    # Expected: the text representations of the result and the expected tuple (shape, dtype,
+    # ragged rank, row-splits dtype, flat-values spec) are equal, since shape equality is unusual.
     serialization = rt_spec._serialize()
     # TensorShape has an unconventional definition of equality, so we can't use
     # assertEqual directly here.  But repr() is deterministic and lossless for
@@ -442,6 +543,10 @@ class RaggedTensorSpecSupportedValuesTest(test_util.TensorFlowTestCase,
        ]),
   ])
   def testComponentSpecs(self, rt_spec, expected):
+    # [FUNCTION DOC]
+    # Scenario: specs with differing ragged ranks, dtypes and shapes. Expected: the component
+    # specs are the wrapped flat-values spec followed by one int64 row-splits spec per ragged
+    # level (with a static length when the outer dimension is known).
     self.assertEqual(rt_spec._component_specs, expected)
 
   @parameterized.parameters([
@@ -466,6 +571,11 @@ class RaggedTensorSpecSupportedValuesTest(test_util.TensorFlowTestCase,
       },
   ])
   def testToFromComponents(self, rt_spec, flat_values, nested_row_splits):
+    # [FUNCTION DOC]
+    # Scenario: a ragged tensor over wrapped float values with given nested row splits.
+    # Action: convert to components and rebuild from them. Expected: the first component is the
+    # wrapped values, the rest equal the row splits, and the rebuilt tensor has wrapped flat
+    # values, equal row splits and the same dtype.
     wrapped_tensor = WrappedTensor(constant_op.constant(flat_values))
     rt = RaggedTensor.from_nested_row_splits(wrapped_tensor, nested_row_splits)
     components = rt_spec._to_components(rt)
@@ -483,6 +593,11 @@ class RaggedTensorSpecSupportedValuesTest(test_util.TensorFlowTestCase,
     self.assertEqual(rt_reconstructed.dtype, rt.dtype)
 
   def testIsCompatibleWith(self):
+    # [FUNCTION DOC]
+    # Scenario: five specs differing in shape, dtype, ragged rank and flat-values spec.
+    # Expected: only the first is compatible with the second (less specific shape); all other
+    # pairs are incompatible; a plain tensor is incompatible with a wrapped-value spec while a
+    # WrappedTensor value is compatible.
     spec1 = RaggedTensorSpec(
         [32, None, None],
         dtypes.float32,
@@ -529,6 +644,10 @@ class RaggedTensorSpecSupportedValuesTest(test_util.TensorFlowTestCase,
     self.assertTrue(spec4.is_compatible_with(WrappedTensor(value)))
 
   def testToList(self):
+    # [FUNCTION DOC]
+    # Scenario (eager mode only): ragged tensor over wrapped strings. Expected: converting to a
+    # list raises a value error when the wrapped type cannot be converted; it succeeds and equals
+    # the expected nested list when the wrapped type provides a numpy method or a to_list method.
     with context.eager_mode():
       tensor_values = constant_op.constant(
           ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'])
@@ -548,8 +667,13 @@ class RaggedTensorSpecSupportedValuesTest(test_util.TensorFlowTestCase,
       with self.subTest('Value with numpy method'):
 
         class WrappedTensorWithNumpy(WrappedTensor):
+          # [CLASS DOC]
+          # HELPER: WrappedTensor subclass adding a numpy conversion method, used to show
+          # list conversion works via numpy.
 
           def numpy(self):
+            # [FUNCTION DOC]
+            # HELPER: returns the wrapped tensor as a numpy array.
             return self.value.numpy()
 
         values = WrappedTensorWithNumpy(tensor_values)
@@ -559,8 +683,13 @@ class RaggedTensorSpecSupportedValuesTest(test_util.TensorFlowTestCase,
       with self.subTest('Value with to_list method'):
 
         class WrappedTensorWithToList(WrappedTensor):
+          # [CLASS DOC]
+          # HELPER: WrappedTensor subclass adding a to_list method, used to show list
+          # conversion works via that method.
 
           def to_list(self):
+            # [FUNCTION DOC]
+            # HELPER: returns the wrapped tensor's contents as a nested Python list.
             return self.value.numpy().tolist()
 
         values = WrappedTensorWithToList(tensor_values)
@@ -568,6 +697,11 @@ class RaggedTensorSpecSupportedValuesTest(test_util.TensorFlowTestCase,
         self.assertEqual(rt.to_list(), expected)
 
   def testFromValue(self):
+    # [FUNCTION DOC]
+    # Scenario: a ragged tensor with wrapped float values and int32 row splits. Action: infer a
+    # type spec from the value. Expected: it equals the spec with shape four by unknown by two,
+    # ragged rank one, int32 row-splits and a wrapped flat-values spec, and the trailing shape
+    # of the spec matches the flat-values spec shape.
     tensor_values = constant_op.constant([[1.0, 2], [4, 5], [7, 8]])
     values = WrappedTensor(tensor_values)
 

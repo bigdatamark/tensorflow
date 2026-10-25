@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Dynamic (tensor-valued) shapes for ragged tensors and broadcasting built on them. Provides the
+# RaggedTensorDynamicShape class, broadcast_dynamic_shape for combining two such shapes, and
+# broadcast_to for tiling a (possibly ragged) tensor to a ragged shape, plus private helpers.
+# Used by ragged elementwise ops and ragged broadcasting. No import-time side effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,6 +35,12 @@ from tensorflow.python.ops.ragged import ragged_util
 
 
 class RaggedTensorDynamicShape:
+  # [CLASS DOC]
+  # Immutable description of the shape of a possibly ragged tensor, stored as tensors. Holds a
+  # tuple of partitioned dimension sizes (scalar for uniform dimensions, vector of slice lengths
+  # for ragged ones) and a vector of inner dimension sizes, all cast to one integer dtype
+  # (int32 or int64). Created via the constructor, from_dim_sizes or from_tensor. Offers rank and
+  # size queries and the broadcasting operations used by broadcast_dynamic_shape and broadcast_to.
   """A collection of tensors encoding the shape of a potentially ragged tensor.
 
   Each `RaggedTensorDynamicShape` consists of an ordered list of dimension
@@ -81,6 +92,15 @@ class RaggedTensorDynamicShape:
 
   def __init__(self, partitioned_dim_sizes, inner_dim_sizes,
                dim_size_dtype=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: partitioned_dim_sizes (list or tuple of scalar or vector integer
+    # tensors), inner_dim_sizes (1-D integer tensor), optional dim_size_dtype. Converts all to
+    # tensors, validates ranks, and casts everything to one dtype: the given one, else the common
+    # dtype of the ragged (vector) sizes, else int64. If the dtypes differ it casts to int64 only
+    # when automatic partition dtype casting is enabled. Raises ValueError if a rank is unknown,
+    # the outermost partitioned dimension is ragged, the innermost is uniform, inner sizes are
+    # not rank 1, or dtypes mismatch without auto-cast. An assertion error occurs if the first
+    # argument is not a list or tuple. Stores the results on the instance; no other side effects.
     """Creates a RaggedTensorDynamicShape.
 
     Args:
@@ -141,12 +161,20 @@ class RaggedTensorDynamicShape:
       self._inner_dim_sizes = inner_dim_sizes
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns a debugging string naming the class with the partitioned and inner dimension sizes.
     return ('RaggedTensorDynamicShape'
             '(partitioned_dim_sizes=%r, inner_dim_sizes=%r)' %
             (self._partitioned_dim_sizes, self._inner_dim_sizes))
 
   @staticmethod
   def from_dim_sizes(dim_sizes):
+    # [FUNCTION DOC]
+    # Static factory. Input: a list of integer scalars (uniform dimensions) or vectors (ragged
+    # dimensions), one per dimension; converted to tensors preferring int64. Dimensions up to and
+    # including the last ragged one become partitioned sizes, the rest become inner sizes.
+    # Returns a new shape object. Raises ValueError if any entry is neither a scalar nor a vector,
+    # plus any constructor errors (e.g. ragged outermost dimension).
     """Constructs a ragged shape from a list of dimension sizes.
 
     This list contains a single tensor for each dimension, where the tensor
@@ -176,6 +204,12 @@ class RaggedTensorDynamicShape:
 
   @classmethod
   def from_tensor(cls, rt_input, dim_size_dtype=None):
+    # [FUNCTION DOC]
+    # Class factory. Input: a dense or ragged tensor (converted if needed) and an optional dtype
+    # for the sizes. For a dense tensor the result has no partitioned dimensions and its full
+    # dynamic shape as inner sizes. For a ragged tensor the partitioned sizes are the row count
+    # followed by each nested row-lengths vector, and the inner sizes are the shape of the
+    # flat values without its first dimension. Returns the shape object; adds ops to the graph.
     """Constructs a ragged shape for a potentially ragged tensor."""
     with ops.name_scope(None, 'RaggedTensorDynamicShapeFromTensor', [rt_input]):
       rt_input = ragged_tensor.convert_to_tensor_or_ragged_tensor(rt_input)
@@ -190,6 +224,12 @@ class RaggedTensorDynamicShape:
             dim_size_dtype=dim_size_dtype)
 
   def dimension_size(self, axis):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: negative or out-of-range axes are not validated here; negative values index
+    # from the end of the inner sizes or fail with an indexing error.
+    # Returns the size tensor for the given axis: an entry of the partitioned sizes (scalar or
+    # vector) or of the inner sizes (scalar). Input axis must be a Python integer, otherwise a
+    # type error is raised.
     """Returns the size of slices across the specified dimension."""
     if not isinstance(axis, int):
       raise TypeError('axis must be an integer')
@@ -200,6 +240,10 @@ class RaggedTensorDynamicShape:
       return self._inner_dim_sizes[axis - partitioned_ndims]
 
   def is_ragged(self, axis):
+    # [FUNCTION DOC]
+    # Returns a Python boolean: true when the axis is a partitioned dimension greater than zero
+    # whose size is a vector. Raises a type error if axis is not an integer and a value error for
+    # negative axes or axes at or beyond a known rank. Axis zero is never ragged.
     """Returns true if the indicated dimension is ragged."""
     if not isinstance(axis, int):
       raise TypeError('axis must be an integer')
@@ -214,6 +258,9 @@ class RaggedTensorDynamicShape:
 
   @property
   def rank(self):
+    # [FUNCTION DOC]
+    # Property. Returns the number of partitioned dimensions plus the statically known number of
+    # inner dimensions, or nothing (null) when the inner sizes vector has unknown length.
     """The number of dimensions in this shape, or None if unknown."""
     inner_ndims = tensor_shape.dimension_value(self._inner_dim_sizes.shape[0])
     if inner_ndims is None:
@@ -223,6 +270,9 @@ class RaggedTensorDynamicShape:
 
   @property
   def partitioned_dim_sizes(self):
+    # [FUNCTION DOC]
+    # Property returning the stored tuple of partitioned dimension size tensors.
+    # KNOWN ISSUE: the docstring says a list, but the stored value is a tuple.
     """The partitioned dimension sizes for this shape.
 
     Returns:
@@ -232,6 +282,8 @@ class RaggedTensorDynamicShape:
 
   @property
   def inner_dim_sizes(self):
+    # [FUNCTION DOC]
+    # Property returning the stored 1-D integer tensor of inner dimension sizes.
     """The inner dimension sizes for this shape.
 
     Returns:
@@ -241,20 +293,32 @@ class RaggedTensorDynamicShape:
 
   @property
   def num_partitioned_dimensions(self):
+    # [FUNCTION DOC]
+    # Property returning the number of partitioned dimensions as a Python integer.
     """The number of partitioned dimensions in this shape."""
     return len(self._partitioned_dim_sizes)
 
   @property
   def num_inner_dimensions(self):
+    # [FUNCTION DOC]
+    # Property returning the static length of the inner sizes vector, or null if not known.
     """The number of inner dimensions, or `None` if not statically known."""
     return tensor_shape.dimension_value(self._inner_dim_sizes.shape[0])
 
   @property
   def dim_size_dtype(self):
+    # [FUNCTION DOC]
+    # Property returning the integer dtype shared by all dimension size tensors (taken from the
+    # inner sizes vector).
     """DType used by this shape for dimension sizes."""
     return self._inner_dim_sizes.dtype
 
   def broadcast_to_rank(self, rank):
+    # [FUNCTION DOC]
+    # Input: target rank (integer). Returns this shape itself if the rank already matches,
+    # otherwise a new shape with leading size-one uniform dimensions added (as extra partitioned
+    # sizes if any exist, else prepended to the inner sizes). Raises ValueError if the current
+    # rank is unknown or larger than the requested rank.
     """Adds leading size-1 dimensions to broadcast `self` to the given rank.
 
     E.g., if `shape1` is `[3, (D2), 4]`, then `shape1.broadcast_to_rank(5)`
@@ -290,6 +354,15 @@ class RaggedTensorDynamicShape:
       return RaggedTensorDynamicShape([], inner_dims, self.dim_size_dtype)
 
   def broadcast_dimension(self, axis, lengths):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring describes tiling with a where-based repeat count; the code only
+    # builds a runtime assertion and delegates to helper methods, and the "??" note is stale.
+    # Inputs: axis (integer) and lengths (scalar or vector integer tensor, converted to this
+    # shape's dtype). Adds an assertion op that the sizes are compatible (ragged axis: scalar 1
+    # or vector equal to existing sizes; uniform axis: scalar 1 or equal, or existing size 1 for
+    # vector lengths). Returns a new shape broadcast along the axis, with the check as a control
+    # dependency. Raises ValueError for unknown or higher-than-1 rank lengths, and for a vector
+    # of lengths on a non-partitioned axis zero. Failed compatibility is a runtime error.
     """Returns a shape that is broadcast-compatible with self & lengths.
 
     * If dimension[axis] is uniform and lengths is a scalar, the check
@@ -370,6 +443,10 @@ class RaggedTensorDynamicShape:
           return self._broadcast_inner_dimension_to_ragged(axis, lengths)
 
   def num_slices_in_dimension(self, axis):
+    # [FUNCTION DOC]
+    # Input: axis (integer). Returns a scalar tensor with the total number of slices across the
+    # axis: one for negative axes, the sum of the lengths for a ragged axis, and otherwise the
+    # axis size times the slice count of the previous axis (computed recursively).
     """Returns the total number of slices across the indicated dimension."""
     if axis < 0:
       return constant_op.constant(1, dtype=self.dim_size_dtype)
@@ -379,6 +456,12 @@ class RaggedTensorDynamicShape:
       return self.dimension_size(axis) * self.num_slices_in_dimension(axis - 1)
 
   def _broadcast_uniform_partitioned_dimension(self, axis, lengths):
+    # [FUNCTION DOC]
+    # HELPER: used by broadcast_dimension for uniform partitioned axes.
+    # Inputs: axis and lengths (scalar or vector tensor). For scalar lengths the axis size is
+    # replaced by lengths when it was one; for vector lengths the axis becomes the ragged lengths
+    # vector. Every later partitioned dimension is rebuilt by repeating ranges accordingly (or
+    # kept when uniform). Returns a new shape; inner sizes are unchanged.
     """Broadcasts the partitioned dimension `axis` to match `lengths`."""
     axis_dim_size = self.dimension_size(axis)
     partitioned_sizes = list(self._partitioned_dim_sizes[:axis])
@@ -409,6 +492,11 @@ class RaggedTensorDynamicShape:
                                     self.dim_size_dtype)
 
   def _broadcast_inner_dimension_to_uniform(self, axis, length):
+    # [FUNCTION DOC]
+    # HELPER: used by broadcast_dimension for inner axes with scalar lengths.
+    # KNOWN ISSUE: docstring mentions lengths but the parameter is named length.
+    # Replaces the inner size at the axis by the given length when the current size is one;
+    # otherwise keeps it. Returns a new shape with the same partitioned sizes.
     """Broadcasts the inner dimension `axis` to match `lengths`."""
     dim_size = self.dimension_size(axis)
     axis_in_inner_dims = axis - self.num_partitioned_dimensions
@@ -423,6 +511,13 @@ class RaggedTensorDynamicShape:
                                     self.dim_size_dtype)
 
   def _broadcast_inner_dimension_to_ragged(self, axis, lengths):
+    # [FUNCTION DOC]
+    # HELPER: used by broadcast_dimension for inner axes with vector lengths.
+    # KNOWN ISSUE: no dtype is passed, so the constructor re-infers the size dtype instead of
+    # reusing this shape's dtype.
+    # Turns the inner dimensions up to and including the axis into partitioned dimensions (the
+    # earlier inner sizes become uniform partitioned sizes, the axis becomes the lengths vector)
+    # and keeps the remaining inner sizes. Returns a new shape.
     axis_in_inner_dims = axis - self.num_partitioned_dimensions
     partitioned_sizes = (
         self._partitioned_dim_sizes + tuple([
@@ -432,6 +527,9 @@ class RaggedTensorDynamicShape:
     return RaggedTensorDynamicShape(partitioned_sizes, inner_sizes)
 
   def with_dim_size_dtype(self, dtype):
+    # [FUNCTION DOC]
+    # Input: dtype, which must be int32 or int64 (else ValueError). Returns this shape if it
+    # already uses that dtype, otherwise a new shape with all sizes cast to it.
     if dtype not in (dtypes.int32, dtypes.int64):
       raise ValueError('dtype must be int32 or int64')
     if self.dim_size_dtype == dtype:
@@ -442,6 +540,13 @@ class RaggedTensorDynamicShape:
 
 
 def broadcast_dynamic_shape(shape_x, shape_y):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring lists only ValueError, but a type error is raised when either
+  # argument is not a RaggedTensorDynamicShape.
+  # Inputs: two shape objects. Raises ValueError if either rank is unknown. Pads both to the
+  # larger rank, then broadcasts one axis at a time, outermost first, each against the other.
+  # Returns the broadcast shape (built from the first argument). Incompatible sizes surface as
+  # runtime assertion failures.
   """Returns the shape formed by broadcasting two shapes to be compatible.
 
   Args:
@@ -474,6 +579,11 @@ def broadcast_dynamic_shape(shape_x, shape_y):
 
 
 def broadcast_to(rt_input, shape, broadcast_inner_dimensions=True):
+  # [FUNCTION DOC]
+  # Inputs: a dense or ragged tensor, a RaggedTensorDynamicShape target, and a flag (default
+  # true) controlling whether inner dimensions are tiled. Raises a type error if shape is not the
+  # right class. Dispatches to the uniform-shape helper when the shape has no partitioned
+  # dimensions, otherwise to the ragged helper. Returns the broadcast tensor.
   """Broadcasts a potentially ragged tensor to a ragged shape.
 
   Tiles `rt_input` as necessary to match the given shape.
@@ -504,6 +614,10 @@ def broadcast_to(rt_input, shape, broadcast_inner_dimensions=True):
 
 
 def _broadcast_to_uniform_shape(rt_input, shape, broadcast_inner_dimensions):
+  # [FUNCTION DOC]
+  # HELPER: broadcast_to for shapes without partitioned dimensions.
+  # Raises ValueError if the input is ragged. Returns the input broadcast to the inner sizes, or
+  # the input unchanged when inner broadcasting is disabled.
   """Broadcasts rt_input to the uniform shape `shape`."""
   if isinstance(rt_input, ragged_tensor.RaggedTensor):
     raise ValueError('Incompatible with shape: ragged rank mismatch')
@@ -514,6 +628,14 @@ def _broadcast_to_uniform_shape(rt_input, shape, broadcast_inner_dimensions):
 
 
 def _broadcast_to_ragged_shape(rt_input, dst_shape, broadcast_inner_dimensions):
+  # [FUNCTION DOC]
+  # HELPER: broadcast_to for shapes with partitioned dimensions.
+  # Inputs: tensor, destination shape, inner-broadcast flag. Aligns row-splits dtypes (casting
+  # both to int64 only if auto-cast is enabled, else ValueError), validates rank and ragged rank
+  # (ValueError on unknown rank or mismatch), then wraps the input in extra outer dimensions,
+  # converts it to a ragged tensor of matching ragged rank, tiles dimensions that stay uniform,
+  # broadcasts the flat values over inner dimensions, and finally tiles dimensions that become
+  # ragged from outermost to innermost. Returns the resulting ragged tensor.
   """Broadcasts rt_input to the ragged shape `dst_shape`."""
   # Check that rt_input and dst_shape have the same row_splits dtype.
   if (isinstance(rt_input, ragged_tensor.RaggedTensor) and
@@ -601,6 +723,12 @@ def _broadcast_to_ragged_shape(rt_input, dst_shape, broadcast_inner_dimensions):
 
 
 def _ragged_tile_axis(rt_input, axis, repeats, row_splits_dtype):
+  # [FUNCTION DOC]
+  # HELPER: used by _broadcast_to_ragged_shape to make a uniform axis ragged.
+  # Inputs: tensor, axis (must be greater than zero, checked by assertion), repeats (per-slice
+  # repeat counts) and the row-splits dtype. Converts a dense input to ragged, recurses into the
+  # values for deeper axes, and at axis one repeats each row's contents the given number of times
+  # while rebuilding nested row lengths. Returns the new ragged tensor.
   """Tile a dimension of a RaggedTensor to match a ragged shape."""
   assert axis > 0  # Outermost dimension may not be ragged.
 

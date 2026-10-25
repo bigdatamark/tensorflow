@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Tests for RaggedTensorDynamicShape and its broadcasting helpers: construction from tensors and
+# dimension size lists, rank broadcasting, per-dimension broadcasting, broadcast of two shapes,
+# broadcast_to, and ragged addition that relies on broadcasting. Test module only.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,8 +33,15 @@ from tensorflow.python.platform import googletest
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedTensorShapeTest(test_util.TensorFlowTestCase,
                             parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for RaggedTensorDynamicShape and ragged broadcasting, run in graph and eager modes
+  # with parameterized scenarios. Shared fixture: the assertShapeEq comparison helper.
 
   def assertShapeEq(self, x, y):
+    # [FUNCTION DOC]
+    # HELPER: shared shape comparison for the tests in this class.
+    # Asserts both arguments are dynamic shape objects, have the same number of partitioned
+    # dimensions, equal partitioned sizes dimension by dimension, and equal inner sizes.
     assert isinstance(x, RaggedTensorDynamicShape)
     assert isinstance(y, RaggedTensorDynamicShape)
     self.assertLen(x.partitioned_dim_sizes, len(y.partitioned_dim_sizes))
@@ -78,6 +89,10 @@ class RaggedTensorShapeTest(test_util.TensorFlowTestCase,
           expected_dim_sizes=[2, [2, 1], [2, 1, 2]]),
   ])
   def testFromTensor(self, value, expected_dim_sizes):
+    # [FUNCTION DOC]
+    # Scenario: dense and ragged values of various ranks and ragged ranks (including docstring
+    # examples). Action: build a shape with from_tensor. Expected: it equals the shape built
+    # from the expected list of dimension sizes.
     shape = RaggedTensorDynamicShape.from_tensor(value)
     expected = RaggedTensorDynamicShape.from_dim_sizes(expected_dim_sizes)
     self.assertShapeEq(shape, expected)
@@ -99,6 +114,10 @@ class RaggedTensorShapeTest(test_util.TensorFlowTestCase,
           expected_dim_sizes=[1, 3, [3, 2, 4], 2, 3]),
   ])
   def testBroadcastToRank(self, dim_sizes, rank, expected_dim_sizes):
+    # [FUNCTION DOC]
+    # Scenario: shapes of varying ragged structure padded to a larger (or equal) rank.
+    # Action: broadcast_to_rank. Expected: leading size-one dimensions are added, the result
+    # equals the expected shape, and its rank equals the requested rank.
     shape = RaggedTensorDynamicShape.from_dim_sizes(dim_sizes)
     expected = RaggedTensorDynamicShape.from_dim_sizes(expected_dim_sizes)
     broadcasted_shape = shape.broadcast_to_rank(rank)
@@ -274,6 +293,11 @@ class RaggedTensorShapeTest(test_util.TensorFlowTestCase,
   ])  # pyformat: disable
   def testBroadcastDimension(self, axis, row_length, original_dim_sizes,
                              broadcast_dim_sizes):
+    # [FUNCTION DOC]
+    # Scenario: a shape and an axis along which a scalar or vector of row lengths is broadcast,
+    # covering uniform inner, uniform partitioned and ragged cases. Action: broadcast_dimension
+    # on the original shape, on the expected shape with the same lengths, and on the expected
+    # shape with length one. Expected: all three results equal the expected broadcast shape.
     """Tests for the broadcast_dimension method.
 
     Verifies that:
@@ -359,6 +383,10 @@ class RaggedTensorShapeTest(test_util.TensorFlowTestCase,
               expected_dims=[2, (2, 1), 2, (2, 1, 2, 1, 2, 1)]),
       ])
   def testBroadcastDynamicShape(self, x_dims, y_dims, expected_dims):
+    # [FUNCTION DOC]
+    # Scenario: pairs of shapes (scalar, vector, ragged, mixed) to be broadcast together.
+    # Action: broadcast_dynamic_shape in both argument orders. Expected: both results equal the
+    # expected shape.
     x_shape = RaggedTensorDynamicShape.from_dim_sizes(x_dims)
     y_shape = RaggedTensorDynamicShape.from_dim_sizes(y_dims)
     expected = RaggedTensorDynamicShape.from_dim_sizes(expected_dims)
@@ -368,6 +396,10 @@ class RaggedTensorShapeTest(test_util.TensorFlowTestCase,
     self.assertShapeEq(expected, result2)
 
   def testRepr(self):
+    # [FUNCTION DOC]
+    # Scenario: a shape with ragged dimensions. Action: take its string representation.
+    # Expected: it matches the class-name format listing a tuple of two partitioned size tensors
+    # and one inner size tensor.
     shape = RaggedTensorDynamicShape.from_dim_sizes([2, (2, 1), 2, 1])
     self.assertRegex(
         repr(shape), r'RaggedTensorDynamicShape\('
@@ -410,6 +442,10 @@ class RaggedTensorShapeTest(test_util.TensorFlowTestCase,
               [[[1, 1], [2, 2]], [[3, 3]]], ragged_rank=1)),
   ])
   def testRaggedBroadcastTo(self, x, dim_sizes, expected):
+    # [FUNCTION DOC]
+    # Scenario: dense, scalar or ragged inputs broadcast to a target shape given as dimension
+    # sizes. Action: broadcast_to. Expected: the result has the same ragged rank as the expected
+    # value and equal contents.
     shape = RaggedTensorDynamicShape.from_dim_sizes(dim_sizes)
     result = ragged_tensor_shape.broadcast_to(x, shape)
     self.assertEqual(
@@ -468,6 +504,11 @@ class RaggedTensorShapeTest(test_util.TensorFlowTestCase,
                                                           [[[15, 25], [36]]]])),
       ])
   def testRaggedAddWithBroadcasting(self, x, y, expected, doc):
+    # [FUNCTION DOC]
+    # Scenario: pairs of dense or ragged operands with different shapes; the doc argument only
+    # labels the case and is unused. Action: convert both to int32 tensors and add them.
+    # Expected: the sum has the expected ragged rank and values (expected is converted to a
+    # nested list if it supports that).
     expected_rrank = getattr(expected, 'ragged_rank', 0)
     x = ragged_tensor.convert_to_tensor_or_ragged_tensor(x, dtype=dtypes.int32)
     y = ragged_tensor.convert_to_tensor_or_ragged_tensor(y, dtype=dtypes.int32)

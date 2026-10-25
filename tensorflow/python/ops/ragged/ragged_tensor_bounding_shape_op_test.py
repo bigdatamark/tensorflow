@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit tests for the bounding_shape method of ragged tensors. Defines one parameterized test
+# class that builds ragged tensors of several ranks, row-splits dtypes and output types and
+# compares the computed bounding shape. Test module only; no import-time side effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +30,9 @@ from tensorflow.python.platform import googletest
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedTensorBoundingShapeOp(test_util.TensorFlowTestCase,
                                   parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case covering the bounding_shape method of ragged tensors, run in graph and eager
+  # modes and parameterized over shapes, axes and dtypes. Holds no shared fixtures.
 
   @parameterized.named_parameters([
       # rank = 2
@@ -114,6 +121,12 @@ class RaggedTensorBoundingShapeOp(test_util.TensorFlowTestCase,
                         out_type=None,
                         rt_row_splits_dtype=dtypes.int64,
                         rt_ragged_rank=None):
+    # [FUNCTION DOC]
+    # Parameterized test of the bounding_shape method. Inputs: nested list rt, expected result,
+    # optional axis (int or list), optional out_type, row-splits dtype (default int64) and
+    # optional ragged rank. Builds a ragged constant, calls bounding_shape, asserts the values
+    # equal expected and that the dtype equals out_type if given, else the row-splits dtype.
+    # When axis is given it repeats the check with axis passed as a tensor. Returns nothing.
     rt = ragged_factory_ops.constant(
         rt, ragged_rank=rt_ragged_rank, row_splits_dtype=rt_row_splits_dtype)
     bounding_shape = rt.bounding_shape(axis=axis, out_type=out_type)
