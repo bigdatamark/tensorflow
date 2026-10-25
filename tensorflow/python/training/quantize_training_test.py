@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Unit tests for the quantize-training graph rewriter Python interface. Checks that the rewrite
+# adds nodes to a simple multiplication graph and that a saver can save and restore the extra
+# moving-average min/max variables the rewrite creates. Test module only; no import-time effects
+# beyond imports, and runs through the test main entry point when executed directly.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,10 +35,18 @@ from tensorflow.python.training import saver as saver_module
 
 
 class PywrapQuantizeTrainingTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the quantize-training rewriter wrapper: basic rewrite and save/restore of
+  # the quantization variables. No shared fixtures; each test builds its own graph and session.
 
   # Mainly to verify the python interface is working.
   # More tests for this function can be found in the related c++ tests.
   def testQuantizeTraining(self):
+    # [FUNCTION DOC]
+    # Scenario: in a session, build a graph multiplying two 1x1 constants (six and seven) and check
+    # it evaluates to forty-two with exactly three nodes. Action: run the quantize-training rewrite
+    # with eight bits on the session's graph definition. Expected: the result has more than three
+    # nodes, showing a rewrite happened.
     with session.Session() as sess:
       a = constant_op.constant(6.0, shape=[1, 1])
       b = constant_op.constant(7.0, shape=[1, 1])
@@ -52,6 +65,13 @@ class PywrapQuantizeTrainingTest(test.TestCase):
   # quantized training rewrite.
   @test_util.run_v1_only('The API is only expect to work with v1 session mode.')
   def testQuantizedSaveRestore(self):
+    # [FUNCTION DOC]
+    # Scenario (graph mode only): a graph with a constant a, a variable b and their matrix product.
+    # The graph is rewritten for quantization with eight bits. The rewritten graph is imported into
+    # a fresh graph, the variable initializer and product are run, and a saver saves to a temp file.
+    # A third fresh graph imports the rewritten graph, restores the checkpoint, and the test asserts
+    # b equals seven and the min/max quantization variables for a (six) and for b's read (seven)
+    # were restored too. Side effect: writes a checkpoint under the test temp directory.
     save_path = os.path.join(self.get_temp_dir(), 'quantized_save_restore')
 
     g = ops.Graph()

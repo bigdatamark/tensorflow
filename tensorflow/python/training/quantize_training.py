@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Thin Python wrapper around the native quantization-aware training graph rewriter.
+# Exposes one deprecated, v1-only public function (exported under the train namespace) that
+# serializes a graph definition, hands it to the compiled helper, and parses the rewritten result.
+# Import-time side effects: registers the exported symbol via the export decorator and wraps it
+# with a deprecation warning. Not a helper module; it is a public API shim.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +31,14 @@ from tensorflow.python.util.tf_export import tf_export
     "GraphDef quantized training rewriter is deprecated in the long term.")
 @tf_export(v1=["train.do_quantize_training_on_graphdef"])
 def do_quantize_training_on_graphdef(input_graph, num_bits):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring summary talks about a contrib quantization scheme rather than
+  # describing this function; the contrib namespace no longer exists in this release.
+  # Rewrites a graph definition for quantization-aware training. Inputs: input_graph, a graph
+  # definition message; num_bits, integer number of quantization bits. The graph is serialized to
+  # bytes, passed to the native rewriting helper, and the returned bytes are parsed into a new
+  # graph definition message which is returned. The input is not modified. Errors from the
+  # native helper or from parsing propagate to the caller. Emits a deprecation warning when called.
   """A general quantization scheme is being developed in `tf.contrib.quantize`.
 
   Consider using that instead, though since it is in the tf.contrib namespace,

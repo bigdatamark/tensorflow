@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Unit tests for the queue runner implementation (v1 graph mode only). Covers thread creation and
+# naming, running enqueue ops to completion, exception capture, coordinator interaction (stop
+# requests, grace period), multiple sessions, repeated starts, collection registration, starting all
+# runners, and protocol-buffer round-trip serialization. Defines a tiny mock operation type that
+# only has a name, used to trigger "not in the graph" errors. Runs through the test main entry point.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -38,8 +44,17 @@ _MockOp = collections.namedtuple("MockOp", ["name"])
 
 @test_util.run_v1_only("QueueRunner removed from v2")
 class QueueRunnerTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the queue runner class and the start/add helper functions. Skipped outside v1
+  # graph mode. Each test builds its own graph objects and uses a cached session; there is no
+  # shared setup. A named tuple with only a name field stands in for an operation that is not in
+  # the graph.
 
   def testBasic(self):
+    # [FUNCTION DOC]
+    # Scenario: one enqueue op that increments a counter variable up to three, which then raises
+    # out-of-range. Creates threads for the session, checks the single thread's name, runs and joins
+    # it. Expected: no captured exceptions and the variable ends at three.
     with self.cached_session() as sess:
       # CountUpTo will raise OUT_OF_RANGE when it reaches the count.
       zero64 = constant_op.constant(0, dtype=dtypes.int64)
@@ -60,6 +75,10 @@ class QueueRunnerTest(test.TestCase):
       self.assertEqual(3, self.evaluate(var))
 
   def testTwoOps(self):
+    # [FUNCTION DOC]
+    # Scenario: two counter ops (limits three and thirty) on two variables in one runner. Checks the
+    # two sorted thread names, starts and joins them. Expected: no captured exceptions and the
+    # variables end at three and thirty.
     with self.cached_session() as sess:
       # CountUpTo will raise OUT_OF_RANGE when it reaches the count.
       zero64 = constant_op.constant(0, dtype=dtypes.int64)
@@ -83,6 +102,10 @@ class QueueRunnerTest(test.TestCase):
       self.assertEqual(30, self.evaluate(var1))
 
   def testExceptionsCaptured(self):
+    # [FUNCTION DOC]
+    # Scenario: a runner with two mock ops that are not in the graph and no coordinator. Threads are
+    # started and joined. Expected: exactly two captured exceptions, each mentioning that the
+    # operation is not in the graph.
     with self.cached_session() as sess:
       queue = data_flow_ops.FIFOQueue(10, dtypes.float32)
       qr = queue_runner_impl.QueueRunner(queue, [_MockOp("i fail"),
@@ -99,6 +122,11 @@ class QueueRunnerTest(test.TestCase):
       self.assertTrue("Operation not in the graph" in str(exceptions[1]))
 
   def testRealDequeueEnqueue(self):
+    # [FUNCTION DOC]
+    # Scenario: a runner moves items from a first queue into a second queue. Two values are put in
+    # the first queue, which is then closed. Expected: the runner stops cleanly with no exceptions,
+    # both values appear in the second queue, and it is closed afterwards (a further dequeue raises
+    # an out-of-range error saying the queue is closed).
     with self.cached_session() as sess:
       q0 = data_flow_ops.FIFOQueue(3, dtypes.float32)
       enqueue0 = q0.enqueue((10.0,))
@@ -127,6 +155,11 @@ class QueueRunnerTest(test.TestCase):
         self.evaluate(dequeue1)
 
   def testRespectCoordShouldStop(self):
+    # [FUNCTION DOC]
+    # Scenario: the coordinator has already been asked to stop before threads are created with it.
+    # Expected: thread names include the enqueue thread and the close-on-stop thread; after starting
+    # and joining via the coordinator there are no captured exceptions and the counter variable
+    # remains zero because the enqueue loop never ran.
     with self.cached_session() as sess:
       # CountUpTo will raise OUT_OF_RANGE when it reaches the count.
       zero64 = constant_op.constant(0, dtype=dtypes.int64)
@@ -151,6 +184,10 @@ class QueueRunnerTest(test.TestCase):
       self.assertEqual(0, self.evaluate(var))
 
   def testRequestStopOnException(self):
+    # [FUNCTION DOC]
+    # Scenario: a runner with a mock op not in the graph, created with a coordinator. Threads are
+    # started. Expected: the error is forwarded to the coordinator and re-raised as a value error
+    # (operation not in the graph) when the coordinator joins.
     with self.cached_session() as sess:
       queue = data_flow_ops.FIFOQueue(10, dtypes.float32)
       qr = queue_runner_impl.QueueRunner(queue, [_MockOp("not an op")])
@@ -163,6 +200,11 @@ class QueueRunnerTest(test.TestCase):
         coord.join()
 
   def testGracePeriod(self):
+    # [FUNCTION DOC]
+    # Scenario: a small queue whose enqueue quickly blocks, with threads started under a
+    # coordinator. One element is dequeued, a short sleep occurs, then stop is requested. Expected:
+    # the close-on-stop thread cancels the queue so the blocked enqueue ends, and joining with a
+    # one-second grace period completes without error.
     with self.cached_session() as sess:
       # The enqueue will quickly block.
       queue = data_flow_ops.FIFOQueue(2, dtypes.float32)
@@ -180,6 +222,10 @@ class QueueRunnerTest(test.TestCase):
       coord.join(stop_grace_period_secs=1.0)
 
   def testMultipleSessions(self):
+    # [FUNCTION DOC]
+    # Scenario: create threads (without starting) for the same runner in two different sessions.
+    # Expected: both calls return the same number of threads, showing running counts are tracked
+    # per session.
     with self.cached_session() as sess:
       with session.Session() as other_sess:
         zero64 = constant_op.constant(0, dtype=dtypes.int64)
@@ -195,6 +241,10 @@ class QueueRunnerTest(test.TestCase):
         self.assertEqual(len(threads), len(other_threads))
 
   def testIgnoreMultiStarts(self):
+    # [FUNCTION DOC]
+    # Scenario: create threads for a session (not started), then ask again for the same session.
+    # Expected: the second call returns an empty list because threads for that session are still
+    # counted as running.
     with self.cached_session() as sess:
       # CountUpTo will raise OUT_OF_RANGE when it reaches the count.
       zero64 = constant_op.constant(0, dtype=dtypes.int64)
@@ -211,6 +261,11 @@ class QueueRunnerTest(test.TestCase):
       self.assertEqual([], new_threads)
 
   def testThreads(self):
+    # [FUNCTION DOC]
+    # Scenario: a runner with one good counter op and one mock op not in the graph, threads created
+    # with immediate start and no coordinator. Expected: the two thread names are as predicted and,
+    # after joining, exactly one exception is captured (operation not in the graph). Creating and
+    # starting threads a second time yields a fresh capture list that again holds one such exception.
     with self.cached_session() as sess:
       # CountUpTo will raise OUT_OF_RANGE when it reaches the count.
       zero64 = constant_op.constant(0, dtype=dtypes.int64)
@@ -238,6 +293,10 @@ class QueueRunnerTest(test.TestCase):
       self.assertTrue("Operation not in the graph" in str(exceptions[0]))
 
   def testName(self):
+    # [FUNCTION DOC]
+    # Scenario: a queue created inside a name scope and a runner over a no-op. Expected: the runner
+    # name is the scoped queue name, and after adding it to the default collection, the collection
+    # filtered by that scope contains exactly one entry.
     with ops.name_scope("scope"):
       queue = data_flow_ops.FIFOQueue(10, dtypes.float32, name="queue")
     qr = queue_runner_impl.QueueRunner(queue, [control_flow_ops.no_op()])
@@ -247,6 +306,10 @@ class QueueRunnerTest(test.TestCase):
         1, len(ops.get_collection(ops.GraphKeys.QUEUE_RUNNERS, "scope")))
 
   def testStartQueueRunners(self):
+    # [FUNCTION DOC]
+    # Scenario: a counter-based runner is added to the graph collection; in a session the variables
+    # are initialized and the start-all function is called. Expected: after joining the returned
+    # threads there are no captured exceptions and the counter equals three.
     # CountUpTo will raise OUT_OF_RANGE when it reaches the count.
     zero64 = constant_op.constant(0, dtype=dtypes.int64)
     var = variable_v1.VariableV1(zero64)
@@ -265,6 +328,9 @@ class QueueRunnerTest(test.TestCase):
       self.assertEqual(3, self.evaluate(var))
 
   def testStartQueueRunnersRaisesIfNotASession(self):
+    # [FUNCTION DOC]
+    # Scenario: a runner is registered in the collection and the start-all function is called with a
+    # plain string instead of a session. Expected: a type error whose message mentions a session.
     zero64 = constant_op.constant(0, dtype=dtypes.int64)
     var = variable_v1.VariableV1(zero64)
     count_up_to = var.count_up_to(3)
@@ -278,6 +344,9 @@ class QueueRunnerTest(test.TestCase):
         queue_runner_impl.start_queue_runners("NotASession")
 
   def testStartQueueRunnersIgnoresMonitoredSession(self):
+    # [FUNCTION DOC]
+    # Scenario: a runner is registered and the start-all function is called with a monitored
+    # session object (backward-compatibility case). Expected: it returns an empty list of threads.
     zero64 = constant_op.constant(0, dtype=dtypes.int64)
     var = variable_v1.VariableV1(zero64)
     count_up_to = var.count_up_to(3)
@@ -292,6 +361,10 @@ class QueueRunnerTest(test.TestCase):
       self.assertFalse(threads)
 
   def testStartQueueRunnersNonDefaultGraph(self):
+    # [FUNCTION DOC]
+    # Scenario: the queue, counter and runner are built inside a separate graph, and a session is
+    # opened on that graph (which is not the default outside the block). Expected: the start-all
+    # function works against the session's graph; no captured exceptions and the counter is three.
     # CountUpTo will raise OUT_OF_RANGE when it reaches the count.
     graph = ops.Graph()
     with graph.as_default():
@@ -312,6 +385,12 @@ class QueueRunnerTest(test.TestCase):
       self.assertEqual(3, self.evaluate(var))
 
   def testQueueRunnerSerializationRoundTrip(self):
+    # [FUNCTION DOC]
+    # Scenario: a runner with explicit close and cancel no-ops and two closed-exception types is
+    # converted to a definition message and rebuilt from it. Expected: queue name, single enqueue
+    # op, close op, cancel op and both exception types survive. Then the exception types are
+    # cleared from the message (legacy format) and rebuilt; expected: all fields match and the
+    # exception types default to just out-of-range.
     graph = ops.Graph()
     with graph.as_default():
       queue = data_flow_ops.FIFOQueue(10, dtypes.float32, name="queue")

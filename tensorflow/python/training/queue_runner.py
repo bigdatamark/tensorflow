@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: compatibility re-export module forwarding the queue runner API to its implementation.
+# Re-exports every public name from the queue runner implementation module through a wildcard
+# import, so older import paths keep working. Defines no logic of its own; the only import-time
+# effect is importing the implementation module (which registers its exports and collections).
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

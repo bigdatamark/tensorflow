@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Deprecated v1 queue-runner machinery: a class that runs a queue's enqueue operations in
+# background threads (optionally coordinated by a coordinator that propagates stop requests and
+# errors), plus functions to add queue runners to a graph collection and to start all collected
+# runners. Not usable under eager execution. Import-time side effects: registers the queue runner
+# collection key with the graph protocol-buffer conversion machinery (to and from the queue runner
+# definition message) and registers public exports. Re-exported by the queue_runner module.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,6 +39,13 @@ _DEPRECATION_INSTRUCTION = (
 
 @tf_export(v1=["train.queue_runner.QueueRunner", "train.QueueRunner"])
 class QueueRunner:
+  # [CLASS DOC]
+  # Holds a queue, a list of enqueue operations, a close operation and a cancel operation, and
+  # creates one thread per enqueue operation (plus an optional close-on-stop thread when a
+  # coordinator is used). State: the queue, enqueue ops, close and cancel ops, the tuple of
+  # exception types meaning "queue closed", a lock, a weak per-session count of running threads,
+  # and a list of captured exceptions. Built from explicit arguments or from a serialized
+  # definition message; can be serialized back. Deprecated; unsupported in eager mode.
   """Holds a list of enqueue operations for a queue, each to be run in a thread.
 
   Queues are a convenient TensorFlow mechanism to compute tensors
@@ -58,6 +72,16 @@ class QueueRunner:
   def __init__(self, queue=None, enqueue_ops=None, close_op=None,
                cancel_op=None, queue_closed_exception_types=None,
                queue_runner_def=None, import_scope=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says ValueError is raised when queue_runner_def and queue are both
+    # given, but the code also raises it when enqueue_ops is given together with queue_runner_def.
+    # Constructor (deprecated). Inputs: queue, enqueue_ops, close_op, cancel_op,
+    # queue_closed_exception_types (all optional, used when building from arguments) or
+    # queue_runner_def (a serialized definition) with optional import_scope name scope. Raises a
+    # runtime error under eager execution; a value error if a definition is combined with a queue or
+    # enqueue ops; the argument path may raise value or type errors. Delegates to the proto or
+    # argument initializer, then creates the lock, a weak mapping from session to running-thread
+    # count, and an empty exceptions list. Adds close and cancel ops to the graph if not supplied.
     """Create a QueueRunner.
 
     On construction the `QueueRunner` adds an op to close the queue.  That op
@@ -116,6 +140,13 @@ class QueueRunner:
 
   def _init_from_args(self, queue=None, enqueue_ops=None, close_op=None,
                       cancel_op=None, queue_closed_exception_types=None):
+    # [FUNCTION DOC]
+    # HELPER: argument-based initializer used by the constructor.
+    # Stores queue, enqueue ops, close op and cancel op. Raises a value error if queue or enqueue ops
+    # are missing or empty; raises a type error if closed-exception types is given but is not a
+    # non-empty tuple of operation-error subclasses. Missing close op becomes a plain close of the
+    # queue; missing cancel op becomes a close that cancels pending enqueues (both create graph ops).
+    # Closed-exception types default to the out-of-range error, otherwise are stored as a tuple.
     """Create a QueueRunner from arguments.
 
     Args:
@@ -163,6 +194,13 @@ class QueueRunner:
           self._queue_closed_exception_types)
 
   def _init_from_proto(self, queue_runner_def, import_scope=None):
+    # [FUNCTION DOC]
+    # HELPER: definition-message initializer used by the constructor.
+    # Asserts the input is a queue runner definition message (assertion error otherwise). Looks up,
+    # in the current default graph, the queue, enqueue ops, close op and cancel op by name, each
+    # prefixed with the optional import scope, and converts stored error codes to exception types.
+    # If the definition has no exception types (older definitions), defaults to out-of-range error.
+    # Raises graph lookup errors if a named element is missing.
     """Create a QueueRunner from `QueueRunnerDef`.
 
     Args:
@@ -190,26 +228,40 @@ class QueueRunner:
 
   @property
   def queue(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the queue whose enqueue ops this runner runs.
     return self._queue
 
   @property
   def enqueue_ops(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the list of enqueue operations, one thread each.
     return self._enqueue_ops
 
   @property
   def close_op(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the operation that closes the queue while preserving pending
+    # enqueues.
     return self._close_op
 
   @property
   def cancel_op(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the operation that closes the queue and cancels pending enqueues.
     return self._cancel_op
 
   @property
   def queue_closed_exception_types(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the tuple of exception types that signal the queue was closed.
     return self._queue_closed_exception_types
 
   @property
   def exceptions_raised(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the list of exceptions captured from worker threads when no
+    # coordinator was supplied. The list is reset each time threads are newly created.
     """Exceptions raised but not handled by the `QueueRunner` threads.
 
     Exceptions raised in queue runner threads are handled in one of two ways
@@ -229,11 +281,21 @@ class QueueRunner:
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the name string of the underlying queue.
     """The string name of the underlying Queue."""
     return self._queue.name
 
   # pylint: disable=broad-except
   def _run(self, sess, enqueue_op, coord=None):
+    # [FUNCTION DOC]
+    # HELPER: thread body started by the thread-creation method, one per enqueue op.
+    # Inputs: sess, the session; enqueue_op, the operation to run repeatedly; coord, optional
+    # coordinator. Builds a cached callable and runs it in a loop until the coordinator says stop or
+    # a queue-closed exception occurs. On a closed exception it decrements this session's running
+    # count under the lock, and the last thread to finish runs the close op (errors ignored, logged
+    # at verbose level). Any other exception is reported to the coordinator, or, without one, logged,
+    # appended to the captured list and re-raised. The count is always decremented on exit.
     """Execute the enqueue op in a loop, close the queue in case of error.
 
     Args:
@@ -280,6 +342,10 @@ class QueueRunner:
           self._runs_per_session[sess] -= 1
 
   def _close_on_stop(self, sess, cancel_op, coord):
+    # [FUNCTION DOC]
+    # HELPER: thread body that cancels the queue when the coordinator requests stop.
+    # Blocks until the coordinator signals stop, then runs the cancel op in the session; any error
+    # from that run is ignored and only logged at verbose level. Returns nothing.
     """Close the queue when the Coordinator requests stop.
 
     Args:
@@ -296,6 +362,14 @@ class QueueRunner:
   # pylint: enable=broad-except
 
   def create_threads(self, sess, coord=None, daemon=False, start=False):
+    # [FUNCTION DOC]
+    # Inputs: sess, session for running ops; coord, optional coordinator; daemon, whether threads
+    # are daemon threads (default false); start, whether to start them (default false). Under the
+    # lock, if threads for this session are still counted as running, returns an empty list;
+    # otherwise records the number of enqueue ops as the session's running count and clears captured
+    # exceptions. Returns a list of unstarted-or-started threads: one per enqueue op, plus a
+    # close-on-stop thread when a coordinator is given. Each thread is registered with the
+    # coordinator if present, marked daemon and started as requested. Names embed queue and op names.
     """Create threads to run the enqueue ops for the given session.
 
     This method requires a session in which the graph was launched.  It creates
@@ -353,6 +427,13 @@ class QueueRunner:
     return ret_threads
 
   def to_proto(self, export_scope=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring mentions a Variable not being in the name scope; it is actually
+    # the queue that must be in the scope.
+    # Input: optional export_scope name scope to strip from names. Returns a queue runner definition
+    # message holding the queue name, enqueue op names, close and cancel op names and error codes of
+    # the closed-exception types, or nothing if an export scope is given and the queue's name does
+    # not start with it. Has no side effects on the runner.
     """Converts this `QueueRunner` to a `QueueRunnerDef` protocol buffer.
 
     Args:
@@ -383,6 +464,11 @@ class QueueRunner:
 
   @staticmethod
   def from_proto(queue_runner_def, import_scope=None):
+    # [FUNCTION DOC]
+    # Static factory. Inputs: queue_runner_def, a definition message; import_scope, optional name
+    # scope to prepend. Returns a new runner built from the definition in the current default graph
+    # (so the constructor's deprecation warning and eager-mode error apply). Used for collection
+    # deserialization.
     """Returns a `QueueRunner` object created from `queue_runner_def`."""
     return QueueRunner(queue_runner_def=queue_runner_def,
                        import_scope=import_scope)
@@ -391,6 +477,9 @@ class QueueRunner:
 @tf_export(v1=["train.queue_runner.add_queue_runner", "train.add_queue_runner"])
 @deprecation.deprecated(None, _DEPRECATION_INSTRUCTION)
 def add_queue_runner(qr, collection=ops.GraphKeys.QUEUE_RUNNERS):
+  # [FUNCTION DOC]
+  # Inputs: qr, a queue runner; collection, graph collection key (default the queue runners key).
+  # Adds the runner to that collection of the default graph. Returns nothing. Deprecated.
   """Adds a `QueueRunner` to a collection in the graph.
 
   When building a complex model that uses many queues it is often difficult to
@@ -419,6 +508,16 @@ def add_queue_runner(qr, collection=ops.GraphKeys.QUEUE_RUNNERS):
 @deprecation.deprecated(None, _DEPRECATION_INSTRUCTION)
 def start_queue_runners(sess=None, coord=None, daemon=True, start=True,
                         collection=ops.GraphKeys.QUEUE_RUNNERS):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring has two Raises sections and omits that a monitored-session object
+  # yields an empty list; it lists only value error for a missing session, but a type error is
+  # raised for non-session objects and a runtime error under eager execution.
+  # Inputs: sess (default: the default session), coord (optional coordinator), daemon (default
+  # true), start (default true), collection (default queue runners key). Raises a runtime error in
+  # eager mode, a value error with no session available, a type error if sess is not a session
+  # (except monitored session classes, which return an empty list). Logs a warning if the collection
+  # is empty. Within the session's graph, creates (and optionally starts) threads for every runner
+  # in the collection and returns the combined list of threads.
   """Starts all queue runners collected in the graph.
 
   This is a companion method to `add_queue_runner()`.  It just starts

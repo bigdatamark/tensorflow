@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Unit tests for the v1 RMSProp optimizer. Compares optimizer results against reference numpy
+# implementations of the dense and sparse update rules over a grid of data types (half and single
+# precision), learning rates, decay, momentum, epsilon, centered flag and variable kind; also
+# checks hand-computed values with and without momentum, sparse minimization on resource variables,
+# and callable hyper-parameters in eager mode. Defines module-level parameter lists used by tests.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -53,9 +59,20 @@ _TESTPARAMS = [
 
 
 class RMSPropOptimizerTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the RMSProp optimizer. Shared fixtures: two numpy reference update helpers (dense
+  # and sparse) and module-level parameter combinations. Most tests run in deprecated graph mode.
 
   def _rmsprop_update_numpy(self, var, g, mg, rms, mom, lr, decay, momentum,
                             epsilon, centered):
+    # [FUNCTION DOC]
+    # HELPER: reference dense RMSProp step in numpy for comparison in tests.
+    # Inputs: current variable, gradient, gradient average, squared-gradient average, momentum
+    # accumulator arrays, plus learning rate, decay, momentum, epsilon and the centered flag.
+    # Updates the squared-gradient average, subtracts the squared gradient average from the
+    # denominator when centered, updates momentum and variable. Returns a tuple of new variable, new
+    # gradient average (unchanged when not centered), new squared average and new momentum. No
+    # side effects.
     rms_t = rms * decay + (1 - decay) * g * g
     denom_t = rms_t + epsilon
     if centered:
@@ -69,6 +86,12 @@ class RMSPropOptimizerTest(test.TestCase):
 
   def _sparse_rmsprop_update_numpy(self, var, gindexs, gvalues, mg, rms, mom,
                                    lr, decay, momentum, epsilon, centered):
+    # [FUNCTION DOC]
+    # HELPER: reference sparse RMSProp step in numpy for comparison in tests.
+    # Inputs: variable, list of row indices, list of gradient values for those rows, gradient
+    # average, squared-gradient average, momentum arrays, and hyper-parameters. Works on deep copies
+    # and updates only the listed indices using the same formulas as the dense helper. Returns a
+    # tuple of new variable, gradient average, squared average and momentum. Inputs are not mutated.
     mg_t = copy.deepcopy(mg)
     rms_t = copy.deepcopy(rms)
     mom_t = copy.deepcopy(mom)
@@ -87,6 +110,12 @@ class RMSPropOptimizerTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testDense(self):
+    # [FUNCTION DOC]
+    # Scenario: for every combination in the parameter grid (reference or resource variables, with
+    # or without centering), two variables get dense gradients and an optimizer is applied. Checks
+    # that mg slots exist only when centered and rms and momentum slots always exist, initial values
+    # are as given, then runs four steps. After each step the variable and all slots are compared
+    # with the numpy reference update within type-dependent tolerance.
     # TODO(yori): Use ParameterizedTest when available
     for (dtype, learning_rate, decay, momentum,
          epsilon, centered, use_resource) in _TESTPARAMS:
@@ -163,6 +192,11 @@ class RMSPropOptimizerTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testMinimizeSparseResourceVariable(self):
+    # [FUNCTION DOC]
+    # Scenario: for single and double precision, minimize a squared prediction built from an
+    # embedding lookup on a resource variable using non-centered RMSProp with learning rate one and
+    # zero decay, momentum and epsilon. Expected: after one step the variable becomes about
+    # zero and one (within a small absolute tolerance).
     for dtype in [dtypes.float32, dtypes.float64]:
       with self.cached_session():
         var0 = resource_variable_ops.ResourceVariable([[1.0, 2.0]], dtype=dtype)
@@ -187,6 +221,10 @@ class RMSPropOptimizerTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testMinimizeSparseResourceVariableCentered(self):
+    # [FUNCTION DOC]
+    # Scenario: same as the non-centered sparse minimization test but with the centered option and
+    # epsilon of one. Expected: after one step the variable is about minus one hundred eleven and
+    # minus one hundred thirty-eight (within a small absolute tolerance).
     for dtype in [dtypes.float32, dtypes.float64]:
       with self.cached_session():
         var0 = resource_variable_ops.ResourceVariable([[1.0, 2.0]], dtype=dtype)
@@ -211,6 +249,11 @@ class RMSPropOptimizerTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testSparse(self):
+    # [FUNCTION DOC]
+    # Scenario: for every parameter-grid combination (resource flag ignored; plain variables),
+    # two variables get indexed-slices gradients each touching one row. Checks slot existence like
+    # the dense test, then runs four steps and compares variables and slots with the sparse numpy
+    # reference after each step.
     # TODO(yori): Use ParameterizedTest when available
     for (dtype, learning_rate, decay,
          momentum, epsilon, centered, _) in _TESTPARAMS:
@@ -288,6 +331,10 @@ class RMSPropOptimizerTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testWithoutMomentum(self):
+    # [FUNCTION DOC]
+    # Scenario: half and single precision, learning rate two, decay 0.9, no momentum, epsilon one,
+    # constant gradients. Checks slots exist, then after two update steps compares squared-gradient
+    # averages and variable values with hand-computed closed-form expressions.
     for dtype in [dtypes.half, dtypes.float32]:
       with test_util.use_gpu():
         var0 = variables.Variable([1.0, 2.0], dtype=dtype)
@@ -357,6 +404,10 @@ class RMSPropOptimizerTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testWithMomentum(self):
+    # [FUNCTION DOC]
+    # Scenario: half and single precision, learning rate two, decay 0.9, momentum 0.5, epsilon 1e-5,
+    # constant gradients. After step one and step two, compares squared-gradient averages, momentum
+    # accumulators and variable values with hand-computed closed-form expressions.
     for dtype in [dtypes.half, dtypes.float32]:
       with test_util.use_gpu():
         var0 = variables.Variable([1.0, 2.0], dtype=dtype)
@@ -457,6 +508,11 @@ class RMSPropOptimizerTest(test.TestCase):
             ]), self.evaluate(var1))
 
   def testCallableParams(self):
+    # [FUNCTION DOC]
+    # Scenario: eager mode with resource variables; learning rate, decay, momentum and epsilon are
+    # passed as no-argument callables. Two gradient applications are performed. Expected: variable
+    # values after each step match the hand-computed non-momentum RMSProp values, showing callables
+    # are evaluated when the update happens.
     with context.eager_mode():
       for dtype in [dtypes.half, dtypes.float32]:
         var0 = resource_variable_ops.ResourceVariable([1.0, 2.0], dtype=dtype)

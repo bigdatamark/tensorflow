@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Defines the v1 RMSProp optimizer (exported under the train namespace). It keeps per-variable
+# slots for a running average of squared gradients, momentum, and, in centered mode, a running
+# average of gradients, and applies updates through native training kernels for dense, sparse,
+# resource-variable dense and resource-variable sparse gradients. Builds on the base optimizer
+# class. Import-time side effect: registers the export only.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -48,6 +54,13 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export(v1=["train.RMSPropOptimizer"])
 class RMSPropOptimizer(optimizer.Optimizer):
+  # [CLASS DOC]
+  # Optimizer implementing RMSProp with plain (not Nesterov) momentum and an optional centered
+  # variant. State: learning rate, decay, momentum and epsilon (each a number, tensor or callable
+  # with no arguments), the centered flag, and tensor copies created when preparing an update.
+  # Per variable it owns slots named rms (initialized to ones), momentum (zeros) and, if centered,
+  # mg (zeros). Subclasses the base optimizer and overrides its slot creation, prepare and apply
+  # hooks. Created directly by user code and used through the base minimize/apply methods.
   """Optimizer that implements the RMSProp algorithm (Tielemans et al.
 
   2012).
@@ -141,6 +154,14 @@ class RMSPropOptimizer(optimizer.Optimizer):
                use_locking=False,
                centered=False,
                name="RMSProp"):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring describes momentum as a scalar tensor and decay vaguely, but any
+    # number, tensor or no-argument callable is accepted and stored unvalidated.
+    # Constructor. Inputs: learning_rate (required number, tensor or callable); decay (default 0.9);
+    # momentum (default 0); epsilon (default 1e-10); use_locking (default false) passed to the base
+    # class along with name (default "RMSProp"); centered (default false) selects the centered
+    # variant. Stores the hyper-parameters and sets the tensor placeholders (learning rate, decay,
+    # momentum, epsilon) to nothing until the prepare step. Raises nothing itself.
     """Construct a new RMSProp optimizer.
 
     Note that in the dense implementation of this algorithm, variables and their
@@ -183,6 +204,12 @@ class RMSPropOptimizer(optimizer.Optimizer):
     self._epsilon_tensor = None
 
   def _create_slots(self, var_list):
+    # [FUNCTION DOC]
+    # HELPER: slot-creation hook called by the base optimizer.
+    # Input: list of variables. For each variable creates an rms slot initialized to ones (using an
+    # initializer if the shape is fully known, otherwise a ones tensor shaped like the variable),
+    # a zeros mg slot only when centered, and a zeros momentum slot. Returns nothing; adds slot
+    # variables to the graph, named under the optimizer name.
     for v in var_list:
       if v.get_shape().is_fully_defined():
         init_rms = init_ops.ones_initializer(dtype=v.dtype.base_dtype)
@@ -196,6 +223,10 @@ class RMSPropOptimizer(optimizer.Optimizer):
       self._zeros_slot(v, "momentum", self._name)
 
   def _prepare(self):
+    # [FUNCTION DOC]
+    # HELPER: pre-update hook called by the base optimizer.
+    # Evaluates any callable hyper-parameters (learning rate, decay, momentum, epsilon) and converts
+    # each to a named tensor, storing them on the instance for the apply hooks. Returns nothing.
     lr = self._call_if_callable(self._learning_rate)
     decay = self._call_if_callable(self._decay)
     momentum = self._call_if_callable(self._momentum)
@@ -207,6 +238,12 @@ class RMSPropOptimizer(optimizer.Optimizer):
     self._epsilon_tensor = ops.convert_to_tensor(epsilon, name="epsilon")
 
   def _apply_dense(self, grad, var):
+    # [FUNCTION DOC]
+    # HELPER: dense update hook of the base optimizer for reference variables.
+    # Inputs: grad, dense gradient tensor; var, the variable. Fetches rms and momentum slots (and mg
+    # when centered), casts the hyper-parameter tensors to the variable's base type and calls the
+    # native (centered or plain) RMSProp apply kernel, honoring the locking flag. Returns the
+    # resulting operation. Mutates the variable and slots when the operation runs.
     rms = self.get_slot(var, "rms")
     mom = self.get_slot(var, "momentum")
     if self._centered:
@@ -235,6 +272,11 @@ class RMSPropOptimizer(optimizer.Optimizer):
           use_locking=self._use_locking).op
 
   def _resource_apply_dense(self, grad, var):
+    # [FUNCTION DOC]
+    # HELPER: dense update hook of the base optimizer for resource variables.
+    # Same as the reference-variable dense update but passes resource handles of the variable and
+    # slots and casts hyper-parameters to the gradient's base type. Returns the created operation
+    # (not its output). Updates variable and slots in place when run.
     rms = self.get_slot(var, "rms")
     mom = self.get_slot(var, "momentum")
     if self._centered:
@@ -263,6 +305,12 @@ class RMSPropOptimizer(optimizer.Optimizer):
           use_locking=self._use_locking)
 
   def _apply_sparse(self, grad, var):
+    # [FUNCTION DOC]
+    # HELPER: sparse update hook of the base optimizer for reference variables.
+    # Inputs: grad, an indexed-slices gradient (values and indices); var, the variable. Uses the
+    # rms, momentum and (when centered) mg slots and calls the native sparse RMSProp kernel,
+    # updating only the referenced rows. Returns the resulting operation output. Hyper-parameters
+    # are cast to the variable's base type.
     rms = self.get_slot(var, "rms")
     mom = self.get_slot(var, "momentum")
     if self._centered:
@@ -293,6 +341,11 @@ class RMSPropOptimizer(optimizer.Optimizer):
           use_locking=self._use_locking)
 
   def _resource_apply_sparse(self, grad, var, indices):
+    # [FUNCTION DOC]
+    # HELPER: sparse update hook of the base optimizer for resource variables.
+    # Inputs: grad, gradient values; var, the resource variable; indices, rows to update. Uses
+    # resource handles of variable and slots, casts hyper-parameters to the gradient type and calls
+    # the native resource sparse RMSProp kernel (centered or plain). Returns the created operation.
     rms = self.get_slot(var, "rms")
     mom = self.get_slot(var, "momentum")
     if self._centered:
