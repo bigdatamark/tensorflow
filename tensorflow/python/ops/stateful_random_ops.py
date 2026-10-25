@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Stateful random number generation built on counter-based algorithms (Philox, ThreeFry). Defines
+# constants for seed/state sizes and types, helpers that turn seeds into 1-D integer RNG states,
+# the public Generator class (state held in an int64 variable, advanced on each draw and made
+# distribution-strategy aware), and functions to get or replace a process-wide global generator.
+# Generator draws are implemented by advancing the state variable and calling the stateless v2
+# random ops with the resulting key and counter. Import-time side effects: public API export
+# registrations only; the global generator is created lazily on first request.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -77,6 +85,11 @@ DEFAULT_ALGORITHM = RNG_ALG_PHILOX
 
 
 def non_deterministic_ints(shape, dtype=dtypes.int64):
+  # [FUNCTION DOC]
+  # Produces integers from an operating-system provided source of randomness. Inputs: shape of the
+  # result (integer tensor or list) and dtype (optional integer type, default int64). Returns a
+  # tensor of that shape and type whose values differ on every execution. Errors come from the
+  # underlying op (for example for unsupported dtypes). Used to seed generators non-deterministically.
   """Non-deterministically generates some integers.
 
   This op may use some OS-provided source of non-determinism (e.g. an RNG), so
@@ -94,12 +107,26 @@ def non_deterministic_ints(shape, dtype=dtypes.int64):
 
 
 def _uint_to_int(n):
+  # [FUNCTION DOC]
+  # HELPER: seed/state conversion, avoids overflow when building int64 tensors.
+  # If n is a Python integer above the largest signed 64-bit value, subtracts 2 to the 64th power so
+  # it wraps into the signed range; any other value (including negative ints, lists, tensors) is
+  # returned unchanged. Pure function.
   if isinstance(n, int) and n > SEED_MAX:
     n = n - SEED_UINT_SPAN
   return n
 
 
 def _make_1d_state(state_size, seed):
+  # [FUNCTION DOC]
+  # HELPER: builds RNG state vectors for create_rng_state and the generator constructors.
+  # Inputs: state_size, the required length; seed, a Python integer (split into 64-bit chunks, low
+  # chunk first, up to state_size chunks) or a 1-D sequence/tensor of integers. The seed is mapped
+  # to signed values, cast to int64, flattened, truncated to state_size, and padded with zeros on
+  # the LEFT when too short (so a short seed lands in the key part rather than the counter, avoiding
+  # overlapping streams). Returns a 1-D int64 tensor of static shape [state_size]. Works with
+  # unknown static seed length by using the dynamic shape. Raises whatever the cast/reshape raises
+  # for non-integer or malformed seeds.
   """Makes a 1-D RNG state.
 
   Args:
@@ -138,6 +165,14 @@ def _make_1d_state(state_size, seed):
 
 
 def _get_counter_size(alg):
+  # [FUNCTION DOC]
+  # HELPER: algorithm lookup for key/counter splitting.
+  # KNOWN ISSUE: the error path calls an error-message function on the stateless random ops module,
+  # which does not define it (it lives in the random ops util module), so an unknown algorithm
+  # actually raises an attribute error instead of the documented ValueError.
+  # Maps an algorithm id (integer) to the counter length in 64-bit words: Philox 2, ThreeFry 1, and
+  # auto-select is treated as Philox (2). Raises ValueError with the unsupported-algorithm message
+  # for any other id.
   if alg == random_ops_util.Algorithm.PHILOX.value:
     return PHILOX_COUNTER_SIZE
   elif alg == random_ops_util.Algorithm.THREEFRY.value:
@@ -150,6 +185,14 @@ def _get_counter_size(alg):
 
 
 def _get_state_size(alg):
+  # [FUNCTION DOC]
+  # HELPER: algorithm lookup for state vector length.
+  # KNOWN ISSUE: the error path calls an error-message function on the stateless random ops module,
+  # which does not define it (it lives in the random ops util module), so an unknown algorithm
+  # actually raises an attribute error instead of the documented ValueError.
+  # Maps an algorithm id (integer) to the full state length in 64-bit words: Philox 3, ThreeFry 2,
+  # and auto-select is treated as Philox (3). Raises ValueError with the unsupported-algorithm
+  # message for any other id.
   if alg == random_ops_util.Algorithm.PHILOX.value:
     return PHILOX_STATE_SIZE
   elif alg == random_ops_util.Algorithm.THREEFRY.value:
@@ -162,17 +205,35 @@ def _get_state_size(alg):
 
 
 def _check_state_shape(shape, alg):
+  # [FUNCTION DOC]
+  # HELPER: validation for generator construction.
+  # Checks that a state shape is compatible with a one-element shape holding the state size for alg.
+  # If alg is a symbolic tensor in graph mode the check is skipped and nothing happens. Returns
+  # nothing; raises a ValueError (from shape compatibility assertion) on mismatch, or the
+  # unsupported-algorithm error for unknown algorithms.
   if isinstance(alg, tensor.Tensor) and not context.executing_eagerly():
     return
   shape.assert_is_compatible_with([_get_state_size(int(alg))])
 
 
 def _make_state_from_seed(seed, alg):
+  # [FUNCTION DOC]
+  # HELPER: thin glue for create_rng_state.
+  # Builds a 1-D int64 state for the integer algorithm id alg from the given seed, using the
+  # algorithm's state size. Returns the state tensor; errors propagate from the size lookup
+  # (ValueError for unknown algorithm) and the seed conversion.
   return _make_1d_state(_get_state_size(alg), seed)
 
 
 @tf_export("random.create_rng_state", "random.experimental.create_rng_state")
 def create_rng_state(seed, alg):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it returns a numpy array, but it returns a tensor (the result
+  # of tensor casting and concatenation).
+  # Public function building an RNG state from an integer or vector seed. alg may be a string name,
+  # an Algorithm enum or an integer; it is converted to an integer id. Returns a 1-D int64 tensor
+  # whose length depends on the algorithm (3 for Philox, 2 for ThreeFry). Short seeds are
+  # left-padded with zeros. Raises ValueError for unsupported algorithms.
   """Creates a RNG state from an integer or a vector.
 
   Example:
@@ -196,6 +257,11 @@ def create_rng_state(seed, alg):
 
 
 def _shape_tensor(shape):
+  # [FUNCTION DOC]
+  # HELPER: shape normalization for random draws.
+  # Converts a shape (list, tuple, or tensor) to an integer tensor named shape. An empty list or
+  # tuple becomes an int64 tensor (otherwise the dtype is inferred, int32 or int64). Returns the
+  # tensor; raises if the value cannot be converted.
   """Convert to an int32 or int64 tensor, defaulting to int64 if empty."""
   if isinstance(shape, (tuple, list)) and not shape:
     dtype = dtypes.int64
@@ -205,12 +271,20 @@ def _shape_tensor(shape):
 
 
 def _convert_to_state_tensor(t):
+  # [FUNCTION DOC]
+  # HELPER: converts states, keys and counters for Generator.
+  # Maps Python integers beyond the signed 64-bit range into the signed range (recursively through
+  # nested structures) and then casts the result to the state type (int64). Returns a tensor.
   # to avoid out-of-range error from ops.convert_to_tensor
   t = nest.map_structure(_uint_to_int, t)
   return math_ops.cast(t, STATE_TYPE)
 
 
 def get_replica_id():
+  # [FUNCTION DOC]
+  # HELPER: replica identification for per-replica key derivation in Generator.
+  # Returns the replica id within the sync group from the current distribution replica context, or
+  # nothing/null value when there is no replica context (cross-replica or no strategy).
   rctx = distribute_lib.get_replica_context()
   if rctx is None:
     return None
@@ -219,6 +293,15 @@ def get_replica_id():
 
 @tf_export("random.Generator", "random.experimental.Generator")
 class Generator(autotrackable.AutoTrackable):
+  # [CLASS DOC]
+  # Stateful random number generator. Holds an integer state variable (non-trainable int64
+  # variable) and an algorithm id (Philox or ThreeFry), plus the distribution strategy active at
+  # construction (or none). Created via the constructor or the class methods from_state,
+  # from_seed, from_non_deterministic_state, from_key_counter. Each sampling call (normal,
+  # uniform, truncated_normal, binomial, ...) advances the counter in the state and runs a
+  # stateless op on the resulting key and counter; under a strategy, the key is mixed with the
+  # replica id so replicas get different streams. Trackable, so it can be checkpointed. Also
+  # offers reset methods, skip, make_seeds and split.
   """Random-number generator.
 
   Example:
@@ -331,6 +414,10 @@ class Generator(autotrackable.AutoTrackable):
 
   @classmethod
   def from_state(cls, state, alg):
+    # [FUNCTION DOC]
+    # Class method constructor. Builds a generator directly from a state (vector, tensor or
+    # existing variable, which is then reused) and an algorithm (name, enum or integer). Returns
+    # the new generator; errors come from the constructor (shape mismatch, unknown algorithm).
     """Creates a generator from a state.
 
     See `__init__` for description of `state` and `alg`.
@@ -346,6 +433,11 @@ class Generator(autotrackable.AutoTrackable):
 
   @classmethod
   def from_seed(cls, seed, alg=None):
+    # [FUNCTION DOC]
+    # Class method constructor from an integer or vector seed. alg is optional; when omitted the
+    # default (Philox) is used (the docstring's "auto-selected" is just this fixed default). The
+    # algorithm is converted to an integer id, the seed converted to a state, and a new generator
+    # with a fresh state variable is returned. Raises ValueError for unsupported algorithms.
     """Creates a generator from a seed.
 
     A seed is a 1024-bit unsigned integer represented either as a Python
@@ -372,6 +464,11 @@ class Generator(autotrackable.AutoTrackable):
 
   @classmethod
   def from_non_deterministic_state(cls, alg=None):
+    # [FUNCTION DOC]
+    # Class method constructor that fills the state with operating-system randomness. alg is
+    # optional (default Philox). Raises RuntimeError if op determinism is enabled. Otherwise
+    # draws a state of the algorithm's size via the non-deterministic integer op and returns a new
+    # generator. Raises ValueError for unsupported algorithms.
     """Creates a generator by non-deterministically initializing its state.
 
     The source of the non-determinism will be platform- and time-dependent.
@@ -396,6 +493,12 @@ class Generator(autotrackable.AutoTrackable):
 
   @classmethod
   def from_key_counter(cls, key, counter, alg):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says alg may be None to auto-select, but alg is required and is
+    # converted directly to an integer id (a null value is not defaulted here).
+    # Class method constructor from a scalar key and a counter vector (length state size minus one).
+    # Both are converted to int64, shape-checked (assertion error on mismatch), joined with the
+    # counter first and the key last into the state, and a new generator is returned.
     """Creates a generator from a key and a counter.
 
     This constructor only applies if the algorithm is a counter-based algorithm.
@@ -421,6 +524,14 @@ class Generator(autotrackable.AutoTrackable):
     return cls(state=state, alg=alg)
 
   def __init__(self, copy_from=None, state=None, alg=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the argument checks use assertions, so misuse (both or neither source given,
+    # copy_from together with alg or state) raises assertion errors, not ValueError.
+    # Constructor. Records the current distribution strategy (or none). If copy_from is given, makes
+    # a new non-trainable state variable from its state and copies its algorithm. Otherwise both
+    # state and alg must be given: alg is converted to an integer id; a variable state is reused
+    # directly, any other state is converted to an int64 tensor and wrapped in a new variable.
+    # State shape is validated against the algorithm. Creates a variable as a side effect.
     """Creates a generator.
 
     The new generator will be initialized by one of the following ways, with
@@ -470,6 +581,12 @@ class Generator(autotrackable.AutoTrackable):
       self._alg = alg
 
   def _create_variable(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: creates the generator state variable.
+    # Forwards all arguments to the variable constructor, forcing the name to the fixed value used
+    # by Keras to find the state, inside a name scope. Returns the variable. Raises ValueError if
+    # the result is a sharded variable (state must not be sharded, e.g. by a parameter server
+    # partitioner).
     """Creates a variable.
 
     Args:
@@ -499,6 +616,10 @@ class Generator(autotrackable.AutoTrackable):
     return v
 
   def reset(self, state):
+    # [FUNCTION DOC]
+    # Overwrites the generator state with a new one. state is converted to int64 and must have the
+    # length required by the current algorithm (assertion error otherwise). Assigns into the state
+    # variable (side effect); returns nothing.
     """Resets the generator by a new state.
 
     See `__init__` for the meaning of "state".
@@ -511,6 +632,9 @@ class Generator(autotrackable.AutoTrackable):
     self._state_var.assign(state)
 
   def reset_from_seed(self, seed):
+    # [FUNCTION DOC]
+    # Re-initializes the state from an integer or vector seed using the generator's own algorithm,
+    # assigning to the state variable. Returns nothing.
     """Resets the generator by a new seed.
 
     See `from_seed` for the meaning of "seed".
@@ -522,6 +646,11 @@ class Generator(autotrackable.AutoTrackable):
     self._state_var.assign(state)
 
   def reset_from_key_counter(self, key, counter):
+    # [FUNCTION DOC]
+    # Re-initializes the state from a scalar key and a counter vector (length state size minus one
+    # for the current algorithm). Both are converted to int64 and shape-checked (assertion error on
+    # mismatch); the state is the counter followed by the key and is assigned into the state
+    # variable. Returns nothing.
     """Resets the generator by a new key-counter pair.
 
     See `from_key_counter` for the meaning of "key" and "counter".
@@ -541,21 +670,40 @@ class Generator(autotrackable.AutoTrackable):
 
   @property
   def state(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the internal state variable (int64 vector whose length depends
+    # on the algorithm). The variable itself, not a copy, is returned.
     """The internal state of the RNG."""
     return self._state_var
 
   @property
   def algorithm(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the algorithm id stored at construction (an integer, or a scalar
+    # integer tensor if one was supplied through a variable state).
     """The RNG algorithm id (a Python integer or scalar integer Tensor)."""
     return self._alg
 
   def _standard_normal(self, shape, dtype):
+    # [FUNCTION DOC]
+    # HELPER: core sampler for normal.
+    # Advances the state by the number of elements, then calls the stateless normal op with the
+    # derived key and counter. shape is an integer tensor, dtype the float type. Returns a tensor
+    # of standard normal samples. Side effect: state variable is updated.
     key, counter = self._prepare_key_counter(shape)
     return gen_stateless_random_ops_v2.stateless_random_normal_v2(
         shape, key=key, counter=counter, dtype=dtype, alg=self.algorithm)
 
   @property
   def key(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it raises ValueError for non counter-based algorithms, but the
+    # check only tests membership in the Algorithm enum values, so any listed algorithm passes
+    # (including auto-select) and only unknown ids raise.
+    # KNOWN ISSUE: the error path calls an error-message function missing from the stateless
+    # random ops module, so an unknown id actually raises an attribute error.
+    # Read-only property returning the last element of the state (the key) as a scalar tensor.
+    # Raises ValueError with the unsupported-algorithm message for unknown algorithm ids.
     """The 'key' part of the state of a counter-based RNG.
 
     For a counter-base RNG algorithm such as Philox and ThreeFry (as
@@ -578,6 +726,11 @@ class Generator(autotrackable.AutoTrackable):
       raise ValueError(stateless_random_ops.unsupported_alg_error_msg(alg))
 
   def _skip_single_var(self, var, delta):
+    # [FUNCTION DOC]
+    # HELPER: per-variable worker for skip.
+    # Marks the variable as accessed, then runs the read-and-skip op on its handle with the
+    # algorithm cast to int32 and delta cast to uint64. Returns the int64 tensor holding the state
+    # (counter and key) as it was before advancing. Side effect: updates the variable in place.
     resource_variable_ops.variable_accessed(var)
     # TODO(wangpeng): Cache the cast algorithm instead of casting everytime.
     return gen_stateful_random_ops.rng_read_and_skip(
@@ -586,6 +739,15 @@ class Generator(autotrackable.AutoTrackable):
         delta=math_ops.cast(delta, dtypes.uint64))
 
   def skip(self, delta):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring returns only "a Tensor of int64" without saying it is the
+    # pre-advance counter-plus-key state, which other methods rely on.
+    # Advances the counter of the state by delta (integer, scalar) and returns the old state
+    # (counter and key) as an int64 tensor. When saving a non-distributed model, applies the
+    # update directly. Under a strategy, in cross-replica context (or CentralStorage) the update is
+    # routed through the strategy's extended update and the function is marked unsaveable in
+    # cross-replica context; otherwise the update runs directly. Mutates the state variable.
+    # Contains a nested function that applies the skip to one variable.
     """Advance the counter of a counter-based RNG.
 
     Args:
@@ -599,6 +761,9 @@ class Generator(autotrackable.AutoTrackable):
     """
 
     def update_fn(v):
+      # [FUNCTION DOC]
+      # HELPER: update callback for skip. Applies the skip by delta to variable v and returns the
+      # old state tensor.
       return self._skip_single_var(v, delta)
     # TODO(b/170515001): Always call strategy.extended.update after calling it
     #   from both replica context and cross-replica context is supported.
@@ -623,6 +788,12 @@ class Generator(autotrackable.AutoTrackable):
     return update_fn(self.state)
 
   def _preprocess_key(self, key):
+    # [FUNCTION DOC]
+    # HELPER: per-replica key derivation.
+    # Without a distribution strategy returns the key unchanged. Otherwise, inside the strategy
+    # scope, if there is a replica id, hashes the key with the replica id (as a two-element uint64
+    # counter) via the stateless full-integer op so each replica gets an independent stream.
+    # Returns the key tensor (uint64).
     if self._distribution_strategy is None:
       return key
     with distribute_lib.enter_or_assert_strategy(self._distribution_strategy):
@@ -637,6 +808,11 @@ class Generator(autotrackable.AutoTrackable):
       return key
 
   def _prepare_key_counter(self, shape):
+    # [FUNCTION DOC]
+    # HELPER: common preamble for all sampling methods.
+    # Advances the state by the product of shape (the number of samples), splits the returned old
+    # state into counter and key (reinterpreted as uint64), and applies per-replica key derivation.
+    # Returns a pair: key, counter. Side effect: the state variable is advanced.
     delta = math_ops.reduce_prod(shape)
     counter_key = self.skip(delta)
     counter_size = _get_counter_size(self.algorithm)
@@ -650,6 +826,11 @@ class Generator(autotrackable.AutoTrackable):
   # self._state_var.
   def normal(self, shape, mean=0.0, stddev=1.0, dtype=dtypes.float32,
              name=None):
+    # [FUNCTION DOC]
+    # Samples a normal distribution. shape: 1-D integer tensor or list; mean and stddev: scalar
+    # values or tensors (defaults 0 and 1) converted to dtype; dtype: float output type (default
+    # float32); name: optional scope name. Draws standard normal values, multiplies by stddev and
+    # adds mean. Returns a tensor of the given shape. Advances the generator state.
     """Outputs random values from a normal distribution.
 
     Args:
@@ -673,6 +854,10 @@ class Generator(autotrackable.AutoTrackable):
       return math_ops.add(rnd * stddev, mean, name=name)
 
   def _truncated_normal(self, shape, dtype):
+    # [FUNCTION DOC]
+    # HELPER: core sampler for truncated_normal. Advances the state, then calls the stateless
+    # truncated normal op (standard normal truncated at two standard deviations) for the given
+    # shape and dtype. Returns the sample tensor.
     key, counter = self._prepare_key_counter(shape)
     return gen_stateless_random_ops_v2.stateless_truncated_normal_v2(
         shape=shape, key=key, counter=counter, dtype=dtype, alg=self.algorithm)
@@ -682,7 +867,13 @@ class Generator(autotrackable.AutoTrackable):
                        stddev=1.0,
                        dtype=dtypes.float32,
                        name=None):
+    # [FUNCTION DOC]
+    # Samples a truncated normal distribution. shape: 1-D integer tensor or list; mean, stddev:
+    # scalars or tensors (defaults 0 and 1); dtype: float type (default float32); name optional.
+    # Draws truncated standard normals (resampled beyond two standard deviations), scales by
+    # stddev and shifts by mean. Returns a tensor of the given shape. Advances the generator state.
     """Outputs random values from a truncated normal distribution.
+
 
     The generated values follow a normal distribution with specified mean and
     standard deviation, except that values whose magnitude is more than
@@ -712,11 +903,19 @@ class Generator(autotrackable.AutoTrackable):
       return math_ops.add(mul, mean_tensor, name=name)
 
   def _uniform(self, shape, dtype):
+    # [FUNCTION DOC]
+    # HELPER: core sampler for floating point uniform draws. Advances the state and calls the
+    # stateless uniform op, producing values in the unit interval of the given float dtype for
+    # the given shape tensor. Returns the sample tensor.
     key, counter = self._prepare_key_counter(shape)
     return gen_stateless_random_ops_v2.stateless_random_uniform_v2(
         shape=shape, key=key, counter=counter, dtype=dtype, alg=self.algorithm)
 
   def _uniform_full_int(self, shape, dtype, name=None):
+    # [FUNCTION DOC]
+    # HELPER: core sampler for full-range integer draws (used by uniform, uniform_full_int and key
+    # generation). Advances the state and calls the stateless full-integer op for the shape tensor
+    # and integer dtype, with an optional op name. Returns the integer tensor.
     key, counter = self._prepare_key_counter(shape)
     return gen_stateless_random_ops_v2.stateless_random_uniform_full_int_v2(
         shape=shape,
@@ -728,7 +927,15 @@ class Generator(autotrackable.AutoTrackable):
 
   def uniform(self, shape, minval=0, maxval=None,
               dtype=dtypes.float32, name=None):
+    # [FUNCTION DOC]
+    # Samples a uniform distribution. shape: 1-D integer tensor or list; minval (default 0) and
+    # maxval (default none); dtype (default float32); name optional. For integer dtypes minval and
+    # maxval must be both given or both none (none means the full integer range), otherwise a
+    # ValueError is raised. For floats a missing maxval becomes 1. Integer ranges use the integer
+    # uniform op; floats scale a unit uniform sample by the range and add minval. Returns a tensor
+    # of the given shape. Advances the generator state.
     """Outputs random values from a uniform distribution.
+
 
     The generated values follow a uniform distribution in the range
     `[minval, maxval)`. The lower bound `minval` is included in the range, while
@@ -799,6 +1006,10 @@ class Generator(autotrackable.AutoTrackable):
         return math_ops.add(rnd * (maxval - minval), minval, name=name)
 
   def uniform_full_int(self, shape, dtype=dtypes.uint64, name=None):
+    # [FUNCTION DOC]
+    # Draws integers uniformly over the whole range of an integer type. shape: output shape; dtype:
+    # integer type (default uint64); name optional. Returns a tensor of that shape and type.
+    # Advances the generator state.
     """Uniform distribution on an integer type's entire range.
 
     This method is the same as setting `minval` and `maxval` to `None` in the
@@ -819,6 +1030,12 @@ class Generator(autotrackable.AutoTrackable):
       return self._uniform_full_int(shape=shape, dtype=dtype, name=name)
 
   def binomial(self, shape, counts, probs, dtype=dtypes.int32, name=None):
+    # [FUNCTION DOC]
+    # Samples a binomial distribution. shape: output shape; counts and probs: tensors of trial
+    # counts and success probabilities, broadcastable with each other and with the trailing
+    # dimensions of shape; dtype: output type (default int32); name optional. Calls the stateful
+    # binomial op directly on the state variable handle, so the state is updated by the op.
+    # Returns a tensor of the given shape.
     """Outputs random values from a binomial distribution.
 
     The generated values follow a binomial distribution with specified count and
@@ -879,6 +1096,10 @@ class Generator(autotrackable.AutoTrackable):
   # TODO(wangpeng): implement other distributions
 
   def _make_int64_keys(self, shape=()):
+    # [FUNCTION DOC]
+    # HELPER: key source for make_seeds and split. Draws independent full-range int64 values of
+    # the given shape (default scalar) by calling full-range uniform sampling, which advances the
+    # state. Returns an int64 tensor.
     # New independent keys are generated via
     # `new_key[i] = hash(old_key, counter+i)`, which is exactly what
     # `uniform_full_int(dtype=int64)` does for PhiloxRandom_64_128_128 and
@@ -886,6 +1107,13 @@ class Generator(autotrackable.AutoTrackable):
     return self.uniform_full_int(shape=shape, dtype=dtypes.int64)
 
   def make_seeds(self, count=1):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the unknown-algorithm path calls an error-message function missing from the
+    # stateless random ops module, so it actually raises an attribute error.
+    # Generates seed pairs for stateless random ops. count: number of pairs (default 1). Draws
+    # count int64 keys, pairs each with zero and stacks them. Returns an int64 tensor of shape
+    # two by count. Intended to raise ValueError for unknown algorithm ids. Advances the
+    # generator state.
     """Generates seeds for stateless random ops.
 
     For example:
@@ -916,6 +1144,13 @@ class Generator(autotrackable.AutoTrackable):
       raise ValueError(stateless_random_ops.unsupported_alg_error_msg(alg))
 
   def split(self, count=1):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the unknown-algorithm path calls an error-message function missing from the
+    # stateless random ops module, so it actually raises an attribute error.
+    # Creates independent child generators. count: how many (default 1). Draws count int64 keys
+    # (advancing this generator), and for each builds a new generator with zero counter and that
+    # key as state, using the same algorithm. Returns a list of count generators, placed on the
+    # current device. Intended to raise ValueError for unknown algorithm ids.
     """Returns a list of independent `Generator` objects.
 
     Two generators are independent of each other in the sense that the
@@ -954,6 +1189,9 @@ class Generator(autotrackable.AutoTrackable):
       The new generators have the same RNG algorithm as the old one.
     """
     def _key_to_state(alg, key):
+      # [FUNCTION DOC]
+      # HELPER: state builder for split. Returns a list of zeros (one fewer than the state size
+      # for alg) followed by the key, i.e. a zero counter and the given key.
       # Padding with zeros on the left. The zeros will be the counter.
       return [0] * (_get_state_size(alg) - 1) + [key]
 
@@ -975,6 +1213,11 @@ global_generator = None
 @tf_export("random.get_global_generator",
            "random.experimental.get_global_generator")
 def get_global_generator():
+  # [FUNCTION DOC]
+  # Returns the process-wide generator, creating it lazily on first use from non-deterministic
+  # state (built in an init scope so it is created outside any function graph) on the default
+  # device. Raises RuntimeError if the global generator is not yet set and op determinism is
+  # enabled. Side effect: sets the module-level global generator.
   """Retrieves the global generator.
 
   This function will create the global generator the first time it is called,
@@ -1000,6 +1243,10 @@ def get_global_generator():
 @tf_export("random.set_global_generator",
            "random.experimental.set_global_generator")
 def set_global_generator(generator):
+  # [FUNCTION DOC]
+  # Replaces the module-level global generator with the given Generator object (no validation of
+  # its type). Returns nothing. Previously compiled functions that captured the old generator are
+  # not affected.
   """Replaces the global generator with another `Generator` object.
 
   This function replaces the global generator with the provided `generator`

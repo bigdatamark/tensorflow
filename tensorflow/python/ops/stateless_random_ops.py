@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Public stateless random operations: functions whose output is a deterministic function of an
+# explicit seed tensor (shape two, int32 or int64) and the arguments, with no hidden state. Covers
+# seed splitting and folding, index and tensor shuffling, and sampling from uniform, normal,
+# truncated normal, binomial, gamma, Poisson, categorical/multinomial and parameterized truncated
+# normal distributions. Counter-based algorithms are selected through the random ops util module.
+# Import-time side effects: marks the underlying stateless ops as not differentiable (except the
+# gamma sampler, which has its own gradient) and registers public API exports. The stateful
+# generator module depends on this one.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -51,6 +60,12 @@ ops.NotDifferentiable("RandomIndexShuffle")
 @tf_export("random.split", "random.experimental.stateless_split")
 @dispatch.add_dispatch_support
 def split(seed, num=2, alg="auto_select"):
+  # [FUNCTION DOC]
+  # Derives num new seeds from one seed. seed: shape-two int32 or int64 seed (converted to a
+  # tensor); num: positive integer or scalar tensor (default 2); alg: random algorithm name or
+  # enum (default automatic selection). Draws full-range random integers of the seed's dtype with
+  # the stateless uniform function. Returns a tensor of shape num by two with the seed's dtype.
+  # Deterministic; no side effects; errors come from the uniform sampler.
   """Splits an RNG seed into `num` new seeds by adding a leading axis.
 
   Example:
@@ -93,6 +108,13 @@ def split(seed, num=2, alg="auto_select"):
 @tf_export("random.fold_in", "random.experimental.stateless_fold_in")
 @dispatch.add_dispatch_support
 def fold_in(seed, data, alg="auto_select"):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the result has the dtype of data, but the first element is
+  # sampled with data's dtype and the seed is not cast, so a seed whose dtype differs from data's
+  # is only handled by the sampler's seed conversion; the stack uses data's dtype for both entries.
+  # Mixes a data value into a seed. seed: shape-two seed; data: int32 or int64 scalar; alg:
+  # algorithm (default automatic). Draws one random integer of data's dtype from the seed, and
+  # returns a vector stacking that integer and data (shape two). Deterministic; no side effects.
   """Folds in data to an RNG seed to form a new RNG seed.
 
   For example, in a distributed-training setting, suppose we have a master seed
@@ -135,6 +157,14 @@ def fold_in(seed, data, alg="auto_select"):
 @tf_export("random.experimental.index_shuffle")
 @dispatch.add_dispatch_support
 def index_shuffle(index, seed, max_index):
+  # [FUNCTION DOC]
+  # Maps position index to its place in a seeded pseudorandom permutation of zero through
+  # max_index, without materializing the permutation. index and max_index: integer scalars or
+  # batched vectors (max_index same dtype as index); seed: shape two or batch by two, integer
+  # dtype (int32, uint32, int64, uint64). The seed is left-padded along its first axis with a
+  # fixed constant to length three as the raw op requires (unknown rank is padded on the first
+  # axis only), then the random index shuffle op runs with four rounds. Returns a tensor of
+  # index's dtype (scalar, or vector when inputs are batched). Deterministic; no side effects.
   """Outputs the position of `index` in a permutation of `[0, ..., max_index]`.
 
   For each possible `seed` and `max_index` there is one pseudorandom
@@ -226,6 +256,11 @@ def index_shuffle(index, seed, max_index):
 @tf_export("random.experimental.stateless_shuffle")
 @dispatch.add_dispatch_support
 def stateless_shuffle(value, seed, alg="auto_select", name=None):
+  # [FUNCTION DOC]
+  # Deterministically shuffles value along its first dimension. value: tensor to shuffle; seed:
+  # shape-two int32 or int64 seed; alg: algorithm (default automatic); name: optional scope name.
+  # The seed is turned into key, counter and algorithm, then the stateless shuffle op is called.
+  # Returns a tensor with the same shape and type as value. Same inputs give the same result.
   """Randomly and deterministically shuffles a tensor along its first dimension.
 
   The tensor is shuffled along dimension 0, such that each `value[j]` is mapped
@@ -282,7 +317,20 @@ def stateless_random_uniform(
     name=None,
     alg="auto_select",
 ):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring lists only float16, bfloat16, float32, float64, int32 and int64 in
+  # the dtype text plus uint32/uint64 only for full range; the code additionally rejects unsigned
+  # dtypes when minval is given, and for float dtypes the `[minval, maxval)` range can include
+  # maxval after rounding.
+  # Deterministic uniform sampling. shape: 1-D integer tensor or list; seed: shape-two int32 or
+  # int64 seed; minval (default 0) and maxval (default none, meaning 1 for floats); dtype (default
+  # float32) must be one of the accepted float or integer types; name optional; alg algorithm.
+  # Raises ValueError for an unaccepted dtype, for integer dtypes with only one of minval and
+  # maxval none, and for unsigned dtypes with a given minval. Full-range integers use the
+  # full-integer op; bounded integers use the integer op; floats scale a unit uniform sample.
+  # Returns a tensor of the shape with static shape set when known. No side effects.
   """Outputs deterministic pseudorandom values from a uniform distribution.
+
 
   This is a stateless version of `tf.random.uniform`: if run twice with the
   same seeds and shapes, it will produce the same pseudorandom numbers.  The
@@ -413,6 +461,12 @@ def stateless_random_uniform(
 def stateless_random_binomial(
     shape, seed, counts, probs, output_dtype=dtypes.int32, name=None
 ):
+  # [FUNCTION DOC]
+  # Deterministic binomial sampling. shape: 1-D integer tensor or list; seed: shape-two seed;
+  # counts and probs: trial counts and success probabilities, broadcastable with each other and
+  # with trailing dimensions of shape (probs default to float32 conversion; counts follow probs'
+  # dtype); output_dtype: result type (default int32); name optional. Calls the stateless
+  # binomial op and sets the static shape. Returns the sample tensor. No side effects.
   """Outputs deterministic pseudorandom values from a binomial distribution.
 
   The generated values follow a binomial distribution with specified count and
@@ -483,6 +537,14 @@ def stateless_random_binomial(
 def stateless_random_gamma(
     shape, seed, alpha, beta=None, dtype=dtypes.float32, name=None
 ):
+  # [FUNCTION DOC]
+  # Deterministic gamma sampling. shape: 1-D integer tensor or list that must encompass the
+  # broadcast of alpha and beta; seed: shape-two seed; alpha: concentration; beta: inverse scale
+  # (default one); dtype: float type (default float32); name optional. Broadcasts alpha to the
+  # joint shape with beta, samples with the version three gamma op using automatic algorithm
+  # selection, divides by beta, and clamps results from below at the smallest positive normal
+  # value of the dtype so zero outcomes are avoided. Returns the sample tensor with static shape
+  # set when known. Samples are differentiable with respect to alpha and beta. No side effects.
   """Outputs deterministic pseudorandom values from a gamma distribution.
 
   The generated values follow a gamma distribution with specified concentration
@@ -584,6 +646,11 @@ def stateless_random_gamma(
 @tf_export("random.stateless_poisson")
 @dispatch.add_dispatch_support
 def stateless_random_poisson(shape, seed, lam, dtype=dtypes.int32, name=None):
+  # [FUNCTION DOC]
+  # Deterministic Poisson sampling. shape: 1-D integer tensor or list; seed: shape-two seed;
+  # lam: rate parameter tensor whose shape matches the trailing dimensions of shape; dtype: result
+  # type (int or float, default int32); name optional. Calls the stateless Poisson op and sets the
+  # static shape. Returns the sample tensor. No side effects.
   """Outputs deterministic pseudorandom values from a Poisson distribution.
 
   The generated values follow a Poisson distribution with specified rate
@@ -652,7 +719,14 @@ def stateless_random_normal(
     name=None,
     alg="auto_select",
 ):
+  # [FUNCTION DOC]
+  # Deterministic normal sampling. shape: 1-D integer tensor or list; seed: shape-two seed; mean
+  # and stddev: scalars (defaults 0 and 1) converted to dtype; dtype: float type (default
+  # float32); name optional; alg: algorithm (default automatic). Draws standard normals with the
+  # version two op, scales by stddev and adds mean. Returns the sample tensor with static shape
+  # set when known. No side effects.
   """Outputs deterministic pseudorandom values from a normal distribution.
+
 
   This is a stateless version of `tf.random.normal`: if run twice with the
   same seeds and shapes, it will produce the same pseudorandom numbers.  The
@@ -703,7 +777,13 @@ def stateless_truncated_normal(
     name=None,
     alg="auto_select",
 ):
+  # [FUNCTION DOC]
+  # Deterministic truncated normal sampling. Same inputs as the stateless normal function (shape,
+  # seed, mean, stddev, dtype, name, alg). Draws truncated standard normals (resampled beyond two
+  # standard deviations), scales by stddev and shifts by mean. Returns the sample tensor with
+  # static shape set when known. No side effects.
   """Outputs deterministic pseudorandom values, truncated normally distributed.
+
 
   This is a stateless version of `tf.random.truncated_normal`: if run twice with
   the same seeds and shapes, it will produce the same pseudorandom numbers.  The
@@ -754,6 +834,12 @@ def stateless_truncated_normal(
 def stateless_multinomial(
     logits, num_samples, seed, output_dtype=dtypes.int64, name=None
 ):
+  # [FUNCTION DOC]
+  # Deprecated (version one API only) alias of stateless_categorical. logits: 2-D tensor of
+  # unnormalized log-probabilities, batch by classes; num_samples: scalar count per row; seed:
+  # shape-two seed; output_dtype: int32 or int64 (default int64); name optional. Delegates to the
+  # shared implementation. Returns a batch by num_samples integer tensor. Emits a deprecation
+  # warning when called; raises ValueError for an unsupported output dtype.
   """Draws deterministic pseudorandom samples from a multinomial distribution.
 
   This is a stateless version of `tf.random.categorical`: if run twice with the
@@ -795,6 +881,12 @@ def stateless_multinomial(
 def stateless_categorical(
     logits, num_samples, seed, dtype=dtypes.int64, name=None
 ):
+  # [FUNCTION DOC]
+  # Deterministic categorical sampling. logits: 2-D tensor of unnormalized log-probabilities,
+  # batch by classes; num_samples: scalar count per row; seed: shape-two seed; dtype: int32 or
+  # int64 (default int64); name optional. Delegates to the shared implementation inside a name
+  # scope. Returns a batch by num_samples integer tensor. Raises ValueError for an unsupported
+  # dtype.
   """Draws deterministic pseudorandom samples from a categorical distribution.
 
   This is a stateless version of `tf.categorical`: if run twice with the
@@ -833,6 +925,11 @@ def stateless_categorical(
 
 
 def stateless_multinomial_categorical_impl(logits, num_samples, dtype, seed):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation behind stateless_multinomial and stateless_categorical.
+  # Converts logits to a tensor, treats a missing dtype as int64, and validates it is int32 or
+  # int64 (raises ValueError otherwise). Calls the stateless multinomial op with num_samples and
+  # seed and returns the integer samples (batch by num_samples).
   """Implementation for stateless multinomial/categorical ops (v1/v2)."""
   logits = ops.convert_to_tensor(logits, name="logits")
   dtype = dtypes.as_dtype(dtype) if dtype else dtypes.int64
@@ -852,6 +949,15 @@ def stateless_multinomial_categorical_impl(logits, num_samples, dtype, seed):
 def stateless_parameterized_truncated_normal(
     shape, seed, means=0.0, stddevs=1.0, minvals=-2.0, maxvals=2.0, name=None
 ):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring describes truncation at two standard deviations, but the actual
+  # truncation bounds are the minvals and maxvals arguments (default minus two and two, absolute
+  # values, not scaled by stddev).
+  # Deterministic truncated normal sampling with per-element parameters. shape: 1-D integer
+  # tensor or list; seed: shape-two seed; means, stddevs, minvals, maxvals: tensors or values
+  # that broadcast together with the broadcast shape dominated by shape; name optional. Converts
+  # all to tensors and calls the parameterized stateless op. Returns the sample tensor with
+  # static shape set when known. No side effects.
   """Outputs random values from a truncated normal distribution.
 
   The generated values follow a normal distribution with specified mean and

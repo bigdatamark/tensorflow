@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Python front end for the stochastic cast operation, exported as the public random namespace
+# function for stochastic rounding. It exposes a helper listing supported target types and the
+# stochastic_cast function, which converts a tensor to a lower precision type using a counter-based
+# random generator driven by a user supplied seed. No import-time registration other than the
+# public API export and dispatch support decorators on stochastic_cast.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +29,11 @@ from tensorflow.python.util.tf_export import tf_export
 
 
 def allowed_to_types(is_integer=True):
+  # [FUNCTION DOC]
+  # HELPER: supplies the set of target dtypes for stochastic_cast.
+  # Returns a set of dtypes. When is_integer is true (default) the set holds int32, int16 and int8;
+  # otherwise it holds the small float types float16, bfloat16, float8 e5m2 and float8 e4m3fn.
+  # Pure function, no side effects, no exceptions.
   if is_integer:
     return {dtypes.int32, dtypes.int16, dtypes.int8}
   else:
@@ -43,6 +54,17 @@ def stochastic_cast(
     alg="auto_select",
     name=None,
 ):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says dtype may be int32, int16 or int8 and mentions alg and seed
+  # generically, but any non-integer target (including the small float types listed by the helper)
+  # raises NotImplementedError; the Args text for t ("same as the output shape") is also vague.
+  # Stochastically rounds tensor t to the integer type dtype. Inputs: t is converted to a tensor;
+  # dtype is the target type; seed is a two element int32 or int64 seed; alg selects the random
+  # algorithm (default automatic selection); name is an optional op scope name.
+  # The seed and algorithm are converted to a key, counter and algorithm id, then the generated op
+  # for casting to integers is called. Returns a tensor of dtype with the same shape as t.
+  # Raises NotImplementedError when dtype is not one of the supported integer types.
+  # Runs inside a name scope; deterministic for a fixed seed; no other side effects.
   """Casts input to the desired precision with stochastic rounding.
 
   This means the value of the cast result will be rounded to two of the closest
