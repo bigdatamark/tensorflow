@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Discrete Cosine Transform ops for the signal API: the public dct and idct functions (types I,
+# II, III and IV, optional orthonormal scaling) plus private argument validation and an internal
+# implementation built on real and inverse real FFTs from the sibling fft_ops module. Only the
+# last axis is supported. Import registers the public exports and dispatch support.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,6 +32,13 @@ from tensorflow.python.util.tf_export import tf_export
 
 
 def _validate_dct_arguments(input_tensor, dct_type, n, axis, norm):
+  # [FUNCTION DOC]
+  # HELPER: Argument validator shared by the public dct and idct functions.
+  # Checks the arguments and returns nothing. Raises not-implemented if axis is not -1; a value
+  # error if n is given and below one, if the transform type is not 1 to 4, if type 1 is combined
+  # with orthonormal norm, if type 1 has a statically known last dimension below two, or if norm
+  # is neither nothing nor the orthonormal option. A dynamic n is not supported here (comparison
+  # with one would fail for tensors).
   """Checks that DCT/IDCT arguments are compatible and well formed."""
   if axis != -1:
     raise NotImplementedError("axis must be -1. Got: %s" % axis)
@@ -50,6 +62,14 @@ def _validate_dct_arguments(input_tensor, dct_type, n, axis, norm):
 @tf_export("signal.dct", v1=["signal.dct", "spectral.dct"])
 @dispatch.add_dispatch_support
 def dct(input, type=2, n=None, axis=-1, norm=None, name=None):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # Public 1-D discrete cosine transform along the last axis.
+  # Inputs: input is a float32/float64 tensor with samples on the last axis; type selects the
+  # DCT variant 1 to 4 (default 2); n is an optional transform length (truncates or zero-pads the
+  # input); axis must be -1; norm is nothing or the orthonormal option; name is an optional name.
+  # Output: tensor of the same dtype and leading shape holding the transform.
+  # Raises (via validation) not-implemented for other axes and value errors for bad type, n, norm
+  # or type 1 with orthonormal norm. Validates, then delegates to the internal implementation.
   """Computes the 1D [Discrete Cosine Transform (DCT)][dct] of `input`.
 
   Types I, II, III and IV are supported.
@@ -98,6 +118,18 @@ def dct(input, type=2, n=None, axis=-1, norm=None, name=None):  # pylint: disabl
 
 
 def _dct_internal(input, type=2, n=None, axis=-1, norm=None, name=None):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # HELPER: Unvalidated core of dct and idct (idct calls it with the inverse type).
+  # KNOWN ISSUE: the axis argument is ignored; the last axis is always used. If the type is not
+  # 1 to 4 the function silently returns nothing (no branch matches).
+  # Inputs as for dct, but n may also be a rank-0 tensor. Converts input to a tensor; if n is
+  # given, truncates or zero-pads the last axis to n using a conditional on n versus the length.
+  # Type 1: even-symmetric extension then real part of rfft. Type 2: rfft over length twice the
+  # axis, multiplied by a complex phase scale, real part, optional orthonormal weights. Type 3:
+  # prescaled input (orthonormal weights or multiplied by length), irfft with phase scale, first
+  # axis_dim entries. Type 4: type 2 transform of the input padded to double length without
+  # normalization, odd-indexed entries, optional orthonormal scale.
+  # Output: real tensor of the input dtype. Side effects: ops created under a name scope.
   """Computes the 1D Discrete Cosine Transform (DCT) of `input`.
 
   This internal version of `dct` does not perform any validation and accepts a
@@ -130,9 +162,16 @@ def _dct_internal(input, type=2, n=None, axis=-1, norm=None, name=None):  # pyli
     if n is not None:
 
       def truncate_input():
+        # [FUNCTION DOC]
+        # HELPER: Branch of the length adjustment in the internal transform.
+        # Returns the input cut to its first n entries along the last axis.
         return input[..., 0:n]
 
       def pad_input():
+        # [FUNCTION DOC]
+        # HELPER: Branch of the length adjustment in the internal transform.
+        # Returns the input zero-padded at the end of the last axis by n minus the sequence length
+        # (padding amounts for all other axes are zero).
         rank = len(input.shape)
         padding = [[0, 0] for _ in range(rank)]
         padding[rank - 1][1] = n - seq_len
@@ -212,6 +251,14 @@ def _dct_internal(input, type=2, n=None, axis=-1, norm=None, name=None):  # pyli
 @tf_export("signal.idct", v1=["signal.idct", "spectral.idct"])
 @dispatch.add_dispatch_support
 def idct(input, type=2, n=None, axis=-1, norm=None, name=None):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says only types 1 to 3 are valid and that n must be nothing, but
+  # type 4 is accepted and validation only requires n, if given, to be at least one; n is then
+  # passed through and acts as a truncate/pad length.
+  # Public 1-D inverse DCT along the last axis (unnormalized unless orthonormal norm is used).
+  # Inputs as for dct. The inverse type is chosen as 1 for 1, 3 for 2, 2 for 3 and 4 for 4.
+  # Output: tensor of the same dtype holding the inverse transform. Raises the same errors as
+  # dct via validation. Delegates to the internal implementation.
   """Computes the 1D [Inverse Discrete Cosine Transform (DCT)][idct] of `input`.
 
   Currently Types I, II, III, IV are supported. Type III is the inverse of

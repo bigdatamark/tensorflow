@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Unit tests for the row-partition class and its spec class from the ragged package. Covers the
+# private constructor, the factory methods (from value row ids, row splits, row starts, row limits,
+# row lengths, uniform row length), string representation, validation errors in graph and eager
+# modes, precomputed encodings and merging them, spec construction, comparison, compatibility,
+# merging with specs, broadcasting, offsets, dtype conversion, copying and tracing support.
+# Run through the test runner entry point at the bottom; not a helper module.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,6 +42,11 @@ from tensorflow.python.platform import googletest
 
 
 def _get_specified_row_partition():
+  # [FUNCTION DOC]
+  # HELPER: Fixture factory for the merge-with-spec tests.
+  # Builds a row partition (via the private constructor key) with row splits zero, three, eight,
+  # and explicitly set row count two and value count eight, all as 64-bit integers. Normally the
+  # value count is not set, which is why a special builder is needed. Takes no arguments.
   """Needed for merge_with_spec tests. Normally, nvals isn't set."""
   return RowPartition(
       row_splits=constant_op.constant([0, 3, 8], dtype=dtypes.int64),
@@ -45,11 +57,19 @@ def _get_specified_row_partition():
 
 @test_util.run_all_in_graph_and_eager_modes
 class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Main test case for the row-partition class. Decorated to run in graph and eager modes. Tests
+  # are grouped by feature (constructor, factories, string forms, validation, precomputed
+  # encodings, merging, broadcasting, conversion). Stateless; uses parameterized testing.
   # =============================================================================
   # RowPartition class docstring examples
   # =============================================================================
 
   def testClassDocStringExamples(self):
+    # [FUNCTION DOC]
+    # Re-runs the examples from the class documentation: builds the same partition from row
+    # splits, lengths, value row ids, starts and limits and asserts all give splits zero, four,
+    # four, seven, eight, eight; also builds nested partitions (no assertion on those).
     # From section: "Component Tensors"
     rp = RowPartition.from_row_splits(row_splits=[0, 4, 4, 7, 8, 8])
     self.assertAllEqual(rp.row_splits(), [0, 4, 4, 7, 8, 8])
@@ -76,6 +96,9 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
   # =============================================================================
 
   def testRowPartitionConstruction(self):
+    # [FUNCTION DOC]
+    # Builds a partition directly with the private constructor key and 64-bit row splits and
+    # asserts the splits are returned unchanged.
     row_splits = constant_op.constant([0, 2, 2, 5, 6, 7], dtypes.int64)
     rp = RowPartition(
         row_splits=row_splits,
@@ -83,6 +106,11 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertAllEqual(rp.row_splits(), [0, 2, 2, 5, 6, 7])
 
   def testRowPartitionConstructionErrors(self):
+    # [FUNCTION DOC]
+    # Checks constructor errors: missing private key gives a value error saying the constructor
+    # is private; a list instead of a tensor gives a type error; rank-two splits give a value
+    # error about rank; a non-tensor cached row lengths gives a type error; mixed integer dtypes
+    # between splits and row count give a value error about inconsistent dtype.
     row_splits = constant_op.constant([0, 2, 2, 5, 6, 7], dtypes.int64)
 
     with self.assertRaisesRegex(ValueError,
@@ -118,6 +146,9 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
   # =============================================================================
 
   def testFromValueRowIdsWithDerivedNRows(self):
+    # [FUNCTION DOC]
+    # Factory from value row ids without a row count. Expects 64-bit dtype, the same row ids
+    # object returned, derived row count five and the splits zero, two, two, five, six, seven.
     # nrows is known at graph creation time.
     value_rowids = constant_op.constant([0, 0, 2, 2, 2, 3, 4], dtypes.int64)
     # TODO(martinz): add nrows
@@ -134,6 +165,9 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertAllEqual(rp_row_splits, [0, 2, 2, 5, 6, 7])
 
   def testFromValueRowIdsWithDerivedNRowsDynamic(self):
+    # [FUNCTION DOC]
+    # Same as the derived row count test but the row ids pass through a placeholder with unknown
+    # shape so the count is only known at run time. Expects the same row ids object and count five.
     # nrows is not known at graph creation time.
     value_rowids = constant_op.constant([0, 0, 2, 2, 2, 3, 4], dtypes.int64)
     value_rowids = array_ops.placeholder_with_default(value_rowids, shape=None)
@@ -148,6 +182,9 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertAllEqual(rp_nrows, 5)
 
   def testFromValueRowIdsWithExplicitNRows(self):
+    # [FUNCTION DOC]
+    # Factory from row ids with an explicit row count of seven (larger than derived). Expects the
+    # same row ids and count objects returned and splits padded with trailing repeats of seven.
     value_rowids = constant_op.constant([0, 0, 2, 2, 2, 3, 4], dtypes.int64)
     nrows = constant_op.constant(7, dtypes.int64)
 
@@ -162,6 +199,9 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertAllEqual(rp_row_splits, [0, 2, 2, 5, 6, 7, 7, 7])
 
   def testFromValueRowIdsWithExplicitNRowsEqualToDefault(self):
+    # [FUNCTION DOC]
+    # Factory from row ids with an explicit row count equal to the derived one (five). Expects
+    # identity of the provided objects, equal values and the usual splits.
     value_rowids = constant_op.constant([0, 0, 2, 2, 2, 3, 4], dtypes.int64)
     nrows = constant_op.constant(5, dtypes.int64)
 
@@ -178,6 +218,9 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertAllEqual(rp_row_splits, [0, 2, 2, 5, 6, 7])
 
   def testFromValueRowIdsWithEmptyValues(self):
+    # [FUNCTION DOC]
+    # Factory from an empty list of row ids. Expects 64-bit dtype, row ids of shape zero and a row
+    # count of zero.
     rp = RowPartition.from_value_rowids([])
     rp_nrows = rp.nrows()
     self.assertEqual(rp.dtype, dtypes.int64)
@@ -185,6 +228,9 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertAllEqual(rp_nrows, 0)
 
   def testFromRowSplits(self):
+    # [FUNCTION DOC]
+    # Factory from a 64-bit splits tensor without validation. Expects 64-bit dtype, the same
+    # splits object returned and a derived row count of five.
     row_splits = constant_op.constant([0, 2, 2, 5, 6, 7], dtypes.int64)
 
     rp = RowPartition.from_row_splits(row_splits, validate=False)
@@ -197,6 +243,9 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertAllEqual(rp_nrows, 5)
 
   def testFromRowSplitsWithDifferentSplitTypes(self):
+    # [FUNCTION DOC]
+    # Builds partitions from a list, 64-bit and 32-bit arrays and 64-bit and 32-bit tensors.
+    # Expects lists and 64-bit inputs to give 64-bit splits and 32-bit inputs to keep 32 bits.
     splits1 = [0, 2, 2, 5, 6, 7]
     splits2 = np.array([0, 2, 2, 5, 6, 7], np.int64)
     splits3 = np.array([0, 2, 2, 5, 6, 7], np.int32)
@@ -214,11 +263,16 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqual(rt5.row_splits().dtype, dtypes.int32)
 
   def testFromRowSplitsWithEmptySplits(self):
+    # [FUNCTION DOC]
+    # Passing an empty splits list must raise a value error stating splits may not be empty.
     err_msg = 'row_splits tensor may not be empty'
     with self.assertRaisesRegex(ValueError, err_msg):
       RowPartition.from_row_splits([])
 
   def testFromRowStarts(self):
+    # [FUNCTION DOC]
+    # Factory from row starts and a value count of seven (no validation). Expects 64-bit dtype,
+    # five rows, the starts returned as given and splits with the count appended.
     nvals = constant_op.constant(7)
     row_starts = constant_op.constant([0, 2, 2, 5, 6], dtypes.int64)
 
@@ -234,6 +288,9 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertAllEqual(rp_row_splits, [0, 2, 2, 5, 6, 7])
 
   def testFromRowLimits(self):
+    # [FUNCTION DOC]
+    # Factory from row limits (no validation). Expects 64-bit dtype, five rows, limits returned
+    # as given and splits with a leading zero.
     row_limits = constant_op.constant([2, 2, 5, 6, 7], dtypes.int64)
 
     rp = RowPartition.from_row_limits(row_limits, validate=False)
@@ -248,6 +305,9 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertAllEqual(rp_row_splits, [0, 2, 2, 5, 6, 7])
 
   def testFromRowLengths(self):
+    # [FUNCTION DOC]
+    # Factory from row lengths (no validation). Expects 64-bit dtype, the same lengths object
+    # returned and a derived row count of five.
     row_lengths = constant_op.constant([2, 0, 3, 1, 1], dtypes.int64)
 
     rp = RowPartition.from_row_lengths(row_lengths, validate=False)
@@ -261,6 +321,9 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertAllEqual(rp_row_lengths, row_lengths)
 
   def testFromUniformRowLength(self):
+    # [FUNCTION DOC]
+    # Factory from a value count of sixteen and row length two. Expects the uniform row length two
+    # and a derived row count of eight.
     nvals = 16
     a1 = RowPartition.from_uniform_row_length(
         nvals=nvals, uniform_row_length=2)
@@ -268,12 +331,18 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertAllEqual(a1.nrows(), 8)
 
   def testFromUniformRowLengthWithEmptyValues(self):
+    # [FUNCTION DOC]
+    # Uniform row length zero with zero values and ten rows. Expects value count zero and row
+    # count ten after evaluation.
     a = RowPartition.from_uniform_row_length(
         nvals=0, uniform_row_length=0, nrows=10)
     self.assertEqual(self.evaluate(a.nvals()), 0)
     self.assertEqual(self.evaluate(a.nrows()), 10)
 
   def testFromUniformRowLengthWithPlaceholders1(self):
+    # [FUNCTION DOC]
+    # Value count supplied through a placeholder of unknown shape, row length three. Expects the
+    # evaluated value count to be six.
     nvals = array_ops.placeholder_with_default(
         constant_op.constant(6, dtype=dtypes.int64), None)
     rt1 = RowPartition.from_uniform_row_length(
@@ -282,6 +351,9 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqual(const_nvals1, 6)
 
   def testFromUniformRowLengthWithPlaceholders2(self):
+    # [FUNCTION DOC]
+    # Both value count and row length come from placeholders. Expects the evaluated value count
+    # to be six.
     nvals = array_ops.placeholder_with_default(6, None)
     ph_rowlen = array_ops.placeholder_with_default(3, None)
     rt2 = RowPartition.from_uniform_row_length(
@@ -290,6 +362,10 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqual(const_nvals2, 6)
 
   def testFromValueRowIdsWithBadNRows(self):
+    # [FUNCTION DOC]
+    # Invalid row count arguments to the row-ids factory must raise value errors: negative count,
+    # count smaller than last id plus one (two cases, including four), rank-two row ids and a
+    # rank-one row count. Messages are matched against expected text.
     value_rowids = constant_op.constant([0, 0, 2, 2, 2, 3, 4], dtypes.int64)
     nrows = constant_op.constant(5, dtypes.int64)
 
@@ -320,6 +396,10 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
   # RowPartition.__str__
   # =============================================================================
   def testRowPartitionStr(self):
+    # [FUNCTION DOC]
+    # Checks the text and debug representation of a partition built from row splits. In eager mode
+    # it shows the splits values; in graph mode it shows the named symbolic tensor. Both forms
+    # must be equal to the expected text.
     row_splits = [0, 2, 5, 6, 6, 7]
     rp = RowPartition.from_row_splits(row_splits, validate=False)
     if context.executing_eagerly():
@@ -332,6 +412,9 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqual(str(rp), expected_repr)
 
   def testRowPartitionStrUniformRowLength(self):
+    # [FUNCTION DOC]
+    # Same representation check for a uniform-row-length partition: shows row count and uniform
+    # row length (values in eager mode, symbolic tensors in graph mode).
     rp = RowPartition.from_uniform_row_length(5, nvals=10, nrows=2)
     if context.executing_eagerly():
       expected_repr = ('tf.RowPartition(nrows=2, uniform_row_length=5)')
@@ -479,6 +562,11 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       },
   ])
   def testFactoryValidation(self, descr, factory, **kwargs):
+    # [FUNCTION DOC]
+    # Parameterized over invalid inputs for each factory (descr is only a label). The factory is
+    # called with the keyword arguments and splits evaluated; expects an invalid-argument or value
+    # error (static detection). In graph mode it repeats with all arguments wrapped in
+    # unknown-shape placeholders and expects an invalid-argument error at run time.
     # When input tensors have shape information, some of these errors will be
     # detected statically.
     with self.assertRaises((errors.InvalidArgumentError, ValueError)):
@@ -490,6 +578,10 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     if not context.executing_eagerly():
 
       def wrap_arg(v):
+        # [FUNCTION DOC]
+        # HELPER: Strips static shape information in the validation test.
+        # Converts a value to a 64-bit constant and returns a placeholder with that default and
+        # fully unknown shape.
         return array_ops.placeholder_with_default(
             constant_op.constant(v, dtype=dtypes.int64),
             tensor_shape.TensorShape(None))
@@ -515,6 +607,9 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
        ['row_splits']),
   ])
   def testPrecomputedSplits(self, rp_factory, expected_encodings):
+    # [FUNCTION DOC]
+    # Parameterized over each factory. Builds a partition and checks which encodings (splits,
+    # lengths, row ids, row count) are cached right after construction against the expected list.
     rp = rp_factory()
     self.assertEqual(rp._has_precomputed_row_splits(),
                      'row_splits' in expected_encodings)
@@ -525,6 +620,9 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqual(rp._has_precomputed_nrows(), 'nrows' in expected_encodings)
 
   def testWithPrecomputedSplits(self):
+    # [FUNCTION DOC]
+    # From a splits-only partition, requests copies with row splits, lengths, row ids, row count
+    # and value count precomputed. Asserts the original lacks each cache and each copy has it.
     rp = RowPartition.from_row_splits([0, 2, 8])
 
     rp_with_row_splits = rp._with_precomputed_row_splits()
@@ -577,6 +675,11 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
           expected_encodings=['row_splits', 'nrows']),
   ])
   def testMergePrecomputedEncodings(self, x, y, expected_encodings):
+    # [FUNCTION DOC]
+    # Parameterized with two partition builders and the expected set of cached encodings of the
+    # merge. For validation on and off, merges the cached encodings of y into x and asserts which
+    # encodings the result caches, and that wherever both a source and the result cache an
+    # encoding their values are equal.
     x = x()
     y = y()
     for validate in (True, False):
@@ -609,6 +712,9 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
                               result.uniform_row_length())
 
   def testMergePrecomputedEncodingsFastPaths(self):
+    # [FUNCTION DOC]
+    # Merging a partition with itself, or with one that shares the same splits tensor, must
+    # return the first partition object unchanged (identity, not just equality).
     # Same object: x gets returned as-is.
     x = RowPartition.from_row_splits([0, 3, 8, 8])
     self.assertIs(x._merge_precomputed_encodings(x), x)
@@ -618,6 +724,10 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertIs(x._merge_precomputed_encodings(y), x)
 
   def testMergePrecomputedEncodingsWithMatchingTensors(self):
+    # [FUNCTION DOC]
+    # A partition built from row ids has a superset of the cached encodings of one built from its
+    # splits, sharing the splits tensor. Merging in either order must return the richer
+    # partition object itself, and the two partitions must be distinct objects.
     # The encoding tensors for `a` are a superset of the encoding tensors
     # for `b`, and where they overlap, they the same tensor objects.
     a = RowPartition.from_value_rowids([0, 0, 3, 4, 4, 4])
@@ -644,6 +754,10 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
           message='incompatible value_rowids'),
   ])
   def testMergePrecomputedEncodingStaticErrors(self, x, y, message):
+    # [FUNCTION DOC]
+    # Parameterized with two incompatible partitions and an expected message. Skipped in eager
+    # mode (returns immediately). In graph mode merging in either order must raise a value error
+    # matching the message when splits are requested, because static shapes already disagree.
     if context.executing_eagerly():
       return
     # Errors that are caught by static shape checks.
@@ -682,6 +796,10 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
           message='incompatible row_splits'),  # row_splits is checked first
   ])
   def testMergePrecomputedEncodingRuntimeErrors(self, x, y, message):
+    # [FUNCTION DOC]
+    # Parameterized with two partitions whose values conflict. Merging in either order and
+    # evaluating the splits must raise an invalid-argument error matching the message (detected
+    # by runtime value checks, not static shapes).
     # Errors that are caught by runtime value checks.
     x = x()
     y = y()
@@ -701,6 +819,12 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
   ])
   def testMergePrecomputedEncodingStaticErrors2(self, x, y,
                                                 message, emessage):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: named "static errors" but it expects a runtime invalid-argument error (in both
+    # modes); only the message differs: the eager message is used when executing eagerly,
+    # otherwise the graph message.
+    # Merges two uniform-row-length partitions with the same row length but different value
+    # counts, in both orders, evaluates the splits and asserts the error type and message.
     # Message error and type varies depending upon eager execution.
     x = x()
     y = y()
@@ -727,6 +851,9 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
           spec=RowPartitionSpec(nrows=None, nvals=8, dtype=dtypes.int64))
   ])
   def testMergeWithSpecNoop(self, rp, spec):
+    # [FUNCTION DOC]
+    # Merging a partition with a spec that adds no new information (nothing specified, or only
+    # values already known) must leave splits, static row count and static value count unchanged.
     rp = rp()
     actual = rp._merge_with_spec(spec)
     self.assertAllEqual(actual.row_splits(), rp.row_splits())
@@ -745,6 +872,10 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
           spec=RowPartitionSpec(nrows=None, nvals=8, dtype=dtypes.int64),
           expected=_get_specified_row_partition)])
   def testMergeWithSpecUpdate(self, rp, spec, expected):
+    # [FUNCTION DOC]
+    # Merging a splits-only partition with a spec giving row count and/or value count must yield
+    # a partition whose splits and static row and value counts match the expected partition with
+    # those counts set.
     rp = rp()
     expected = expected()
     actual = rp._merge_with_spec(spec)
@@ -771,6 +902,9 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
           expected=False),
   ])
   def testIsUniform(self, x, expected):
+    # [FUNCTION DOC]
+    # Asserts the uniformity predicate is true only for the uniform-row-length factory; partitions
+    # from splits or lengths (even equal lengths) are not reported as uniform.
     x = x()
     self.assertEqual(expected, x.is_uniform())
 
@@ -789,11 +923,17 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
           expected=[0, 1, 2, 0, 1, 2, 3, 4]),
   ])
   def testOffsetsInRows(self, x, expected):
+    # [FUNCTION DOC]
+    # Asserts the offsets-in-rows result (position of each value within its own row) equals the
+    # expected list for partitions from lengths, uniform row length and splits.
     x = x()
     actual = x.offsets_in_rows()
     self.assertAllEqual(expected, actual)
 
   def testFromUniformRowLengthBugConvertToTensor(self):
+    # [FUNCTION DOC]
+    # Regression test: a 32-bit row count combined with 64-bit value count and row length and an
+    # explicit 64-bit dtype used to fail. Asserts the resulting row count tensor is 64-bit.
     # This originally failed to run because nrows was dtypes.int32. I think
     # we may need to consider the semantics of the type of a RowPartition
     # if preferred_dtype is unspecified. Also, looking at convert_to_tensor:
@@ -808,6 +948,11 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqual(rp.nrows().dtype, dtypes.int64)
 
   def testFromUniformRowLengthNvalDynamic(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: dead test; the body is entirely commented out and ends with a no-op, so it
+    # asserts nothing (pending a fix for dynamic value counts).
+    # Intended scenario: a traced function with a dynamic value count, row length twelve and
+    # three rows should statically resolve the value count to thirty-six.
     # A key question is whether if nrows and uniform_row_length are known,
     # and nvals is given but not known statically, should we determine nvals?
     # TODO(martinz): Uncomment after nvals is fixed.
@@ -821,6 +966,10 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     pass
 
   def testFromUniformRowLengthNvalDynamicNoValidate(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: dead test; the body is entirely commented out and ends with a no-op, so it
+    # asserts nothing.
+    # Intended scenario: same as the dynamic value count test but with validation disabled.
     # A key question is whether if nrows and uniform_row_length are known,
     # and nvals is given but not known statically, should we determine nvals?
     # TODO(martinz): Uncomment after nvals is fixed.
@@ -835,6 +984,10 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     pass
 
   def testFromUniformRowLengthNvalDynamicWrong(self):
+    # [FUNCTION DOC]
+    # Traces a function taking a dynamic value count (seven) with row length twelve and three
+    # rows (inconsistent) and returning the value count. Asserts calling it and evaluating the
+    # result raises an invalid-argument error.
     # A key question is whether if nrows and uniform_row_length are known,
     # and nvals is given but not known statically and WRONG,
     # what should we do? We add a check, but checks are only checked for
@@ -842,6 +995,9 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     @def_function.function(
         input_signature=[tensor_spec.TensorSpec(None, dtypes.int32)])
     def foo(nvals):
+      # [FUNCTION DOC]
+      # Traced helper: builds a uniform-row-length partition with row length twelve, three rows
+      # and the given dynamic value count, and returns its value count tensor.
       rp = RowPartition.from_uniform_row_length(12, nvals=nvals, nrows=3)
       return rp.nvals()
 
@@ -850,6 +1006,10 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       self.evaluate(nvals)
 
   def testFromUniformRowLengthNvalDynamicWrongRowSplits(self):
+    # [FUNCTION DOC]
+    # Same inconsistent setup as the previous test (value count seven against twelve by three),
+    # but the traced function returns the row splits. Asserts evaluating them raises an
+    # invalid-argument error, since the consistency check is attached to the splits.
     # A key question is whether if nrows and uniform_row_length are known,
     # and nvals is given but not known statically and WRONG,
     # what should we do?
@@ -860,6 +1020,9 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     @def_function.function(
         input_signature=[tensor_spec.TensorSpec(None, dtypes.int32)])
     def foo(nvals):
+      # [FUNCTION DOC]
+      # Traced helper: builds a uniform-row-length partition with row length twelve, three rows
+      # and the given dynamic value count, and returns its row splits tensor.
       rp = RowPartition.from_uniform_row_length(12, nvals=nvals, nrows=3)
       return rp.row_splits()
 
@@ -868,18 +1031,27 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       self.evaluate(rs)
 
   def testFromUniformRowPartitionNrows(self):
+    # [FUNCTION DOC]
+    # Uniform row length three with four rows and no value count. Expects row count four, row
+    # length three and a static value count of twelve.
     rp = RowPartition.from_uniform_row_length(3, nrows=4)
     self.assertAllEqual(4, rp.nrows())
     self.assertAllEqual(3, rp.uniform_row_length())
     self.assertAllEqual(12, rp.static_nvals)
 
   def testFromUniformRowPartitionNvalsStatic(self):
+    # [FUNCTION DOC]
+    # Uniform row length three with twelve values. Expects static row count four, static row
+    # length three and static value count twelve.
     rp = RowPartition.from_uniform_row_length(3, nvals=12)
     self.assertAllEqual(4, rp.static_nrows)
     self.assertAllEqual(3, rp.static_uniform_row_length)
     self.assertAllEqual(12, rp.static_nvals)
 
   def testFromUniformRowPartitionNvalsStaticNoValidate(self):
+    # [FUNCTION DOC]
+    # Same static-value checks as the previous test, with all of row length, row count and value
+    # count given and validation disabled. Expects the static values four, three and twelve.
     rp = RowPartition.from_uniform_row_length(3, nrows=4, nvals=12,
                                               validate=False)
     self.assertAllEqual(4, rp.static_nrows)
@@ -887,6 +1059,10 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertAllEqual(12, rp.static_nvals)
 
   def testFromUniformRowPartitionNvalsIs(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: dead test; the body is commented out and does nothing.
+    # Intended scenario: the value count tensor passed to the factory should be returned
+    # unchanged (same object) by the value count accessor.
     # TODO(martinz): Uncomment after nvals is fixed.
     # nvals = constant_op.constant(12)
     # rp = RowPartition.from_uniform_row_length(3, nvals=nvals)
@@ -894,19 +1070,32 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     pass
 
   def testFromUniformRowPartitionRowStartsStatic(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: name mentions uniform row partition but the test uses the row-starts factory.
+    # Builds a partition from row starts and a value count of twelve and asserts the static value
+    # count is twelve.
     rp = RowPartition.from_row_starts([0, 3, 6], nvals=12)
     self.assertAllEqual(12, rp.static_nvals)
 
   def testStaticNrows(self):
+    # [FUNCTION DOC]
+    # Partition from splits zero, three, four, five. Asserts the static row count is a plain
+    # integer equal to three.
     rp = RowPartition.from_row_splits([0, 3, 4, 5])
     static_nrows = rp.static_nrows
     self.assertIsInstance(static_nrows, int)
     self.assertAllEqual(3, static_nrows)
 
   def testStaticNrowsUnknown(self):
+    # [FUNCTION DOC]
+    # Traces a function whose splits input has unknown shape and asserts inside it that the
+    # static row count is nothing/unknown, then calls it with concrete 32-bit splits.
     @def_function.function(
         input_signature=[tensor_spec.TensorSpec(None, dtypes.int32)])
     def foo(rs):
+      # [FUNCTION DOC]
+      # Traced helper: builds a partition from the unknown-shape splits argument and asserts its
+      # static row count is nothing. Returns nothing.
       rp = RowPartition.from_row_splits(rs)
       static_nrows = rp.static_nrows
       self.assertIsNone(static_nrows)
@@ -916,8 +1105,14 @@ class RowPartitionTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 @test_util.run_all_in_graph_and_eager_modes
 class RowPartitionSpecTest(test_util.TensorFlowTestCase,
                            parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for the row-partition type specification class: construction and validation,
+  # copying, serialization, component specs, compatibility, most-specific-compatible-type,
+  # creation from a value, dtype change and merging. Runs in graph and eager modes; stateless.
 
   def testDefaultConstruction(self):
+    # [FUNCTION DOC]
+    # A default spec has no row count, value count or uniform row length and 64-bit dtype.
     spec = RowPartitionSpec()
     self.assertIsNone(spec.nrows)
     self.assertIsNone(spec.nvals)
@@ -937,6 +1132,11 @@ class RowPartitionSpecTest(test_util.TensorFlowTestCase,
   def testConstruction(self, nrows, nvals, uniform_row_length, dtype,
                        expected_nrows, expected_nvals,
                        expected_uniform_row_length, expected_dtype):
+    # [FUNCTION DOC]
+    # Parameterized construction test. Builds a spec from row count, value count, uniform row
+    # length and dtype, and asserts the stored attributes equal the expected ones, including
+    # values inferred from the others (value count from rows times length, row count from value
+    # count divided by length).
     spec = RowPartitionSpec(nrows, nvals, uniform_row_length, dtype)
     self.assertEqual(spec.nrows, expected_nrows)
     self.assertEqual(spec.nvals, expected_nvals)
@@ -958,6 +1158,10 @@ class RowPartitionSpecTest(test_util.TensorFlowTestCase,
                             uniform_row_length=None,
                             dtype=dtypes.int64,
                             error=None):
+    # [FUNCTION DOC]
+    # Parameterized over inconsistent spec arguments (non-integer dtype, or mutually incompatible
+    # row count, value count and uniform row length). Constructing the spec must raise a value
+    # error whose message matches the given pattern.
     with self.assertRaisesRegex(ValueError, error):
       RowPartitionSpec(nrows, nvals, uniform_row_length, dtype)
 
@@ -968,11 +1172,18 @@ class RowPartitionSpecTest(test_util.TensorFlowTestCase,
   ])  # pyformat: disable
 
   def testDeepcopy(self, spec):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the parameterized spec argument is immediately overwritten by a default spec,
+    # so only the default spec is ever tested; a blank line also separates the decorator from
+    # the definition.
+    # Deep-copies a spec and asserts the debug representation of the copy equals the original.
     spec = RowPartitionSpec()
     spec_b = copy.deepcopy(spec)
     self.assertEqual(repr(spec), repr(spec_b))
 
   def testValueType(self):
+    # [FUNCTION DOC]
+    # Asserts a spec reports the row-partition class as the type of value it describes.
     spec = RowPartitionSpec()
     self.assertEqual(spec.value_type, RowPartition)
 
@@ -1001,6 +1212,10 @@ class RowPartitionSpecTest(test_util.TensorFlowTestCase,
               dtypes.int64)),
   ])
   def testSerialize(self, spec, expected):
+    # [FUNCTION DOC]
+    # Serializes a spec and compares with the expected tuple of row count shape, value count
+    # shape, uniform row length shape and dtype (including inferred sizes). Shapes are compared
+    # through their debug text because shape equality is unconventional.
     serialization = spec._serialize()
     # TensorShape has an unconventional definition of equality, so we can't use
     # assertEqual directly here.  But repr() is deterministic and lossless for
@@ -1022,6 +1237,9 @@ class RowPartitionSpecTest(test_util.TensorFlowTestCase,
           expected=tensor_spec.TensorSpec([6], dtypes.int64)),  # inferred nrow
   ])
   def testComponentSpecs(self, spec, expected):
+    # [FUNCTION DOC]
+    # Asserts the component tensor spec of a row-partition spec is a vector spec of the spec dtype
+    # whose length is the row count plus one when known (inferred if needed), else unknown.
     self.assertEqual(spec._component_specs, expected)
 
   @parameterized.parameters([
@@ -1030,6 +1248,10 @@ class RowPartitionSpecTest(test_util.TensorFlowTestCase,
           components=[0, 3, 7]),
   ])
   def testToFromComponents(self, rp_factory, components):
+    # [FUNCTION DOC]
+    # Takes the type spec of a partition, converts the partition to components (the splits),
+    # asserts they equal the expected list, rebuilds a partition from them and asserts it matches
+    # the original via the module's equality helper.
     rp = rp_factory()
     spec = rp._type_spec
     actual_components = spec._to_components(rp)
@@ -1054,6 +1276,9 @@ class RowPartitionSpecTest(test_util.TensorFlowTestCase,
       (RowPartitionSpec(nvals=0), RowPartitionSpec(uniform_row_length=0)),
   ])
   def testIsCompatibleWith(self, spec1, spec2):
+    # [FUNCTION DOC]
+    # Asserts pairs of specs that can describe the same partition (equal, or one more specific,
+    # or consistent through inference) are reported compatible.
     self.assertTrue(spec1.is_compatible_with(spec2))
 
   @parameterized.parameters([
@@ -1065,6 +1290,9 @@ class RowPartitionSpecTest(test_util.TensorFlowTestCase,
       (RowPartitionSpec(nvals=5), RowPartitionSpec(uniform_row_length=0)),
   ])
   def testIsNotCompatibleWith(self, spec1, spec2):
+    # [FUNCTION DOC]
+    # Asserts pairs of specs with different dtypes or contradictory sizes are reported
+    # incompatible.
     self.assertFalse(spec1.is_compatible_with(spec2))
 
   @parameterized.parameters([
@@ -1090,6 +1318,9 @@ class RowPartitionSpecTest(test_util.TensorFlowTestCase,
           expected=RowPartitionSpec(None, None, None)),
   ])
   def testMostSpecificCompatibleType(self, spec1, spec2, expected):
+    # [FUNCTION DOC]
+    # Asserts the most specific compatible type of two specs keeps only the attributes on which
+    # they agree and relaxes the differing ones to unknown.
     actual = spec1.most_specific_compatible_type(spec2)
     self.assertEqual(actual, expected)
 
@@ -1097,16 +1328,26 @@ class RowPartitionSpecTest(test_util.TensorFlowTestCase,
       (RowPartitionSpec(), RowPartitionSpec(dtype=dtypes.int32)),
   ])
   def testMostSpecificCompatibleTypeError(self, spec1, spec2):
+    # [FUNCTION DOC]
+    # Specs with different dtypes have no common type: asking for the most specific compatible
+    # type must raise a value error saying no type spec is compatible.
     with self.assertRaisesRegex(ValueError, 'No TypeSpec is compatible'):
       spec1.most_specific_compatible_type(spec2)
 
   def testNumRowsInt64(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: lives in the spec test class but tests a partition, not a spec.
+    # Builds a partition from 64-bit splits and asserts its row count tensor is 64-bit.
     row_splits = array_ops.constant([0, 2, 3, 5], dtype=dtypes.int64)
     values = RowPartition.from_row_splits(row_splits)
     nrows = values.nrows()
     self.assertEqual(dtypes.int64, nrows.dtype)
 
   def testFromValue(self):
+    # [FUNCTION DOC]
+    # Asserts the spec derived from partitions built by each factory: splits and lengths give
+    # only a row count; row ids give row count and value count; uniform row length gives value
+    # count and row length.
     self.assertEqual(
         RowPartitionSpec.from_value(RowPartition.from_row_splits([0, 2, 8, 8])),
         RowPartitionSpec(nrows=3))
@@ -1137,6 +1378,9 @@ class RowPartitionSpecTest(test_util.TensorFlowTestCase,
                                      dtype=dtypes.int32)),
   ])
   def testWithDType(self, original, dtype, expected):
+    # [FUNCTION DOC]
+    # Asserts changing the dtype of a spec returns a spec equal to the expected one, keeping all
+    # size attributes.
     actual = original.with_dtype(dtype)
     self.assertEqual(actual, expected)
 
@@ -1155,6 +1399,9 @@ class RowPartitionSpecTest(test_util.TensorFlowTestCase,
            expected=RowPartitionSpec(nvals=20, nrows=3, dtype=dtypes.int32)),
   ])
   def testMergeWith(self, a, b, expected):
+    # [FUNCTION DOC]
+    # Asserts merging two compatible specs (combining their known attributes) gives the expected
+    # spec, and that the merge is symmetric (same result in both orders).
     actual = a._merge_with(b)
     actual_rev = b._merge_with(a)
     self.assertEqual(actual, expected)
@@ -1171,11 +1418,20 @@ class RowPartitionSpecTest(test_util.TensorFlowTestCase,
            error_regex='Merging RowPartitionSpecs with incompatible dtypes'),
   ])
   def testMergeWithRaises(self, a, b, error_type, error_regex):
+    # [FUNCTION DOC]
+    # Asserts merging specs with contradictory sizes or different dtypes raises the given error
+    # type (value error) with a message matching the pattern.
     with self.assertRaisesRegex(error_type, error_regex):
       a._merge_with(b)
 
 
 def _assert_row_partition_equal(test_class, actual, expected):
+  # [FUNCTION DOC]
+  # HELPER: Equality assertion used by the to/from components test.
+  # Inputs: a test case instance (must be a TensorFlow test case), and two row partitions.
+  # Asserts (type checks via plain assertions) that both have the same cached encodings and
+  # uniform-row-length presence, then that every encoding cached on the expected partition has
+  # equal values in the actual one. Returns nothing; raises assertion errors on mismatch.
   assert isinstance(test_class, test_util.TensorFlowTestCase)
   assert isinstance(actual, RowPartition)
   assert isinstance(expected, RowPartition)

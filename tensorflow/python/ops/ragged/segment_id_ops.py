@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Ragged-tensor ops that convert between the two row-partitioning encodings: row_splits (offsets
+# of row boundaries) and segment_ids (one row index per value). Exposes two public ops exported
+# as the ragged namespace functions for row-splits-to-segment-ids and segment-ids-to-row-splits.
+# Builds on ragged_util (repeat, integer conversion) and the bincount ops. Import has no side
+# effects other than registering the exports and dispatch support.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,6 +37,16 @@ from tensorflow.python.util.tf_export import tf_export
 @tf_export("ragged.row_splits_to_segment_ids")
 @dispatch.add_dispatch_support
 def row_splits_to_segment_ids(splits, name=None, out_type=None):
+  # [FUNCTION DOC]
+  # Converts a row_splits vector into a segment_ids vector, where each output entry is the index
+  # of the row that the corresponding value belongs to.
+  # Inputs: splits is a 1-D integer tensor (or list) of int32 or int64, converted to a tensor with
+  # int64 preferred; name is an optional name scope; out_type is an optional output integer type
+  # (defaults to the dtype of splits).
+  # Output: a 1-D integer tensor made by repeating each row index by that row's length.
+  # Raises a value error if splits is not int32/int64, is empty, or is not rank 1 (shape
+  # assertion). Sorting and a leading zero are NOT validated here, despite the docstring.
+  # Side effects: creates ops inside a name scope; none otherwise.
   """Generates the segmentation corresponding to a RaggedTensor `row_splits`.
 
   Returns an integer vector `segment_ids`, where `segment_ids[i] == j` if
@@ -76,6 +92,18 @@ def row_splits_to_segment_ids(splits, name=None, out_type=None):
 @dispatch.add_dispatch_support
 def segment_ids_to_row_splits(segment_ids, num_segments=None,
                               out_type=None, name=None):
+  # [FUNCTION DOC]
+  # Converts a segment_ids vector into the equivalent row_splits vector (cumulative row lengths
+  # prefixed by zero).
+  # Inputs: segment_ids is a 1-D integer tensor or list (cast to int32 internally because
+  # bincount only supports int32); num_segments is an optional scalar giving the number of rows
+  # (otherwise one more than the maximum id, zero for empty input); out_type is the optional
+  # output integer type (defaults to the dtype of segment_ids if it is a tensor, else the dtype of
+  # num_segments if that is a tensor, else int64); name is an optional name scope.
+  # Output: a 1-D tensor of length num_segments plus one, starting at zero.
+  # Raises an error if segment_ids is not rank 1 or num_segments is not rank 0.
+  # Side effects: imports the bincount module lazily to avoid an import cycle; sets the static
+  # shape of the result when num_segments is a known constant.
   """Generates the RaggedTensor `row_splits` corresponding to a segmentation.
 
   Returns an integer vector `splits`, where `splits[0] = 0` and

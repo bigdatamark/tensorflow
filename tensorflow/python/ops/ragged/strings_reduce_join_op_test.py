@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Unit tests for the string reduce-join op (ragged string ops module) on dense and ragged string
+# inputs: joining along various axes, with and without separators, for ranks one to four, and
+# checking both values and static output shapes. Runs in graph and eager modes. Not a helper
+# module; executed through the test runner entry point at the bottom.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,8 +29,16 @@ from tensorflow.python.platform import googletest
 @test_util.run_all_in_graph_and_eager_modes
 class StringsReduceJoinOpTest(test_util.TensorFlowTestCase,
                               parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case covering the ragged-aware string reduce-join op. Decorated to run every test in
+  # both graph and eager modes. Combines the TensorFlow test base class with parameterized
+  # testing; holds no state of its own.
 
   def test_rank_one(self):
+    # [FUNCTION DOC]
+    # Scenario: reduce-join a plain list of four byte strings over the last axis with no
+    # separator and no kept dimensions. Expects the single joined string and a scalar (empty)
+    # static shape.
     input_array = [b'this', b'is', b'a', b'test']
     truth = b'thisisatest'
     truth_shape = []
@@ -120,6 +133,12 @@ class StringsReduceJoinOpTest(test_util.TensorFlowTestCase,
                            truth,
                            truth_shape,
                            separator=''):
+    # [FUNCTION DOC]
+    # Parameterized test over ragged string inputs of rank two to four. Each case gives the nested
+    # input, the axis, keepdims, the expected values, the expected static shape (None marks a
+    # ragged or unknown dimension) and optionally a separator (default empty).
+    # Builds a ragged tensor, reduce-joins it, evaluates, and asserts equal values; the shape is
+    # compared after converting legacy dimension objects to plain numbers.
     with self.cached_session():
       input_tensor = ragged_factory_ops.constant(input_array)
       output = ragged_string_ops.reduce_join(

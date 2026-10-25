@@ -1,3 +1,11 @@
+# [PACKAGE DOC]
+# Package for the public signal processing API (exported as the signal namespace of TensorFlow).
+# The file contains only a module docstring that lists the documented public symbols (framing,
+# Hamming and Hann windows, short-time Fourier transform and its inverse, mel weight matrices,
+# MFCCs, overlap-and-add) and reference links; it defines no code and re-exports nothing itself.
+# The real implementations live in sibling modules (for example the FFT, DCT, window, spectral,
+# mel and shape helper modules), which register their functions for the public API through the
+# export decorator. Importing this package has no side effects.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
