@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# HELPER: shared utilities for the summary op modules.
+# Provides adding a summary to graph collections, sanitizing summary tag names, and a context
+# manager that builds a unique name scope and tag for a summary. No import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +26,11 @@ from tensorflow.python.platform import tf_logging
 
 
 def collect(val, collections, default_collections):
+  # [FUNCTION DOC]
+  # HELPER: registers a summary tensor in graph collections for the v1 summary ops.
+  # Inputs: val is the value to add; collections is a list of collection keys, or nothing to use
+  # default_collections instead. Returns nothing. Side effect: adds val to each named collection
+  # of the default graph.
   """Adds keys to a collection.
 
   Args:
@@ -39,6 +48,11 @@ _INVALID_TAG_CHARACTERS = re.compile(r'[^-/\w\.]')
 
 
 def clean_tag(name):
+  # [FUNCTION DOC]
+  # HELPER: sanitizes user-supplied summary names for the summary ops.
+  # Replaces every character other than letters, digits, underscore, dash, slash and dot with an
+  # underscore, then strips leading slashes. Nothing is returned unchanged. Logs an informational
+  # message when the name was altered. Returns the cleaned name.
   """Cleans a tag. Removes illegal characters for instance.
 
   Args:
@@ -66,6 +80,13 @@ def clean_tag(name):
 
 @contextlib.contextmanager
 def summary_scope(name, family=None, default_name=None, values=None):
+  # [FUNCTION DOC]
+  # HELPER: context manager used by v1 summary ops to obtain a unique tag and name scope.
+  # Inputs: name for the summary node; family optional prefix for the tag; default_name used when
+  # name is nothing; values optional tensors passed to the name scope. Both name and family are
+  # cleaned first. Enters a name scope (even in eager mode) based on family and name.
+  # Yields a pair of tag (family prefixed to the scope name when family is given, trailing slash
+  # removed) and the scope string. Side effect: pushes and pops a name scope.
   """Enters a scope used for the summary and yields both the name and tag.
 
   To ensure that the summary tag name is always unique, we create a name scope

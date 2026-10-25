@@ -1,4 +1,10 @@
 # -*- coding: utf-8 -*-
+# [MODULE DOC]
+# Python wrappers for string tensor operations (regex match/replace, formatting, splitting,
+# joining, length, substring, number conversion, hashing) exported under the strings namespace.
+# Wraps generated string and parsing ops, handles deprecated argument aliases and v1/v2 variants.
+# Import-time side effects: marks several ops as not differentiable, attaches generated docs to
+# some wrappers, and registers unary elementwise dispatch for ops lacking Python wrappers.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -48,6 +54,14 @@ from tensorflow.python.util.tf_export import tf_export
 @dispatch.register_unary_elementwise_api
 @dispatch.add_dispatch_support
 def regex_full_match(input, pattern, name=None):
+  # [FUNCTION DOC]
+  # Tests whether each string element of input matches the entire regular expression pattern.
+  # Inputs: input is a string tensor; pattern is a Python string/bytes or a scalar string tensor
+  # (RE2 syntax); name is an optional op name.
+  # Output: a boolean tensor with the same shape as input holding the match results.
+  # When pattern is a static Python string or bytes, the static-pattern op is used so the regex is
+  # compiled once at graph construction; otherwise the dynamic op compiles it at run time.
+  # Raises nothing itself; invalid patterns surface as errors from the underlying op.
   r"""Match elements of `input` with regex `pattern`.
 
   Args:
@@ -77,6 +91,15 @@ regex_full_match.__doc__ = gen_string_ops.regex_full_match.__doc__
 @dispatch.add_dispatch_support
 @deprecation.deprecated_endpoints("regex_replace")
 def regex_replace(input, pattern, rewrite, replace_global=True, name=None):
+  # [FUNCTION DOC]
+  # Replaces text in each string element of input that matches a regular expression.
+  # Inputs: input is a string tensor; pattern is the RE2 regular expression (Python string/bytes
+  # or scalar string tensor); rewrite is the replacement text, which may reference captured groups
+  # with backslash-digit escapes; replace_global (default true) replaces all non-overlapping
+  # matches, otherwise only the first; name is an optional op name.
+  # Output: a string tensor with the same shape as input.
+  # If both pattern and rewrite are static Python strings/bytes, the static op is used so the
+  # regex compiles once at graph construction; otherwise the dynamic op is used.
   r"""Replace elements of `input` matching regex `pattern` with `rewrite`.
 
   >>> tf.strings.regex_replace("Text with tags.<br /><b>contains html</b>",
@@ -115,6 +138,15 @@ def regex_replace(input, pattern, rewrite, replace_global=True, name=None):
 @tf_export("strings.format")
 @dispatch.add_dispatch_support
 def string_format(template, inputs, placeholder="{}", summarize=3, name=None):
+  # [FUNCTION DOC]
+  # Formats a string template by substituting tensors at each placeholder occurrence.
+  # Inputs: template is a Python string containing placeholders; inputs is a list of tensors or a
+  # single tensor (a lone tensor is wrapped into a one-element list); placeholder is the marker
+  # text (default two braces); summarize (default 3) is how many leading and trailing entries of
+  # each dimension are printed, with -1 meaning all; name is an optional op name.
+  # Output: a scalar string tensor with the formatted text.
+  # Raises a value error if the number of placeholders in the template differs from the number of
+  # inputs. Does not mutate arguments.
   r"""Formats a string template using a list of tensors.
 
   Formats a string template using a list of tensors, abbreviating tensors by
@@ -179,6 +211,16 @@ def string_format(template, inputs, placeholder="{}", summarize=3, name=None):
 # Note: tf.strings.split is exported in ragged/ragged_string_ops.py, which
 # defines a wrapper for this function.
 def string_split(source, sep=None, skip_empty=True, delimiter=None):  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says empty tokens are always ignored and that a ValueError is
+  # raised for a non-string delimiter, but empty tokens are only dropped when skip_empty is true,
+  # and no explicit check or raise exists here (a bad delimiter fails in tensor conversion).
+  # Splits each element of a 1-D string tensor on a delimiter and returns a rank-2 sparse tensor.
+  # Inputs: source is the string tensor; sep (default a single space when nothing is given) is
+  # the delimiter; skip_empty (default true) drops empty tokens; delimiter is a deprecated alias
+  # for sep (specifying both is an error from the deprecation helper).
+  # Output: a sparse tensor whose indices are (row in source, position in row), values are the
+  # tokens and dense shape is [rows, max tokens]. Static shapes of the parts are set to rank 2/1.
   """Split elements of `source` based on `delimiter` into a `SparseTensor`.
 
   Let N be the size of source (typically N will be the batch size). Split each
@@ -236,6 +278,16 @@ def string_split(source, sep=None, skip_empty=True, delimiter=None):  # pylint: 
 # Note: tf.strings.split is exported in ragged/ragged_string_ops.py, which
 # defines a wrapper for this function.
 def string_split_v2(source, sep=None, maxsplit=-1):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring first says empty tokens are ignored and later says consecutive
+  # delimiters produce empty strings; the code just forwards to the op, so the later statement
+  # (python-like split semantics) applies. It also claims a ValueError for a non-string sep, but
+  # no explicit check exists.
+  # Splits each element of a 1-D string tensor on a separator and returns a rank-2 sparse tensor.
+  # Inputs: source is the string tensor; sep is the separator (nothing is treated as the empty
+  # string, meaning split on runs of whitespace); maxsplit (default -1) limits the number of
+  # splits when positive.
+  # Output: a sparse tensor with indices (row, token position), token values and dense shape.
   """Split elements of `source` based on `sep` into a `SparseTensor`.
 
   Let N be the size of source (typically N will be the batch size). Split each
@@ -289,6 +341,12 @@ def string_split_v2(source, sep=None, maxsplit=-1):
 
 
 def _reduce_join_reduction_dims(x, axis):
+  # [FUNCTION DOC]
+  # HELPER: computes the default reduction axes for the string reduce-join ops.
+  # Returns axis unchanged when given. Otherwise returns all axes of x in descending order: a
+  # constant int32 tensor when the rank is statically known, else a dynamically computed range
+  # built from the rank op. KNOWN ISSUE: the docstring says the range ends before 0, but the code
+  # includes axis 0 (all dimensions are reduced).
   """Returns range(rank(x) - 1, 0, -1) if axis is None; or axis otherwise."""
   if axis is not None:
     return axis
@@ -314,6 +372,13 @@ def reduce_join(inputs, axis=None,  # pylint: disable=missing-docstring
                 name=None,
                 reduction_indices=None,
                 keepdims=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: keep_dims is defaulted to false after the lookup but never used afterwards, so
+  # when neither keepdims nor keep_dims is given, keepdims stays nothing and is passed on as such
+  # rather than false.
+  # Deprecated v1 entry point for joining strings along axes. Resolves the deprecated aliases
+  # keep_dims to keepdims and reduction_indices to axis, then delegates to the v2 function with
+  # inputs, axis, keepdims, separator and name. Returns the reduced string tensor.
   keepdims = deprecation.deprecated_argument_lookup("keepdims", keepdims,
                                                     "keep_dims", keep_dims)
   if keep_dims is None:
@@ -337,6 +402,11 @@ def reduce_join_v2(  # pylint: disable=missing-docstring
     keepdims=False,
     separator="",
     name=None):
+  # [FUNCTION DOC]
+  # Reduction counterpart of the elementwise string join. Converts inputs to a tensor, picks all
+  # axes when axis is nothing (via the helper), and joins strings along them with separator
+  # between elements. keepdims (default false) keeps reduced dimensions with length one; name
+  # is an optional op name. Returns a string tensor (scalar when joining everything).
   """Joins all strings into a single string, or joins along an axis.
 
   This is the reduction operation for the elementwise `tf.strings.join` op.
@@ -383,6 +453,11 @@ reduce_join.__doc__ = reduce_join_v2.__doc__
 @dispatch.register_unary_elementwise_api
 @dispatch.add_dispatch_support
 def string_length(input, name=None, unit="BYTE"):
+  # [FUNCTION DOC]
+  # Version 1 API: computes the length of each string in a string tensor. name is an optional op
+  # name (kept second for backward compatibility); unit is BYTE (default) or UTF8_CHAR, selecting
+  # whether bytes or UTF-8 code points are counted (undefined for invalid UTF-8 with UTF8_CHAR).
+  # Returns an int32 tensor of the same shape as input.
   """Computes the length of each string given in the input tensor.
 
   >>> strings = tf.constant(['Hello','TensorFlow', '🙂'])
@@ -413,6 +488,10 @@ def string_length(input, name=None, unit="BYTE"):
 @dispatch.register_unary_elementwise_api
 @dispatch.add_dispatch_support
 def string_length_v2(input, unit="BYTE", name=None):
+  # [FUNCTION DOC]
+  # Version 2 API of string length: same behavior as the v1 function but with unit before name.
+  # Returns an int32 tensor of per-string lengths counted in bytes or UTF-8 code points. The
+  # documentation is attached after definition from the generated op.
   return gen_string_ops.string_length(input, unit=unit, name=name)
 
 
@@ -424,6 +503,10 @@ string_length_v2.__doc__ = gen_string_ops.string_length.__doc__
 @dispatch.add_dispatch_support
 @deprecation.deprecated(None, "Use `tf.strings.substr` instead of `tf.substr`.")
 def substr_deprecated(input, pos, len, name=None, unit="BYTE"):
+  # [FUNCTION DOC]
+  # Deprecated top-level alias for the substring op; emits a deprecation warning pointing to the
+  # strings namespace version. Delegates to substr with the same input, pos (start offsets),
+  # len (lengths), name and unit (BYTE default). Returns a string tensor of substrings.
   return substr(input, pos, len, name=name, unit=unit)
 
 substr_deprecated.__doc__ = gen_string_ops.substr.__doc__
@@ -433,6 +516,10 @@ substr_deprecated.__doc__ = gen_string_ops.substr.__doc__
 @dispatch.register_unary_elementwise_api
 @dispatch.add_dispatch_support
 def substr(input, pos, len, name=None, unit="BYTE"):
+  # [FUNCTION DOC]
+  # Version 1 API: extracts substrings from each string in input, starting at offset pos with
+  # length len (tensors broadcastable to input), counted in unit (BYTE default or UTF8_CHAR).
+  # Thin wrapper over the generated op; returns a string tensor. Documentation is attached later.
   return gen_string_ops.substr(input, pos, len, unit=unit, name=name)
 
 substr.__doc__ = gen_string_ops.substr.__doc__
@@ -442,6 +529,9 @@ substr.__doc__ = gen_string_ops.substr.__doc__
 @dispatch.register_unary_elementwise_api
 @dispatch.add_dispatch_support
 def substr_v2(input, pos, len, unit="BYTE", name=None):
+  # [FUNCTION DOC]
+  # Version 2 API of substring extraction; identical to the v1 function except unit precedes
+  # name. Takes string tensor input, start offsets pos and lengths len; returns a string tensor.
   return gen_string_ops.substr(input, pos, len, unit=unit, name=name)
 
 substr_v2.__doc__ = gen_string_ops.substr.__doc__
@@ -463,6 +553,11 @@ ops.NotDifferentiable("DecodeBase64")
 @dispatch.register_unary_elementwise_api
 @dispatch.add_dispatch_support
 def string_to_number(input, out_type=dtypes.float32, name=None):
+  # [FUNCTION DOC]
+  # Parses each string in the input tensor as a number of type out_type (default float32; also
+  # float64, int32, int64, uint32, uint64). name is an optional op name. Returns a tensor of
+  # out_type with the shape of input. Unparseable strings or integer overflow cause a runtime
+  # error from the op.
   r"""Converts each string in the input Tensor to the specified numeric type.
 
   (Note that int32 overflow results in an error while float overflow
@@ -495,6 +590,10 @@ def string_to_number_v1(
     out_type=dtypes.float32,
     name=None,
     input=None):
+  # [FUNCTION DOC]
+  # Version 1 API for string to number conversion. Accepts the string tensor as string_tensor or
+  # via the newer name input (resolved by the deprecation lookup; giving both is an error),
+  # plus out_type (default float32) and name. Returns a tensor of out_type.
   string_tensor = deprecation.deprecated_argument_lookup(
       "input", input, "string_tensor", string_tensor)
   return gen_parsing_ops.string_to_number(string_tensor, out_type, name)
@@ -506,6 +605,11 @@ string_to_number_v1.__doc__ = gen_parsing_ops.string_to_number.__doc__
 @dispatch.register_unary_elementwise_api
 @dispatch.add_dispatch_support
 def string_to_hash_bucket(input, num_buckets, name=None):
+  # [FUNCTION DOC]
+  # Hashes each string in input and takes the result modulo num_buckets (an integer >= 1).
+  # name is an optional op name. Returns an int64 tensor of bucket ids with the shape of input.
+  # The hash is deterministic within a process but may change between versions; fast or strong
+  # variants are recommended instead.
   # pylint: disable=line-too-long
   r"""Converts each string in the input Tensor to its hash mod by a number of buckets.
 
@@ -541,6 +645,11 @@ def string_to_hash_bucket_v1(  # pylint: disable=missing-function-docstring
     num_buckets=None,
     name=None,
     input=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: num_buckets defaults to nothing although it is required; omitting it fails inside
+  # the op rather than with a clear error.
+  # Version 1 API for hash bucketing. The string tensor may be given as string_tensor or the
+  # newer input name (both together is an error). Returns int64 bucket ids in [0, num_buckets).
   string_tensor = deprecation.deprecated_argument_lookup(
       "input", input, "string_tensor", string_tensor)
   return gen_string_ops.string_to_hash_bucket(string_tensor, num_buckets, name)
@@ -552,6 +661,10 @@ string_to_hash_bucket_v1.__doc__ = gen_string_ops.string_to_hash_bucket.__doc__
 @dispatch.add_dispatch_support
 @deprecation.deprecated_endpoints("string_join")
 def string_join(inputs, separator="", name=None):
+  # [FUNCTION DOC]
+  # Concatenates, element by element, a list of string tensors of the same shape, inserting
+  # separator (default empty) between the pieces. name is an optional op name. Returns a string
+  # tensor with the common shape.
   """Perform element-wise concatenation of a list of string tensors.
 
   Given a list of string tensors of same shape, performs element-wise
@@ -590,6 +703,11 @@ def unsorted_segment_join(inputs,
                           num_segments,
                           separator="",
                           name=None):
+  # [FUNCTION DOC]
+  # Joins strings of inputs that share a segment id. segment_ids (int32/int64, non-negative) has a
+  # shape that prefixes inputs; num_segments is a non-negative scalar larger than every id;
+  # separator (default empty) goes between joined pieces in row-major order; name is optional.
+  # Returns a string tensor with one entry (slice) per segment.
   """Joins the elements of `inputs` based on `segment_ids`.
 
   Computes the string join along segments of a tensor.
