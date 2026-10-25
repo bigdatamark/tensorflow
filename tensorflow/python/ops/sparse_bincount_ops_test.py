@@ -220,7 +220,9 @@ class TestSparseCount(test_util.TensorFlowTestCase, parameterized.TestCase):
     # last axis; nothing means count over all axes). Calls the op and asserts that the result's
     # indices, values and dense shape equal the expectations. Cases cover trimming, padding,
     # zero maxlength, binary output, weights, one-dimensional input and very large values.
-
+    y = sparse_ops.sparse_bincount(
+        x,
+        weights=weights,
         minlength=minlength,
         maxlength=maxlength,
         binary_output=binary_output,
