@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Unit tests for tpu_embedding_v3_utils, the SparseCore embedding checkpoint layout helpers.
+# Defines a small named tuple describing a test table (rows, columns, rotation), a helper that
+# builds sharded test tables, and one test class. Run as a script it enables v2 behavior and
+# starts the test runner. No import time side effects beyond the named tuple definition.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,6 +36,14 @@ TestTable = collections.namedtuple("Table", ["vocab", "dim", "shift"])
 def create_test_table_shards(
     table: TestTable, num_sc_shards: int, table_data_start=0
 ):
+  # [FUNCTION DOC]
+  # HELPER: builds sharded test data for the unshuffle and index mapping tests.
+  # Inputs: table is a description with row count, column count and shard rotation;
+  # num_sc_shards is the number of shards; table_data_start (default 0) is the first value of
+  # the consecutive integers that fill the table.
+  # Returns a pair: the full table (rows by columns, row-major consecutive numbers) and a list of
+  # shards, where shard i holds rows i, i plus the shard count, and so on. If the table has a
+  # nonzero rotation, the list of shards is rotated by that many positions first. No side effects.
   t = array_ops.reshape(
       math_ops.range(
           start=table_data_start,
@@ -49,8 +62,18 @@ def create_test_table_shards(
 
 
 class TpuEmbeddingV3UtilsTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Unit tests for the SparseCore checkpoint layout utilities: removing padding, unshuffling
+  # stacked sharded tables back into logical tables (single, two stacked, six stacked with
+  # rotations) and mapping row indices to shard and position. Uses the module level helper to
+  # build sharded test data; no shared fixtures or setup.
 
   def test_unpadding(self):
+    # [FUNCTION DOC]
+    # Scenario for the padding removal function. Asserts: a 4 by 5 tensor of ones with expected
+    # shape 3 by 2 is cut to a 3 by 2 tensor of ones; a 3 by 4 range tensor with expected shape
+    # 2 by 2 yields its top-left 2 by 2 block; and when the expected shape is larger in a
+    # dimension (3 by 5) the input is returned unchanged.
     self.assertAllEqual(
         v3_utils.remove_padding_from_sc(
             array_ops.ones((4, 5)), variable_shape=(3, 2)
@@ -71,6 +94,11 @@ class TpuEmbeddingV3UtilsTest(test.TestCase, parameterized.TestCase):
       ("one", 8, 4, 4), ("two", 27, 6, 3), ("three", 128, 8, 4)
   )
   def test_unshuffle_one_table_basic(self, vocab, dim, num_sc):
+    # [FUNCTION DOC]
+    # Parameterized test over (rows, columns, core count) triples. Builds a single unrotated
+    # table, shards it with the test helper, concatenates the shards and unshuffles with offset
+    # zero and no rotation. Precondition asserted: rows divisible by core count. Asserts the
+    # result equals the original table.
     # input vocab should be multiple of num_sc
     self.assertEqual(vocab % num_sc, 0)
     x, shards = create_test_table_shards(
@@ -89,6 +117,10 @@ class TpuEmbeddingV3UtilsTest(test.TestCase, parameterized.TestCase):
     )
 
   def test_unshuffle_stacking_basic(self):
+    # [FUNCTION DOC]
+    # Scenario: two tables (12 rows unrotated, 32 rows rotated by one) are sharded over 4 cores
+    # and stacked per shard. Unshuffling with each table's offset, size per shard and rotation
+    # must return exactly the original table. Asserts equality for both tables.
     num_sc = 4
     ta = TestTable(vocab=12, dim=4, shift=0)
     tb = TestTable(vocab=32, dim=4, shift=1)
@@ -120,6 +152,11 @@ class TpuEmbeddingV3UtilsTest(test.TestCase, parameterized.TestCase):
     )
 
   def test_unshuffle_stacking_many_tables(self):
+    # [FUNCTION DOC]
+    # Scenario: six tables (one of 12 rows, five of 32 rows, with rotations 0 to 5) are sharded
+    # over 4 cores and stacked by concatenating their per-core shards. For each table the
+    # unshuffle function is called with the cumulative row offset of the preceding tables, the
+    # table's rows per shard, and its rotation. Asserts each recovered table equals the original.
     num_sc = 4
     tables = [
         TestTable(vocab=12, dim=4, shift=0),
@@ -220,6 +257,10 @@ class TpuEmbeddingV3UtilsTest(test.TestCase, parameterized.TestCase):
     )
 
   def test_index_mapping_one_table(self):
+    # [FUNCTION DOC]
+    # Scenario: one unrotated 12-row table over 4 sparse cores. Maps a few row ids through the
+    # index mapping function. Asserts the shard indices equal the row ids modulo the core count,
+    # and that the rows found at the returned (shard, position) pairs equal the original rows.
     num_sc = 4
     x, shards = create_test_table_shards(
         TestTable(vocab=12, dim=4, shift=0), num_sc
@@ -241,6 +282,12 @@ class TpuEmbeddingV3UtilsTest(test.TestCase, parameterized.TestCase):
     )
 
   def test_index_mapping_stacked_tables(self):
+    # [FUNCTION DOC]
+    # Scenario: two tables (12 rows unrotated, 32 rows rotated by one, the second with data
+    # starting at 100) are stacked and sharded over 4 sparse cores. For row lookups in each table,
+    # the shard index and position from the index mapping function (using the table's offset in
+    # the shard and its rotation) must address exactly the rows of the original table when used
+    # to index into the stacked shards. Asserts equality of looked-up rows for both tables.
     num_sc = 4
     ta = TestTable(vocab=12, dim=4, shift=0)
     tb = TestTable(vocab=32, dim=4, shift=1)

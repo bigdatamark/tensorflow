@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Tests for the SparseCore CPU-side XLA operations used by TPU embedding v3 (converting sparse
+# features to per-core coordinate lists, sorting, statistics, CSR-wrapped conversion). Contains
+# pure Python reference implementations (combiner scaling, deduplication, statistics, CSR layout
+# with physical replicas) used as golden values, and one test class. Run as a script it enables
+# v2 behavior and starts the test runner. No import time side effects.
 # Copyright 2024 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,6 +39,10 @@ from tensorflow.python.tpu.ops import gen_xla_ops as xla_ops
 
 
 def _get_combiner_scale_contribution(x, combiner):
+  # [FUNCTION DOC]
+  # HELPER: reference per-entry contribution to a row's combiner total. For the sum combiner it
+  # is 1.0, for mean it is the weight x itself, and for any other combiner (square-root-n) it is
+  # x squared. Pure function.
   if combiner == "sum":
     return 1.0
   elif combiner == "mean":
@@ -42,6 +52,10 @@ def _get_combiner_scale_contribution(x, combiner):
 
 
 def _get_combiner_scale_transform(x, combiner):
+  # [FUNCTION DOC]
+  # HELPER: reference final scale factor for a row total x. Returns 1.0 for the sum combiner;
+  # for mean, the reciprocal of x (0 when x is 0); otherwise the reciprocal of the square root
+  # of x (0 when x is 0). Pure function.
   if combiner == "sum":
     return 1.0
   elif combiner == "mean":
@@ -53,6 +67,17 @@ def _get_combiner_scale_transform(x, combiner):
 def convert_input_to_coo_tensor(
     indices_or_row_splits, values, weight, sample_count, combiner
 ):
+  # [FUNCTION DOC]
+  # HELPER: reference (golden) conversion of an input feature to deduplicated coordinate lists.
+  # Inputs: indices_or_row_splits, either a two-column index matrix (rank 2, first column is the
+  # row), a row-splits vector (rank 1) or a scalar-like value (each value is its own row);
+  # values (column ids); weight (per-value weights); sample_count; combiner name (sum, mean or
+  # anything else meaning square-root-n).
+  # Behavior: derives each value's row id, merges consecutive entries with the same row and
+  # column by adding gains, accumulates the per-row scale contribution, converts it to a scale
+  # factor and multiplies the gains by it.
+  # Returns three tensors: row ids and column ids (32-bit integers) and gains (32-bit floats).
+  # No side effects. The sample count must cover all row ids, otherwise an index error occurs.
   if indices_or_row_splits.shape.rank >= 2:
     row_ids_before_dedup = indices_or_row_splits[:, 0]
   elif indices_or_row_splits.shape.rank == 1:
@@ -97,6 +122,13 @@ def convert_input_to_coo_tensor(
 
 
 def _compute_sparse_core_stats(row_ids, col_ids, num_sc_shards):
+  # [FUNCTION DOC]
+  # HELPER: reference computation of SparseCore id statistics for the stats op test.
+  # Inputs: parallel sequences of row ids and column ids, and the number of shards. Entries are
+  # sorted by (column id, row id); per shard (column id modulo shard count) it counts every
+  # distinct (column, row) pair as an id and every distinct column as a unique id.
+  # Returns a pair: the maximum id count and the maximum unique id count over the shards.
+  # No side effects.
   max_ids = np.zeros(num_sc_shards)
   max_unique_ids = np.zeros(num_sc_shards)
   previous_col_id = -1
@@ -124,6 +156,22 @@ def _convert_coo_tensor_to_csr_with_physical_replica(
     max_ids_per_chip_per_sample,
     table_vocab_size,
 ):
+  # [FUNCTION DOC]
+  # HELPER: pure Python reference (golden) implementation of the CSR-wrapped coordinate
+  # conversion, used to check the corresponding XLA op.
+  # Inputs: row_ids, column ids and gains of the sorted coordinate entries; splits, a scalar (or
+  # array of masks that is OR-ed together) tensor whose set bits mark where the vocabulary is
+  # divided into minibatch buckets; the sample count (must be a multiple of 4, since 4 sparse
+  # cores per replica are assumed); replica count; the maximum minibatches per core; the maximum
+  # ids per chip per sample; and the table vocabulary size.
+  # Behavior: decodes the split bits into bucket boundaries, groups entries by physical replica
+  # (column id modulo replicas times 4), core (row divided by samples per core) and minibatch
+  # bucket, then lays out row pointers and ids padded to multiples of 8 (padding value 8).
+  # Returns a tuple of seven values: row pointers, sorted sample ids, sorted token ids, sorted
+  # gains, the unpadded row pointer size, the unpadded id count and the minibatches per core,
+  # the last three as 32-bit integer scalars.
+  # Raises an assertion error if the sample count is not a multiple of 4 or if the number of
+  # minibatches per core exceeds the allowed maximum.
   num_sc_per_replica = 4
   num_physical_replica = num_replica * num_sc_per_replica
   assert (
@@ -175,6 +223,11 @@ def _convert_coo_tensor_to_csr_with_physical_replica(
   minibatches = [[] for _ in range(total_minibatches)]
 
   def calculate_minibatch_id(col_id):
+    # [FUNCTION DOC]
+    # HELPER: nested helper of the reference CSR conversion. Given a column id, returns the index
+    # of the first bucket split whose boundary (split value times division size) lies above the
+    # column id, or the number of splits if none does. Uses the enclosing bucket splits and
+    # division size.
     for i, bucket_split in enumerate(bucket_splits):
       if bucket_split * division_size > col_id:
         return i
@@ -189,6 +242,9 @@ def _convert_coo_tensor_to_csr_with_physical_replica(
     )
 
   def round_up_to(x, round_value):
+    # [FUNCTION DOC]
+    # HELPER: rounding utility for the reference CSR conversion. Returns x rounded up to the next
+    # multiple of round_value (unchanged if already a multiple).
     return x + -x % round_value
 
   max_ids_per_chip = max_ids_per_chip_per_sample * sample_count
@@ -243,6 +299,12 @@ def _convert_coo_tensor_to_csr_with_physical_replica(
 
 
 class TpuEmbeddingV3CPUOpsTest(parameterized.TestCase, test.TestCase):
+  # [CLASS DOC]
+  # Tests for the XLA SparseCore host (CPU) operations used by TPU embedding v3: converting a
+  # sparse feature to per-core coordinate lists, sorting them, computing id statistics, and
+  # building the CSR-wrapped coordinate representation (with and without id dropping). Each test
+  # compares op outputs with the pure Python reference helpers defined in this module. No
+  # shared fixtures.
 
   @parameterized.parameters(
       *list(
@@ -258,6 +320,14 @@ class TpuEmbeddingV3CPUOpsTest(parameterized.TestCase, test.TestCase):
   def test_convert_to_list_of_sparse_core_coo_tensor(
       self, sample_count, token_count, combiner, col_offset, col_shift
   ):
+    # [FUNCTION DOC]
+    # Parameterized over the product of sample count (16, 32), token count (1024, 2048), combiner
+    # (sum, mean, sqrtn), column offset and column shift. Builds a random sparse feature,
+    # computes the expected row ids, column ids and gains in Python (row ids regrouped per
+    # sparse core with the row offset and stacked-table sample count; column ids shifted within the
+    # shard bits and offset; gains normalized by the combiner), then runs the conversion operation
+    # with 512 shards and 4 cores per chip. Asserts the concatenated per-core row ids, column ids
+    # and gains are close to the expected values. Uses random data.
     sparse_feature = sparse_ops.sparse_reorder(
         sparse_tensor.SparseTensor(
             indices=[
@@ -323,6 +393,16 @@ class TpuEmbeddingV3CPUOpsTest(parameterized.TestCase, test.TestCase):
     self.assertAllClose(gains, array_ops.concat(gains_list, axis=0))
 
   def test_convert_to_list_of_sparse_core_coo_tensors(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the name differs from the parameterized test above only by a trailing letter
+    # (tensor versus tensors) and does not reflect what it covers (the whole chain through
+    # sorting and CSR conversion, not only the first conversion).
+    # Scenario: end-to-end check of the CPU ops chain: 16 samples, 1024 tokens, sum combiner.
+    # Converts to per-core coordinate lists, sorts each of the 4 cores' lists, converts the sorted
+    # lists to the CSR-wrapped coordinate form (no id dropping, no splits), and compares with a
+    # pure Python reference that builds the same structure with physical replicas. Asserts the
+    # row pointers and the sorted sample ids, token ids and gains agree (compared only up to the
+    # unpadded sizes) and that the number of minibatches per core is equal.
     sample_count = 16
     token_count = 1024
     combiner = "sum"
@@ -444,6 +524,13 @@ class TpuEmbeddingV3CPUOpsTest(parameterized.TestCase, test.TestCase):
     self.assertEqual(golden_num_minibatches_per_sc, num_minibatches_per_sc)
 
   def test_get_stats_from_list_of_sparse_core_coo_tensors(self):
+    # [FUNCTION DOC]
+    # Scenario: random sparse feature (16 samples, 1024 tokens, sum combiner, 16 shards). The
+    # golden maximum ids and maximum unique ids per sparse core are computed in Python from each
+    # of four sample slices using the stats helper. The feature is converted to per-core lists and
+    # the statistics operation is run for each core; the maxima over the four cores are
+    # compared. Asserts both the maximum ids and the maximum unique ids equal the golden values.
+    # Uses random data, so the input differs between runs.
     sample_count = 16
     token_count = 1024
     combiner = "sum"
@@ -520,6 +607,13 @@ class TpuEmbeddingV3CPUOpsTest(parameterized.TestCase, test.TestCase):
     self.assertEqual(max_uniques, max_unique_ids_golden)
 
   def test_sort_list_of_sparse_core_coo_tensors(self):
+    # [FUNCTION DOC]
+    # Scenario: 16 samples and 1024 tokens with identity-like ids, 4 chips, 4 cores per chip.
+    # Converts the sparse feature to per-core coordinate lists, then for each of the 4 cores runs
+    # the sort operation. The expected order is computed in Python by sorting tuples of
+    # (column id modulo 16, column id, row id, gain). Asserts the sorted row ids equal the row
+    # ids modulo the samples per core, the sorted column ids equal column id divided by the
+    # number of physical replicas (chips times 4), and the sorted gains match.
     sample_count = 16
     token_count = 1024
     combiner = "sum"
@@ -592,6 +686,13 @@ class TpuEmbeddingV3CPUOpsTest(parameterized.TestCase, test.TestCase):
       )
 
   def test_id_dropping_with_convert_to_list_of_sparse_core_coo_tensors(self):
+    # [FUNCTION DOC]
+    # Scenario: 16 samples, 1024 tokens, sum combiner, 4 sparse cores per chip. Converts the
+    # sparse feature to per-core coordinate lists, sorts each core's list, then calls the
+    # CSR-wrapped conversion operation with a very small maximum ids per chip per sample (8).
+    # Asserts that with id dropping disallowed the operation raises an error (any exception),
+    # and then calls it again with id dropping allowed, which is expected to succeed (no output
+    # is checked, only that no error is raised).
     sample_count = 16
     token_count = 1024
     combiner = "sum"

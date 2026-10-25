@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# HELPER: helper module for the TPU embedding v3 (SparseCore) checkpoint save/restore code.
+# Utilities for converting embedding tables between the logical (unsharded, per-table) layout and
+# the SparseCore internal layout, in which several tables are stacked together and mod-sharded
+# across all sparse cores. It exposes: a checkpoint key constant for the stored table layouts;
+# functions to unshuffle a stacked sharded tensor back into one table, strip padding, map row
+# indices to shard and position, shard a table, and wrap an initializer so it produces sharded
+# values; and two Trackable classes used to save and restore the layouts and the stacked tables.
+# Import time side effects: none beyond imports and defining the constant.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,6 +44,18 @@ def unshuffle_from_sc_to_cpu(
     size_in_shard: int,
     shard_rotation: int = 0,
 ) -> tensor.Tensor:
+  # [FUNCTION DOC]
+  # Recovers one logical embedding table from a stacked, mod-sharded SparseCore table tensor.
+  # Inputs: t is a two-dimensional tensor whose first dimension must be divisible by
+  # num_sparse_cores; num_sparse_cores is the shard count; offset_in_shard is the first row of the
+  # wanted table inside each shard; size_in_shard is the number of rows the table owns in each
+  # shard; shard_rotation (default 0) is how many positions the table's shards were rotated.
+  # Behavior: splits t into per-core shards, slices the rows of the wanted table from every shard,
+  # undoes the rotation by rolling the shards in the opposite direction, then interleaves the
+  # shards (transpose and reshape) to give a table with size_in_shard times num_sparse_cores rows
+  # and the same number of columns as t. Returns that tensor.
+  # Raises a value error if the first dimension of t is not a multiple of num_sparse_cores.
+  # No side effects.
   """Unshuffles the sparse core sharded embedding tables to unsharded.
 
   This converts an input tensor respresenting stacked and sharded embedding
@@ -86,6 +107,15 @@ def unshuffle_from_sc_to_cpu(
 def remove_padding_from_sc(
     value_in_checkpoint: tensor.Tensor, variable_shape: tuple[int, int]
 ) -> tensor.Tensor:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says a slice is returned only when the variable shape is a valid
+  # slice, but the code only checks that every checkpoint dimension is at least the matching
+  # variable dimension; shapes of different rank are silently truncated by the pairing.
+  # Strips trailing padding rows and columns from a checkpoint value.
+  # Inputs: value_in_checkpoint is a tensor with a fully known shape; variable_shape is the
+  # expected (rows, columns) pair. If each checkpoint dimension is at least as large as the
+  # variable dimension, returns the leading slice of the requested size; otherwise returns the
+  # input unchanged. No exceptions are raised by this function itself; no side effects.
   """Removes padding, if any, from sparsecore checkpoint.
 
   Args:
@@ -115,6 +145,15 @@ def map_indices_in_shard(
     shard_rotation: int,
     row_indices: tensor.Tensor,
 ) -> tuple[tensor.Tensor, tensor.Tensor]:
+  # [FUNCTION DOC]
+  # Computes where each logical table row lives in the SparseCore layout.
+  # Inputs: num_sparse_cores is the total shard count; offset_in_shard is the first row of the
+  # table within a shard; shard_rotation is the rotation applied to the table's shards;
+  # row_indices is a tensor of logical row ids.
+  # Outputs: a pair of tensors shaped like row_indices. The first holds the shard index (row id
+  # modulo the core count, plus the rotation, modulo the core count); the second holds the
+  # position within the shard (offset plus row id integer-divided by the core count).
+  # No exceptions or side effects.
   """Maps a row of a given table to its sparse core shard and position.
 
   Maps a given a row index of a logical table and its layout in sparse core,
@@ -139,26 +178,62 @@ def map_indices_in_shard(
 
 
 class SparseCoreLayoutsTrackable(trackable_base.Trackable):
+  # [CLASS DOC]
+  # Checkpoint-able holder for the serialized SparseCore table layouts. It keeps one attribute,
+  # value, a string tensor containing the serialized layouts description. It is saved as a single
+  # value under the standard variable-value key, and is deliberately never restored from a
+  # checkpoint because the layout is fixed when the embedding is built. Created by embedding code
+  # and attached to a model under the layouts checkpoint key.
   """Trackable for sparsecore layouts used in training."""
 
   def __init__(self, proto_str_tensor: tensor.Tensor):
+    # [FUNCTION DOC]
+    # Constructor. Stores the given string tensor (the serialized layouts) in the value
+    # attribute. No validation, no other side effects.
     self.value = proto_str_tensor
 
   def _serialize_to_tensors(self) -> Dict[str, tensor.Tensor]:
+    # [FUNCTION DOC]
+    # HELPER: checkpointing hook called by the trackable saving machinery.
+    # Returns a mapping with one entry, from the standard variable-value key to the stored
+    # layouts tensor. No side effects.
     return {trackable_base.VARIABLE_VALUE_KEY: self.value}
 
   def _restore_from_tensors(
       self, restored_tensors: Dict[str, tensor.Tensor]
   ) -> None:
+    # [FUNCTION DOC]
+    # HELPER: checkpointing hook called by the trackable restore machinery.
+    # KNOWN ISSUE: the declared return type is nothing, but the code returns the result of a
+    # no-op control-flow operation (an op or nothing, depending on eager or graph mode).
+    # Intentionally ignores the restored tensors (the argument is unused): the layouts always
+    # come from the build-time value. Only creates a no-op operation so the restore has
+    # something to run. Raises nothing.
     # Do not restore the layouts proto from checkpoint, it should always match
     # the embedding, which is set at build time.
     gen_control_flow_ops.no_op()
 
 
 class SparseCoreStackedTableTrackable(trackable_base.Trackable):
+  # [CLASS DOC]
+  # Checkpoint-able representation of one stacked SparseCore table (several logical tables
+  # stacked and sharded together). Attributes: vars, a mapping from table name to a float32
+  # variable holding the unsharded table, and a private list of the stacked table layouts.
+  # On save it writes only a dummy zero scalar under the variable-value key; on restore it takes
+  # the stacked value found in the checkpoint, unshuffles it into each logical table, strips
+  # padding, and assigns the result to the matching variable. This lets a SparseCore checkpoint
+  # be loaded into ordinary per-table variables.
   """Trackable for stacked tables generated from sparse core."""
 
   def __init__(self, stacked_layouts, table_to_config):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: stacked_layouts is an iterable of layout descriptions, each giving a
+    # table name and its unsharded shape plus shard offsets and rotation; table_to_config is a
+    # mapping from table name to a table configuration object that provides an initializer.
+    # For every layout it creates a float32 variable of the unsharded shape, named after the
+    # table, whose initial value is produced lazily by the table's initializer, and stores it in
+    # the vars mapping. Side effect: creates variables. Raises a key error if a table name is
+    # missing from table_to_config (at creation time of the variable's initial value factory).
     self.vars = {}
     self._stacked_layouts = stacked_layouts
     for table_layout in stacked_layouts:
@@ -178,9 +253,19 @@ class SparseCoreStackedTableTrackable(trackable_base.Trackable):
   # Remove this when the bug is fixed.
   @property
   def _unique_id(self):
+    # [FUNCTION DOC]
+    # HELPER: workaround property so optimizer checkpoint restoration can identify this
+    # trackable (see the bug reference in the preceding comment).
+    # Returns the unique id of the variable of the first stacked table. Raises an index error if
+    # there are no layouts. No side effects.
     return self.vars[self._stacked_layouts[0].table_name]._unique_id
 
   def _serialize_to_tensors(self) -> Any:
+    # [FUNCTION DOC]
+    # HELPER: checkpointing hook called by the trackable saving machinery.
+    # Returns a mapping with one entry: the standard variable-value key mapped to a constant
+    # float32 zero. The value is a placeholder, only the key matters so that restore finds the
+    # stacked value in the checkpoint. No side effects.
     return {
         # We need to export some variable here for restore to pick
         # the checkpoint key the actual value is not important so 0 works
@@ -190,7 +275,19 @@ class SparseCoreStackedTableTrackable(trackable_base.Trackable):
     }
 
   def _restore_from_tensors(self, restored_tensors: Dict[str, tensor.Tensor]):
+    # [FUNCTION DOC]
+    # HELPER: checkpointing hook called by the trackable restore machinery.
+    # Input: restored_tensors maps the standard variable-value key to the stacked, sharded
+    # table value read from the checkpoint. For each stored layout it unshuffles the logical
+    # table out of the stacked value, removes padding down to the unsharded shape, and assigns
+    # it to the variable with the layout's table name. Returns whatever the inner function
+    # returns, which is nothing. Side effects: assigns to variables. Raises a key error if the
+    # value key is missing, or whatever the unshuffle raises on inconsistent layouts.
     def fn(restored_tensors):
+      # [FUNCTION DOC]
+      # HELPER: inner worker of the restore hook; same input as the outer method. Performs the
+      # per-table unshuffle, padding removal and variable assignment for every layout and
+      # returns nothing.
       value_from_checkpoint = restored_tensors[
           trackable_base.VARIABLE_VALUE_KEY
       ]
@@ -216,12 +313,19 @@ class SparseCoreStackedTableTrackable(trackable_base.Trackable):
     return fn(restored_tensors)
 
   def get_var(self, name: str) -> tf_variables.Variable:
+    # [FUNCTION DOC]
+    # Returns the variable for the table with the given name. Raises a key error for an unknown
+    # name. No side effects.
     return self.vars[name]
 
   def get_vars(self) -> Dict[str, tf_variables.Variable]:
+    # [FUNCTION DOC]
+    # Returns the live mapping (not a copy) from table name to variable. No side effects.
     return self.vars
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns a short string naming the class and listing the table names held in vars.
     return "SparseCoreStackedTableTrackable({})".format(self.vars.keys())
 
 
@@ -229,6 +333,15 @@ def shard_table(
     num_sparse_cores: int,
     table: tensor.Tensor,
 ) -> tensor.Tensor:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: an inner comment mentions doing a sparse core rotation, but no rotation is
+  # applied; only the mod sharding (reshape and transpose) is performed.
+  # Converts a full unsharded table into the SparseCore internal layout, in which rows are
+  # distributed across cores by row id modulo the core count and the shards are concatenated.
+  # Inputs: num_sparse_cores is the total number of cores; table is a two-dimensional tensor.
+  # Output: a tensor with the same shape as the table, with rows reordered.
+  # Uses an assertion (not a value error) that the row count is divisible by the core count, so
+  # a failure raises an assertion error. No side effects.
   """Convert a table to the internal layout.
 
   Args:
@@ -251,6 +364,18 @@ def shard_table(
 
 
 def shard_initializer(strategy, initializer) -> tensor.Tensor:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the declared return type is a tensor, but the function returns a callable
+  # (the wrapped initializer).
+  # Wraps a table initializer so that, when asked for a shard, it builds the whole table, converts
+  # it to the SparseCore layout and returns only the requested slice.
+  # Inputs: strategy is a TPU distribution strategy, used to read the number of TPU devices and
+  # the number of embedding devices per chip (total cores is their product); initializer is a
+  # callable taking a shape and a dtype and returning a full table.
+  # Output: a callable taking shape, dtype and optional shard info. Without shard info it
+  # returns the full unsharded table. With shard info (offset and shape per dimension) it
+  # returns the corresponding slice of the sharded table.
+  # No side effects at wrap time besides reading strategy attributes (including a private one).
   """Wraps an initializer to convert a table to the internal layout."""
 
   num_devices = strategy.extended._tpu_devices.size  # pylint: disable=protected-access
@@ -261,6 +386,11 @@ def shard_initializer(strategy, initializer) -> tensor.Tensor:
 
   @functools.wraps(initializer)
   def wrapper(shape, dtype, shard_info=None):
+    # [FUNCTION DOC]
+    # HELPER: the wrapped initializer returned by shard_initializer. Inputs: shape and dtype of
+    # the full table; shard_info (optional) with the offset and shape of the wanted slice.
+    # Returns the full table if no shard info is given, otherwise the matching slice of the
+    # table converted to the SparseCore layout. Evaluates the inner initializer each call.
     # Initializes the whole table.
     table = initializer(shape, dtype)
     if shard_info is None:

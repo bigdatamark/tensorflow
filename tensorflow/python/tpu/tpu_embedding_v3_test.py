@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Hardware tests for the TPU embedding v3 (SparseCore) layer. Requires a real TPU cluster; each
+# test connects to it, builds a TPU strategy and compares lookups, gradient updates, statistics
+# computation, error handling and pipelining flags against expectations or the CPU serving
+# implementation. Contains a helper that generates random hardware-compliant sparse input and one
+# test class. Import time side effects: defines the shard initializer alias. Run as a script it
+# enables v2 behavior and the MLIR bridge before starting the test runner.
 # Copyright 2024 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -54,6 +61,22 @@ def create_input_data_based_on_hw_requirement(
     per_sc_sample_count,
     num_minibatches_per_physical_sparse_core,
 ):
+  # [FUNCTION DOC]
+  # HELPER: generates random coordinate-format input (row ids, column ids, gains) that respects
+  # SparseCore hardware limits so that a given number of minibatches per core is required.
+  # Inputs: chip count (4 sparse cores per chip are assumed); maximum unique ids per physical
+  # replica; vocabulary rows per sparse core; samples per sparse core; desired minibatches per
+  # physical sparse core.
+  # Behavior: for every chip, core and physical replica it draws an id count between one more
+  # than the capacity of all-but-one minibatches and the capacity of all minibatches, picks
+  # unique local column ids per minibatch division without replacement, random row ids within the
+  # core's samples and random gains, and maps them to global ids. Uses global numpy randomness.
+  # Returns three numpy arrays: row ids, column ids and gains.
+  # Raises an assertion error if a division of the vocabulary is smaller than the maximum unique
+  # ids per partition (the minibatch count would not fit).
+  # KNOWN ISSUE: a source comment says to make sure at least one replica contains something but
+  # the sentence is unfinished; and the docstring's output description omits that splits are
+  # not returned (only three arrays come back, not "gains and splits").
   """Create the coo tensor based on hardware requirements.
 
   Args:
@@ -152,8 +175,19 @@ def create_input_data_based_on_hw_requirement(
 
 
 class TPUEmbeddingV3Test(parameterized.TestCase, test.TestCase):
+  # [CLASS DOC]
+  # Hardware tests of the TPU embedding v3 layer (SparseCore): lookups compared against the CPU
+  # serving implementation, embedding initialization, backward passes and training, id
+  # dropping, minibatching and checkpoint-related behavior. These tests need a real TPU
+  # cluster. Shared fixtures (from setUp): two table configurations ("video" with constant 1.0 and
+  # "user" with constant 2.0, vocabulary 16384, width 127, sum combiner) and a seeded random
+  # generator.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Test fixture. Calls the base setUp, then creates the vocabulary size (16384), embedding
+    # width (127), the two table configurations (video: constant 1.0, user: constant 2.0, both
+    # with sum combiner) and a random generator seeded with zero. Returns nothing.
     super().setUp()
     self.vocabulary_size = 16384
     self.embedding_dim = 127
@@ -174,6 +208,10 @@ class TPUEmbeddingV3Test(parameterized.TestCase, test.TestCase):
     self.rng = np.random.default_rng(0)
 
   def test_single_feature_single_table_lookup_with_static_buffer_size(self):
+    # [FUNCTION DOC]
+    # Scenario (needs a TPU): one feature on one table with output shape 16, fed a sparse batch
+    # of 16 samples and 1024 ids, distributed across replicas. Runs the lookup on the TPU and on
+    # the CPU serving implementation and asserts the activations are exactly equal.
     feature_config = tpu_embedding_v2_utils.FeatureConfig(
         table=self.table_video, name='watched', output_shape=[16]
     )
@@ -213,7 +251,13 @@ class TPUEmbeddingV3Test(parameterized.TestCase, test.TestCase):
 
     @def_function.function
     def test_fn():
+      # [FUNCTION DOC]
+      # Graph function that runs the lookup on every TPU replica with the distributed batch
+      # captured from the enclosing test, and returns the per-replica results of the strategy run.
       def step(data):
+        # [FUNCTION DOC]
+        # Per-replica step: calls the embedding layer on the batch (one sparse feature) and
+        # returns its activations.
         return mid_level_api(data)
 
       return strategy.run(step, args=(data,))
@@ -233,6 +277,10 @@ class TPUEmbeddingV3Test(parameterized.TestCase, test.TestCase):
       self.assertAllEqual(per_feature_result, per_feature_result_cpu)
 
   def test_two_features_single_table_lookup_with_csr_input(self):
+    # [FUNCTION DOC]
+    # Scenario (needs a TPU): two features sharing one table, fed the same sparse batch of 16
+    # samples. Runs the lookup on the TPU and on the CPU serving implementation with the same
+    # table settings and asserts the activations of each feature are exactly equal.
     feature_config = [
         tpu_embedding_v2_utils.FeatureConfig(
             table=self.table_video, output_shape=[16]
@@ -277,7 +325,13 @@ class TPUEmbeddingV3Test(parameterized.TestCase, test.TestCase):
 
     @def_function.function
     def test_fn():
+      # [FUNCTION DOC]
+      # Graph function that runs the two-feature lookup on every TPU replica with the distributed
+      # batch captured from the enclosing test, and returns the per-replica results.
       def step(data):
+        # [FUNCTION DOC]
+        # Per-replica step: feeds the same batch as both features to the embedding layer and
+        # returns its activations.
         return mid_level_api([data, data])
 
       return strategy.run(step, args=(data,))
@@ -297,6 +351,11 @@ class TPUEmbeddingV3Test(parameterized.TestCase, test.TestCase):
       self.assertAllEqual(per_feature_result, per_feature_result_cpu)
 
   def test_two_features_two_tables_stacked_lookup_with_csr_input(self):
+    # [FUNCTION DOC]
+    # Scenario (needs a TPU): two features on two different tables with table stacking enabled
+    # (64 max ids per chip per sample, no id dropping). Asserts the layer holds exactly one
+    # (stacked) embedding table, then runs the same batch for both features on the TPU and on
+    # the CPU serving implementation and asserts the activations are exactly equal.
     feature_config = [
         tpu_embedding_v2_utils.FeatureConfig(
             table=self.table_video, output_shape=[16]
@@ -349,7 +408,13 @@ class TPUEmbeddingV3Test(parameterized.TestCase, test.TestCase):
 
     @def_function.function
     def test_fn():
+      # [FUNCTION DOC]
+      # Graph function that runs the two-feature lookup on every TPU replica with the distributed
+      # batch captured from the enclosing test, and returns the per-replica results.
       def step(data):
+        # [FUNCTION DOC]
+        # Per-replica step: feeds the same batch as both features to the embedding layer (whose
+        # two tables are stacked) and returns its activations.
         return mid_level_api([data, data])
 
       return strategy.run(step, args=(data,))
@@ -369,16 +434,30 @@ class TPUEmbeddingV3Test(parameterized.TestCase, test.TestCase):
       self.assertAllEqual(per_feature_result, per_feature_result_cpu)
 
   def test_embedding_initialization(self):
+    # [FUNCTION DOC]
+    # Scenario (needs a TPU): three tables of width 128 with different initializers - constant
+    # 1, a sharded initializer producing each element's own index, and a shard-aware constant
+    # 23. Three features (one per table) are fed a batch of 16 ids with values offset by 0, 16
+    # and 32. The batch is enqueued and dequeued through the embedding layer. Asserts each
+    # output has shape 16 by 128 and the values: ones for the first, 2048 plus the element
+    # index for the second (the ids start at row 16 of width 128), and 23 for the third.
     resolver = tpu_cluster_resolver.TPUClusterResolver(tpu='')
     remote.connect_to_cluster(resolver)
     tpu_cluster_resolver.initialize_tpu_system(resolver)
     strategy = tpu_strategy.TPUStrategy(resolver)
 
     def element_id_initializer(shape, dtype):
+      # [FUNCTION DOC]
+      # HELPER: table initializer for the test. Given a two-dimensional shape and dtype, returns
+      # a tensor in which each element holds its own row-major position (0, 1, 2, ...).
       values = math_ops.range(0, shape[0] * shape[1], dtype=dtype)
       return array_ops.reshape(values, shape)
 
     def sharding_aware_const_initializer(shape, dtype, shard_info=None):
+      # [FUNCTION DOC]
+      # HELPER: table initializer for the test that accepts optional shard info. Returns a
+      # tensor filled with 23.0 whose shape is the shard's shape when shard info is given and
+      # the full shape otherwise.
       initializer = init_ops_v2.Constant(23.0)
       return initializer(shard_info.shape if shard_info else shape, dtype=dtype)
 
@@ -463,7 +542,14 @@ class TPUEmbeddingV3Test(parameterized.TestCase, test.TestCase):
 
     @def_function.function
     def test_fn(data):
+      # [FUNCTION DOC]
+      # Graph function taking a distributed batch: enqueues it on the first worker device to get
+      # a partitioned tensor, then runs a per-replica dequeue and returns the activations
+      # (a mapping from feature name to a per-replica tensor).
       def step(partitioned_tensor):
+        # [FUNCTION DOC]
+        # Per-replica step: dequeues the activations for the partitioned tensor, ignores the
+        # second dequeue output and returns the activations.
         activations, _ = mid_level_api.dequeue(partitioned_tensor)
         return activations
 
@@ -496,9 +582,25 @@ class TPUEmbeddingV3Test(parameterized.TestCase, test.TestCase):
     )
 
   def _recover_same_sized_tables(self, table, strategy, num_tables=1):
+    # [FUNCTION DOC]
+    # HELPER: reads back table values from a sharded (possibly stacked) embedding variable.
+    # KNOWN ISSUE: the loop variable named table shadows the table parameter (harmless since
+    # the parameter is not used afterwards).
+    # Inputs: table, a distributed variable whose values are per-device shards; strategy, the
+    # TPU strategy (gives the replica count; 4 sparse cores per replica are assumed); num_tables
+    # (default 1), the number of equally sized tables stacked in the variable.
+    # Behavior: concatenates the shards (dropping padded columns beyond the embedding width),
+    # undoes the mod sharding across all cores, splits the result into equal slices of the
+    # vocabulary size, and undoes the per-table stacking rotation (four cores per table index).
+    # Returns the single table if one table, otherwise a list of tables in stacking order.
     # This table has num_sparse_cores mod shards, so we need to slice,
     # reconcat and reshape.
     def _unshuffle_from_sc_to_cpu(num_sc_devices, t):
+      # [FUNCTION DOC]
+      # HELPER: undoes the mod sharding of a stacked table. Inputs: number of sparse core
+      # devices and a two-dimensional tensor whose rows are laid out shard by shard. Returns a
+      # tensor of the same shape with rows interleaved back into logical order. Raises an
+      # assertion error if the row count is not a multiple of the device count.
       old_shape = t.shape
       # The width of the table must be a multiple of number of SC devices. The
       # tpu strategy does this round off at training time so we expect the
@@ -541,6 +643,14 @@ class TPUEmbeddingV3Test(parameterized.TestCase, test.TestCase):
     return tables
 
   def test_single_feature_single_table_backwards_pass_with_csr_input(self):
+    # [FUNCTION DOC]
+    # Scenario (needs a TPU): one feature on one table (all values 1.0) with plain gradient
+    # descent whose learning rate comes from a variable read function (value 1.0). A batch of
+    # 16 samples and 1024 ids is enqueued and random gradients (16 by embedding width) are
+    # applied. The table is recovered from the sharded variables and compared with a golden
+    # table: ones, with each of the first 1024 rows reduced by the gradient of its sample (row
+    # index modulo 16). Asserts the two are close.
+    # Uses random gradients drawn with global numpy randomness.
     feature_config = tpu_embedding_v2_utils.FeatureConfig(
         table=self.table_video, name='watched', output_shape=[16]
     )
@@ -586,7 +696,14 @@ class TPUEmbeddingV3Test(parameterized.TestCase, test.TestCase):
 
     @def_function.function
     def test_fn(random_input):
+      # [FUNCTION DOC]
+      # Graph function taking a gradient tensor (random_input); runs the step on every replica
+      # with the distributed batch captured from the enclosing test. Returns nothing.
       def step(data, random_input):
+        # [FUNCTION DOC]
+        # Per-replica training step: enqueues the batch, copies the preprocessed tensors to the
+        # device through outside compilation, then applies the given gradients to the embedding
+        # tables (using the learning-rate variable). Returns nothing.
         partitioned_tensors = mid_level_api.enqueue(data)
         preprocessed_results = tpu_replication.outside_compilation(
             mid_level_api._copy_tensors_to_device,
@@ -611,6 +728,13 @@ class TPUEmbeddingV3Test(parameterized.TestCase, test.TestCase):
     self.assertAllClose(full_table, golden)
 
   def test_two_feature_single_table_backwards_pass_with_csr_input(self):
+    # [FUNCTION DOC]
+    # Scenario (needs a TPU): two features sharing the same table (all values 1.0), plain
+    # gradient descent with learning rate 1.0 supplied through a variable read function. The same
+    # batch of 16 samples and 512 ids is used for both features and a different random gradient
+    # is applied to each. After recovering the table from the sharded variables, asserts it is
+    # close to a golden table: ones with each of the first 512 rows reduced by both gradients of
+    # its sample (row index modulo 16). Uses global numpy randomness.
     feature_config = [
         tpu_embedding_v2_utils.FeatureConfig(
             table=self.table_video, name='watched', output_shape=[16]
@@ -666,7 +790,14 @@ class TPUEmbeddingV3Test(parameterized.TestCase, test.TestCase):
 
     @def_function.function
     def test_fn(random_input):
+      # [FUNCTION DOC]
+      # Graph function taking a list of two gradient tensors (one per feature); runs the step on
+      # every replica with the distributed batch captured from the enclosing test. Returns nothing.
       def step(data, random_input):
+        # [FUNCTION DOC]
+        # Per-replica training step: enqueues the batch as both features, copies the
+        # preprocessed tensors to the device through outside compilation, then applies the given
+        # gradients. Returns nothing.
         partitioned_tensors = mid_level_api.enqueue([data, data])
         preprocessed_results = tpu_replication.outside_compilation(
             mid_level_api._copy_tensors_to_device,
@@ -691,6 +822,14 @@ class TPUEmbeddingV3Test(parameterized.TestCase, test.TestCase):
     self.assertAllClose(full_table, golden)
 
   def test_two_feature_two_tables_stacked_backwards_pass_with_csr_input(self):
+    # [FUNCTION DOC]
+    # Scenario (needs a TPU): two features on two different tables (video all 1.0, user all
+    # 2.0) with table stacking enabled and plain gradient descent at learning rate 1.0. Random
+    # gradients are applied per feature. The stacked table (named user_video) is recovered and
+    # split into two tables; asserts both are close to golden tables where each of the first
+    # 512 rows is reduced by the gradient of its sample (row modulo 16). Note that the user
+    # table receives the second feature's gradient and the video table the first's.
+    # Uses global numpy randomness.
     feature_config = [
         tpu_embedding_v2_utils.FeatureConfig(
             table=self.table_video, name='watched', output_shape=[16]
@@ -750,7 +889,14 @@ class TPUEmbeddingV3Test(parameterized.TestCase, test.TestCase):
 
     @def_function.function
     def test_fn(random_input):
+      # [FUNCTION DOC]
+      # Graph function taking a list of two gradient tensors (one per feature); runs the step on
+      # every replica with the distributed batch captured from the enclosing test. Returns nothing.
       def step(data, random_input):
+        # [FUNCTION DOC]
+        # Per-replica training step: enqueues the batch as both features, copies the
+        # preprocessed tensors to the device through outside compilation, then applies the given
+        # gradients to the stacked tables. Returns nothing.
         partitioned_tensors = mid_level_api.enqueue([data, data])
         preprocessed_results = tpu_replication.outside_compilation(
             mid_level_api._copy_tensors_to_device,
@@ -780,6 +926,13 @@ class TPUEmbeddingV3Test(parameterized.TestCase, test.TestCase):
     self.assertAllClose(full_tables, goldens)
 
   def test_compute_sparse_core_stats_and_pass_it_to_api(self):
+    # [FUNCTION DOC]
+    # Scenario (needs a TPU): profiles a distributed batch with the layer's static stats
+    # computation (max ids and max unique ids per table) for one feature, asserting the feature
+    # configuration is not modified (table width stays 127). Feeds the stats to the layer through
+    # the SparseCore configuration (stacking on, 64 max ids per chip per sample, no id dropping),
+    # runs the lookup on the TPU, and asserts the activations equal those of the CPU serving
+    # implementation. Also re-asserts the feature configuration is unchanged after the lookup.
     feature_config = tpu_embedding_v2_utils.FeatureConfig(
         table=self.table_video, name='watched', output_shape=[16]
     )
@@ -844,7 +997,13 @@ class TPUEmbeddingV3Test(parameterized.TestCase, test.TestCase):
 
     @def_function.function
     def test_fn():
+      # [FUNCTION DOC]
+      # Graph function that runs the lookup on every TPU replica with the distributed batch
+      # captured from the enclosing test, and returns the per-replica results of the strategy run.
       def step(data):
+        # [FUNCTION DOC]
+        # Per-replica step: calls the embedding layer on the batch (one sparse feature) and
+        # returns its activations.
         return mid_level_api(data)
 
       return strategy.run(step, args=(data,))
@@ -866,6 +1025,13 @@ class TPUEmbeddingV3Test(parameterized.TestCase, test.TestCase):
       self.assertAllEqual(per_feature_result, per_feature_result_cpu)
 
   def test_compute_sparse_core_stats_shared_table(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the test makes no assertion on the returned statistics; it only checks that
+    # the call completes without raising.
+    # Scenario (needs a TPU): two features (a and b) share one table, each given a dense float
+    # id vector of batch size times chip count. Calls the static stats computation with these
+    # dense features, the feature configuration, chip count and an SGD optimizer, and discards
+    # the result.
     resolver = tpu_cluster_resolver.TPUClusterResolver(tpu='')
     remote.connect_to_cluster(resolver)
     tpu_cluster_resolver.initialize_tpu_system(resolver)
@@ -906,6 +1072,10 @@ class TPUEmbeddingV3Test(parameterized.TestCase, test.TestCase):
     )
 
   def test_raise_error_when_weight_decay_is_set(self):
+    # [FUNCTION DOC]
+    # Scenario (needs a TPU): constructs the embedding layer inside a strategy scope with an SGD
+    # optimizer that has a weight decay factor of 0.1 multiplied by the learning rate. Asserts
+    # that construction raises a not-implemented error, because weight decay is unsupported.
     feature_config = tpu_embedding_v2_utils.FeatureConfig(
         table=self.table_video, name='watched', output_shape=[16]
     )
@@ -940,6 +1110,15 @@ class TPUEmbeddingV3Test(parameterized.TestCase, test.TestCase):
       use_predicate_function,
       use_sequential_embedding_context,
   ):
+    # [FUNCTION DOC]
+    # Parameterized over all combinations of four booleans: record summaries, enqueue separated
+    # from the step, summary predicate given as a function, and use of a sequential embedding
+    # context. Scenario (needs a TPU): builds a layer with pipelining enabled and a TPU function
+    # running ten steps (either a combined lookup step or a separate enqueue plus dequeue),
+    # applying gradients each step. Under a mock summary writer and a record-if condition it
+    # asserts that the function is flagged for pipelining only when summaries are not recorded
+    # (a predicate function always allows pipelining, a sequential embedding context never does).
+    # The mock writer's init, flush and close do nothing.
     """Test that pipelining is disabled when summaries are recorded and vice versa."""
     num_steps = 10
     feature_config = tpu_embedding_v2_utils.FeatureConfig(
@@ -984,7 +1163,15 @@ class TPUEmbeddingV3Test(parameterized.TestCase, test.TestCase):
 
       @def_function.function
       def tpu_test_fn(tpu_iter):
+        # [FUNCTION DOC]
+        # Graph function taking a distributed iterator. Runs ten steps in a loop; each step
+        # enqueues the next batch on the host (separate function) and runs a per-replica step
+        # that dequeues. Returns the activations of the last step.
         def step(data):
+          # [FUNCTION DOC]
+          # Per-replica step: dequeues activations and preserved results for the enqueued
+          # data, scales the activations by the weight variable, applies them as gradients, and
+          # returns the scaled activations.
           activations, preserved_results = mid_level_api.dequeue(data)
           activations = activations * weight
           mid_level_api.apply_gradients(activations, preserved_results)
@@ -992,6 +1179,9 @@ class TPUEmbeddingV3Test(parameterized.TestCase, test.TestCase):
 
         @def_function.function
         def enqueue(data):
+          # [FUNCTION DOC]
+          # Graph function that enqueues one batch on the first worker device and returns the
+          # partitioned host tensors.
           return mid_level_api.enqueue(
               data, device=strategy.extended.worker_devices[0]
           )
@@ -1008,7 +1198,15 @@ class TPUEmbeddingV3Test(parameterized.TestCase, test.TestCase):
 
       @def_function.function
       def tpu_test_fn(tpu_iter):
+        # [FUNCTION DOC]
+        # Graph function taking a distributed iterator. Runs ten steps in a loop; each step
+        # runs the combined lookup and gradient step on the next batch. Returns the activations
+        # of the last step.
         def step(data):
+          # [FUNCTION DOC]
+          # Per-replica step: performs the lookup (returning activations and preserved
+          # results), scales the activations by the weight variable, applies them as gradients,
+          # and returns the scaled activations.
           activations, preserved_results = mid_level_api(data)
           activations = activations * weight
           mid_level_api.apply_gradients(activations, preserved_results)
@@ -1022,14 +1220,23 @@ class TPUEmbeddingV3Test(parameterized.TestCase, test.TestCase):
         return inner_result
 
     class MockSummaryWriter(summary_ops_v2.SummaryWriter):
+      # [CLASS DOC]
+      # HELPER: stub summary writer used only to make summary recording active in the test. It
+      # overrides init, flush and close to do nothing, so no files are created.
 
       def init(self):
+        # [FUNCTION DOC]
+        # Stub: does nothing and returns nothing.
         pass
 
       def flush(self):
+        # [FUNCTION DOC]
+        # Stub: does nothing and returns nothing.
         pass
 
       def close(self):
+        # [FUNCTION DOC]
+        # Stub: does nothing and returns nothing.
         pass
 
     if use_predicate_function:
@@ -1053,6 +1260,18 @@ class TPUEmbeddingV3Test(parameterized.TestCase, test.TestCase):
           self.assertEqual(is_pipelined, should_be_pipelined)
 
   def is_function_pipelined(self, tf_function, *args):
+    # [FUNCTION DOC]
+    # HELPER: inspects a traced function to decide whether embedding pipelining is enabled.
+    # KNOWN ISSUE: the docstring's Returns section is followed by further explanation text, and
+    # the word "usage" in its example heading is misspelled; behavior matches otherwise.
+    # Inputs: tf_function, a graph function; args, the arguments used to trace it.
+    # Behavior: traces a concrete function, finds the operation named while in its graph (fails
+    # the test if absent), obtains the loop body function (through the concrete function lookup
+    # or, on attribute error, by scanning the graph's registered functions by name; raises a
+    # value error if not found), then looks through the body operations for the pipelining
+    # attribute, logging the first found.
+    # Returns true if the attribute value is the forward or backward pipeline mode, else false.
+    # Side effects: traces (and may compile) the function and writes an informational log line.
     """Returns whether the tf_function is flagged for embedding pipelining.
 
     Args:
