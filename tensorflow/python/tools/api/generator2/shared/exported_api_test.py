@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Unit test for the exported API data model. Defines a module-level fixture collection with one
+# module docstring and two symbol records for the same source file, then verifies that writing it
+# to a JSON file and reading that file back into a fresh collection gives an equal collection.
+# Run through the TensorFlow test runner. No import-time side effects other than the fixture.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -47,8 +52,15 @@ _EXPORTS = exported_api.ExportedApi(
 
 
 class ExportedApiTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the exported API container; uses the module-level fixture collection and the
+  # framework-provided temporary directory.
 
   def test_read_write(self):
+    # [FUNCTION DOC]
+    # Round-trip test. Setup: write the fixture collection to a JSON file in the temp directory.
+    # Action: read that file into a new empty collection. Asserts the new collection equals the
+    # fixture, proving write and read are inverse operations for docs and symbols.
     filename = self.get_temp_dir() + "/test_write.json"
     _EXPORTS.write(filename)
     e = exported_api.ExportedApi()

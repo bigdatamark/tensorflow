@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Executable entry point (binary) for the API generator. When run as a script it hands the
+# generator library's main function to the absl application runner, which parses the command-line
+# flags defined by the generator module and passes the remaining arguments (API mapping files).
+# Importing it has no side effects beyond importing the generator and absl. Thin wrapper module.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

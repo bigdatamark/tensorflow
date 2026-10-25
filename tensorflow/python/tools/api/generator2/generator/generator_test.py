@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Unit tests for the API generator library (generator.py). Builds small in-memory exported-API
+# fixtures (a Tensor symbol exported as tf.Tensor and tf.experimental.numpy.ndarray, and a
+# test_ops symbol that should be ignored), writes them as mapping files into temporary
+# directories, and checks public API extraction, import path computation, import line rendering,
+# module naming, proxy file generation, docstring selection, package skipping, and init file
+# generation (including a renamed root file and the guard against writing unexpected files).
+# No import-time side effects other than creating the fixtures. Run through the absl test runner.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -53,6 +61,11 @@ test_data = {
 
 
 def write_test_data(tmp_dir: str):
+  # [FUNCTION DOC]
+  # HELPER: shared test utility that materializes the module-level fixture mapping files.
+  # Input: tmp_dir, a directory path. For each fixture file name, creates its parent directories
+  # (existing ones are fine) and writes the corresponding exported-API object there as a mapping
+  # file. Returns nothing; side effect is files created under tmp_dir.
   for f in test_data:
     file_name = os.path.join(tmp_dir, f)
     os.makedirs(os.path.dirname(file_name), exist_ok=True)
@@ -60,8 +73,18 @@ def write_test_data(tmp_dir: str):
 
 
 class GeneratorTest(parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case covering the functions of the generator library. Tests are
+  # independent; each creates its own temporary directories and uses the module-level fixtures.
 
   def test_get_public_api(self):
+    # [FUNCTION DOC]
+    # Scenario: two mapping files are written to a temp directory, one exporting the Tensor
+    # symbol (v1 as tf.Tensor; v2 as tf.Tensor and tf.experimental.numpy.ndarray) and one for a
+    # test_ops package that is listed as ignored. Action: call get_public_api with the temp
+    # directory as the prefix to strip. Asserts the result equals an expected public API with the
+    # top-level and numpy entrypoints for v1/v2, parent-child generated imports (tf to
+    # experimental to numpy) in v2 only, empty docs, and nothing from the ignored package.
     tmp_dir = self.create_tempdir()
     write_test_data(tmp_dir.full_path)
 
@@ -142,6 +165,11 @@ class GeneratorTest(parameterized.TestCase):
       ),
   )
   def test_get_import_path(self, entrypoint, prefixes_to_strip, expected):
+    # [FUNCTION DOC]
+    # Parameterized test of the import path helper. Inputs: an entrypoint (its symbol file name
+    # is used), a list of prefixes to strip, and the expected dotted path. Cases: a normal source
+    # file, and a generated file under a build output directory whose prefix is stripped. Asserts
+    # the computed path (with an empty module prefix) equals the expected one.
     self.assertEqual(
         expected,
         generator._get_import_path(
@@ -212,9 +240,17 @@ class GeneratorTest(parameterized.TestCase):
       ),
   )
   def test_entrypoint_get_import(self, entrypoint, use_lazy_loading, expected):
+    # [FUNCTION DOC]
+    # Parameterized test of the entrypoint import rendering. Inputs: an entrypoint, whether lazy
+    # loading is used, and the expected text. Cases: direct and aliased names, each with eager
+    # (from-import with line comment) and lazy (table entry with line comment) output. Asserts
+    # the rendered text for no prefixes and an empty module prefix equals the expected text.
     self.assertEqual(expected, entrypoint.get_import([], '', use_lazy_loading))
 
   def test_get_module(self):
+    # [FUNCTION DOC]
+    # Checks that a directory path with a trailing slash, taken relative to a base directory, is
+    # converted into the dotted module name for keras losses.
     self.assertEqual(
         'keras.losses',
         generator.get_module(
@@ -223,6 +259,11 @@ class GeneratorTest(parameterized.TestCase):
     )
 
   def test_generate_proxy_api_files(self):
+    # [FUNCTION DOC]
+    # Scenario: a proxy init file path for the keras losses package is given inside a temp
+    # directory that does not yet contain it. Action: generate proxy files with root module keras.
+    # Asserts the file now exists and its content is exactly a star-import from the keras losses
+    # module.
     tmp_dir = self.create_tempdir()
     proxy_file = os.path.join(tmp_dir, 'tensorflow/keras/losses/__init__.py')
     generator.generate_proxy_api_files(
@@ -233,6 +274,9 @@ class GeneratorTest(parameterized.TestCase):
       self.assertEqual('from keras.losses import *', f.read())
 
   def test_get_module_docstring(self):
+    # [FUNCTION DOC]
+    # Checks docstring selection: a module with a registered docstring returns it; a module
+    # without one returns the default "Public API for <module> namespace" text.
     docs_by_module = {
         'io': 'io docs',
     }
@@ -273,6 +317,12 @@ from tf.python.framework.tensor import Tensor # line: 1
   def test_get_imports_for_module(
       self, use_lazy_loading, subpackage_rewrite, expected
   ):
+    # [FUNCTION DOC]
+    # Parameterized test of the per-module import rendering. Setup: module tf has one Tensor
+    # entrypoint and one generated child import tf.io. Inputs: lazy loading flag, optional
+    # subpackage rewrite, expected text. Cases: eager imports, lazy table entries, and eager
+    # imports with the child package rewritten to the compat v1 package. Asserts the exact output
+    # (child module lines first, then symbol lines).
     symbols_by_module = {
         'tf': {
             generator._Entrypoint(
@@ -335,6 +385,11 @@ from tf.python.framework.tensor import Tensor # line: 1
   def test_should_skip_file(
       self, file, file_prefixes_to_strip, packages_to_ignore, should_skip
   ):
+    # [FUNCTION DOC]
+    # Parameterized test of the ignore-package filter. Inputs: a file path, prefixes to strip,
+    # packages to ignore, and the expected boolean. Cases cover empty lists, a matching package
+    # with and without a stripped prefix, and a non-matching prefix and package. Asserts the
+    # filter result equals the expectation.
     self.assertEqual(
         should_skip,
         generator._should_skip_file(
@@ -353,6 +408,14 @@ from tf.python.framework.tensor import Tensor # line: 1
       ),
   )
   def test_gen_init_files(self, root_file_name):
+    # [FUNCTION DOC]
+    # Parameterized test of init file generation. Input: root_file_name, either nothing (default
+    # init file name) or a custom name. Setup: fixture mapping files in a temp mapping directory,
+    # public API built with the test_ops package ignored, a set of the three permitted output
+    # paths (root, experimental, experimental/numpy). Action: write v2 init files (eager imports,
+    # package tf). Asserts the root file (default or renamed) exists with the expected generated
+    # header, docstring, system import, experimental import and Tensor import with line comment,
+    # and that the numpy init file contains the ndarray alias import.
     output_dir = self.create_tempdir()
     mapping_dir = self.create_tempdir()
     write_test_data(mapping_dir.full_path)
@@ -445,6 +508,10 @@ from tf.python.framework.tensor import Tensor as ndarray # line: 1
       )
 
   def testRaisesOnNotExpectedFile(self):
+    # [FUNCTION DOC]
+    # Scenario: the init file writer is given an empty list of permitted output files. Action:
+    # generate init files for the fixture API. Asserts an assertion error is raised whose message
+    # says the exported API attempted to write to a file that is not in the output files.
     output_dir = self.create_tempdir()
     mapping_dir = self.create_tempdir()
     write_test_data(mapping_dir.full_path)

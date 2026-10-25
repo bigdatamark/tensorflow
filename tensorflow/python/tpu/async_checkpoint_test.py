@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# End-to-end test of the asynchronous checkpoint hook on a real TPU through the TPU estimator.
+# Defines flags for the TPU name, zone, project and model directory, a metrics-count helper,
+# an input function producing random features and labels, and a model function with a single
+# weight matrix using a cross-shard optimizer for training and recall metrics for evaluation.
+# Tests train for 100 steps with the hook (with and without a mock listener) and check the number
+# of checkpoint files, the final step, the listener callbacks and the recorded metrics.
+# Import-time side effects: defines the four command-line flags. When run as a script it disables
+# TF2 behavior before starting the test runner.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -52,8 +61,18 @@ flags.DEFINE_string(
 
 
 def _get_checkpoint_metrics_counts() -> (int, int):
+  # [FUNCTION DOC]
+  # HELPER: shared test utility reading checkpoint metrics.
+  # Takes no inputs. Returns a pair of integers: the number of recorded (blocking) checkpoint
+  # write durations and the number of recorded asynchronous write durations, both for the async
+  # checkpoint v1 label, obtained by parsing the histogram messages returned by the metrics
+  # module. Nested get_count does the parsing for one metric getter.
   """Get the count for recorded sync and async checkpoint write durations."""
   def get_count(method):
+    # [FUNCTION DOC]
+    # HELPER: nested utility. Input: method, a metrics getter taking an API label. Calls it for
+    # the async checkpoint label, parses the returned serialized histogram, and returns its
+    # sample count as an integer.
     proto_bytes = method(api_label=async_checkpoint._ASYNC_CHECKPOINT_V1)
     histogram_proto = summary_pb2.HistogramProto()
     histogram_proto.ParseFromString(proto_bytes)
@@ -63,6 +82,10 @@ def _get_checkpoint_metrics_counts() -> (int, int):
 
 
 def input_fn(params):
+  # [FUNCTION DOC]
+  # HELPER: estimator input function for the tests. Input: params, a mapping that must contain
+  # the batch size. Returns a pair of tensors: random normal float features of shape batch size by
+  # 1000 and random integer labels in the range zero to nine, one per example.
   """Return a dataset of source and target sequences for training."""
   return (constant_op.constant(
       np.random.randn(params['batch_size'], 1000), dtype=dtypes.float32),
@@ -72,6 +95,16 @@ def input_fn(params):
 
 
 def model_fn(features, labels, mode, params):
+  # [FUNCTION DOC]
+  # HELPER: estimator model function for the tests.
+  # KNOWN ISSUE: only train and evaluate modes are handled; any other mode (such as predict)
+  # makes the function return nothing.
+  # Inputs: features, labels, mode (estimator mode key) and params (ignored). Builds a single
+  # weight matrix variable (1000 by 10, reused), computes logits by matrix multiplication and a
+  # sparse softmax cross-entropy loss. In train mode, uses an RMS-prop optimizer wrapped in a
+  # cross-shard optimizer to build a train op and returns a TPU estimator spec with loss and
+  # train op. In evaluate mode recomputes the loss and returns a spec with the loss and eval
+  # metrics (recall at 1 and 5, via the nested metric function).
   del params  # unused
   with variable_scope.variable_scope('m', reuse=variable_scope.AUTO_REUSE):
     w = variable_scope.get_variable('W', shape=[1000, 10])
@@ -90,6 +123,10 @@ def model_fn(features, labels, mode, params):
   elif mode == model_fn_lib.ModeKeys.EVAL:
 
     def metric_fn(labels, logits):
+      # [FUNCTION DOC]
+      # HELPER: nested evaluation-metrics function run on the host. Inputs: labels and logits
+      # tensors. Casts labels to 64-bit integers, logs both, and returns a mapping with recall at
+      # 1 and recall at 5 metrics computed from the logits.
       labels = math_ops.cast(labels, dtypes.int64)
       logging.info('LABELS %s %s', labels, logits)
       return {
@@ -104,8 +141,20 @@ def model_fn(features, labels, mode, params):
 
 
 class AsyncCheckpointingTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the asynchronous checkpoint saver hook using a TPU estimator on real TPU
+  # hardware. Configuration comes from command-line flags; tests share the module-level input and
+  # model functions and the metrics helper.
 
   def testAsyncCheckpointHookEnabled(self):
+    # [FUNCTION DOC]
+    # Scenario: a TPU estimator is configured through a cluster resolver built from the flags,
+    # with a checkpoint interval of 5 steps and a keep-max of 11 (off by one). Action: train for
+    # 100 steps with the async checkpoint hook and a mock listener. Asserts: at most 10 checkpoint
+    # meta files exist; the final loaded global step equals 100; the listener before-save and
+    # after-save were called; the blocking write count is the expected number of saves (one plus
+    # steps divided by interval) or one more; the async write count does not exceed that; and the
+    # recorded training time saved is positive.
     resolver = tpu_cluster_resolver.TPUClusterResolver(
         tpu=FLAGS.tpu, zone=FLAGS.zone, project=FLAGS.project)
 
@@ -166,6 +215,11 @@ class AsyncCheckpointingTest(test.TestCase):
     self.assertGreater(training_time_saved, 0)
 
   def testAsyncCheckpointHookWithoutListeners(self):
+    # [FUNCTION DOC]
+    # Same scenario as the listener test but the hook gets no listeners and the keep-checkpoint
+    # limit is 10 (configured as 11). Trains for 100 steps with interval 5. Asserts the number of
+    # checkpoint meta files is at most 10, the final step is 100, the blocking and async write
+    # counts are within the expected bounds, and the training time saved metric is positive.
     resolver = tpu_cluster_resolver.TPUClusterResolver(
         tpu=FLAGS.tpu, zone=FLAGS.zone, project=FLAGS.project)
 

@@ -1,3 +1,18 @@
+# [MODULE DOC]
+# Command-line library that generates the public TensorFlow Python API package tree (the generated
+# __init__.py files) from "API mapping" files produced by the API extractor. Each mapping file lists
+# symbols exported with the export decorators (with their v1/v2 public names, source file and line)
+# and module docstrings. This module groups them per public module, then writes one init file per
+# module containing either eager imports or a lazy-loading table, optionally spliced into a root
+# template, plus an optional module-wrapper footer for deprecation handling. It can also write
+# "proxy" init files that simply star-import from another module root, and nested compat trees.
+# Import-time side effects: defines many absl command-line flags (output files, output dir, root
+# template, API version, compat versions and templates, output package, lazy loading, proxy module
+# root, file prefixes to strip, packages to ignore, module prefix, root file name).
+# KNOWN ISSUE: the help text of the compat init templates flag refers to "compat_apiversions", but
+# the actual flag is named compat_api_versions.
+# Exposes the PublicAPI structure, get_public_api, gen_public_api, gen_nested_compat_files,
+# generate_proxy_api_files, get_module and the entry point main (run through the absl app runner).
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -120,12 +135,22 @@ if not isinstance(_sys.modules[__name__], _module_wrapper.TFModuleWrapper):
 
 
 class DocExportedTwiceError(Exception):
+  # [CLASS DOC]
+  # Error raised by the public API builder when two module docstrings are registered for the same
+  # public module. It carries only the message text and has no extra state or behavior.
   """Exception for when two docstrings are registered to a single module."""
 
 
 def _get_import_path(
     file: str, file_prefixes_to_strip: Sequence[str], module_prefix: str
 ) -> str:
+  # [FUNCTION DOC]
+  # HELPER: converts a source file path into a dotted import path for the generated API files.
+  # Inputs: file is a slash separated file path; file_prefixes_to_strip is a list of prefixes
+  # removed from the start (each in order, if present); module_prefix is text prepended to the
+  # result. Removes a trailing ".py" and then a trailing "__init__", strips leading and trailing
+  # slashes, and turns remaining slashes into dots. Returns the dotted module path as a string.
+  # No exceptions, no side effects.
   module_import_path = file
   for prefix in file_prefixes_to_strip:
     module_import_path = module_import_path.removeprefix(prefix)
@@ -139,6 +164,11 @@ def _get_import_path(
 
 @dataclasses.dataclass(frozen=True)
 class _Entrypoint:
+  # [CLASS DOC]
+  # HELPER: internal record used while building the generated API init files.
+  # Immutable (frozen) data record describing one public name: the public module it is exposed in,
+  # the public name, and the underlying exported symbol (file, symbol name, line number). It is
+  # hashable so entrypoints can be kept in sets per module. Created by get_public_api.
   """An entrypoint that was exposed by the use of a decorator.
 
   Attributes:
@@ -158,6 +188,15 @@ class _Entrypoint:
       module_prefix: str,
       use_lazy_loading: bool,
   ) -> str:
+    # [FUNCTION DOC]
+    # Builds the text line that makes this entrypoint available in a generated init file.
+    # Inputs: file_prefixes_to_strip (list of path prefixes removed from the symbol's file name),
+    # module_prefix (text prepended to the import path), use_lazy_loading (boolean).
+    # The import path comes from the exported symbol's file name. If the public name differs from
+    # the symbol name, an alias is used. Returns, for eager loading, a from-import line with the
+    # alias and a trailing comment recording the source line number; for lazy loading, an entry of
+    # the lazy table mapping the public name to a pair of module path and symbol name, with the
+    # same trailing line comment. No exceptions or side effects.
     """Returns the import statement for this entrypoint.
 
     Args:
@@ -188,6 +227,12 @@ class _Entrypoint:
 
 @dataclasses.dataclass(frozen=True)
 class PublicAPI:
+  # [CLASS DOC]
+  # Immutable (frozen) result of get_public_api: the complete structure of the public API.
+  # Fields: v1 and v2 mappings from public module name to the set of entrypoints exposed there;
+  # v1 and v2 mappings from module name to the set of child modules that must be imported by it
+  # (generated sub-package imports); and a mapping from module name to its docstring.
+  # It has no docstring of its own and no methods.
   v1_entrypoints_by_module: Mapping[str, set[_Entrypoint]]
   v2_entrypoints_by_module: Mapping[str, set[_Entrypoint]]
   v1_generated_imports_by_module: Mapping[str, set[str]]
@@ -196,6 +241,12 @@ class PublicAPI:
 
 
 def get_module(dir_path: str, relative_to_dir: str) -> str:
+  # [FUNCTION DOC]
+  # Converts a directory path into a dotted module name relative to another directory.
+  # Inputs: dir_path (string path, expected to start with relative_to_dir) and relative_to_dir.
+  # The leading characters equal in length to relative_to_dir are cut off without checking that
+  # they really match, OS path separators become slashes, slashes become dots, and dots at the ends
+  # are trimmed. Returns the module name string (empty if nothing remains). No side effects.
   """Get module that corresponds to path relative to relative_to_dir.
 
   Args:
@@ -214,6 +265,14 @@ def get_module(dir_path: str, relative_to_dir: str) -> str:
 def generate_proxy_api_files(
     output_files: list[str], proxy_module_root: str, output_dir: str
 ):
+  # [FUNCTION DOC]
+  # Writes "proxy" init files: each output file contains a single star-import line that pulls
+  # everything from the module of the same name under proxy_module_root.
+  # Inputs: output_files (list of init file paths), proxy_module_root (module root to import from),
+  # output_dir (API root directory used to derive each file's module name).
+  # For every file: creates the parent directory if missing, computes the module name from the
+  # directory relative to output_dir, and writes the import line (overwriting the file).
+  # Returns nothing; side effects are directory and file creation. File system errors propagate.
   """Creates __init__.py files in proxy format for the Python API.
 
   Args:
@@ -239,6 +298,11 @@ def _should_skip_file(
     packages_to_ignore: Sequence[str],
     module_prefix: str,
 ) -> bool:
+  # [FUNCTION DOC]
+  # HELPER: filter used by get_public_api to drop symbols from ignored packages.
+  # Computes the import path of the file (after stripping prefixes and adding module_prefix) and
+  # returns true if it starts with any entry of packages_to_ignore (plain prefix match, so a
+  # package name is also matched by longer sibling names). Pure function, no side effects.
   import_path = _get_import_path(file, file_prefixes_to_strip, module_prefix)
   return any(import_path.startswith(package) for package in packages_to_ignore)
 
@@ -250,6 +314,20 @@ def get_public_api(
     output_package: str,
     module_prefix: str,
 ) -> PublicAPI:
+  # [FUNCTION DOC]
+  # Reads the API mapping files and builds the PublicAPI structure.
+  # Inputs: api_mapping_files (list of mapping file paths), file_prefixes_to_strip and
+  # packages_to_ignore (used to skip symbols whose import path starts with an ignored package),
+  # output_package (root public package name, e.g. the top-level package), module_prefix (prefix
+  # for imported module paths).
+  # Behavior: loads every file into one exported-API container; for each non-skipped symbol, each
+  # of its v1 and v2 public names is split into a module (derived from the dotted name, rooted at
+  # output_package) and a leaf name, and an entrypoint is recorded per module. Then for every
+  # module with entrypoints, every ancestor package is recorded as importing its child module.
+  # Finally module docstrings are collected per module.
+  # Returns a PublicAPI. Raises DocExportedTwiceError if a module gets two docstrings. File read
+  # errors from the loader propagate. No other side effects.
+  # Nested helpers: add_exported_symbols and add_generated_imports fill the maps.
   """Generates the structure of the public API from the given files.
 
   Args:
@@ -280,6 +358,13 @@ def get_public_api(
       s: exported_api.ExportedSymbol,
       entrypoints_by_module: Mapping[str, set[_Entrypoint]],
   ):
+    # [FUNCTION DOC]
+    # HELPER: nested helper of get_public_api that registers one symbol under its public names.
+    # Inputs: api_names (list of dotted public names such as a module path plus leaf), s (the
+    # exported symbol), entrypoints_by_module (mapping from module name to a set, mutated).
+    # For each name the module is the output package, extended by the part between the first and
+    # last dot if one exists; the leaf is the text after the last dot. An entrypoint is added to
+    # that module's set. Returns nothing.
     for api_name in api_names:
       index_of_last_dot = api_name.rfind('.')
       index_of_first_dot = api_name.find('.')
@@ -304,6 +389,13 @@ def get_public_api(
       entrypoints_by_module: Mapping[str, set[_Entrypoint]],
       generated_imports_by_module: Mapping[str, set[str]],
   ):
+    # [FUNCTION DOC]
+    # HELPER: nested helper of get_public_api that records the package hierarchy.
+    # Inputs: entrypoints_by_module (modules that have entrypoints) and
+    # generated_imports_by_module (mapping from module name to set of child module names, mutated).
+    # For each module containing a dot, walks up its ancestors: every ancestor package gets the
+    # module at the current level added as a child import. Top-level modules without a dot are
+    # skipped. Returns nothing.
     for module in entrypoints_by_module:
       i = module.rfind('.')
       if i == -1:
@@ -344,6 +436,11 @@ def get_public_api(
 def _get_module_docstring(
     docs_by_module: Mapping[str, str], module: str
 ) -> str:
+  # [FUNCTION DOC]
+  # HELPER: picks the docstring text for a generated module file.
+  # Returns the registered docstring for the module if present in docs_by_module; otherwise a
+  # default sentence "Public API for <module> namespace" where the word tensorflow in the module
+  # name is replaced by tf. No side effects.
   if module in docs_by_module:
     return docs_by_module[module]
   module = module.replace('tensorflow', 'tf')
@@ -360,6 +457,19 @@ def _get_imports_for_module(
     use_lazy_loading: bool,
     subpackage_rewrite: Optional[str],
 ) -> str:
+  # [FUNCTION DOC]
+  # HELPER: renders the import body of one generated init file.
+  # KNOWN ISSUE: the docstring lacks a Returns section; the lookup into symbols_by_module for a
+  # module known only from generated imports depends on that mapping being a defaultdict.
+  # Inputs: module (public module name), output_package (root package), symbols_by_module and
+  # generated_imports_by_module (as built by get_public_api), file_prefixes_to_strip,
+  # module_prefix, use_lazy_loading, subpackage_rewrite (optional text that replaces the output
+  # package inside child module names; nothing means no rewrite).
+  # First emits one line per child module (sorted): a lazy table entry or a from-import line.
+  # Then emits one line per entrypoint, sorted by source file and public name, via the
+  # entrypoint's own import rendering.
+  # Returns the accumulated text. Raises a key error if the module has no entry in the symbols
+  # mapping (generated imports use a default-aware lookup only if the mapping is a default map).
   """Returns the imports for a module.
 
   Args:
@@ -410,6 +520,23 @@ def gen_public_api(
     root_file_name: str,
     output_files: Set[str],
 ):
+  # [FUNCTION DOC]
+  # Top-level generator: builds the public API structure and writes all init files, including
+  # compat and nested compat trees.
+  # Inputs: output_dir (directory to write into), output_package (root package name),
+  # root_init_template (path of the root template file, may be empty), api_version (1 or 2 chooses
+  # which entrypoints form the root API), compat_api_versions (list of ints, one compat subtree
+  # each), compat_init_templates (list of template paths aligned with the compat versions, may be
+  # empty), use_lazy_loading (boolean), file_prefixes_to_strip, mapping_files (API mapping files),
+  # packages_to_ignore, module_prefix, root_file_name (name of the root file, usually the init
+  # file), output_files (set of allowed output paths).
+  # Steps: build the PublicAPI; register each compat version package as a child of the compat
+  # package in both v1 and v2 import maps; write the root files; then for each compat version
+  # create its directory (under compat/v<N>), pick v1 or v2 entrypoints (v1 only when the version
+  # equals 1), write its init files with the compat package as a rewrite target, and for each
+  # compat version again create a nested compat directory and call gen_nested_compat_files.
+  # Returns nothing. Side effects: creates directories and writes files. Raises an assertion error
+  # (from the init file writer) if a file would be written outside output_files.
   """Generates the public API for tensorflow.
 
   Args:
@@ -544,6 +671,15 @@ def _get_module_wrapper(
     symbols_by_module: Mapping[str, set[_Entrypoint]],
     use_lazy_loading: bool,
 ) -> str:
+  # [FUNCTION DOC]
+  # HELPER: produces the footer text that wraps the generated module in the module wrapper class.
+  # Inputs: module (full module name), output_dir, output_package, api_version, symbols_by_module
+  # (used to detect whether a lite submodule exists) and use_lazy_loading.
+  # Returns an empty string when the API is not version 1 and lazy loading is off. Otherwise fills
+  # the footer template with the module name relative to the package, the name of the lazy table
+  # (or the none value when not lazy), a deprecation flag (true for version 1 unless the output
+  # directory ends in compat/v1) and a has-lite flag (true only when lazy and a lite module
+  # exists). No side effects.
   """Returns the module wrapper for the given module."""
   if api_version != 1 and not use_lazy_loading:
     return ''
@@ -579,6 +715,24 @@ def _gen_init_files(
     subpackage_rewrite: Optional[str] = None,
     root_file_name='__init__.py',
 ):
+  # [FUNCTION DOC]
+  # HELPER: writes the init file of every module for one API version (used by gen_public_api and
+  # gen_nested_compat_files).
+  # KNOWN ISSUE: the underscore name list is built from entrypoint names for the root module only;
+  # modules other than the root never get such a footer, and the footer is indented oddly.
+  # Inputs: output_dir, output_package, api_version, symbols_by_module, generated_imports_by_module,
+  # docs_by_module, root_template_path (template for the root module, may be empty),
+  # file_prefixes_to_strip, use_lazy_loading, module_prefix, output_files (set of permitted paths),
+  # subpackage_rewrite (optional text replacing the output package in child module names), and
+  # root_file_name (file name used for the root module; others always use the init file name).
+  # For each module in either mapping (skipping names shorter than the package name): creates the
+  # directory, computes a normalized file path, and raises an assertion error if it is not in
+  # output_files. Opens the file for writing, builds the import body (wrapped in the lazy table
+  # template when lazy). For the root module with a template: reads the template, substitutes the
+  # imports placeholder, an all-names footer (listing underscore-prefixed names explicitly) and
+  # the wrapper placeholder, writes it and moves on. Otherwise writes the generated header with
+  # the module docstring, the imports, and the module wrapper footer.
+  # Returns nothing. Side effects: directories and files created or overwritten.
   """Generates the __init__.py files for the given API version."""
   modules = set(symbols_by_module.keys())
   modules.update(generated_imports_by_module.keys())
@@ -684,6 +838,17 @@ def gen_nested_compat_files(
     module_prefix: str,
     output_files: Set[str],
 ):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the final loop adds compat version packages to the nested imports mapping only
+  # after the init files were already written, so it has no effect on the output; it also raises
+  # a key error if the compat module was absent from both input mappings.
+  # Generates the init files of a nested compat tree (compat/vN/compat/vM).
+  # Inputs: output_dir, output_package, api_version, symbols_by_module,
+  # generated_imports_by_module, docs_by_module, root_template_path, file_prefixes_to_strip,
+  # use_lazy_loading, compat_versions (list of ints), module_prefix, output_files.
+  # Keeps only the entries for the root package and its compat package, then calls the init file
+  # writer with a rewrite target of the compat package plus the version. Returns nothing. Side
+  # effects: files written by the delegate.
   """Generates the nested compat __init__.py files."""
   nested_compat_symbols_by_module: dict[str, set[_Entrypoint]] = {}
   nested_generated_imports_by_module: dict[str, set[str]] = {}
@@ -729,6 +894,13 @@ def gen_nested_compat_files(
 
 
 def main(argv: Sequence[str]) -> None:
+  # [FUNCTION DOC]
+  # Entry point run by the absl app runner. Input: argv, the argument list whose first item is the
+  # program name and the rest are the API mapping files.
+  # Raises a usage error if the output directory or output files flags are missing. If the proxy
+  # module root flag is set, writes proxy files and returns. Otherwise normalizes the output file
+  # paths, truncates each to an empty file, and calls gen_public_api with the flag values (compat
+  # versions converted to ints). Returns nothing; writes files.
   if not _OUTPUT_DIR.value or not _OUTPUT_FILES.value:
     raise app.UsageError('--output_dir and --output_files are required')
 

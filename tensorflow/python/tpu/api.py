@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: helper module for the API build, not meant to be used directly at runtime.
+# Only imports (without using them) the TPU modules that are not imported elsewhere, such as
+# bfloat16, feature columns, the TPU core module, the embedding modules (serving, v1, v2, v2
+# utilities, v3), hardware features and the TPU optimizer, so that the API extractor scans them
+# for export decorations. Exposes no functions or classes. Import-time side effect: importing all
+# of those modules (and anything they register).
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

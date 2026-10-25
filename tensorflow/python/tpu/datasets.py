@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Cloud TPU data loading helpers. Because Cloud TPUs cannot read files local to the VM, this
+# module offers a function that builds a dataset which reads files on a coordinator job and
+# streams the elements to the worker job through remote function calls. Defines private reader
+# builders for text lines and records, and a mapping from file type names to those builders.
+# No import-time side effects beyond building that mapping.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,12 +34,18 @@ from tensorflow.python.types import data as data_types
 
 
 def _TextLineDataset(filename: Text) -> dataset_ops.Dataset:
+  # [FUNCTION DOC]
+  # HELPER: file-type reader used by the streaming files dataset. Input: filename, a string.
+  # Returns a text-line dataset for that file with an 8 MiB read buffer. No other side effects.
   buffer_size = 8 * 1024 * 1024  # 8 MiB per file
   dataset = readers.TextLineDataset(filename, buffer_size=buffer_size)
   return dataset
 
 
 def _TFRecordDataset(filename: Text) -> dataset_ops.Dataset:
+  # [FUNCTION DOC]
+  # HELPER: file-type reader used by the streaming files dataset. Input: filename, a string.
+  # Returns a record-file dataset for that file with an 8 MiB read buffer. No other side effects.
   buffer_size = 8 * 1024 * 1024  # 8 MiB per file
   dataset = readers.TFRecordDataset(filename, buffer_size=buffer_size)
   return dataset
@@ -57,6 +69,28 @@ def StreamingFilesDataset(
     num_parallel_reads: Optional[int] = None,
     batch_transfer_size: Optional[Union[int, bool]] = None,
     sloppy: bool = True) -> dataset_ops.Dataset:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says filetype is one of the record or text-line names, but the
+  # accepted names also include a plain text alias. The output dataset is repeated forever on the
+  # worker regardless of num_epochs (num_epochs only limits the inner file dataset), and the
+  # docstring's mention of an out-of-range error when no files match is not enforced here.
+  # Builds a dataset that reads files on the file reader job and streams elements to the worker
+  # job. Inputs: files (glob string, or dataset of file names), filetype (name string, default
+  # record files, or a function mapping a file name to a dataset), file_reader_job (default the
+  # coordinator job, mapped to its first task device), worker_job (default worker),
+  # num_epochs (repeat count of the inner dataset; nothing repeats forever),
+  # filename_shuffle_buffer_size (default 4096; zero or false disables shuffling),
+  # num_parallel_reads (default 8, also used for a falsy value), batch_transfer_size (default 256;
+  # false disables batching), sloppy (default true; allow non-deterministic order).
+  # Steps: on the reader device, list or accept files, optionally shuffle, interleave readers in
+  # parallel, repeat, batch, prefetch, and expose a one-shot iterator handle. Then a legacy
+  # function loads the next element from that iterator; a map function calls it remotely on the
+  # reader job; on the worker device a range dataset is repeated, mapped (parallel if sloppy),
+  # prefetched and unbatched if batching was used.
+  # Returns the resulting dataset. Raises a value error for an unknown filetype name, a filetype
+  # that is neither string nor callable, or files that are neither string nor dataset (and, when
+  # run, for invalid source output types). Side effects: adds ops and a function to the graph.
+  # Nested: LoadingFunc and MapFn.
   """StreamingFilesDataset constructs a dataset to stream from workers (GCE VM).
 
   Because Cloud TPUs are allocated over the network, a Cloud TPU cannot read
@@ -165,12 +199,22 @@ def StreamingFilesDataset(
 
   @function.Defun(dtypes.string)
   def LoadingFunc(h):
+    # [FUNCTION DOC]
+    # HELPER: legacy graph function (defined with a string input) executed on the reader job.
+    # Input: h, a string iterator handle. Rebuilds the iterator from the handle using the source
+    # dataset's types and shapes and returns the next element (or tuple of elements).
     remote_iterator = iterator_ops.Iterator.from_string_handle(
         h, dataset_ops.get_legacy_output_types(source_dataset),
         dataset_ops.get_legacy_output_shapes(source_dataset))
     return remote_iterator.get_next()
 
   def MapFn(unused_input):
+    # [FUNCTION DOC]
+    # HELPER: map function of the output dataset. Input: unused_input (ignored; it only drives
+    # repetition). Determines the source dataset's output types (a single type becomes a list;
+    # lists or tuples are used as is; anything else raises a value error), then remote-calls the
+    # loading function on the reader job's CPU with the iterator handle. Returns the single
+    # result if there is one output, otherwise the list of results.
     source_dataset_output_types = dataset_ops.get_legacy_output_types(
         source_dataset)
     if isinstance(source_dataset_output_types, dtypes.DType):
