@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Unit tests for VariableSpec, the type specification of resource variables (exposed through the
+# resource variable ops module). The module defines one test class that runs every test in both
+# graph and eager modes. The tests cover spec properties, compatibility checks against other specs,
+# variables and tensors, creation of a spec from a variable, conversion to and from components
+# (the resource handle), error handling for bad components, serialization, repr, hashing,
+# equality, subtype checks and most-specific-common-supertype computation.
+# Import-time side effects: only a module-level alias for the VariableSpec class. When run as a
+# script it starts the TensorFlow test runner.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,8 +41,18 @@ VariableSpec = resource_variable_ops.VariableSpec
 
 @test_util.run_all_in_graph_and_eager_modes
 class VariableSpecTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case covering the VariableSpec type specification. The class decorator runs each test
+  # in both graph mode and eager mode. It supports parameterized tests and holds no shared
+  # fixtures; each test builds its own specs and variables.
 
   def test_properties(self):
+    # [FUNCTION DOC]
+    # Checks the public properties of a spec: name, shape, dtype, trainable flag, value type and
+    # component specs. A spec built with only a shape must have no name, float32 dtype, be
+    # trainable, have the resource variable class as value type and a single scalar resource
+    # tensor component. A second spec with explicit shape, float64 dtype and trainable false
+    # must report those values. Returns nothing; fails on assertion mismatch.
     spec = VariableSpec(shape=(None, None, None))
     self.assertIsNone(spec.name)
     self.assertAllEqual(spec.shape.as_list(), [None, None, None])
@@ -53,6 +72,12 @@ class VariableSpecTest(test.TestCase, parameterized.TestCase):
                         [tensor_spec.TensorSpec([], dtypes.resource)])
 
   def test_compatibility(self):
+    # [FUNCTION DOC]
+    # Checks is_compatible_with between specs, variables and tensors. A spec with unknown shape
+    # is compatible with a more specific shape spec but a spec with shape [None, 15] is not
+    # compatible with a rank-1 spec. Specs are compatible with variables of matching dtype and
+    # shape, and a spec with a different dtype is incompatible. A plain tensor is never
+    # compatible with a variable spec. Returns nothing.
     spec = VariableSpec(shape=None)
     spec2 = VariableSpec(shape=[None, 15])
     spec3 = VariableSpec(shape=[None])
@@ -93,6 +118,12 @@ class VariableSpecTest(test.TestCase, parameterized.TestCase):
                     shape=None,
                     dtype=dtypes.float32,
                     trainable=True):
+    # [FUNCTION DOC]
+    # Parameterized test of building a spec from an existing variable. Inputs (supplied by the
+    # parameter sets): initial_value, shape, dtype (default float32) and trainable (default
+    # true). A resource variable is created with these, then a spec is made from it. Asserts the
+    # spec shape, dtype and trainable flag equal the inputs and that the alias id is unset.
+    # Returns nothing.
     var = resource_variable_ops.ResourceVariable(
         initial_value=initial_value,
         shape=shape,
@@ -125,6 +156,13 @@ class VariableSpecTest(test.TestCase, parameterized.TestCase):
                            shape=None,
                            dtype=dtypes.float32,
                            trainable=True):
+    # [FUNCTION DOC]
+    # Parameterized test of the round trip between a variable and its components. Inputs come
+    # from the parameter sets: initial value, shape, dtype and trainable flag. Creates a
+    # variable (initializing it in graph mode), makes a spec from it, converts the variable to
+    # components and asserts the result is a list of length one holding the variable handle.
+    # Rebuilds a variable from the components and asserts the same value and trainable flag.
+    # Returns nothing.
     var = resource_variable_ops.ResourceVariable(
         initial_value=initial_value,
         shape=shape,
@@ -143,6 +181,12 @@ class VariableSpecTest(test.TestCase, parameterized.TestCase):
     self.assertEqual(rebuilt_var.trainable, trainable)
 
   def testFromComponentsSetHandleData(self):
+    # [FUNCTION DOC]
+    # Checks that rebuilding a variable from components fills in handle data. Takes the handle
+    # data of a real variable as the expectation, then creates a resource placeholder inside a
+    # fresh graph that has no handle data (asserted unset). A spec with shape [1] and float32
+    # converts that placeholder into a variable; the resulting handle must have handle data set
+    # whose shape and dtype equal the expected ones. Returns nothing.
     v = resource_variable_ops.ResourceVariable([1.])
     if not context.executing_eagerly():
       self.evaluate(v.initializer)
@@ -168,6 +212,11 @@ class VariableSpecTest(test.TestCase, parameterized.TestCase):
                      expected_handle_data.shape_and_type[0].dtype)
 
   def testFromComponentsError(self):
+    # [FUNCTION DOC]
+    # Checks the validation in rebuilding a variable from components. Passing a bare tensor must
+    # raise a type error saying a list or tuple is required; a list with two tensors must raise
+    # a value error saying only the resource handle is allowed; a list with a non-resource
+    # tensor must raise a value error saying a resource tensor is required. Returns nothing.
     spec = resource_variable_ops.VariableSpec(shape=[1], dtype=dtypes.float32)
     self.assertRaisesRegex(TypeError, "must be a list or tuple",
                            spec._from_components, constant_op.constant(1.))
@@ -179,6 +228,11 @@ class VariableSpecTest(test.TestCase, parameterized.TestCase):
                            spec._from_components, [constant_op.constant(1.)])
 
   def testComponentSpecs(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the test is disabled; it unconditionally skips itself (bug reference about the
+    # resource variable not yet being a composite tensor), so the checks after the skip never run.
+    # Intended behavior: flattening a spec with composites expanded yields exactly one scalar
+    # resource-typed tensor spec. Returns nothing.
     self.skipTest("b/209081027: re-enable this test after ResourceVariable "
                   "becomes a subclass of CompositeTensor.")
     spec = resource_variable_ops.VariableSpec([1, 3], dtypes.float32)
@@ -189,10 +243,17 @@ class VariableSpecTest(test.TestCase, parameterized.TestCase):
     self.assertEqual(handle_spec.dtype, dtypes.resource)
 
   def testValueType(self):
+    # [FUNCTION DOC]
+    # Asserts that a spec of shape [1, 3] and float32 reports the resource variable class as its
+    # value type. Returns nothing.
     spec = resource_variable_ops.VariableSpec([1, 3], dtypes.float32)
     self.assertIs(spec.value_type, resource_variable_ops.ResourceVariable)
 
   def testSerialize(self):
+    # [FUNCTION DOC]
+    # Checks spec serialization. A spec with shape, int32 dtype, trainable false and alias id 1
+    # must serialize to a tuple of those four values in that order, and deserializing that tuple
+    # must give a spec equal to the original. Returns nothing.
     shape = [1, 3]
     dtype = dtypes.int32
     trainable = False
@@ -205,6 +266,10 @@ class VariableSpecTest(test.TestCase, parameterized.TestCase):
     self.assertEqual(rebuilt_spec, spec)
 
   def testRepr(self):
+    # [FUNCTION DOC]
+    # Checks the string representation of a spec with shape (1, 3), int32 and trainable false:
+    # it must name the class and list shape, dtype, trainable flag and an unset alias id in the
+    # exact expected text. Returns nothing.
     shape = (1, 3)
     dtype = dtypes.int32
     trainable = False
@@ -215,6 +280,9 @@ class VariableSpecTest(test.TestCase, parameterized.TestCase):
     self.assertEqual(spec_repr, expected_repr)
 
   def testHash(self):
+    # [FUNCTION DOC]
+    # Checks that a spec hashes the same as the tuple of its shape, dtype, trainable flag and
+    # alias id (here unset). Returns nothing.
     shape = (1, 3)
     dtype = dtypes.int32
     trainable = False
@@ -225,6 +293,10 @@ class VariableSpecTest(test.TestCase, parameterized.TestCase):
     self.assertEqual(spec_hash, expected_hash)
 
   def testEquality(self):
+    # [FUNCTION DOC]
+    # Checks spec equality. Identical specs are equal; a spec with an alias id differs from one
+    # without; specs with equal alias ids are equal; and a difference in any one of shape,
+    # dtype, trainable flag or alias id makes two specs unequal. Returns nothing.
     spec = resource_variable_ops.VariableSpec([1, 3], dtypes.float32, False)
     spec2 = resource_variable_ops.VariableSpec([1, 3], dtypes.float32, False)
     self.assertEqual(spec, spec2)
@@ -247,6 +319,11 @@ class VariableSpecTest(test.TestCase, parameterized.TestCase):
     self.assertNotEqual(spec8, spec4)
 
   def testisSubtypeOf(self):
+    # [FUNCTION DOC]
+    # Checks the subtype relation between specs that share dtype, trainable flag and alias id: a
+    # spec with a concrete shape is a subtype of one with unknown shape but not the reverse.
+    # Comparing with a spec whose alias id is unset (in either direction) must raise a
+    # not-implemented error. Returns nothing.
     spec = resource_variable_ops.VariableSpec([1, 3], dtypes.float32, False, 1)
     spec2 = resource_variable_ops.VariableSpec(None, dtypes.float32, False, 1)
     self.assertTrue(spec.is_subtype_of(spec2))
@@ -258,6 +335,11 @@ class VariableSpecTest(test.TestCase, parameterized.TestCase):
       spec3.is_subtype_of(spec)
 
   def testMostSpecificCommonSupertype(self):
+    # [FUNCTION DOC]
+    # Checks computing the most specific common supertype of specs. Two specs differing in one
+    # dimension (3 versus 2) yield a spec with that dimension unknown, both when alias ids are 1
+    # and when they are unset. Mixing a spec with an alias id and one without must raise a
+    # not-implemented error in either direction. Returns nothing.
     spec = resource_variable_ops.VariableSpec([1, 3], dtypes.float32, False, 1)
     spec2 = resource_variable_ops.VariableSpec([1, 2], dtypes.float32, False, 1)
     spec3 = spec.most_specific_common_supertype([spec2])

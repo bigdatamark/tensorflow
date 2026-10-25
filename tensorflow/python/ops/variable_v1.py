@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Defines the TF1-style variable class VariableV1 (exported as the v1 Variable), the helper
+# function is_variable_initialized (exported for v1) and default_variable_creator, which lazily
+# delegates to the reference-variable module. The module is imported very early at TF1 import
+# time, so heavy imports (state ops, cond, reference variables) are deferred into function bodies.
+# Import-time side effect: registers VariableV1 with the variable scope module at the end of the
+# file so the variable scope machinery can create v1 variables.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +31,11 @@ from tensorflow.python.util.tf_export import tf_export
 @tf_export(v1=["is_variable_initialized"])
 @tf_should_use.should_use_result
 def is_variable_initialized(variable):
+  # [FUNCTION DOC]
+  # Tells whether a variable has been initialized. Input: a variable object. Output: a scalar
+  # boolean tensor that is true when initialized. Imports the state ops module lazily to keep
+  # import time low, then delegates to it. The decorators export it for v1 only and warn when
+  # the returned tensor is unused.
   """Tests if a variable has been initialized.
 
   Args:
@@ -41,6 +53,11 @@ def is_variable_initialized(variable):
 
 
 def default_variable_creator(next_creator=None, **kwds):
+  # [FUNCTION DOC]
+  # HELPER: terminal creator used by VariableV1 when no custom variable creator intercepts.
+  # Lazily imports the reference-variable module and forwards the optional next creator and all
+  # keyword arguments to its default creator, returning whatever variable it builds. Raises
+  # whatever the delegate raises.
   from tensorflow.python.ops import ref_variable  # pylint: disable=g-import-not-at-top
 
   return ref_variable.default_variable_creator(
@@ -50,6 +67,13 @@ def default_variable_creator(next_creator=None, **kwds):
 
 @tf_export(v1=["Variable"])
 class VariableV1(variables.Variable):
+  # [CLASS DOC]
+  # The TF1 graph-mode variable, exported as the v1 Variable. It subclasses the generic Variable
+  # base. Its constructor body is empty: instances are produced through the class-level call
+  # hook (_variable_call) which runs the chain of registered variable creators and ends in the
+  # default creator, normally giving a reference variable or resource variable rather than a
+  # plain instance of this class. Also provides initialized_value, a from_proto factory and the
+  # SaveSliceInfo alias used for partitioned variables.
   """See the [Variables Guide](https://tensorflow.org/guide/variables).
 
   A variable maintains state in the graph across calls to `run()`. You add a
@@ -181,6 +205,15 @@ class VariableV1(variables.Variable):
       synchronization=variables.VariableSynchronization.AUTO,
       aggregation=variables.VariableAggregation.NONE,
       shape=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it creates variable and assign ops and raises errors, but
+    # the body only contains the docstring and does nothing (it intentionally skips the base
+    # constructor). Real creation happens in the class call hook, so the documented Raises
+    # section is not enforced here.
+    # Documented-only constructor that fixes the public signature: initial value, trainable flag,
+    # collections, shape validation, caching device, name, variable definition, dtype, expected
+    # shape, import scope, constraint, resource flag, synchronization, aggregation and shape.
+    # Returns nothing and has no side effects.
     """Creates a new variable with value `initial_value`.
 
     The new variable is added to the graph collections listed in `collections`,
@@ -258,6 +291,12 @@ class VariableV1(variables.Variable):
   SaveSliceInfo = variables.Variable.SaveSliceInfo
 
   def initialized_value(self):
+    # [FUNCTION DOC]
+    # Returns a tensor holding this variable's value if it is initialized, otherwise its initial
+    # value, so dependent variables are initialized in the right order. Lazily imports the
+    # conditional op module, runs inside the init scope (outside any function graph) and builds
+    # a conditional on whether the variable is initialized, reading the value or the initial
+    # value accordingly. No docstring exists for this method.
     # variable_v1.py is imported at the top-level internally at TF1 import time,
     # so the import time for this file should be reduced as much as possible.
     # Thus import cond only when it is used.
@@ -269,6 +308,11 @@ class VariableV1(variables.Variable):
 
   @staticmethod
   def from_proto(variable_def, import_scope=None):
+    # [FUNCTION DOC]
+    # Static factory that rebuilds a reference variable from a variable definition protocol
+    # buffer. Inputs: the variable definition and an optional import scope name prefix. Output:
+    # the new reference variable referring to existing graph nodes. Lazily imports the
+    # reference-variable module; errors come from its constructor.
     from tensorflow.python.ops import ref_variable  # pylint: disable=g-import-not-at-top
     return ref_variable.RefVariable(
         variable_def=variable_def, import_scope=import_scope)
@@ -294,6 +338,15 @@ class VariableV1(variables.Variable):
       use_resource=None,
       **kwargs,
     ):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: extra keyword arguments (kwargs) are accepted but silently ignored and not
+    # forwarded to the creator chain. The docstring is also terse and does not describe this.
+    # Class-level call hook that creates a variable. If invoked on a subclass of VariableV1 it
+    # returns nothing, letting the subclass handle creation. Otherwise it starts from the default
+    # creator and wraps it with each creator registered on the current default graph's creator
+    # stack (in stack order), treating a missing aggregation as the none aggregation. It then
+    # calls the outermost creator with all the named arguments and returns the new variable.
+    # Reads the default graph; no other side effects beyond the creators' own.
     """VariableV1 class getter. Useful to force the signature."""
     if cls is not VariableV1:
       return None
