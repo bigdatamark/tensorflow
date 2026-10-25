@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Public aggregation module for the training API. It has no functions or classes of its own; it
+# only re-exports (at import time, by importing) optimizers, the sync replicas optimizer,
+# coordinator and queue-runner utilities, input pipeline helpers, session hooks, monitored
+# sessions, saver and checkpoint helpers, warm-starting tools, global-step utilities and the
+# supervisor, so they are reachable from one namespace. Wildcard imports of the queue runner and
+# input modules are used on purpose. The module also assigns long documentation text to the
+# example-proto classes (byte list, float list, int64 list, feature, feature lists, sequence
+# example and so on) by setting their doc attributes; it defines no code of its own. Import loads all submodules.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

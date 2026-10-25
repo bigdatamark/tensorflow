@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Global step utilities for training: public (v1-exported) functions to read, find, create,
+# get-or-create and validate the global step, plus private helpers that cache a read of the step
+# and build an increment op, and the write_graph alias to the graph writer. Defines the cache
+# collection key constant. No import-time side effects beyond export registration.
 """Utility functions for training."""
 from tensorflow.python.eager import context
 from tensorflow.python.framework import dtypes
@@ -38,6 +43,13 @@ write_graph = graph_io.write_graph
 
 @tf_export(v1=['train.global_step'])
 def global_step(sess, global_step_tensor):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the second argument may be the name of an operation, but in
+  # eager mode the code calls a numpy conversion on it, which fails for a plain name string.
+  # Reads the current global step as a plain integer. Inputs: sess, a session (ignored in eager
+  # mode); global_step_tensor, a variable or tensor holding the step. In eager mode it converts
+  # the tensor to a number directly; otherwise it runs the tensor in the session. Returns an
+  # integer. Errors from the session run propagate. No other side effects.
   """Small helper to get the global step.
 
   ```python
@@ -69,6 +81,15 @@ def global_step(sess, global_step_tensor):
 
 @tf_export(v1=['train.get_global_step'])
 def get_global_step(graph=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring does not mention that when the global step collection holds
+  # more than one tensor the function only logs an error and returns nothing instead of raising.
+  # Finds the global step tensor of a graph. Input: graph, optional (defaults to the default
+  # graph). If the global step collection has exactly one item it is used; if empty, it looks up
+  # a tensor named global_step with output index zero and returns nothing if absent. A found
+  # tensor is validated with the assert helper. Returns the tensor or nothing. Raises a type
+  # error (from validation) for a wrong type, non-integer dtype or non-scalar shape. Logs an
+  # error in the ambiguous case.
   """Get the global step tensor.
 
   The global step tensor must be an integer variable. We first try to find it
@@ -163,6 +184,13 @@ def get_global_step(graph=None):
 
 @tf_export(v1=['train.create_global_step'])
 def create_global_step(graph=None):
+  # [FUNCTION DOC]
+  # Creates the global step variable. Input: graph, optional (default graph). Raises a value
+  # error if a global step already exists in that graph. Creates a non-trainable, scalar 64-bit
+  # integer variable named global_step, initialized to zero, using the first-replica
+  # aggregation, registered in the global variables and global step collections. In eager mode
+  # it is created on the CPU device; in graph mode inside the given graph under the root name
+  # scope. Returns the new variable.
   """Create global step tensor in graph.
 
   Args:
@@ -257,6 +285,10 @@ def create_global_step(graph=None):
 
 @tf_export(v1=['train.get_or_create_global_step'])
 def get_or_create_global_step(graph=None):
+  # [FUNCTION DOC]
+  # Returns the existing global step of the graph, or creates one if none exists. Input:
+  # graph, optional (default graph). Side effect: may add a new variable to the graph. Errors
+  # from lookup or creation propagate (type errors for invalid existing steps).
   """Returns and create (if necessary) the global step tensor.
 
   Args:
@@ -328,6 +360,12 @@ def get_or_create_global_step(graph=None):
 
 @tf_export(v1=['train.assert_global_step'])
 def assert_global_step(global_step_tensor):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it asserts a scalar, but the shape check only raises when
+  # the shape is fully defined and not scalar; a partially unknown shape is accepted.
+  # Validates a candidate global step. Input: a variable, resource variable or tensor. Raises a
+  # type error if it is not one of those, if its base dtype is not an integer type, or if its
+  # fully-defined shape is not a scalar. Returns nothing.
   """Asserts `global_step_tensor` is a scalar int `Variable` or `Tensor`.
 
   Args:
@@ -350,6 +388,11 @@ def assert_global_step(global_step_tensor):
 
 
 def _get_global_step_read(graph=None):
+  # [FUNCTION DOC]
+  # HELPER: lookup used by the global step increment logic.
+  # Looks in the graph's cache collection for the global step read tensor. Input: graph,
+  # optional (default graph). Returns the single cached tensor or nothing if there is none.
+  # Raises a runtime error if the collection holds more than one item.
   """Gets global step read tensor in graph.
 
   Args:
@@ -374,6 +417,14 @@ def _get_global_step_read(graph=None):
 
 
 def _get_or_create_global_step_read(graph=None):
+  # [FUNCTION DOC]
+  # HELPER: builds the cached read of the global step for the increment logic.
+  # Input: graph, optional (default graph). Returns an existing cached read tensor if present;
+  # returns nothing if the graph has no global step. Otherwise, for a variable it builds a
+  # conditional that reads the value if initialized and falls back to the initial value
+  # (so reading before initialization is safe); for non-variables it uses the tensor itself.
+  # Adds zero to make a copy as a plain tensor and stores it in the cache collection under the
+  # global step name scope. Returns the cached tensor.
   """Gets or creates global step read tensor in graph.
 
   Args:
@@ -408,6 +459,11 @@ def _get_or_create_global_step_read(graph=None):
 
 
 def _increment_global_step(increment, graph=None):
+  # [FUNCTION DOC]
+  # HELPER: used by training hooks and loops to bump the global step.
+  # Inputs: increment, amount to add; graph, optional (default graph). Raises a value error if
+  # the graph has no global step. Builds an add-assign op on the global step that depends on the
+  # cached read tensor (created if needed), under the root name scope. Returns that op/tensor.
   graph = graph or ops.get_default_graph()
   global_step_tensor = get_global_step(graph)
   if global_step_tensor is None:

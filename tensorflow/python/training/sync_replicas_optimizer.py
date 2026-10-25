@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Defines SyncReplicasOptimizer (deprecated, registered under the v1 train namespace), which
+# turns any optimizer into a synchronous multi-replica one using conditional accumulators and a
+# token queue, plus an internal session hook that performs chief and worker initialization.
+# Imports are only used for graph construction; no import-time side effects beyond the export
+# registration. Superseded by distribution strategies.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -40,6 +46,20 @@ from tensorflow.python.util.tf_export import tf_export
 # replica.
 @tf_export(v1=["train.SyncReplicasOptimizer"])
 class SyncReplicasOptimizer(optimizer.Optimizer):
+  # [CLASS DOC]
+  # Deprecated optimizer wrapper for synchronous data-parallel training in graph mode. It wraps
+  # another optimizer (held in the opt attribute), routes each replica's gradients into
+  # per-variable conditional accumulators, lets the chief average a configured number of them,
+  # applies the average through the wrapped optimizer, and releases replicas through a shared
+  # token queue holding global step values, acting as a barrier. State held: the wrapped
+  # optimizer, replicas to aggregate, total replica count, tokens per step, optional variable
+  # averager and variable list, the global step, the token queue, the chief queue runner, a
+  # list of (accumulator, device) pairs, and a flag recording whether gradients were applied.
+  # After applying gradients it also exposes the local step initialization op, the chief
+  # initialization op and a readiness op. Created with a wrapped optimizer and replica counts;
+  # used via the usual minimize/compute/apply flow plus a session run hook for chief setup.
+  # Subclass of the base Optimizer; delegates gradient computation, slots and variables.
+  # Creating an instance logs a deprecation warning (once) through the deprecation decorator.
   """Class to synchronize, aggregate gradients and pass them to the optimizer.
 
   This class is deprecated. For synchronous training, please use [Distribution
@@ -147,6 +167,16 @@ class SyncReplicasOptimizer(optimizer.Optimizer):
                variables_to_average=None,
                use_locking=False,
                name="sync_replicas"):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: opt, the wrapped optimizer; replicas_to_aggregate, how many gradients
+    # are averaged per update; total_num_replicas, optional worker count (defaults to
+    # replicas_to_aggregate when null); variable_averages, optional moving-average object;
+    # variables_to_average, list of variables for that averager; use_locking, passed to the base
+    # class; name, optional operation name. Stores all of these, computes tokens per step as the
+    # larger of the two replica counts, and initializes the global step, token queue and chief
+    # queue runner to nothing and the accumulator list to empty. Logs the replica counts at
+    # info level. Returns nothing and raises nothing itself. Wrapped by a deprecation decorator
+    # that warns once.
     """Construct a sync_replicas optimizer.
 
     Args:
@@ -195,6 +225,10 @@ class SyncReplicasOptimizer(optimizer.Optimizer):
     self._accumulator_list = []
 
   def compute_gradients(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Pass-through to the wrapped optimizer. Takes any positional and keyword arguments and
+    # returns the list of (gradient, variable) pairs from the wrapped optimizer unchanged.
+    # Aggregation across replicas is deferred to apply_gradients. No side effects of its own.
     """Compute gradients of "loss" for the variables in "var_list".
 
     This simply wraps the compute_gradients() from the real optimizer. The
@@ -213,6 +247,25 @@ class SyncReplicasOptimizer(optimizer.Optimizer):
     return self._opt.compute_gradients(*args, **kwargs)
 
   def apply_gradients(self, grads_and_vars, global_step=None, name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the name argument is accepted but never used, so the documented default of
+    # the optimizer name is not applied here (the name scope uses the optimizer's own name).
+    # KNOWN ISSUE: the docstring says global step is optional, but a missing global step raises.
+    # Builds the synchronous update graph. Inputs: grads_and_vars, non-empty list of
+    # (gradient, variable) pairs where a gradient may be nothing, a dense tensor or sparse
+    # indexed slices; global_step, a required variable; name, unused. For each variable on its
+    # device it creates a conditional accumulator (dense or sparse) named from the variable,
+    # pushes the gradient with the local step, and takes the average once the required number of
+    # replicas has contributed; null gradients pass through. The averaged pairs are applied by
+    # the wrapped optimizer on the global step device, which also increments the global step. A
+    # FIFO token queue is created; the returned train op dequeues a token (after all pushes)
+    # and assigns it to the local step, acting as a barrier. A sync op enqueues tokens equal to
+    # tokens per step after the update (and after variable averaging if configured) and is
+    # wrapped in a chief queue runner. Side effects: creates a non-trainable local-variable
+    # local step colocated with a placeholder op, sets attributes for the local step init op,
+    # chief init op (local step plus accumulator global steps) and readiness op, records
+    # accumulators, and marks gradients as applied. Returns the train op. Raises a value error if
+    # the list is empty, the global step is missing, or a gradient has an unknown type.
     """Apply gradients to variables.
 
     This contains most of the synchronization implementation and also wraps the
@@ -338,6 +391,10 @@ class SyncReplicasOptimizer(optimizer.Optimizer):
       return train_op
 
   def get_chief_queue_runner(self):
+    # [FUNCTION DOC]
+    # Returns the queue runner the chief must start, which runs the sync op that applies the
+    # aggregated update and inserts tokens. Takes no inputs. Raises a value error if
+    # apply_gradients has not been called yet. No side effects.
     """Returns the QueueRunner for the chief to execute.
 
     This includes the operations to synchronize replicas: aggregate gradients,
@@ -358,6 +415,9 @@ class SyncReplicasOptimizer(optimizer.Optimizer):
     return self._chief_queue_runner
 
   def get_slot(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Pass-through to the wrapped optimizer's slot lookup. Takes any positional and keyword
+    # arguments (normally a variable and a slot name). Returns the slot variable or nothing.
     """Return a slot named "name" created for "var" by the Optimizer.
 
     This simply wraps the get_slot() from the actual optimizer.
@@ -372,6 +432,9 @@ class SyncReplicasOptimizer(optimizer.Optimizer):
     return self._opt.get_slot(*args, **kwargs)
 
   def variables(self):
+    # [FUNCTION DOC]
+    # Returns the list of variables of the wrapped optimizer. Takes no inputs. Does not include
+    # this class's own local step variable. No side effects.
     """Fetches a list of optimizer variables in the default graph.
 
     This wraps `variables()` from the actual optimizer. It does not include
@@ -383,6 +446,9 @@ class SyncReplicasOptimizer(optimizer.Optimizer):
     return self._opt.variables()
 
   def get_slot_names(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Pass-through to the wrapped optimizer's slot-name listing. Takes any positional and
+    # keyword arguments and returns the list of slot name strings. No side effects.
     """Return a list of the names of slots created by the `Optimizer`.
 
     This simply wraps the get_slot_names() from the actual optimizer.
@@ -397,6 +463,13 @@ class SyncReplicasOptimizer(optimizer.Optimizer):
     return self._opt.get_slot_names(*args, **kwargs)
 
   def get_init_tokens_op(self, num_tokens=-1):
+    # [FUNCTION DOC]
+    # Builds the op that seeds the token queue with initial tokens (copies of the global step).
+    # Input num_tokens: count to add; the default of minus one means use replicas_to_aggregate.
+    # Returns the enqueue op, or a no-op named for no initial tokens when the count is zero or
+    # less. Raises a value error if called before apply_gradients, or if an explicit count is
+    # below replicas_to_aggregate minus total_num_replicas. Creates graph ops on the global step
+    # device.
     """Returns the op to fill the sync_token_queue with the tokens.
 
     This is supposed to be executed in the beginning of the chief/sync thread
@@ -438,14 +511,29 @@ class SyncReplicasOptimizer(optimizer.Optimizer):
     return init_tokens
 
   def make_session_run_hook(self, is_chief, num_tokens=-1):
+    # [FUNCTION DOC]
+    # Factory for the session hook that initializes this optimizer's local step, queue runner
+    # and initial tokens. Inputs: is_chief, whether this worker is the chief; num_tokens, initial
+    # token count (default minus one meaning the standard amount). Returns the hook object.
+    # No other side effects; validation happens when the hook starts.
     """Creates a hook to handle SyncReplicasHook ops such as initialization."""
     return _SyncReplicasOptimizerHook(self, is_chief, num_tokens)
 
 
 class _SyncReplicasOptimizerHook(session_run_hook.SessionRunHook):
+  # [CLASS DOC]
+  # HELPER: internal hook created by SyncReplicasOptimizer.make_session_run_hook.
+  # Session hook that, once a session exists, runs the local-step initialization (chief or
+  # non-chief variant), runs the initial token op on the chief, and starts the chief queue
+  # runner threads as daemons. Holds the optimizer, chief flag, token count, and the init ops
+  # and queue runner chosen in begin.
   """A SessionRunHook handles ops related to SyncReplicasOptimizer."""
 
   def __init__(self, sync_optimizer, is_chief, num_tokens):
+    # [FUNCTION DOC]
+    # HELPER: constructor for the internal sync-replicas hook.
+    # Stores the synchronized optimizer, whether this is the chief, and the initial token count.
+    # Returns nothing; no graph or session effects.
     """Creates hook to handle SyncReplicasOptimizer initialization ops.
 
     Args:
@@ -458,6 +546,13 @@ class _SyncReplicasOptimizerHook(session_run_hook.SessionRunHook):
     self._num_tokens = num_tokens
 
   def begin(self):
+    # [FUNCTION DOC]
+    # HELPER: hook start callback selecting which init ops to use.
+    # Raises a value error if the optimizer's gradients were not applied yet. On the chief it
+    # picks the chief init op, the readiness op, the chief queue runner and the initial tokens
+    # op (built with the stored token count); on other workers it picks the local step init op
+    # and the readiness op and sets the queue runner and tokens op to nothing. Stores them as
+    # attributes; returns nothing.
     if self._sync_optimizer._gradients_applied is False:  # pylint: disable=protected-access
       raise ValueError(
           "SyncReplicasOptimizer.apply_gradient should be called before using "
@@ -477,6 +572,13 @@ class _SyncReplicasOptimizerHook(session_run_hook.SessionRunHook):
       self._init_tokens_op = None
 
   def after_create_session(self, session, coord):
+    # [FUNCTION DOC]
+    # HELPER: hook callback run after the session is created.
+    # Inputs: session, the new session; coord, the coordinator for threads. Checks that the
+    # readiness op reports the model ready for local initialization, raising a runtime error
+    # (including the init op name and message) otherwise. Then runs the local init op, runs the
+    # initial tokens op if present (chief only), and starts queue runner threads as daemons
+    # tied to the coordinator if present. Returns nothing.
     """Runs SyncReplicasOptimizer initialization ops."""
     local_init_success, msg = session_manager._ready(  # pylint: disable=protected-access
         self._ready_for_local_init_op, session,

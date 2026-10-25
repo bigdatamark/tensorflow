@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Tests for the generated low-level training ops: dense and sparse gradient descent, Adagrad,
+# Ftrl and Adam updates, checked against numpy reference computations, plus a threaded
+# regression test for a copy-on-read race. Runs via the standard test main entry point.
 """Tests for tensorflow.ops.gen_training_ops."""
 
 import itertools
@@ -35,8 +39,15 @@ from tensorflow.python.platform import googletest
 
 
 class TrainingOpsTest(TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for the raw generated training ops (gradient descent, Adagrad, Ftrl, sparse variants,
+  # Adam and resource sparse Adagrad v2) compared against numpy reference formulas across
+  # data types, devices and index types. Most helpers re-run setUp to reset state per case.
 
   def _toType(self, dtype):
+    # [FUNCTION DOC]
+    # HELPER: maps a numpy dtype (16/32/64-bit float, 32/64-bit int) to the framework dtype.
+    # Any other input trips an assertion failure. Returns the framework dtype.
     if dtype == np.float16:
       return dtypes.float16
     elif dtype == np.float32:
@@ -51,6 +62,11 @@ class TrainingOpsTest(TensorFlowTestCase):
       assert False, (dtype)
 
   def _testTypes(self, x, alpha, delta, use_gpu=None):
+    # [FUNCTION DOC]
+    # HELPER: checks the gradient descent op for one input set.
+    # Inputs: x initial values, alpha step size, delta gradient, use_gpu device choice. Resets
+    # test state, creates a variable from x, runs the apply-gradient-descent op, and asserts the
+    # output has the variable's shape and equals x minus alpha times delta (type-aware tolerance).
     self.setUp()
     with self.session(use_gpu=use_gpu):
       var = variable_v1.VariableV1(x)
@@ -64,6 +80,10 @@ class TrainingOpsTest(TensorFlowTestCase):
   @test_util.run_v1_only("ApplyGradientDescent op returns a ref, so it is not "
                          "supported in eager mode.")
   def testApplyGradientDescent(self):
+    # [FUNCTION DOC]
+    # Runs the gradient descent check over float16/32/64 on CPU and GPU with a 100-element
+    # range input, step size two and gradient equal to the range (graph mode only because the
+    # op returns a reference).
     for (dtype, use_gpu) in itertools.product(
         [np.float16, np.float32, np.float64], [False, True]):
       x = np.arange(100).astype(dtype)
@@ -72,6 +92,11 @@ class TrainingOpsTest(TensorFlowTestCase):
       self._testTypes(x, alpha, delta, use_gpu)
 
   def _testTypesForAdagrad(self, x, y, lr, grad, use_gpu=None):
+    # [FUNCTION DOC]
+    # HELPER: checks the Adagrad op. Inputs: x variable values, y accumulator values, lr
+    # learning rate, grad gradient, use_gpu device choice. After applying the op, asserts the
+    # output equals x minus lr times grad divided by the square root of (accumulator plus
+    # grad squared), and that the accumulator became accumulator plus grad squared.
     self.setUp()
     with self.session(use_gpu=use_gpu):
       var = variable_v1.VariableV1(x)
@@ -96,6 +121,12 @@ class TrainingOpsTest(TensorFlowTestCase):
                         l1=0.0,
                         l2=0.0,
                         lr_power=-0.5):
+    # [FUNCTION DOC]
+    # HELPER: checks the Ftrl op. Inputs: x variable, y accumulator, z linear term, lr, grad,
+    # use_gpu, and optional l1 and l2 regularization and lr_power (defaults zero, zero, -0.5).
+    # Applies the op, then asserts the output shape, the accumulator update (accumulator plus
+    # grad squared), the linear term and the new variable value against numpy formulas, with
+    # looser tolerances for float16 and float32 and exact-style comparison for float64.
     self.setUp()
     with self.session(use_gpu=use_gpu):
       var = variable_v1.VariableV1(x)
@@ -141,6 +172,12 @@ class TrainingOpsTest(TensorFlowTestCase):
                                           l1=0.0,
                                           l2=0.0,
                                           lr_power=-0.5):
+    # [FUNCTION DOC]
+    # HELPER: same as the plain Ftrl check but with the option that multiplies the linear term
+    # by the learning rate turned on. Inputs: x, y, z, lr, grad, use_gpu, optional l1, l2,
+    # lr_power. Asserts shape, accumulator, linear term and output against the matching numpy
+    # formulas (linear updated with grad times lr, thresholds scaled by lr), with
+    # dtype-dependent tolerances.
     self.setUp()
     with self.session(use_gpu=use_gpu):
       var = variable_v1.VariableV1(x)
@@ -189,6 +226,9 @@ class TrainingOpsTest(TensorFlowTestCase):
   @test_util.run_v1_only("ApplyAdagrad op returns a ref, so it is not "
                          "supported in eager mode.")
   def testApplyAdagrad(self):
+    # [FUNCTION DOC]
+    # Runs the Adagrad check for float16/32/64 on CPU and GPU with range inputs, accumulator
+    # starting at one, learning rate two (graph mode only).
     for (dtype, use_gpu) in itertools.product(
         [np.float16, np.float32, np.float64], [False, True]):
       x = np.arange(100).astype(dtype)
@@ -200,6 +240,9 @@ class TrainingOpsTest(TensorFlowTestCase):
   @test_util.run_v1_only("ApplyFtrl op returns a ref, so it is not "
                          "supported in eager mode.")
   def testApplyFtrl(self):
+    # [FUNCTION DOC]
+    # Runs the Ftrl check for float16/32/64 on CPU with l1 three, l2 four, learning rate two
+    # and range inputs (graph mode only).
     for dtype in [np.float16, np.float32, np.float64]:
       x = np.arange(100).astype(dtype)
       y = np.arange(1, 101).astype(dtype)
@@ -213,6 +256,9 @@ class TrainingOpsTest(TensorFlowTestCase):
   @test_util.run_v1_only("ApplyFtrlMultiplyLinearByLr op returns a ref, so it "
                          "is not supported in eager mode.")
   def testApplyFtrlMultiplyLinearByLr(self):
+    # [FUNCTION DOC]
+    # Runs the Ftrl check with the multiply-linear-by-learning-rate option for float16/32/64
+    # on CPU with the same inputs as the plain Ftrl test (graph mode only).
     for dtype in [np.float16, np.float32, np.float64]:
       x = np.arange(100).astype(dtype)
       y = np.arange(1, 101).astype(dtype)
@@ -225,6 +271,11 @@ class TrainingOpsTest(TensorFlowTestCase):
           x, y, z, lr, grad, use_gpu=False, l1=l1, l2=l2)
 
   def _testTypesForSparseAdagrad(self, x, y, lr, grad, indices, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: checks the sparse Adagrad op. Inputs: x variable rows, y accumulator rows, lr,
+    # grad rows, indices of the rows to update, use_gpu. Applies the op and asserts the output
+    # shape and, for each listed index, that the variable row and accumulator row match the
+    # Adagrad formulas. Works with empty gradients and indices too.
     self.setUp()
     with self.session(use_gpu=use_gpu):
       var = variable_v1.VariableV1(x)
@@ -256,6 +307,13 @@ class TrainingOpsTest(TensorFlowTestCase):
                               l1=0.0,
                               l2=0.0,
                               lr_power=-0.5):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the expected-value check uses the simple Adagrad-style formula with lr_power
+    # as the exponent and ignores l1, l2 and the linear term, so it only validates the
+    # variable and accumulator rows for the default zero regularization cases used.
+    # HELPER: checks the sparse Ftrl op. Inputs: x, y, z, lr, grad rows, indices, use_gpu,
+    # optional l1, l2, lr_power. Applies the op and asserts shape and, for each index, the
+    # variable and accumulator rows.
     self.setUp()
     with self.session(use_gpu=use_gpu):
       var = variable_v1.VariableV1(x)
@@ -295,6 +353,12 @@ class TrainingOpsTest(TensorFlowTestCase):
                                                 l1=0.0,
                                                 l2=0.0,
                                                 lr_power=-0.5):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: like the plain sparse Ftrl check it ignores l1, l2 and the linear term in
+    # its expected values.
+    # HELPER: checks the sparse Ftrl op with multiply-linear-by-learning-rate enabled, always
+    # on CPU. Inputs: x, y, z, lr, grad rows, indices, optional l1, l2, lr_power. Asserts shape
+    # and per-index variable and accumulator rows.
     self.setUp()
     with self.session(use_gpu=False):
       var = variable_v1.VariableV1(x)
@@ -329,6 +393,10 @@ class TrainingOpsTest(TensorFlowTestCase):
   @test_util.run_v1_only("SparseApplyAdagrad op returns a ref, so it is not "
                          "supported in eager mode.")
   def testSparseApplyAdagrad(self):
+    # [FUNCTION DOC]
+    # Runs the sparse Adagrad check over float16/32/64, int32/int64 index types and CPU/GPU,
+    # updating rows zero and two of a three-row variable, then repeats with empty gradients
+    # and empty indices (graph mode only).
     for (dtype, index_type,
          use_gpu) in itertools.product([np.float16, np.float32, np.float64],
                                        [np.int32, np.int64], [False, True]):
@@ -350,6 +418,9 @@ class TrainingOpsTest(TensorFlowTestCase):
   @test_util.run_v1_only("SparseApplyAdagrad op returns a ref, so it is not "
                          "supported in eager mode.")
   def testSparseApplyAdagradDim1(self):
+    # [FUNCTION DOC]
+    # Sparse Adagrad check with single-column rows over the same dtype, index type and device
+    # combinations (graph mode only).
     for (dtype, index_type,
          use_gpu) in itertools.product([np.float16, np.float32, np.float64],
                                        [np.int32, np.int64], [False, True]):
@@ -366,6 +437,9 @@ class TrainingOpsTest(TensorFlowTestCase):
   @test_util.run_v1_only("SparseApplyFtrl op returns a ref, so it is not "
                          "supported in eager mode.")
   def testSparseApplyFtrlDim1(self):
+    # [FUNCTION DOC]
+    # Sparse Ftrl check with single-column rows, zero initial variable and linear term, over
+    # float types, index types and devices, also with empty gradients and indices (graph only).
     for (dtype, index_type,
          use_gpu) in itertools.product([np.float16, np.float32, np.float64],
                                        [np.int32, np.int64], [False, True]):
@@ -389,6 +463,9 @@ class TrainingOpsTest(TensorFlowTestCase):
   @test_util.run_v1_only("SparseApplyFtrlMultiplyLinearByLr op returns a ref, "
                          "so it is not supported in eager mode.")
   def testSparseApplyFtrlMultiplyLinearByLrDim1(self):
+    # [FUNCTION DOC]
+    # Sparse Ftrl check with multiply-linear-by-learning-rate enabled, single-column rows, over
+    # float types and index types on CPU (graph mode only).
     for (dtype,
          index_type) in itertools.product([np.float16, np.float32, np.float64],
                                           [np.int32, np.int64]):
@@ -407,6 +484,9 @@ class TrainingOpsTest(TensorFlowTestCase):
   @test_util.run_v1_only("ApplyAdam op returns a ref, so it is not "
                          "supported in eager mode.")
   def testApplyAdam(self):
+    # [FUNCTION DOC]
+    # Runs the Adam op check for float16/32/64 on CPU and GPU with range-valued variable,
+    # first and second moments and gradient (graph mode only).
     for dtype, use_gpu in itertools.product(
         [np.float16, np.float32, np.float64], [False, True]):
       var = np.arange(100).astype(dtype)
@@ -416,6 +496,11 @@ class TrainingOpsTest(TensorFlowTestCase):
       self._testTypesForAdam(var, m, v, grad, use_gpu)
 
   def _testTypesForAdam(self, var, m, v, grad, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: checks the Adam op at step one. Inputs: var values, m first moment, v second
+    # moment, grad, use_gpu. Uses beta1 0.9, beta2 0.999, learning rate 0.001, epsilon 1e-8,
+    # computes the expected variable with the numpy helper, applies the op and asserts the
+    # output shape and value.
     self.setUp()
     with self.session(use_gpu=use_gpu):
       var_t = variable_v1.VariableV1(var)
@@ -448,6 +533,10 @@ class TrainingOpsTest(TensorFlowTestCase):
       self.assertAllCloseAccordingToType(new_var, out)
 
   def _adamUpdateNumpy(self, param, g_t, t, m, v, alpha, beta1, beta2, epsilon):
+    # [FUNCTION DOC]
+    # HELPER: numpy reference for one Adam update. Inputs: param, gradient g_t, step t, moments
+    # m and v, learning rate alpha, beta1, beta2, epsilon. Returns the updated parameter and
+    # the updated first and second moments, using bias-corrected step size.
     alpha_t = alpha * np.sqrt(1 - beta2**t) / (1 - beta1**t)
 
     m_t = beta1 * m + (1 - beta1) * g_t
@@ -458,6 +547,12 @@ class TrainingOpsTest(TensorFlowTestCase):
 
   @test_util.run_v2_only
   def testResourceSparseApplyAdagradV2AndDisableCopyOnReadRace(self):
+    # [FUNCTION DOC]
+    # Regression test (eager/v2 only) for a deadlock between disabling copy-on-read and the
+    # resource sparse Adagrad v2 op on the same variables. Builds two variables, defines two
+    # compiled functions that loop a thousand times (one disabling copy-on-read on both
+    # variables, one applying the sparse op), runs them in two threads at once and joins both.
+    # Passing means no deadlock or error occurs.
     dtype = np.float32
     index_type = np.int32
     x_val = [np.arange(10), np.arange(10, 20), np.arange(20, 30)]
@@ -476,6 +571,9 @@ class TrainingOpsTest(TensorFlowTestCase):
 
     @def_function.function
     def fn_disable_copy_on_read():
+      # [FUNCTION DOC]
+      # Nested compiled function: loops over a range, each time disabling copy-on-read on both
+      # variables' handles with the next addition ordered after them. Returns the loop sum.
       ret = constant_op.constant(0, dtypes.int32)
       for i in math_ops.range(num_iter):
         op1 = resource_variable_ops.disable_copy_on_read(var.handle)
@@ -486,6 +584,10 @@ class TrainingOpsTest(TensorFlowTestCase):
 
     @def_function.function
     def fn_resource_sparse_apply_adagrad_v2():
+      # [FUNCTION DOC]
+      # Nested compiled function: loops over a range, each time applying the resource sparse
+      # Adagrad v2 op to the variable and accumulator rows at the chosen indices, with the
+      # addition ordered after it. Returns the loop sum.
       ret = constant_op.constant(0, dtypes.int32)
       for i in math_ops.range(num_iter):
         adagrad_op = gen_training_ops.resource_sparse_apply_adagrad_v2(

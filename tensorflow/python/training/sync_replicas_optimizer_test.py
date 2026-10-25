@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Tests for the synchronous replicas optimizer: a helper that builds multi-worker graphs and
+# sessions on a local in-process cluster, cluster-based tests for averaging, stale gradient
+# dropping and backup workers, and hook tests. Runs through the standard test main entry point.
 """Tests for sync_replicas_optimizer.py."""
 
 import time
@@ -30,6 +34,16 @@ from tensorflow.python.training import training
 
 # Creates the workers and return their sessions, graphs, train_ops.
 def get_workers(num_workers, replicas_to_aggregate, workers):
+  # [FUNCTION DOC]
+  # HELPER: shared fixture builder for the two-/three-worker synchronous optimizer tests.
+  # Inputs: num_workers, number of replicas to build; replicas_to_aggregate, how many gradients
+  # are averaged per update; workers, list of in-process servers (each with a target address).
+  # For each worker it builds a separate graph with a global step and three variables (two
+  # scalars and one sparse-style matrix) on parameter server tasks, constant dense gradients and
+  # one indexed-slices gradient that depend on the worker index, wraps plain gradient descent
+  # (rate 2.0) in a sync replicas optimizer, applies the gradients, creates the session hook and
+  # a monitored training session (worker 0 is chief). Returns three lists: sessions, graphs and
+  # train ops, indexed by worker. Side effects: connects sessions to the given servers.
   sessions = []
   graphs = []
   train_ops = []
@@ -82,13 +96,27 @@ def get_workers(num_workers, replicas_to_aggregate, workers):
 
 
 class SyncReplicasOptimizerTest(test.TestCase):
+  # [CLASS DOC]
+  # Integration tests for the synchronous replicas optimizer using an in-process local cluster
+  # with parameter servers and workers; checks averaging, staleness dropping and backup workers.
 
   def _run(self, train_op, sess):
+    # [FUNCTION DOC]
+    # HELPER: thread target that runs one train op in the given session, so tests can run
+    # workers concurrently. Returns nothing.
     sess.run(train_op)
 
   @test_util.run_v1_only(
       "This exercises tensor lookup via names which is not supported in V2.")
   def test2Workers(self):
+    # [FUNCTION DOC]
+    # Scenario: two workers, two parameter servers, both gradients required per update (graph
+    # mode only). Checks that the chief initialized variables and steps; that after both workers
+    # run once the global step becomes one and variables equal the start minus the average of
+    # the two gradients times the learning rate (dense and sparse); that local steps stay zero
+    # after the initial tokens; that a second round updates local steps to one with variables
+    # unchanged; and that a third round run concurrently moves the global step to two and applies
+    # the averaged update twice.
     num_workers = 2
     replicas_to_aggregate = 2
     num_ps = 2
@@ -181,6 +209,12 @@ class SyncReplicasOptimizerTest(test.TestCase):
   @test_util.run_v1_only(
       "This exercises tensor lookup via names which is not supported in V2.")
   def test3Workers1Backup(self):
+    # [FUNCTION DOC]
+    # Scenario: three workers but only two gradients aggregated per update, so one is a backup
+    # (graph mode only). Workers 0 and 2 finish first and the global step becomes one with
+    # variables updated by the average of their gradients. Worker 1's late gradients are stale and
+    # dropped; later rounds bring local steps to one; then workers 0 and 1 run concurrently and
+    # the global step becomes two with the average of their gradients applied on top.
     num_workers = 3
     replicas_to_aggregate = 2
     num_ps = 2
@@ -257,8 +291,14 @@ class SyncReplicasOptimizerTest(test.TestCase):
 
 
 class SyncReplicasOptimizerHookTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for the session run hook created by the synchronous replicas optimizer, and for the
+  # optimizer's variables listing; no cluster is needed.
 
   def testErrorIfUsedBeforeMinimizeCalled(self):
+    # [FUNCTION DOC]
+    # Creates the optimizer and a chief hook without applying gradients, then starts the hook.
+    # Expects a value error whose message says apply_gradient should be called first.
     opt = training.SyncReplicasOptimizer(
         opt=gradient_descent.GradientDescentOptimizer(1.0),
         replicas_to_aggregate=1,
@@ -271,6 +311,10 @@ class SyncReplicasOptimizerHookTest(test.TestCase):
       "train.SyncReplicasOptimizer and train.GradientDescentOptimizer "
       "are V1 only APIs.")
   def testCanCreatedBeforeMinimizeCalled(self):
+    # [FUNCTION DOC]
+    # Creates the hook before minimize is called, then minimizes a variable with a global step,
+    # and starts the hook. Expects no error, showing the hook only checks at start time
+    # (graph mode only).
     opt = training.SyncReplicasOptimizer(
         opt=gradient_descent.GradientDescentOptimizer(1.0),
         replicas_to_aggregate=1,
@@ -284,6 +328,10 @@ class SyncReplicasOptimizerHookTest(test.TestCase):
   @test_util.run_v1_only(
       "train.SyncReplicasOptimizer and train.AdamOptimizer are V1 only APIs.")
   def testFetchVariableList(self):
+    # [FUNCTION DOC]
+    # Wraps an Adam optimizer, minimizes a variable, and fetches the optimizer's variables.
+    # Expects both Adam beta power accumulators of the wrapped optimizer to be in the list
+    # (graph mode only).
     opt = training.SyncReplicasOptimizer(
         opt=adam.AdamOptimizer(0.01),
         replicas_to_aggregate=1,
