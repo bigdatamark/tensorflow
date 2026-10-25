@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test module for the numpy_compat helpers. Contains one test class checking that np_asarray with
+# copy set to none reuses an existing array on NumPy 2.x, in contrast to an older implementation
+# that always copied. Runs through the standard TensorFlow test main. No import-time side effects.
+
 # Copyright 2025 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,12 +27,23 @@ from tensorflow.python.util import numpy_compat
 
 
 class NumpyCompatCopyBehaviorTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the copy behavior of numpy_compat.np_asarray. No shared fixtures.
 
   def test_no_copy_new_vs_old(self):
+    # [FUNCTION DOC]
+    # Scenario: a float32 array is converted to float32 with copy set to none, once by a local
+    # re-implementation of the old behavior and once by the real np_asarray. Expected: on NumPy 2.x
+    # the old version returns a different object (it always copied), while the new version returns
+    # the very same array object. Asserts identity (not equality) for both cases.
 
     # Define old_np_asarray to replicate the old code that used .astype(dtype)
     # WITHOUT passing `copy=copy`.
     def old_np_asarray(values, dtype=None, order=None, copy=None):
+      # [FUNCTION DOC]
+      # HELPER: test-local copy of the previous np_asarray, which cast without forwarding the copy
+      # argument and therefore always copied on NumPy 2.x. Inputs mirror np_asarray (values, dtype,
+      # order, copy); returns the converted array. Used only as the baseline for comparison.
       if np.lib.NumpyVersion(np.__version__) >= '2.0.0.dev0':
         if dtype is not None and np.issubdtype(dtype, np.number):
           return np.asarray(values, order=order, copy=copy).astype(dtype)

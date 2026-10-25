@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# HELPER: compatibility shims over NumPy so TensorFlow code behaves the same on NumPy 1.x and 2.x.
+# Exposes four wrappers: np_array, np_asarray, np_where and np_reshape. They paper over NumPy 2.x
+# changes (strict overflow errors when a dtype is given at array creation, the copy argument
+# semantics, zero-dimensional input to nonzero, and the new shape/copy arguments of reshape) by
+# checking the installed NumPy version at call time. Used by other util and framework modules in
+# place of calling NumPy directly. No import-time side effects beyond importing NumPy.
+
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,6 +27,13 @@ import numpy as np
 
 
 def np_array(values, dtype=None, copy=True, order='K'):
+  # [FUNCTION DOC]
+  # HELPER: version-safe replacement for direct NumPy array creation.
+  # Inputs: values (array-like), dtype (optional NumPy dtype), copy (default true), order (memory
+  # layout, default 'K'). When dtype is a numeric type the array is first built without dtype and
+  # then cast, so overflowing values wrap as in old NumPy instead of raising; otherwise the dtype
+  # is passed straight through. Returns a new array. Errors from NumPy propagate (for example when
+  # copy is false but a copy is unavoidable). No side effects.
   """Creates a NumPy array containing input values.
 
   It will make a copy of the object.
@@ -50,6 +65,13 @@ def np_array(values, dtype=None, copy=True, order='K'):
 
 
 def np_asarray(values, dtype=None, order=None, copy=None):
+  # [FUNCTION DOC]
+  # HELPER: version-safe replacement for NumPy asarray.
+  # Inputs: values (array-like), dtype (optional), order (optional layout), copy (optional: true,
+  # false or none meaning copy only if needed; honored only on NumPy 2.x, ignored on 1.x).
+  # On NumPy 2.x with a numeric dtype, converts first then casts (passing copy to the cast) so
+  # overflow wraps and an already-matching array is reused; on 1.x calls asarray with dtype and
+  # order. Returns an array (possibly the input itself). NumPy errors propagate. No side effects.
   """Converts input values to a NumPy array.
 
   It will not make a copy.
@@ -83,6 +105,13 @@ def np_asarray(values, dtype=None, order=None, copy=None):
 
 
 def np_where(condition, x=None, y=None):
+  # [FUNCTION DOC]
+  # HELPER: version-safe replacement for NumPy where.
+  # Inputs: condition (array-like of booleans), x and y (optional array-likes, broadcastable with
+  # condition; either both given or both omitted). With both omitted it returns the tuple of index
+  # arrays of non-zero entries, forcing at least one dimension on NumPy 2.1 and later so zero
+  # dimensional input still works. With both given it returns the element-wise choice from x or y.
+  # If only one of x and y is given, NumPy raises its usual error. No side effects.
   """Return elements chosen from x or y depending on condition.
 
   When only condition is provided, np.where(condition) is a shorthand for
@@ -111,6 +140,15 @@ def np_where(condition, x=None, y=None):
 
 
 def np_reshape(a, /, shape=None, *, newshape=None, order='C', copy=None):
+  # [FUNCTION DOC]
+  # HELPER: version-safe replacement for NumPy reshape accepting both shape and legacy newshape.
+  # KNOWN ISSUE: on NumPy older than 2.1 the copy argument is silently ignored, and if neither
+  # shape nor newshape is given NumPy's own error is raised instead of returning a copy as the
+  # docstring's historical note suggests. Also the "both none" test is redundant since shape is
+  # already replaced by newshape.
+  # Inputs: a (array-like), shape (new shape), newshape (deprecated alias, used when shape is
+  # omitted), order (default 'C'), copy (optional, honored on NumPy 2.1+). On 2.1+ with no shape at
+  # all, returns an array made from a; otherwise returns the reshaped view or copy.
   """Reshapes an array without changing its data.
 
   NumPy 2.1.0rc1 added shape and copy arguments to numpy.reshape. See

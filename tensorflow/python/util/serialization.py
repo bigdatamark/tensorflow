@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: JSON serialization hook used when saving Keras and TensorFlow configurations.
+# Exposes get_json_type, intended as the default-handler argument of a JSON encoder, converting
+# configurable objects, NumPy values, callables, types, tensor shapes, dtypes, mappings and the
+# ellipsis into JSON-friendly structures. Depends on NumPy, wrapt and framework dtype/shape
+# classes. No import-time side effects.
+
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +30,18 @@ from tensorflow.python.util.compat import collections_abc
 
 
 def get_json_type(obj):
+  # [FUNCTION DOC]
+  # HELPER: fallback converter for JSON encoding of objects the encoder cannot handle itself.
+  # KNOWN ISSUE: because every callable (including classes) is handled by the callable branch
+  # first, the later branch for Python types is unreachable for classes; and a callable object
+  # without a name attribute raises an attribute error rather than the documented type error. The
+  # mapping and proxy branches return values that may themselves need further conversion.
+  # Input: obj (any object). Checked in order: objects with a configuration method give a mapping
+  # of class name and config; NumPy arrays give nested lists and NumPy scalars give Python
+  # scalars; callables give their name; dimensions give their value (note: callable check runs
+  # before); tensor shapes give a list; dtypes give their name; mappings give a plain dictionary;
+  # the ellipsis gives a marker mapping; wrapt proxies give the wrapped object.
+  # Raises a type error with guidance to add a configuration method if nothing matches.
   """Serializes any object to a JSON-serializable structure.
 
   Args:
