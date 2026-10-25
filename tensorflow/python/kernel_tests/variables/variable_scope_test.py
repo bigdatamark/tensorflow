@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Unit tests for the variable store and variable scope machinery in the variable scope module
+# (default variable store, get_variable, variable_scope, partitioned variables, custom getters,
+# variable creator scopes, the eager variable store and the partition info helper).
+# Most tests run in both graph and eager modes; in eager mode the body is wrapped in a wrapped
+# graph function by the helper decorator defined here. A few older tests are graph-only and use
+# the deprecated-v1 decorator. Defines three partitioner helper functions used by the
+# partitioning tests. Has no import-time side effects beyond imports; running the file as a
+# program starts the test runner.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -43,6 +52,14 @@ from tensorflow.python.util import tf_inspect
 
 
 def run_inside_wrap_function_in_eager_mode(graph_function):
+  # [FUNCTION DOC]
+  # HELPER: test decorator letting the same graph-style test body run in graph and eager modes.
+  # Takes graph_function, a test method (taking only the test case instance) containing graph
+  # code. Returns a new method: in eager mode it wraps the original with the wrap-function
+  # utility (passing the test instance as the only argument) and calls the wrapped result; in
+  # graph mode it simply calls the original with the instance. Raises nothing itself; any
+  # exception from the test body propagates. The returned method does not preserve the name or
+  # docstring of the original.
   """Decorator to execute the same graph code in eager and graph modes.
 
   In graph mode, we just execute the graph_function passed as argument. In eager
@@ -56,6 +73,10 @@ def run_inside_wrap_function_in_eager_mode(graph_function):
     decorated function
   """
   def wrap_and_execute(self):
+    # [FUNCTION DOC]
+    # HELPER: inner wrapper returned by the decorator above.
+    # Given the test case instance, runs the captured graph function directly when graph mode
+    # is active, or via a wrapped graph function when executing eagerly. Returns nothing.
     if context.executing_eagerly():
       wrapped = wrap_function.wrap_function(graph_function, [self])
       # use the wrapped graph function
@@ -67,8 +88,19 @@ def run_inside_wrap_function_in_eager_mode(graph_function):
 
 
 class VariableScopeTest(test.TestCase):
+  # [CLASS DOC]
+  # Main test case for the variable scope module: default variable store behavior (reuse and
+  # existence checks), scope initializers, constraints, dtypes, regularizers, caching devices,
+  # name scopes, reuse semantics, auxiliary name scope handling, collections accessors, and the
+  # eager variable store. Holds no state of its own; tearDown checks for leaked garbage.
 
   def tearDown(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: overrides tearDown without calling the parent implementation, so base-class
+    # cleanup is skipped.
+    # Runs garbage collection and asserts that the list of uncollectable objects (reference
+    # cycles involving finalizers) is empty. Takes no inputs, returns nothing, fails the test
+    # with an assertion error if garbage remains. Side effect: forces a collection.
     gc.collect()
     # This will only contain uncollectable garbage, i.e. reference cycles
     # involving objects with __del__ defined.
@@ -77,6 +109,9 @@ class VariableScopeTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testGetVar(self):
+    # [FUNCTION DOC]
+    # Test: requesting the same name and shape twice from the default variable store returns
+    # the identical variable object (no new variable created). Runs in graph and eager modes.
     vs = variable_scope._get_default_variable_store()
     v = vs.get_variable("v", [1])
     v1 = vs.get_variable("v", [1])
@@ -85,6 +120,9 @@ class VariableScopeTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testResource(self):
+    # [FUNCTION DOC]
+    # Test: asking the default variable store for a variable with the resource option enabled
+    # yields a resource variable instance. Runs in graph and eager modes.
     vs = variable_scope._get_default_variable_store()
     v1 = vs.get_variable("v", [1], use_resource=True)
     self.assertTrue(isinstance(v1, resource_variable_ops.ResourceVariable))
@@ -92,6 +130,10 @@ class VariableScopeTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testNameExists(self):
+    # [FUNCTION DOC]
+    # Test: with no reuse flag the store both creates and returns existing names; with reuse
+    # explicitly false, requesting an existing name raises a value error; with reuse true,
+    # requesting a name that does not exist raises a value error while an existing one succeeds.
     vs = variable_scope._get_default_variable_store()
     # No check by default, so we can both create and get existing names.
     v = vs.get_variable("v", [1])
@@ -110,6 +152,9 @@ class VariableScopeTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testNamelessStore(self):
+    # [FUNCTION DOC]
+    # Test: after creating two variables directly in the default store, the store's internal
+    # variable mapping holds exactly those two variables, named with the output suffix zero.
     vs = variable_scope._get_default_variable_store()
     vs.get_variable("v1", [2])
     vs.get_variable("v2", [2])
@@ -122,6 +167,10 @@ class VariableScopeTest(test.TestCase):
   # type '<type 'NoneType'>'
   @test_util.run_in_graph_and_eager_modes
   def testVarScopeInitializer(self):
+    # [FUNCTION DOC]
+    # Test: an initializer given to a variable scope (by name or by re-entering a scope object)
+    # is inherited by variables created inside, so they are initialized to the constant 0.3.
+    # Graph-and-eager test not wrapped because the group operation rejects null arguments.
     init = init_ops.constant_initializer(0.3)
     with variable_scope.variable_scope("tower0") as tower:
       with variable_scope.variable_scope("foo", initializer=init):
@@ -136,6 +185,9 @@ class VariableScopeTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testVarScopeConstraint(self):
+    # [FUNCTION DOC]
+    # Test: a constraint function given to a scope (by name or via a scope object) is attached
+    # to variables created inside and is available as the variable's constraint attribute.
     constraint = lambda x: 0. * x
     with variable_scope.variable_scope("tower1") as tower:
       with variable_scope.variable_scope("foo", constraint=constraint):
@@ -148,6 +200,9 @@ class VariableScopeTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testVarScopeNestingError(self):
+    # [FUNCTION DOC]
+    # Test: manually entering a scope, then entering another scope, and then exiting the first
+    # one out of order raises a runtime error; exiting afterwards in proper order succeeds.
     with variable_scope.variable_scope("aa"):
       scope = variable_scope.variable_scope("bb")
       scope.__enter__()
@@ -162,6 +217,9 @@ class VariableScopeTest(test.TestCase):
   # (Can not convert a ResourceVariable into a Tensor or Operation.)
   @test_util.run_deprecated_v1
   def testStringDefaultInitializer(self):
+    # [FUNCTION DOC]
+    # Test (graph mode only): a string-typed scalar variable with no initializer defaults to the
+    # empty byte string after global initialization.
     with self.cached_session():
       v = variable_scope.get_variable("string", shape=[], dtype=dtypes.string)
       variables_lib.global_variables_initializer().run()
@@ -170,6 +228,9 @@ class VariableScopeTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testVarScopeDType(self):
+    # [FUNCTION DOC]
+    # Test: a dtype given to a scope (by name or scope object) becomes the default dtype of
+    # variables created inside; checks the base dtype is half precision.
     with variable_scope.variable_scope("tower2") as tower:
       with variable_scope.variable_scope("foo", dtype=dtypes.float16):
         v = variable_scope.get_variable("v", [])
@@ -179,16 +240,28 @@ class VariableScopeTest(test.TestCase):
         self.assertEqual(w.dtype.base_dtype, dtypes.float16)
 
   def testGetVariableInGraphNestedUnderEagerContext(self):
+    # [FUNCTION DOC]
+    # Test: in eager mode, a variable obtained via get_variable and then passed into a graph
+    # function is still a resource variable (checked inside the function).
     with context.eager_mode():
 
       @def_function.function
       def f(v):
+        # [FUNCTION DOC]
+        # HELPER: body of the traced function for the enclosing test.
+        # Takes a variable v and asserts its exact type is the resource variable class. Returns
+        # nothing.
         self.assertEqual(type(v), resource_variable_ops.ResourceVariable)
 
       var = variable_scope.get_variable("should_be_resource", [])
       f(var)
 
   def testEagerVariableStore(self):
+    # [FUNCTION DOC]
+    # Test (eager mode): variables created inside an eager variable store are reported by its
+    # variables, trainable and non-trainable accessors correctly; copying the store gives
+    # equal initial values but independent variable instances (assigning to one store's
+    # variables does not change the other's).
     with context.eager_mode():
       store = variable_scope.EagerVariableStore()
       with store.as_default():
@@ -230,6 +303,10 @@ class VariableScopeTest(test.TestCase):
   # obtaining different results in the eager case compared to the graph one
   @test_util.run_in_graph_and_eager_modes
   def testEagerVariablesStoreAddsToCollections(self):
+    # [FUNCTION DOC]
+    # Test: variables created within an eager variable store are added to the global, trainable
+    # and custom concatenated collections as requested (non-trainable ones excluded from the
+    # trainable collection). Not wrapped because eager and graph results differ.
     store = variable_scope.EagerVariableStore()
     with store.as_default():
       trainable = variable_scope.get_variable("v1", [], trainable=True)
@@ -246,6 +323,9 @@ class VariableScopeTest(test.TestCase):
           ops.get_collection(ops.GraphKeys.CONCATENATED_VARIABLES), [concat])
 
   def testEagerVariablesOutsideStoreNotAddedToCollections(self):
+    # [FUNCTION DOC]
+    # Test (eager mode): variables created without an eager variable store do not appear in the
+    # global or trainable collections.
     with context.eager_mode():
       variable_scope.get_variable("v1", [], trainable=True)
       variable_scope.get_variable("v2", [], trainable=False)
@@ -257,6 +337,10 @@ class VariableScopeTest(test.TestCase):
   # type '<type 'NoneType'>'.
   @test_util.run_in_graph_and_eager_modes
   def testInitFromNonTensorValue(self):
+    # [FUNCTION DOC]
+    # Test: variables can be initialized from a plain number or an array with explicit dtype and
+    # take the given values; an unsupported initializer (an empty mapping) raises a value error
+    # when eager and a type error in graph mode (noted in the test as a quirk).
     v = variable_scope.get_variable("v4", initializer=4, dtype=dtypes.int32)
     self.evaluate(variables_lib.variables_initializer([v]))
     self.assertAllClose(self.evaluate(v.value()), 4)
@@ -276,6 +360,9 @@ class VariableScopeTest(test.TestCase):
   # 'ReadVariableOp/resource' with dtype resource
   @test_util.run_in_graph_and_eager_modes
   def testInitFromNonInitializer(self):
+    # [FUNCTION DOC]
+    # Test: for several integer and boolean dtypes, a variable with no initializer holds the
+    # same values as one initialized explicitly with zeros (the default is zeros).
     # Test various dtypes with zeros initializer as following:
     types = [
         dtypes.int8, dtypes.uint8, dtypes.int16, dtypes.uint16, dtypes.int32,
@@ -299,6 +386,10 @@ class VariableScopeTest(test.TestCase):
   # InvalidArgumentError: /job:moo/replica:0/task:0/device:CPU:0 unknown device.
   @test_util.run_deprecated_v1
   def testVarScopeCachingDevice(self):
+    # [FUNCTION DOC]
+    # Test (graph mode): the caching device set on a scope is inherited by child scopes, can be
+    # cleared with an empty string, can be a callable returning the op device (which is then not
+    # the scope device), can be changed via the scope setter, and does not leak outside.
     with self.cached_session():
       caching_device = "/job:moo"
       with variable_scope.variable_scope("tower"):
@@ -335,12 +426,21 @@ class VariableScopeTest(test.TestCase):
   # AttributeError: Tensor.name is meaningless when eager execution is enabled.
   @test_util.run_in_graph_and_eager_modes
   def testVarScopeRegularizer(self):
+    # [FUNCTION DOC]
+    # Test: regularizers set on scopes apply to variables created in them and add entries to the
+    # regularization loss collection with expected values; setting a new regularizer on a scope
+    # object, passing the no-regularizer marker per variable or per scope, and resetting it
+    # disable regularization; reusing a variable adds no new loss (graph mode only).
     init = init_ops.constant_initializer(0.3)
 
     def regularizer1(v):
+      # [FUNCTION DOC]
+      # HELPER: regularizer for the enclosing test. Returns the mean of variable v plus 0.1.
       return math_ops.reduce_mean(v) + 0.1
 
     def regularizer2(v):
+      # [FUNCTION DOC]
+      # HELPER: regularizer for the enclosing test. Returns the mean of variable v plus 0.2.
       return math_ops.reduce_mean(v) + 0.2
 
     with variable_scope.variable_scope(
@@ -383,6 +483,11 @@ class VariableScopeTest(test.TestCase):
   # init_scope or callable...
   @test_util.run_in_graph_and_eager_modes
   def testInitializeFromValue(self):
+    # [FUNCTION DOC]
+    # Test: a constant tensor can be the initializer (value 0.1); passing an explicit shape with
+    # it raises a value error mentioning shape; it can be inherited through a scope; an integer
+    # tensor gives an integer variable; a mismatching explicit dtype raises a value error saying
+    # the types do not match.
     init = constant_op.constant(0.1)
     w = variable_scope.get_variable("v", initializer=init)
     self.evaluate(variables_lib.variables_initializer([w]))
@@ -414,6 +519,10 @@ class VariableScopeTest(test.TestCase):
   # Operation.)
   @test_util.run_deprecated_v1
   def testControlDeps(self):
+    # [FUNCTION DOC]
+    # Test (graph mode): a variable created under a control dependency on another variable can
+    # be initialized and evaluated without initializing the dependency; reading the dependency
+    # or an add of both fails with an uninitialized error until the dependency is initialized.
     with self.cached_session() as sess:
       v0 = variable_scope.get_variable(
           "v0", [1], initializer=init_ops.constant_initializer(0))
@@ -441,6 +550,10 @@ class VariableScopeTest(test.TestCase):
   # AssertionError: True is not false (last assertFalse)
   @test_util.run_deprecated_v1
   def testEnableResourceVariables(self):
+    # [FUNCTION DOC]
+    # Test (graph mode): enabling resource variables makes the V1 variable constructor return
+    # resource variables; disabling makes it return something else. The global default flag is
+    # saved first and restored in a finally block.
     old = resource_variables_toggle._DEFAULT_USE_RESOURCE
     try:
       resource_variables_toggle.enable_resource_variables()
@@ -458,6 +571,10 @@ class VariableScopeTest(test.TestCase):
   # TypeError: Fetch argument None has invalid type <type 'NoneType'>
   @test_util.run_deprecated_v1
   def testControlFlow(self):
+    # [FUNCTION DOC]
+    # Test (graph mode): variables created inside both branches of a conditional via
+    # get_variable can be initialized and read independently of the outside variable, while the
+    # conditional result fails as uninitialized until that outside variable is initialized.
     with self.cached_session() as sess:
       v0 = variable_scope.get_variable(
           "v0", [], initializer=init_ops.constant_initializer(0))
@@ -465,12 +582,18 @@ class VariableScopeTest(test.TestCase):
 
       # Call get_variable in each of the cond clauses.
       def var_in_then_clause():
+        # [FUNCTION DOC]
+        # HELPER: true branch of the conditional in the enclosing test. Creates variable v1 with
+        # initial value 1, records it in the shared mapping and returns v1 plus the outer v0.
         v1 = variable_scope.get_variable(
             "v1", [1], initializer=init_ops.constant_initializer(1))
         var_dict["v1"] = v1
         return v1 + v0
 
       def var_in_else_clause():
+        # [FUNCTION DOC]
+        # HELPER: false branch of the conditional in the enclosing test. Creates variable v2 with
+        # initial value 2, records it in the shared mapping and returns v2 plus the outer v0.
         v2 = variable_scope.get_variable(
             "v2", [1], initializer=init_ops.constant_initializer(2))
         var_dict["v2"] = v2
@@ -501,6 +624,10 @@ class VariableScopeTest(test.TestCase):
   # type '<type 'NoneType'>'.
   @test_util.run_in_graph_and_eager_modes
   def testGetVariableScope(self):
+    # [FUNCTION DOC]
+    # Test: the current-scope accessor returns a modifiable scope; the initializer set on it
+    # applies to new variables inside the scope and is gone after exit; in graph mode marking
+    # the scope for reuse makes creating a new name raise a value error.
     # Test the get_variable_scope() function and setting properties of result.
     init = init_ops.constant_initializer(0.3)
     with variable_scope.variable_scope("bar"):
@@ -523,6 +650,9 @@ class VariableScopeTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testVarScope(self):
+    # [FUNCTION DOC]
+    # Test: scope names and the name scopes they open follow nesting, and re-entering a scope
+    # object inside another scope prefixes the name scope but keeps the scope's own name.
     with variable_scope.variable_scope("tower4") as tower:
       self.assertEqual(tower.name, "tower4")
       with ops.name_scope("scope") as sc:
@@ -543,6 +673,10 @@ class VariableScopeTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testVarScopeNameScope(self):
+    # [FUNCTION DOC]
+    # Test: name scopes opened inside variable scopes get expected prefixes; in graph mode
+    # re-entering the same scope (by object or string) yields unique suffixed name scopes; the
+    # root scope adds no prefix.
     with ops.name_scope("testVarScopeNameScope1"):
       with variable_scope.variable_scope("tower") as tower:
         with ops.name_scope("scope2") as sc2:
@@ -575,6 +709,10 @@ class VariableScopeTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testVarScopeOriginalNameScope(self):
+    # [FUNCTION DOC]
+    # Test: the scope's original name scope is recorded at first entry and preserved on
+    # re-entry; entering a name scope with that string recreates the original prefix, and a
+    # second such entry gets a unique suffix.
     with self.cached_session():
       with ops.name_scope("scope1"):
         with variable_scope.variable_scope("tower") as tower:
@@ -600,6 +738,10 @@ class VariableScopeTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testVarScopeObjectReuse(self):
+    # [FUNCTION DOC]
+    # Test: re-entering a scope object inherits its reuse flag; once reuse is true it cannot be
+    # turned off by re-entering with reuse false, but a scope created with reuse false can be
+    # re-entered with reuse true.
     with self.cached_session():
       vs = None
       with variable_scope.variable_scope("jump", reuse=True) as scope:
@@ -629,9 +771,18 @@ class VariableScopeTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testVarScopeGetOrCreateReuse(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the final assertion compares the input value with the evaluated constant
+    # tensor, not the variable, so it is always true and does not check variable reuse.
+    # Test: using the automatic-reuse mode, repeatedly creating or fetching the same named
+    # variable and assigning to it works across calls with several values.
     with self.cached_session():
 
       def test_value(value):
+        # [FUNCTION DOC]
+        # HELPER: inner routine of the enclosing test. Takes a number, builds a constant, assigns
+        # it to the auto-reuse variable, fetches the variable again and asserts the number
+        # equals the evaluated constant. Returns nothing.
         x = constant_op.constant(value)
         with variable_scope.variable_scope(
             "testVarScopeGetOrCreateReuse_bar",
@@ -650,6 +801,10 @@ class VariableScopeTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testVarOpScope(self):
+    # [FUNCTION DOC]
+    # Test: scopes entered with a name or a default name: the explicit name wins; re-creating a
+    # variable with the same name in a re-entered scope raises a value error; default names
+    # are made unique with numeric suffixes and name scopes follow.
     with self.cached_session():
       with ops.name_scope("testVarOpScope1"):
         with variable_scope.variable_scope("tower", "default", []):
@@ -678,6 +833,9 @@ class VariableScopeTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testVarOpScopeUniqueNamesInterleavedSubstringScopes(self):
+    # [FUNCTION DOC]
+    # Test: unique default-name numbering treats names that are prefixes of one another
+    # independently (default scope one is numbered separately from default scope).
     with self.cached_session():
       with variable_scope.variable_scope(None, "defaultScope1"):
         with variable_scope.variable_scope(None, "layer"):
@@ -703,6 +861,9 @@ class VariableScopeTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testVarOpScopeUniqueNamesWithJump(self):
+    # [FUNCTION DOC]
+    # Test: unique numbering of default scope names continues even when another scope object is
+    # re-entered between uses.
     with self.cached_session():
       with variable_scope.variable_scope("default") as default:
         with variable_scope.variable_scope(None, "layer"):
@@ -723,6 +884,9 @@ class VariableScopeTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testVarOpScopeReuse(self):
+    # [FUNCTION DOC]
+    # Test: variables under an outer scope with a default name; re-entering the outer scope with
+    # reuse true reuses the same variables while name scopes get new suffixes.
     with self.cached_session():
       with variable_scope.variable_scope("outer") as outer:
         with variable_scope.variable_scope("tower", "default", []):
@@ -751,6 +915,10 @@ class VariableScopeTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testVarScopeGetVar(self):
+    # [FUNCTION DOC]
+    # Test: variable lookup by scope: reuse through a scope object returns the same variable,
+    # new scopes get separate variables, duplicate creation raises a value error, reuse with a
+    # different scope fails, and reuse with a wrong shape or dtype raises errors mentioning them.
     with self.cached_session():
       with variable_scope.variable_scope("root"):
         with variable_scope.variable_scope("towerA") as tower_a:
@@ -799,6 +967,9 @@ class VariableScopeTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testVarScopeOuterScope(self):
+    # [FUNCTION DOC]
+    # Test: re-entering an outer scope object after exit keeps variable names but opens new
+    # suffixed name scopes, with and without reuse, and for child scopes.
     with self.cached_session():
       with variable_scope.variable_scope("outer") as outer:
         pass
@@ -827,6 +998,9 @@ class VariableScopeTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testVarScopeNestedOuterScope(self):
+    # [FUNCTION DOC]
+    # Test: entering the outer scope object while inside itself nests names correctly in name
+    # scopes (repeated outer prefix), with and without reuse.
     with self.cached_session():
       with variable_scope.variable_scope("outer") as outer:
         with variable_scope.variable_scope(outer):
@@ -854,6 +1028,9 @@ class VariableScopeTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testVarOpScopeReuseParam(self):
+    # [FUNCTION DOC]
+    # Test: the reuse argument and the reuse-variables call on a scope make later variables with
+    # same names resolve to existing ones, including with a default name.
     with self.cached_session():
       with variable_scope.variable_scope("outer") as outer:
         with variable_scope.variable_scope("tower", "default", []):
@@ -883,6 +1060,9 @@ class VariableScopeTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testVarOpScopeReuseError(self):
+    # [FUNCTION DOC]
+    # Test: entering an unnamed scope with a default name and reuse true then requesting a new
+    # variable raises a value error.
     with self.cached_session():
       with self.assertRaises(ValueError):
         with variable_scope.variable_scope(None, "default", reuse=True):
@@ -892,6 +1072,9 @@ class VariableScopeTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testVarOpScopeOuterScope(self):
+    # [FUNCTION DOC]
+    # Test: passing both a scope object and default name uses the scope object (default name is
+    # ignored), checking names, name scopes and reuse handling.
     with self.cached_session():
       with variable_scope.variable_scope("outer") as outer:
         pass
@@ -921,6 +1104,9 @@ class VariableScopeTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testVarOpScopeNestedOuterScope(self):
+    # [FUNCTION DOC]
+    # Test: a scope object plus default name entered inside the same scope nests names and name
+    # scopes as expected, with reuse in the second pass.
     with self.cached_session():
       with variable_scope.variable_scope("outer") as outer:
         with variable_scope.variable_scope(outer, "default", []):
@@ -948,6 +1134,10 @@ class VariableScopeTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testBasicWhenAuxiliaryNameScopeIsFalse(self):
+    # [FUNCTION DOC]
+    # Test: with the auxiliary name scope disabled no new name scope is opened: operations get
+    # no scope prefix, variables are still prefixed by scope name, and the original name scope
+    # is empty or the parent's, for fresh and re-entered scopes, top-level and nested.
     with self.cached_session():
       with variable_scope.variable_scope(
           "scope", auxiliary_name_scope=False) as scope:
@@ -987,6 +1177,9 @@ class VariableScopeTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testCreatedByDefaultNameWhenAuxiliaryNameScopeIsFalse(self):
+    # [FUNCTION DOC]
+    # Test: same as the basic auxiliary-name-scope-disabled test, but scopes are created from a
+    # default name instead of an explicit name.
     with self.cached_session():
       with variable_scope.variable_scope(
           None, default_name="default", auxiliary_name_scope=False) as scope:
@@ -1016,6 +1209,10 @@ class VariableScopeTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testReenterRootScopeWhenAuxiliaryNameScopeIsFalse(self):
+    # [FUNCTION DOC]
+    # Test: re-entering the root scope with the auxiliary name scope disabled, at top level and
+    # nested in another scope, leaves variable names unprefixed and ops under only the outer
+    # name scope.
     with self.cached_session():
       root_scope = variable_scope.get_variable_scope()
       with variable_scope.variable_scope(
@@ -1035,6 +1232,9 @@ class VariableScopeTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testAuxiliaryNameScopeIsInvalid(self):
+    # [FUNCTION DOC]
+    # Test: a non-boolean auxiliary name scope value raises a type error mentioning the argument
+    # for a default-name scope, a named scope, and a re-entered scope object.
     with self.cached_session():
       with self.assertRaisesRegex(TypeError, "auxiliary_name_scope"):
         with variable_scope.variable_scope(
@@ -1056,6 +1256,10 @@ class VariableScopeTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testReuseScopeWithoutNameScopeCollision(self):
+    # [FUNCTION DOC]
+    # Test (regression for a public issue): re-entering a scope without its auxiliary name
+    # scope and then entering its original name scope gives expected variable and op names
+    # without collisions with a differently nested name scope of the same string.
     # Github issue: #13429
     with self.cached_session():
       with variable_scope.variable_scope("outer"):
@@ -1091,6 +1295,9 @@ class VariableScopeTest(test.TestCase):
   # (different assertions failing after wrapping, in both execution modes)
   @test_util.run_in_graph_and_eager_modes
   def testGetLocalVar(self):
+    # [FUNCTION DOC]
+    # Test: local variables respect scope naming; in graph mode they are in the local and custom
+    # collections but not the trainable collection, and local variable lookup respects reuse.
     # Check that local variable respects naming.
     with variable_scope.variable_scope("outer") as outer:
       with variable_scope.variable_scope(outer, "default", []):
@@ -1114,6 +1321,8 @@ class VariableScopeTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testSignatureGetVarVsGetLocalVar(self):
+    # [FUNCTION DOC]
+    # Test: the functions for variable and local variable creation have the same argument names.
     """get_{local,}variable() must take the same list of args."""
     arg_names = tf_inspect.getargspec(variable_scope.get_variable)[0]
     local_arg_names = tf_inspect.getargspec(
@@ -1123,10 +1332,17 @@ class VariableScopeTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testGetVarWithDevice(self):
+    # [FUNCTION DOC]
+    # Test: a device function applied while building a separate graph is called for variable
+    # creation ops, observing the right names and element types for a float and an int variable.
     g = ops.Graph()
     varname_type = []
 
     def device_func(op):
+      # [FUNCTION DOC]
+      # HELPER: device function for the enclosing test. Given an operation, records name and
+      # dtype attribute of variable-creating ops in a shared list and always returns the first
+      # GPU device string. No other side effects.
       if op.type in ["Variable", "VariableV2", "VarHandleOp"]:
         varname_type.append((op.name, op.get_attr("dtype")))
       return "/device:GPU:0"
@@ -1143,6 +1359,10 @@ class VariableScopeTest(test.TestCase):
   # obtaining different results in the eager case compared to the graph one
   @test_util.run_deprecated_v1
   def testGetCollection(self):
+    # [FUNCTION DOC]
+    # Test (graph mode): the scope's collection accessor returns only variables under that
+    # scope's prefix (scope names that are prefixes of each other are separated), for trainable
+    # and global collections, and the root scope returns all.
     with self.cached_session():
       _ = variable_scope.get_variable("testGetCollection_a", [])
       _ = variable_scope.get_variable(
@@ -1200,6 +1420,10 @@ class VariableScopeTest(test.TestCase):
   # obtaining different results in the eager case compared to the graph one
   @test_util.run_deprecated_v1
   def testGetTrainableVariablesWithGetVariable(self):
+    # [FUNCTION DOC]
+    # Test (graph mode): trainable variables listing for a scope when created via get_variable:
+    # non-trainable ones excluded; read-synchronized ones default to non-trainable unless
+    # trainable is forced true; other synchronization modes stay trainable.
     with self.cached_session():
       _ = variable_scope.get_variable("testGetTrainableVariables_a", [])
       with variable_scope.variable_scope(
@@ -1239,6 +1463,9 @@ class VariableScopeTest(test.TestCase):
   # obtaining different results in the eager case compared to the graph one
   @test_util.run_deprecated_v1
   def testGetTrainableVariablesWithVariable(self):
+    # [FUNCTION DOC]
+    # Test (graph mode): same scenario as the get_variable version, but variables are created
+    # via the V1 variable constructor with names.
     with self.cached_session():
       _ = variable_v1.VariableV1(1.0, name="testGetTrainableVariables_a")
       with variable_scope.variable_scope(
@@ -1281,6 +1508,9 @@ class VariableScopeTest(test.TestCase):
   # obtaining different results in the eager case compared to the graph one
   @test_util.run_deprecated_v1
   def testGetGlobalVariables(self):
+    # [FUNCTION DOC]
+    # Test (graph mode): the scope's global variables listing only includes variables created
+    # inside that scope.
     with self.cached_session():
       _ = variable_scope.get_variable("testGetGlobalVariables_a", [])
       with variable_scope.variable_scope("testGetGlobalVariables_foo") as scope:
@@ -1294,6 +1524,9 @@ class VariableScopeTest(test.TestCase):
   # obtaining different results in the eager case compared to the graph one
   @test_util.run_deprecated_v1
   def testGetLocalVariables(self):
+    # [FUNCTION DOC]
+    # Test (graph mode): the scope's local variables listing only includes local-collection
+    # variables created inside that scope.
     with self.cached_session():
       _ = variable_scope.get_variable(
           "a", [], collections=[ops.GraphKeys.LOCAL_VARIABLES])
@@ -1306,6 +1539,8 @@ class VariableScopeTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testGetVariableWithRefDtype(self):
+    # [FUNCTION DOC]
+    # Test: get_variable accepts the dtype of an existing variable as dtype argument.
     v = variable_scope.get_variable("v", shape=[3, 4], dtype=dtypes.float32)
     # Ensure it is possible to do get_variable with a _ref dtype passed in.
     _ = variable_scope.get_variable("w", shape=[5, 6], dtype=v.dtype)
@@ -1313,18 +1548,26 @@ class VariableScopeTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testGetVariableWithInitializerWhichTakesNoArgs(self):
+    # [FUNCTION DOC]
+    # Test: a callable initializer with no arguments is accepted and the variable is named as
+    # requested.
     v = variable_scope.get_variable("foo", initializer=lambda: [2])
     self.assertEqual(v.name, "foo:0")
 
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testGetVariableWithInitializerWhichTakesOptionalArgs(self):
+    # [FUNCTION DOC]
+    # Test: a callable initializer whose arguments all have defaults is accepted.
     v = variable_scope.get_variable("foo", initializer=lambda x=True: [2])
     self.assertEqual(v.name, "foo:0")
 
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testGetVariableWithInitializerWhichTakesUnprovidedArgsAndNoShape(self):
+    # [FUNCTION DOC]
+    # Test: a callable initializer with a required argument and no shape raises a value error
+    # describing the valid initializer forms.
     with self.assertRaisesRegex(
         ValueError,
         "The initializer passed is not valid. It should be a callable with no "
@@ -1335,8 +1578,14 @@ class VariableScopeTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testTwoGraphs(self):
+    # [FUNCTION DOC]
+    # Test: entering a scope named with a single underscore, while two nested graphs are
+    # default, raises a value error saying it is not a valid scope name.
 
     def f():
+      # [FUNCTION DOC]
+      # HELPER: callable passed to the error-assertion in the enclosing test. Creates two graphs,
+      # makes both default in nesting and enters an invalid scope name, expecting the failure.
       g1 = ops.Graph()
       g2 = ops.Graph()
       with g1.as_default():
@@ -1349,28 +1598,47 @@ class VariableScopeTest(test.TestCase):
 
 
 def axis0_into1_partitioner(shape=None, **unused_kwargs):
+  # [FUNCTION DOC]
+  # HELPER: partitioner for the partitioning tests that does not split. Takes a shape (list of
+  # dimension sizes, required in practice) and ignores other keyword arguments; returns a list
+  # of ones, one per dimension. Fails with a type error if shape is missing.
   part = [1] * len(shape)
   return part
 
 
 def axis0_into2_partitioner(shape=None, **unused_kwargs):
+  # [FUNCTION DOC]
+  # HELPER: partitioner for the partitioning tests that splits into two along the first axis.
+  # Takes a shape (required in practice), ignores other keywords; returns partitions per axis:
+  # two on axis zero, one elsewhere. Fails with a type error if shape is missing.
   part = [1] * len(shape)
   part[0] = 2
   return part
 
 
 def axis0_into3_partitioner(shape=None, **unused_kwargs):
+  # [FUNCTION DOC]
+  # HELPER: partitioner for the partitioning tests that splits into three along the first axis.
+  # Takes a shape (required in practice), ignores other keywords; returns partitions per axis:
+  # three on axis zero, one elsewhere. Fails with a type error if shape is missing.
   part = [1] * len(shape)
   part[0] = 3
   return part
 
 
 class VariableScopeWithPartitioningTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests partitioned variables created through scopes with partitioner functions: naming of
+  # parts, reuse and changing partitioners, scalar handling, eager behavior, concatenation axis.
 
   # Not converted to use wrap_function because of
   # obtaining different results in the eager case compared to the graph one
   @test_util.run_deprecated_v1
   def testResultNameMatchesRequested(self):
+    # [FUNCTION DOC]
+    # Test (graph mode): a partitioned variable keeps the requested name, its concatenated
+    # tensor name has the output suffix, and exactly two part variables exist for a
+    # two-way partition.
     with variable_scope.variable_scope(
         "scope0", partitioner=axis0_into2_partitioner):
       v = variable_scope.get_variable("name0", shape=(3, 1, 1))
@@ -1385,6 +1653,9 @@ class VariableScopeWithPartitioningTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testBreaksIfPartitioningChanges(self):
+    # [FUNCTION DOC]
+    # Test: reusing a partitioned variable with a different partitioner (three-way or no split)
+    # raises a value error saying the specified and found partitions differ.
     with variable_scope.variable_scope(
         "scope0", partitioner=axis0_into2_partitioner):
       variable_scope.get_variable("name0", shape=(3, 1, 1))
@@ -1408,6 +1679,9 @@ class VariableScopeWithPartitioningTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testReturnsExistingConcatenatedValueIfReuse(self):
+    # [FUNCTION DOC]
+    # Test: after marking the scope for reuse, fetching the partitioned variable again returns
+    # an equal object.
     with variable_scope.variable_scope(
         "scope0", partitioner=axis0_into2_partitioner):
       v_concat = variable_scope.get_variable("name0", shape=(3, 1, 1))
@@ -1418,6 +1692,9 @@ class VariableScopeWithPartitioningTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testAllowsReuseWithoutPartitioner(self):
+    # [FUNCTION DOC]
+    # Test: a partitioned variable can be reused in a scope that has no partitioner and gives
+    # the identical object.
     with variable_scope.variable_scope(
         "scope0", partitioner=axis0_into2_partitioner):
       v = variable_scope.get_variable("name0", shape=(3, 1, 1))
@@ -1426,6 +1703,9 @@ class VariableScopeWithPartitioningTest(test.TestCase):
     self.assertIs(v, v_reused)
 
   def testNoReuseInEagerByDefault(self):
+    # [FUNCTION DOC]
+    # Test (eager mode): requesting the same partitioned variable name twice gives two distinct
+    # objects because eager mode does not reuse by default.
     with context.eager_mode():
       with variable_scope.variable_scope(
           "scope0", partitioner=axis0_into2_partitioner):
@@ -1436,6 +1716,8 @@ class VariableScopeWithPartitioningTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testPropagatePartitionerOnReopening(self):
+    # [FUNCTION DOC]
+    # Test: a scope's partitioner is kept when its scope object is re-entered.
     with variable_scope.variable_scope(
         "scope0", partitioner=axis0_into2_partitioner) as vs:
       self.assertEqual(axis0_into2_partitioner, vs.partitioner)
@@ -1446,6 +1728,9 @@ class VariableScopeWithPartitioningTest(test.TestCase):
   # obtaining different results in the eager case compared to the graph one
   @test_util.run_deprecated_v1
   def testScalarIgnoresPartitioner(self):
+    # [FUNCTION DOC]
+    # Test (graph mode): a scalar variable is not partitioned despite a partitioner, keeping its
+    # plain name in the global collection.
     with variable_scope.variable_scope(
         "scope0", partitioner=axis0_into2_partitioner):
       v = variable_scope.get_variable("name0", shape=())
@@ -1454,10 +1739,19 @@ class VariableScopeWithPartitioningTest(test.TestCase):
       self.assertIn("scope0/name0:0", [x.name for x in variables])
 
   def _testPartitionConcatenatesAlongCorrectAxis(self, use_resource):
+    # [FUNCTION DOC]
+    # HELPER: shared body of the partition-axis tests. Takes use_resource (boolean, whether
+    # partitions are resource variables). Creates two variables of shape two by two by two with
+    # partitioners splitting axis zero and axis one, and asserts the overall shapes and the
+    # shapes of the first two parts. Returns nothing.
     def _part_axis_0(**unused_kwargs):
+      # [FUNCTION DOC]
+      # HELPER: partitioner splitting two ways on the first axis of three; ignores arguments.
       return (2, 1, 1)
 
     def _part_axis_1(**unused_kwargs):
+      # [FUNCTION DOC]
+      # HELPER: partitioner splitting two ways on the second axis of three; ignores arguments.
       return (1, 2, 1)
 
     with variable_scope.variable_scope("root", use_resource=use_resource):
@@ -1482,23 +1776,33 @@ class VariableScopeWithPartitioningTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testPartitionConcatenatesAlongCorrectAxis(self):
+    # [FUNCTION DOC]
+    # Test: runs the shared partition-axis check with non-resource variables.
     self._testPartitionConcatenatesAlongCorrectAxis(use_resource=False)
 
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testPartitionConcatenatesAlongCorrectAxisResource(self):
+    # [FUNCTION DOC]
+    # Test: runs the shared partition-axis check with resource variables.
     self._testPartitionConcatenatesAlongCorrectAxis(use_resource=True)
 
   def testPartitionConcatenatesAlongCorrectAxisResourceInEager(self):
+    # [FUNCTION DOC]
+    # Test (eager mode): runs the shared partition-axis check with resource variables.
     with context.eager_mode():
       self._testPartitionConcatenatesAlongCorrectAxis(use_resource=True)
 
 
 class VariableScopeWithCustomGetterTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests custom getters on scopes and calls, and variable creator scopes.
 
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testNonCallableGetterFails(self):
+    # [FUNCTION DOC]
+    # Test: a non-callable custom getter, on a scope or per call, raises a value error.
     with self.assertRaisesRegex(ValueError, r"custom_getter .* not callable:"):
       with variable_scope.variable_scope("scope0", custom_getter=3):
         variable_scope.get_variable("name0")
@@ -1508,9 +1812,15 @@ class VariableScopeWithCustomGetterTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testNoSideEffectsWithIdentityCustomGetter(self):
+    # [FUNCTION DOC]
+    # Test: a pass-through custom getter changes nothing about reuse: counts invocations (three,
+    # one skipped for the reuse scope without getter) and verifies identity of reused variables.
     called = [0]
 
     def custom_getter(getter, *args, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: counting pass-through getter. Increments the shared call counter and returns the
+      # result of the underlying getter called with all arguments unchanged.
       called[0] += 1
       return getter(*args, **kwargs)
 
@@ -1532,11 +1842,18 @@ class VariableScopeWithCustomGetterTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testSynchronizationAndAggregationWithCustomGetter(self):
+    # [FUNCTION DOC]
+    # Test: custom getters receive the synchronization and aggregation keyword arguments with
+    # defaults (automatic, none) or the values explicitly passed; counts two calls.
     called = [0]
     synchronization = variable_scope.VariableSynchronization.AUTO
     aggregation = variable_scope.VariableAggregation.NONE
 
     def custom_getter(getter, *args, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: getter that counts calls, asserts the synchronization and aggregation keywords
+      # equal the currently expected values from the enclosing test, then calls the underlying
+      # getter with all arguments and returns its result.
       called[0] += 1
 
       # Verify synchronization and aggregation kwargs are as expected.
@@ -1559,8 +1876,14 @@ class VariableScopeWithCustomGetterTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testCustomGetterWithReuse(self):
+    # [FUNCTION DOC]
+    # Test: a custom getter sees the reuse keyword and may wrap results differently, giving
+    # distinct tensor names for first creation and reuse.
     # Custom getter can choose to behave differently on reused variables.
     def custom_getter(getter, *args, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: getter that gets the variable, then returns an identity of it named reused when
+      # the reuse keyword is truthy and not_reused otherwise.
       var = getter(*args, **kwargs)
       if kwargs["reuse"]:
         # This can be used, e.g., for changing the caching device if needed.
@@ -1584,8 +1907,14 @@ class VariableScopeWithCustomGetterTest(test.TestCase):
   # element of this graph.)
   @test_util.run_deprecated_v1
   def testGetterThatCreatesTwoVariablesAndSumsThem(self):
+    # [FUNCTION DOC]
+    # Test (graph mode): a getter creating two variables and returning their sum gives a
+    # tensor of the right shape and name, two trainable variables, and a value equal to the sum.
 
     def custom_getter(getter, name, *args, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: getter for the enclosing test. Gets two underlying variables named with slash
+      # zero and one suffixes and returns their sum inside a name scope. Forwards all extra args.
       g_0 = getter("%s/0" % name, *args, **kwargs)
       g_1 = getter("%s/1" % name, *args, **kwargs)
       with ops.name_scope("custom_getter"):
@@ -1612,14 +1941,21 @@ class VariableScopeWithCustomGetterTest(test.TestCase):
   # element of this graph.)
   @test_util.run_deprecated_v1
   def testNestedCustomGetters(self):
+    # [FUNCTION DOC]
+    # Test (graph mode): nested scopes with sum and product getters create eight variables with
+    # expected nested names, and the final tensor equals the product-of-sums-of-products value.
 
     def sum_getter(getter, name, *args, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: getter that returns the sum of two variables fetched under the sum names.
       g_0 = getter("%s/sum_0" % name, *args, **kwargs)
       g_1 = getter("%s/sum_1" % name, *args, **kwargs)
       with ops.name_scope("sum_getter"):
         return g_0 + g_1
 
     def prod_getter(getter, name, *args, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: getter that returns the product of two variables fetched under the product names.
       g_0 = getter("%s/prod_0" % name, *args, **kwargs)
       g_1 = getter("%s/prod_1" % name, *args, **kwargs)
       with ops.name_scope("prod_getter"):
@@ -1657,13 +1993,20 @@ class VariableScopeWithCustomGetterTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testVariableCreator(self):
+    # [FUNCTION DOC]
+    # Test: nested variable creator scopes chain (the inner forces a name, the outer observes
+    # it), and creators receive synchronization and aggregation keywords from get_variable.
     variable_names = []
 
     def creator_a(next_creator, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: records the name keyword (empty if missing) then defers to the next creator.
       variable_names.append(kwargs.get("name", ""))
       return next_creator(**kwargs)
 
     def creator_b(next_creator, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: overrides the name keyword with a fixed forced name then defers to the next one.
       kwargs["name"] = "forced_name"
       return next_creator(**kwargs)
 
@@ -1676,6 +2019,9 @@ class VariableScopeWithCustomGetterTest(test.TestCase):
     called = [False]
 
     def creater_c(next_creator, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: sets a called flag, asserts on-write synchronization and mean aggregation, then
+      # defers to the next creator.
       called[0] = True
       self.assertEqual(kwargs["synchronization"],
                        variable_scope.VariableSynchronization.ON_WRITE)
@@ -1693,8 +2039,13 @@ class VariableScopeWithCustomGetterTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testVariableCreatorNestingError(self):
+    # [FUNCTION DOC]
+    # Test: exiting a creator scope out of order raises a runtime error; the graph's creator
+    # stack is saved and restored in a finally block to clean up.
 
     def creator(next_creator, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: pass-through creator for the nesting-error test.
       return next_creator(**kwargs)
 
     # Save the state so we can clean up at the end.
@@ -1712,10 +2063,15 @@ class VariableScopeWithCustomGetterTest(test.TestCase):
 
 
 class PartitionInfoTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests the internal partition information helper (full shape and offset of a shard).
 
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testConstructorChecks(self):
+    # [FUNCTION DOC]
+    # Test: constructing partition info with non-sequence arguments raises a type error; with
+    # different lengths or an offset not below the shape raises a value error.
     # Invalid arg types.
     with self.assertRaises(TypeError):
       variable_scope._PartitionInfo(full_shape=None, var_offset=[0, 1])
@@ -1736,6 +2092,9 @@ class PartitionInfoTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testSingleOffset(self):
+    # [FUNCTION DOC]
+    # Test: the single-offset query returns the offset along the sliced axis (four) for a
+    # partitioned case and zero when unpartitioned.
     partition_info = variable_scope._PartitionInfo(
         full_shape=[9, 3], var_offset=[4, 0])
     self.assertEqual(4, partition_info.single_offset([1, 3]))
@@ -1748,6 +2107,9 @@ class PartitionInfoTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testSingleSliceDim(self):
+    # [FUNCTION DOC]
+    # Test: the single-slice-dimension query raises a type error for null shape and value errors
+    # for wrong rank, overflow, or ambiguity; otherwise returns the sliced axis index.
     partition_info = variable_scope._PartitionInfo(
         full_shape=[9, 3], var_offset=[4, 0])
     # Invalid shape.
@@ -1775,12 +2137,20 @@ class PartitionInfoTest(test.TestCase):
 
 
 class VariableScopeMultithreadedTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests scope behavior across threads sharing one graph.
 
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testTwoThreadsDisjointScopeEntry(self):
+    # [FUNCTION DOC]
+    # Test: two threads run one after the other; the first creates a variable and the second
+    # fails with a value error on the same name since the store is shared. Both threads joined.
 
     def thread_fn(i, graph):
+      # [FUNCTION DOC]
+      # HELPER: thread body. In the given graph enters a scope; thread index 0 creates a
+      # variable and checks its name, others expect a value error. Returns nothing.
       with graph.as_default():
         with variable_scope.variable_scope("foo"):
           if i == 0:
@@ -1809,8 +2179,14 @@ class VariableScopeMultithreadedTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testTwoThreadsNestedScopeEntry(self):
+    # [FUNCTION DOC]
+    # Test: two threads hold the same scope open concurrently using events; the second cannot
+    # create the same variable; then both are released and joined.
 
     def thread_fn(i, graph, run_event, pause_event):
+      # [FUNCTION DOC]
+      # HELPER: thread body. Same as the disjoint-thread version, but afterwards signals the
+      # pause event and blocks until the run event is set. Returns nothing.
       with graph.as_default():
         with variable_scope.variable_scope("foo"):
           if i == 0:
@@ -1848,8 +2224,14 @@ class VariableScopeMultithreadedTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @run_inside_wrap_function_in_eager_mode
   def testReenterMainScope(self):
+    # [FUNCTION DOC]
+    # Test: a worker thread re-entering the main thread's scope object gets the main prefix,
+    # while a fresh scope in that thread gets none.
 
     def thread_fn(graph, main_thread_scope):
+      # [FUNCTION DOC]
+      # HELPER: thread body. Takes the graph and the main scope; creates a variable under the
+      # re-entered scope and one under a fresh scope and checks both names. Returns nothing.
       with graph.as_default():
         # Variable created with main scope will have prefix "main".
         with variable_scope.variable_scope(main_thread_scope):
