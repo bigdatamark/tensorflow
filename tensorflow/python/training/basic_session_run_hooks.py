@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Collection of commonly used SessionRunHook implementations for the legacy session-based
+# training loop (exported to the v1 train namespace): step/second timers, tensor logging, stop at
+# step, checkpoint saving (with listeners), step counting, NaN checking, summary saving, global
+# step waiting, final-ops evaluation, feeding and profiling hooks. Also provides the helper that
+# creates the steps-per-run variable used by Estimator-style multi-step loops. Import time effects
+# are limited to registering the exported symbols and defining two module constants.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -47,23 +54,38 @@ _STEPS_PER_RUN_VAR = "steps_per_run"
 
 
 class _HookTimer:
+  # [CLASS DOC]
+  # HELPER: abstract base for the timers that decide when hooks should fire.
+  # Defines the interface (reset, should-trigger query, record-trigger, last triggered step).
+  # Holds no state; subclasses implement the behavior.
   """Base timer for determining when Hooks should trigger.
 
   Should not be instantiated directly.
   """
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Does nothing; the base timer has no state.
     pass
 
   def reset(self):
+    # [FUNCTION DOC]
+    # Default reset: does nothing. Subclasses clear their trigger history here.
     """Resets the timer."""
     pass
 
   def should_trigger_for_step(self, step):
+    # [FUNCTION DOC]
+    # Abstract: subclasses return whether the hook should fire at the given step number.
+    # Always raises a not-implemented error in the base class.
     """Return true if the timer should trigger for the specified step."""
     raise NotImplementedError
 
   def update_last_triggered_step(self, step):
+    # [FUNCTION DOC]
+    # Abstract: subclasses record that a trigger happened at the given step and return the elapsed
+    # seconds and steps since the previous trigger (both null the first time). The base class
+    # always raises a not-implemented error.
     """Update the last triggered time and step number.
 
     Args:
@@ -78,12 +100,20 @@ class _HookTimer:
     raise NotImplementedError
 
   def last_triggered_step(self):
+    # [FUNCTION DOC]
+    # Abstract: subclasses return the step of the last trigger or null if never triggered.
+    # The base class always raises a not-implemented error.
     """Returns the last triggered time step or None if never triggered."""
     raise NotImplementedError
 
 
 @tf_export(v1=["train.SecondOrStepTimer"])
 class SecondOrStepTimer(_HookTimer):
+  # [CLASS DOC]
+  # Concrete timer that fires when either a time interval in seconds or a step interval has
+  # passed since the last trigger (exactly one of the two is configured). Keeps the configured
+  # intervals plus the step and wall-clock time of the last trigger. Used by logging, saving and
+  # summary hooks.
   """Timer that triggers at most once every N seconds or once every N steps.
 
   This symbol is also exported to v2 in tf.estimator namespace. See
@@ -91,6 +121,10 @@ class SecondOrStepTimer(_HookTimer):
   """
 
   def __init__(self, every_secs=None, every_steps=None):
+    # [FUNCTION DOC]
+    # Creates the timer. Inputs: every_secs (number of seconds between triggers, optional) and
+    # every_steps (number of steps between triggers, optional). Exactly one must be given.
+    # Clears trigger history. Raises a value error if neither or both are provided.
     self.reset()
     self._every_secs = every_secs
     self._every_steps = every_steps
@@ -103,10 +137,17 @@ class SecondOrStepTimer(_HookTimer):
     super(SecondOrStepTimer, self).__init__()
 
   def reset(self):
+    # [FUNCTION DOC]
+    # Forgets the last triggered step and time, so the next query triggers. Returns nothing.
     self._last_triggered_step = None
     self._last_triggered_time = None
 
   def should_trigger_for_step(self, step):
+    # [FUNCTION DOC]
+    # Input: step, the current step number. Returns true if nothing has triggered yet; false if
+    # the last trigger was at this same step; otherwise true when the configured seconds have
+    # elapsed since the last trigger or the configured number of steps has been reached.
+    # No side effects (the trigger is recorded separately by the update method).
     """Return true if the timer should trigger for the specified step.
 
     Args:
@@ -134,6 +175,10 @@ class SecondOrStepTimer(_HookTimer):
     return False
 
   def update_last_triggered_step(self, step):
+    # [FUNCTION DOC]
+    # Records a trigger at the given step using the current wall-clock time. Returns a pair of
+    # elapsed seconds and elapsed steps since the previous trigger, both null on the first
+    # trigger. Side effect: stores the new last triggered time and step.
     current_time = time.time()
     if self._last_triggered_time is None:
       elapsed_secs = None
@@ -147,26 +192,41 @@ class SecondOrStepTimer(_HookTimer):
     return (elapsed_secs, elapsed_steps)
 
   def last_triggered_step(self):
+    # [FUNCTION DOC]
+    # Returns the step number of the most recent trigger, or null if it never triggered.
     return self._last_triggered_step
 
 
 class NeverTriggerTimer(_HookTimer):
+  # [CLASS DOC]
+  # Timer that never fires; used by hooks that only act at the end of a run. Stateless.
   """Timer that never triggers."""
 
   def should_trigger_for_step(self, step):
+    # [FUNCTION DOC]
+    # Ignores the step and always returns false.
     _ = step
     return False
 
   def update_last_triggered_step(self, step):
+    # [FUNCTION DOC]
+    # Ignores the step; returns a pair of two null values (no elapsed time or steps). No state.
     _ = step
     return (None, None)
 
   def last_triggered_step(self):
+    # [FUNCTION DOC]
+    # Always returns null since this timer never triggers.
     return None
 
 
 @tf_export(v1=["train.LoggingTensorHook"])
 class LoggingTensorHook(session_run_hook.SessionRunHook):
+  # [CLASS DOC]
+  # Session hook that logs the values of chosen tensors at INFO level, every N local steps, every
+  # N seconds, and/or once at the end of the run. Holds the tag-to-tensor mapping, the display
+  # order of the tags, an optional formatter, a trigger timer, the log-at-end flag, and per-run
+  # state (iteration counter, resolved tensors and whether the current run triggers).
   """Prints the given tensors every N local steps, every N seconds, or at end.
 
   The tensors will be printed to the log, with `INFO` severity. If you are not
@@ -194,6 +254,14 @@ class LoggingTensorHook(session_run_hook.SessionRunHook):
                every_n_secs=None,
                at_end=False,
                formatter=None):
+    # [FUNCTION DOC]
+    # Configures the hook. Inputs: tensors (mapping from tag to tensor or tensor name, or a list of
+    # tensors/names which then serve as their own tags), every_n_iter (step interval, optional),
+    # every_n_secs (seconds interval, optional), at_end (also log at session end, default false),
+    # formatter (optional callable turning the tag-to-value mapping into a string).
+    # Raises a value error if neither at_end nor exactly one interval is given, or if every_n_iter
+    # is not positive. Uses a never-triggering timer when only at_end is requested.
+    # Note: tags from a mapping are sorted; list input keeps its order.
     """Initializes a `LoggingTensorHook`.
 
     Args:
@@ -234,6 +302,10 @@ class LoggingTensorHook(session_run_hook.SessionRunHook):
     self._log_at_end = at_end
 
   def begin(self):
+    # [FUNCTION DOC]
+    # Called before the graph is finalized: resets the timer and iteration counter and resolves
+    # every configured tensor name into a graph element of the default graph.
+    # Raises (via the lookup) if a name is not found in the graph.
     self._timer.reset()
     self._iter_count = 0
     # Convert names to tensors if given
@@ -243,6 +315,9 @@ class LoggingTensorHook(session_run_hook.SessionRunHook):
     }
 
   def before_run(self, run_context):  # pylint: disable=unused-argument
+    # [FUNCTION DOC]
+    # Asks the timer whether to log on this run (remembered for after_run). If so returns session
+    # run arguments requesting the tensors to be fetched; otherwise returns null. run_context unused.
     self._should_trigger = self._timer.should_trigger_for_step(self._iter_count)
     if self._should_trigger:
       return SessionRunArgs(self._current_tensors)
@@ -250,6 +325,12 @@ class LoggingTensorHook(session_run_hook.SessionRunHook):
       return None
 
   def _log_tensors(self, tensor_values):
+    # [FUNCTION DOC]
+    # HELPER: formats and logs fetched tensor values for this hook.
+    # Input: tensor_values, mapping from tag to fetched value. Records the trigger with the timer,
+    # then logs either the formatter output or a comma separated "tag = value" list (with elapsed
+    # seconds when known) at INFO level. Temporarily disables scientific notation in numpy printing
+    # and restores the previous options afterwards (not restored if logging raises).
     original = np.get_printoptions()
     np.set_printoptions(suppress=True)
     elapsed_secs, _ = self._timer.update_last_triggered_step(self._iter_count)
@@ -266,6 +347,9 @@ class LoggingTensorHook(session_run_hook.SessionRunHook):
     np.set_printoptions(**original)
 
   def after_run(self, run_context, run_values):
+    # [FUNCTION DOC]
+    # If this run was selected for logging, logs the fetched values. Always increments the
+    # iteration counter. run_context is unused.
     _ = run_context
     if self._should_trigger:
       self._log_tensors(run_values.results)
@@ -273,12 +357,21 @@ class LoggingTensorHook(session_run_hook.SessionRunHook):
     self._iter_count += 1
 
   def end(self, session):
+    # [FUNCTION DOC]
+    # When logging at end was requested, evaluates all configured tensors once with the given
+    # session and logs them. Otherwise does nothing.
     if self._log_at_end:
       values = session.run(self._current_tensors)
       self._log_tensors(values)
 
 
 def get_or_create_steps_per_run_variable():
+  # [FUNCTION DOC]
+  # Returns the single non-trainable int32 scalar resource variable (initialized to one) that
+  # controls loop iterations per device run. Looks it up in a graph collection of the default
+  # graph; returns it if exactly one exists, raises a runtime error if more than one exists, and
+  # otherwise creates it under the hooks scope (reusing if present) and adds it to the collection
+  # and local variables. Side effect: may add a variable to the default graph.
   """Gets or creates the steps_per_run variable.
 
   In Estimator, the user provided computation, the model_fn, is wrapped
@@ -326,9 +419,19 @@ def get_or_create_steps_per_run_variable():
 
 
 class _MultiStepStopAtStepHook(session_run_hook.SessionRunHook):
+  # [CLASS DOC]
+  # HELPER: internal variant of the stop-at-step hook for loops that run several steps per
+  # session call. Besides requesting a stop it updates the steps-per-run variable so the final
+  # run executes only the remaining steps. Holds the step budget, the target last step, the
+  # initial steps per run, the global step tensor and the steps-per-run variable.
   """Hook that requests stop at a specified step."""
 
   def __init__(self, num_steps=None, last_step=None, steps_per_run=1):
+    # [FUNCTION DOC]
+    # Inputs: num_steps (steps to run after start, optional), last_step (absolute final step,
+    # optional) and steps_per_run (steps per session call, default 1). Exactly one of num_steps and
+    # last_step is required. Raises a value error if both or neither are given, or if steps_per_run
+    # is null or below one. Stores the values.
     """Initializes a `MultiStepStopAtStepHook`.
 
     This hook requests stop after either a number of steps have been
@@ -363,23 +466,37 @@ class _MultiStepStopAtStepHook(session_run_hook.SessionRunHook):
     self._steps_per_run_initial_value = steps_per_run
 
   def begin(self):
+    # [FUNCTION DOC]
+    # Finds the global step tensor and the steps-per-run variable (creating the latter if needed).
+    # Raises a runtime error if no global step exists in the graph.
+    # KNOWN ISSUE: the error message names StopAtStepHook although this is the multi-step variant.
     self._global_step_tensor = training_util.get_global_step()
     if self._global_step_tensor is None:
       raise RuntimeError("Global step should be created to use StopAtStepHook.")
     self._steps_per_run_variable = get_or_create_steps_per_run_variable()
 
   def _update_steps_per_run_variable(self, global_step, session):
+    # [FUNCTION DOC]
+    # HELPER: sets the steps-per-run variable to the smaller of the steps remaining until the last
+    # step and the configured steps per run. Inputs: current global step value and the session in
+    # which the variable value is loaded (side effect on that session).
     steps = min(self._last_step - global_step,
                 self._steps_per_run_initial_value)
     self._steps_per_run_variable.load(steps, session=session)
 
   def after_create_session(self, session, coord):
+    # [FUNCTION DOC]
+    # Reads the current global step; if only a step count was given, converts it into an absolute
+    # last step. Then initializes the steps-per-run variable. coord is unused.
     global_step = session.run(self._global_step_tensor)
     if self._last_step is None:
       self._last_step = global_step + self._num_steps
     self._update_steps_per_run_variable(global_step, session)
 
   def after_run(self, run_context, run_values):
+    # [FUNCTION DOC]
+    # Reads the global step with a separate session call. Requests the run to stop once the last
+    # step is reached, otherwise updates the steps-per-run variable for the next run.
     # Global step cannot be retrieved via SessionRunArgs and before_run due to
     # race condition in hook execution.
     global_step = run_context.session.run(self._global_step_tensor)
@@ -391,6 +508,10 @@ class _MultiStepStopAtStepHook(session_run_hook.SessionRunHook):
 
 @tf_export(v1=["train.StopAtStepHook"])
 class StopAtStepHook(session_run_hook.SessionRunHook):
+  # [CLASS DOC]
+  # Session hook that asks the training loop to stop after a given number of steps or when a
+  # given global step is reached. Holds the step budget or absolute last step and the global step
+  # read tensor.
   """Hook that requests stop at a specified step.
 
   @compatibility(TF2)
@@ -402,6 +523,10 @@ class StopAtStepHook(session_run_hook.SessionRunHook):
   """
 
   def __init__(self, num_steps=None, last_step=None):
+    # [FUNCTION DOC]
+    # Inputs: num_steps (steps to run after the session starts, optional) and last_step (absolute
+    # global step at which to stop, optional). Exactly one is required; raises a value error if
+    # both or neither are given. Stores the values.
     """Initializes a `StopAtStepHook`.
 
     This hook requests stop after either a number of steps have been
@@ -428,19 +553,31 @@ class StopAtStepHook(session_run_hook.SessionRunHook):
     self._last_step = last_step
 
   def begin(self):
+    # [FUNCTION DOC]
+    # Gets or creates the global step read tensor. Raises a runtime error if there is no global
+    # step. May add ops to the default graph.
     self._global_step_tensor = training_util._get_or_create_global_step_read()  # pylint: disable=protected-access
     if self._global_step_tensor is None:
       raise RuntimeError("Global step should be created to use StopAtStepHook.")
 
   def after_create_session(self, session, coord):
+    # [FUNCTION DOC]
+    # If only a step count was given, reads the current global step and sets the absolute last
+    # step to current plus the count. coord is unused.
     if self._last_step is None:
       global_step = session.run(self._global_step_tensor)
       self._last_step = global_step + self._num_steps
 
   def before_run(self, run_context):  # pylint: disable=unused-argument
+    # [FUNCTION DOC]
+    # Requests the global step value to be fetched along with each run. run_context unused.
     return SessionRunArgs(self._global_step_tensor)
 
   def after_run(self, run_context, run_values):
+    # [FUNCTION DOC]
+    # Takes the global step fetched before the run, adds one (assuming the run incremented it),
+    # and if that reaches the last step re-reads the real global step and requests stop when it
+    # really has reached the last step.
     global_step = run_values.results + 1
     if global_step >= self._last_step:
       # Check latest global step to ensure that the targeted last step is
@@ -455,6 +592,10 @@ class StopAtStepHook(session_run_hook.SessionRunHook):
 
 @tf_export(v1=["train.CheckpointSaverListener"])
 class CheckpointSaverListener:
+  # [CLASS DOC]
+  # Interface (with do-nothing defaults) for callbacks run by the checkpoint saver hook: at
+  # session start, before and after each save, and at session end. A listener may stop training
+  # by returning true from the after-save callback. Stateless by default.
   """Interface for listeners that take action before or after checkpoint save.
 
   `CheckpointSaverListener` triggers only in steps when `CheckpointSaverHook` is
@@ -508,20 +649,36 @@ class CheckpointSaverListener:
   """
 
   def begin(self):
+    # [FUNCTION DOC]
+    # Called once before the session is used; may add ops to the graph. Default does nothing.
     pass
 
   def before_save(self, session, global_step_value):
+    # [FUNCTION DOC]
+    # Called before each checkpoint is written, with the session and current global step value.
+    # Default does nothing.
     pass
 
   def after_save(self, session, global_step_value):
+    # [FUNCTION DOC]
+    # Called after each checkpoint is written, with the session and global step value. May return
+    # true to request that training stops. Default does nothing and returns null.
     pass
 
   def end(self, session, global_step_value):
+    # [FUNCTION DOC]
+    # Called at the end of the session, with the session and final global step value. Default does
+    # nothing.
     pass
 
 
 @tf_export(v1=["train.CheckpointSaverHook"])
 class CheckpointSaverHook(session_run_hook.SessionRunHook):
+  # [CLASS DOC]
+  # Session hook that periodically (every N steps or seconds) saves checkpoints, writes the graph
+  # definition and meta graph, emits session-log summaries, and notifies registered listeners.
+  # Holds the saver or scaffold, target paths, a timer, the listeners, the global step tensor, a
+  # summary writer and the steps-per-run estimate.
   """Saves checkpoints every N steps or seconds."""
 
   def __init__(self,
@@ -533,6 +690,13 @@ class CheckpointSaverHook(session_run_hook.SessionRunHook):
                scaffold=None,
                listeners=None,
                save_graph_def=True):
+    # [FUNCTION DOC]
+    # Inputs: checkpoint_dir (directory for files), save_secs / save_steps (interval, exactly one
+    # required by the timer), saver (optional saver), checkpoint_basename (file base name, default
+    # model.ckpt), scaffold (optional, used to obtain the saver), listeners (optional list of
+    # listeners), save_graph_def (write the graph and meta graphs, default true).
+    # Raises a value error if both saver and scaffold are given, and (from the timer) if the
+    # intervals are missing or both given. Logs a creation message.
     """Initializes a `CheckpointSaverHook`.
 
     Args:
@@ -571,9 +735,16 @@ class CheckpointSaverHook(session_run_hook.SessionRunHook):
     self._save_graph_def = save_graph_def
 
   def _set_steps_per_run(self, steps_per_run):
+    # [FUNCTION DOC]
+    # HELPER: lets the surrounding training machinery tell the hook how many steps each run
+    # executes. Stores the value; returns nothing.
     self._steps_per_run = steps_per_run
 
   def begin(self):
+    # [FUNCTION DOC]
+    # Gets the cached summary writer for the checkpoint directory, finds or creates the global
+    # step read tensor and calls begin on all listeners. Raises a runtime error if there is no
+    # global step.
     self._summary_writer = SummaryWriterCache.get(self._checkpoint_dir)
     self._global_step_tensor = training_util._get_or_create_global_step_read()  # pylint: disable=protected-access
     if self._global_step_tensor is None:
@@ -583,6 +754,12 @@ class CheckpointSaverHook(session_run_hook.SessionRunHook):
       l.begin()
 
   def after_create_session(self, session, coord):
+    # [FUNCTION DOC]
+    # Called once the session exists. Reads the global step; optionally writes the graph
+    # definition text file into the checkpoint directory; builds the meta graph (with the saver
+    # definition if a saver is available) and adds the graph and meta graph to the summary writer;
+    # then saves an initial checkpoint at the current step and records it with the timer.
+    # coord is unused. Side effects: files written, summaries emitted, listeners invoked.
     global_step = session.run(self._global_step_tensor)
     if self._save_graph_def:
       # We do write graph and saver_def at the first call of before_run.
@@ -602,9 +779,15 @@ class CheckpointSaverHook(session_run_hook.SessionRunHook):
     self._timer.update_last_triggered_step(global_step)
 
   def before_run(self, run_context):  # pylint: disable=unused-argument
+    # [FUNCTION DOC]
+    # Requests the global step value to be fetched with every run. run_context unused.
     return SessionRunArgs(self._global_step_tensor)
 
   def after_run(self, run_context, run_values):
+    # [FUNCTION DOC]
+    # Uses the (possibly stale) fetched step plus steps per run to cheaply decide whether a save
+    # may be due; if so reads the real global step, rechecks the timer, saves a checkpoint and
+    # requests stop if any listener asked for it.
     stale_global_step = run_values.results
     if self._timer.should_trigger_for_step(stale_global_step +
                                            self._steps_per_run):
@@ -616,6 +799,9 @@ class CheckpointSaverHook(session_run_hook.SessionRunHook):
           run_context.request_stop()
 
   def end(self, session):
+    # [FUNCTION DOC]
+    # Reads the final global step, saves a last checkpoint if that step was not already saved, and
+    # calls the end callback of every listener with the step.
     last_step = session.run(self._global_step_tensor)
     if last_step != self._timer.last_triggered_step():
       self._save(session, last_step)
@@ -623,6 +809,12 @@ class CheckpointSaverHook(session_run_hook.SessionRunHook):
       l.end(session, last_step)
 
   def _save(self, session, step):
+    # [FUNCTION DOC]
+    # HELPER: performs one checkpoint save for the hook.
+    # Inputs: session and the global step value. Calls every listener's before-save callback, saves
+    # through the saver (writing the meta graph only if configured), adds a checkpoint session log
+    # to the summary writer, then calls every after-save callback. Returns true if any listener
+    # requested training to stop. Logs progress. Errors from saver or listeners propagate.
     """Saves the latest checkpoint, returns should_stop."""
     logging.info("Calling checkpoint listeners before saving checkpoint %d...",
                  step)
@@ -648,6 +840,11 @@ class CheckpointSaverHook(session_run_hook.SessionRunHook):
     return should_stop
 
   def _get_saver(self):
+    # [FUNCTION DOC]
+    # HELPER: resolves the saver to use. Returns the explicit saver if given, else the scaffold's
+    # saver (which may be null), else the single saver found in the saver collection of the default
+    # graph (cached for later). Raises a runtime error if that collection is empty or holds more
+    # than one item.
     if self._saver is not None:
       return self._saver
     elif self._scaffold is not None:
@@ -672,6 +869,11 @@ class CheckpointSaverHook(session_run_hook.SessionRunHook):
 
 @tf_export(v1=["train.StepCounterHook"])
 class StepCounterHook(session_run_hook.SessionRunHook):
+  # [CLASS DOC]
+  # Session hook that measures training speed in global steps per second at a configurable
+  # interval, logs it, and writes it as a scalar summary when a summary writer is available.
+  # Holds a timer, optional writer or output directory, the last seen global step and the steps
+  # per run estimate.
   """Hook that counts steps per second."""
 
   def __init__(self,
@@ -679,6 +881,12 @@ class StepCounterHook(session_run_hook.SessionRunHook):
                every_n_secs=None,
                output_dir=None,
                summary_writer=None):
+    # [FUNCTION DOC]
+    # Inputs: every_n_steps (step interval, default 100), every_n_secs (seconds interval),
+    # output_dir (directory for a lazily created summary writer) and summary_writer (explicit
+    # writer). Raises a value error unless exactly one of the two intervals is non-null.
+    # KNOWN ISSUE: because every_n_steps defaults to 100, asking for a seconds interval alone also
+    # requires explicitly setting every_n_steps to null, otherwise the value error is raised.
 
     if (every_n_steps is None) == (every_n_secs is None):
       raise ValueError(
@@ -692,9 +900,16 @@ class StepCounterHook(session_run_hook.SessionRunHook):
     self._steps_per_run = 1
 
   def _set_steps_per_run(self, steps_per_run):
+    # [FUNCTION DOC]
+    # HELPER: lets the training machinery tell the hook how many steps each run executes.
+    # Stores the value; returns nothing.
     self._steps_per_run = steps_per_run
 
   def begin(self):
+    # [FUNCTION DOC]
+    # Creates a cached summary writer from the output directory if no writer was given, finds or
+    # creates the global step read tensor and builds the summary tag from the global step name.
+    # Raises a runtime error if no global step exists.
     if self._summary_writer is None and self._output_dir:
       self._summary_writer = SummaryWriterCache.get(self._output_dir)
     self._global_step_tensor = training_util._get_or_create_global_step_read()  # pylint: disable=protected-access
@@ -704,9 +919,15 @@ class StepCounterHook(session_run_hook.SessionRunHook):
     self._summary_tag = training_util.get_global_step().op.name + "/sec"
 
   def before_run(self, run_context):  # pylint: disable=unused-argument
+    # [FUNCTION DOC]
+    # Requests the global step value to be fetched with every run. run_context unused.
     return SessionRunArgs(self._global_step_tensor)
 
   def _log_and_record(self, elapsed_steps, elapsed_time, global_step):
+    # [FUNCTION DOC]
+    # HELPER: reports speed. Inputs: steps and seconds elapsed since the previous trigger and the
+    # current global step. Computes steps per second, writes it as a scalar summary if a writer
+    # exists, and logs it at INFO level. Division by zero elapsed time is not guarded.
     steps_per_sec = elapsed_steps / elapsed_time
     if self._summary_writer is not None:
       summary = Summary(value=[
@@ -716,6 +937,12 @@ class StepCounterHook(session_run_hook.SessionRunHook):
     logging.info("%s: %g", self._summary_tag, steps_per_sec)
 
   def after_run(self, run_context, run_values):
+    # [FUNCTION DOC]
+    # Uses the fetched (stale) step plus steps per run to check the timer; if due, reads the real
+    # step, and on a confirmed trigger records it and logs/writes the speed (skipped on the very
+    # first trigger when no interval exists). Also warns (at most five times) when the fetched
+    # global step equals the previous one, i.e. the global step is not being incremented.
+    # Remembers the fetched step. run_context is otherwise unused.
     _ = run_context
 
     stale_global_step = run_values.results
@@ -752,19 +979,30 @@ class StepCounterHook(session_run_hook.SessionRunHook):
 
 @tf_export(v1=["train.NanLossDuringTrainingError"])
 class NanLossDuringTrainingError(RuntimeError):
+  # [CLASS DOC]
+  # Runtime error raised by the NaN-tensor hook when the monitored loss becomes NaN and the hook
+  # is configured to fail. Carries a fixed message.
 
   def __str__(self):
+    # [FUNCTION DOC]
+    # Returns the fixed text saying that a NaN loss occurred during training.
     return "NaN loss during training."
 
 
 @tf_export(v1=["train.NanTensorHook"])
 class NanTensorHook(session_run_hook.SessionRunHook):
+  # [CLASS DOC]
+  # Session hook that fetches a loss tensor every run and reacts when it is NaN: either raises
+  # a NaN-loss error or requests a clean stop. Holds the loss tensor and the fail flag.
   """Monitors the loss tensor and stops training if loss is NaN.
 
   Can either fail with exception or just stop training.
   """
 
   def __init__(self, loss_tensor, fail_on_nan_loss=True):
+    # [FUNCTION DOC]
+    # Inputs: loss_tensor (tensor to monitor) and fail_on_nan_loss (default true: raise on NaN;
+    # false: just request stop). Stores both; returns nothing.
     """Initializes a `NanTensorHook`.
 
     Args:
@@ -775,9 +1013,15 @@ class NanTensorHook(session_run_hook.SessionRunHook):
     self._fail_on_nan_loss = fail_on_nan_loss
 
   def before_run(self, run_context):  # pylint: disable=unused-argument
+    # [FUNCTION DOC]
+    # Requests the loss tensor to be fetched with every run. run_context unused.
     return SessionRunArgs(self._loss_tensor)
 
   def after_run(self, run_context, run_values):
+    # [FUNCTION DOC]
+    # Checks the fetched loss for NaN. If NaN: logs an error and raises the NaN-loss error when
+    # failing is enabled, otherwise logs a warning and asks the run context to stop.
+    # Does nothing for a non-NaN loss.
     if np.isnan(run_values.results):
       failure_message = "Model diverged with loss = NaN."
       if self._fail_on_nan_loss:
@@ -791,6 +1035,11 @@ class NanTensorHook(session_run_hook.SessionRunHook):
 
 @tf_export(v1=["train.SummarySaverHook"])
 class SummarySaverHook(session_run_hook.SessionRunHook):
+  # [CLASS DOC]
+  # Session hook that runs summary ops every N steps or seconds and writes the results with a
+  # summary writer, also emitting a session-start log on the first run and flushing at the end.
+  # Holds the summary op or scaffold, writer or output directory, a timer and per-run state
+  # (next expected step, whether this run requests summaries, global step tensor).
   """Saves summaries every N steps."""
 
   def __init__(self,
@@ -800,6 +1049,13 @@ class SummarySaverHook(session_run_hook.SessionRunHook):
                summary_writer=None,
                scaffold=None,
                summary_op=None):
+    # [FUNCTION DOC]
+    # Inputs: save_steps / save_secs (interval, validated by the timer), output_dir (used to create
+    # a writer when none is supplied), summary_writer, scaffold (source of the summary op) and
+    # summary_op (tensor or list of tensors). Raises a value error unless exactly one of scaffold
+    # and summary_op is given.
+    # KNOWN ISSUE: a TODO in the code notes that no error is raised when both output_dir and
+    # summary_writer are missing; summaries are then silently dropped.
     """Initializes a `SummarySaverHook`.
 
     Args:
@@ -833,6 +1089,10 @@ class SummarySaverHook(session_run_hook.SessionRunHook):
     # TODO(mdan): Throw an error if output_dir and summary_writer are None.
 
   def begin(self):
+    # [FUNCTION DOC]
+    # Creates a cached summary writer from the output directory if needed, clears the next-step
+    # marker and finds or creates the global step read tensor. Raises a runtime error if there is
+    # no global step.
     if self._summary_writer is None and self._output_dir:
       self._summary_writer = SummaryWriterCache.get(self._output_dir)
     self._next_step = None
@@ -842,6 +1102,10 @@ class SummarySaverHook(session_run_hook.SessionRunHook):
           "Global step should be created to use SummarySaverHook.")
 
   def before_run(self, run_context):  # pylint: disable=unused-argument
+    # [FUNCTION DOC]
+    # Decides whether this run should produce summaries (the first run, or when the timer fires for
+    # the expected next step). Returns run arguments always fetching the global step and, when
+    # summaries are due and a summary op exists, also the summary tensors. run_context unused.
     self._request_summary = (
         self._next_step is None or
         self._timer.should_trigger_for_step(self._next_step))
@@ -853,6 +1117,11 @@ class SummarySaverHook(session_run_hook.SessionRunHook):
     return SessionRunArgs(requests)
 
   def after_run(self, run_context, run_values):
+    # [FUNCTION DOC]
+    # Does nothing without a summary writer. Otherwise determines the global step (reading the
+    # real one on the first run or when summaries were requested, else stale plus one), writes a
+    # session-start log on the first run, and when summaries were requested records the trigger and
+    # writes each fetched summary. Updates the expected next step.
     _ = run_context
     if not self._summary_writer:
       return
@@ -875,10 +1144,15 @@ class SummarySaverHook(session_run_hook.SessionRunHook):
     self._next_step = global_step + 1
 
   def end(self, session=None):
+    # [FUNCTION DOC]
+    # Flushes pending summaries of the writer, if any. The session argument is optional and unused.
     if self._summary_writer:
       self._summary_writer.flush()
 
   def _get_summary_op(self):
+    # [FUNCTION DOC]
+    # HELPER: resolves the summary tensors. Prefers the explicit summary op, else the scaffold's
+    # summary op. Returns null if none is available, otherwise a list (a single tensor is wrapped).
     """Fetches the summary op either from self._summary_op or self._scaffold.
 
     Returns:
@@ -900,6 +1174,10 @@ class SummarySaverHook(session_run_hook.SessionRunHook):
 
 @tf_export(v1=["train.GlobalStepWaiterHook"])
 class GlobalStepWaiterHook(session_run_hook.SessionRunHook):
+  # [CLASS DOC]
+  # Session hook that blocks the first training run until the global step (advanced by other
+  # workers) reaches a threshold, used to stagger worker start in distributed training. Holds the
+  # threshold, a started flag and the global step tensor.
   """Delays execution until global step reaches `wait_until_step`.
 
   This hook delays execution until global step reaches to `wait_until_step`. It
@@ -909,6 +1187,8 @@ class GlobalStepWaiterHook(session_run_hook.SessionRunHook):
   """
 
   def __init__(self, wait_until_step):
+    # [FUNCTION DOC]
+    # Input: wait_until_step, the global step (integer) to wait for. Stores it; returns nothing.
     """Initializes a `GlobalStepWaiterHook`.
 
     Args:
@@ -917,6 +1197,11 @@ class GlobalStepWaiterHook(session_run_hook.SessionRunHook):
     self._wait_until_step = wait_until_step
 
   def begin(self):
+    # [FUNCTION DOC]
+    # Marks the worker as not started and finds or creates the global step read tensor.
+    # Raises a runtime error if there is no global step.
+    # KNOWN ISSUE: the error message names a class called _GlobalStepWaiterHook, which does not
+    # exist (the class is GlobalStepWaiterHook).
     self._worker_is_started = False
     self._global_step_tensor = training_util._get_or_create_global_step_read()  # pylint: disable=protected-access
     if self._global_step_tensor is None:
@@ -924,6 +1209,11 @@ class GlobalStepWaiterHook(session_run_hook.SessionRunHook):
           "Global step should be created to use _GlobalStepWaiterHook.")
 
   def before_run(self, run_context):
+    # [FUNCTION DOC]
+    # Returns null immediately if already started or the threshold is not positive. Otherwise
+    # blocks, polling the global step through the run context's session every half second (sleeping
+    # in between) and logging progress when the step advanced by over a thousand, until the step
+    # reaches the threshold; then marks the worker started and returns null.
     if self._worker_is_started:
       return None
 
@@ -949,9 +1239,16 @@ class GlobalStepWaiterHook(session_run_hook.SessionRunHook):
 
 @tf_export(v1=["train.FinalOpsHook"])
 class FinalOpsHook(session_run_hook.SessionRunHook):
+  # [CLASS DOC]
+  # Session hook that evaluates given tensors once when the session ends and keeps the results,
+  # available through the final_ops_values property. Holds the ops, an optional feed mapping and
+  # the computed values (null until the end).
   """A hook which evaluates `Tensors` at the end of a session."""
 
   def __init__(self, final_ops, final_ops_feed_dict=None):
+    # [FUNCTION DOC]
+    # Inputs: final_ops (a tensor, list of tensors or mapping from names to tensors) and
+    # final_ops_feed_dict (optional feed mapping). Stores them and sets the result to null.
     """Initializes `FinalOpHook` with ops to run at the end of the session.
 
     Args:
@@ -966,9 +1263,16 @@ class FinalOpsHook(session_run_hook.SessionRunHook):
 
   @property
   def final_ops_values(self):
+    # [FUNCTION DOC]
+    # Property returning the values computed at session end (same structure as the final ops), or
+    # null if the session has not ended or no ops were given.
     return self._final_ops_values
 
   def end(self, session):
+    # [FUNCTION DOC]
+    # If final ops were given, runs them in the session with the feed mapping and stores the
+    # values. If an out-of-range error or stop-iteration occurs (meaning the ops read more input),
+    # logs an explanatory warning and re-raises it.
     if self._final_ops is not None:
       try:
         self._final_ops_values = session.run(
@@ -993,9 +1297,15 @@ class FinalOpsHook(session_run_hook.SessionRunHook):
 
 @tf_export(v1=["train.FeedFnHook"])
 class FeedFnHook(session_run_hook.SessionRunHook):
+  # [CLASS DOC]
+  # Session hook that calls a user supplied function before each run and uses the returned
+  # mapping as extra feed values. Holds only that function.
   """Runs `feed_fn` and sets the `feed_dict` accordingly."""
 
   def __init__(self, feed_fn):
+    # [FUNCTION DOC]
+    # Input: feed_fn, a callable without arguments returning a mapping from tensors to values.
+    # Stores it as a public attribute.
     """Initializes a `FeedFnHook`.
 
     Args:
@@ -1005,12 +1315,20 @@ class FeedFnHook(session_run_hook.SessionRunHook):
     self.feed_fn = feed_fn
 
   def before_run(self, run_context):  # pylint: disable=unused-argument
+    # [FUNCTION DOC]
+    # Calls the feed function and returns run arguments with no fetches and that feed mapping.
+    # run_context is unused.
     return session_run_hook.SessionRunArgs(
         fetches=None, feed_dict=self.feed_fn())
 
 
 @tf_export(v1=["train.ProfilerHook"])
 class ProfilerHook(session_run_hook.SessionRunHook):
+  # [CLASS DOC]
+  # Session hook that periodically runs a step with full tracing and saves the collected
+  # execution statistics as a Chrome trace timeline file per profiled step, also adding the run
+  # metadata to a summary writer. Holds the output file pattern, writer, display options, a
+  # timer and per-run state.
   """Captures CPU/GPU profiling information every N steps or seconds.
 
   This produces files called "timeline-<step>.json", which are in Chrome
@@ -1026,6 +1344,11 @@ class ProfilerHook(session_run_hook.SessionRunHook):
                output_dir="",
                show_dataflow=True,
                show_memory=False):
+    # [FUNCTION DOC]
+    # Inputs: save_steps / save_secs (interval, validated by the timer), output_dir (directory for
+    # trace files, default current directory), show_dataflow (default true) and show_memory
+    # (default false) trace options. Builds the output file pattern, obtains a cached summary
+    # writer for the directory (side effect) and creates the timer.
     """Initializes a hook that takes periodic profiling snapshots.
 
     `options.run_metadata` argument of `tf.Session.Run` is used to collect
@@ -1052,12 +1375,19 @@ class ProfilerHook(session_run_hook.SessionRunHook):
         every_secs=save_secs, every_steps=save_steps)
 
   def begin(self):
+    # [FUNCTION DOC]
+    # Clears the next-step marker and finds or creates the global step read tensor.
+    # Raises a runtime error if there is no global step.
     self._next_step = None
     self._global_step_tensor = training_util._get_or_create_global_step_read()  # pylint: disable=protected-access
     if self._global_step_tensor is None:
       raise RuntimeError("Global step should be created to use ProfilerHook.")
 
   def before_run(self, run_context):
+    # [FUNCTION DOC]
+    # Decides whether this run is profiled (not the first run, and the timer fires for the expected
+    # next step). Returns run arguments fetching the global step, with full-trace run options when
+    # profiling and none otherwise. run_context is unused.
     self._request_summary = (
         self._next_step is not None and
         self._timer.should_trigger_for_step(self._next_step))
@@ -1069,6 +1399,10 @@ class ProfilerHook(session_run_hook.SessionRunHook):
     return SessionRunArgs(requests, options=opts)
 
   def after_run(self, run_context, run_values):
+    # [FUNCTION DOC]
+    # On the first run, starts the timer so profiling waits a full interval. When this run was
+    # profiled, reads the real global step, records the trigger, writes the timeline file and adds
+    # the run metadata to the summary writer under a step-named tag. Updates the next expected step.
     stale_global_step = run_values.results["global_step"]
     if self._next_step is None:
       # Update the timer so that it does not activate until N steps or seconds
@@ -1086,6 +1420,11 @@ class ProfilerHook(session_run_hook.SessionRunHook):
     self._next_step = global_step + 1
 
   def _save(self, step, save_path, step_stats):
+    # [FUNCTION DOC]
+    # HELPER: writes one profile. Inputs: step number (for logging), destination file path and the
+    # collected step statistics. Converts the statistics to Chrome trace JSON honoring the dataflow
+    # and memory options and writes it to the file (created or overwritten). Returns nothing; file
+    # errors propagate.
     logging.info("Saving timeline for %d into '%s'.", step, save_path)
     with gfile.Open(save_path, "w") as f:
       trace = timeline.Timeline(step_stats)
@@ -1095,6 +1434,12 @@ class ProfilerHook(session_run_hook.SessionRunHook):
 
 
 def _as_graph_element(obj):
+  # [FUNCTION DOC]
+  # HELPER: resolves a tensor or tensor name to a graph element of the default graph, for the
+  # tensor logging hook. A non-string object must belong to the current graph and is returned
+  # as is, else a value error is raised. A string with a colon is looked up directly; a string
+  # without one is looked up as output zero, and a value error is raised if the operation has a
+  # second output (ambiguous name). Lookup failures from the graph propagate.
   """Retrieves Graph element."""
   graph = ops.get_default_graph()
   if not isinstance(obj, str):

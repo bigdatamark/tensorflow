@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Unit tests for the legacy graph-style Adam optimizer (training.adam.AdamOptimizer).
+# Contains a numpy reference implementation of one Adam update step and a single test case class
+# that compares optimizer results against it for dense, sparse, tensor/callable learning rates,
+# shared optimizers across update ops, multiple graphs/sessions, eager slot uniqueness and XLA
+# sharding of variables and slots. No import-time side effects; runs via the test main entry point.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -42,6 +48,13 @@ def adam_update_numpy(param,
                       beta1=0.9,
                       beta2=0.999,
                       epsilon=1e-8):
+  # [FUNCTION DOC]
+  # HELPER: numpy reference implementation used by the Adam optimizer tests to compute expected values.
+  # Performs one Adam step. Inputs: param (current parameter array), g_t (gradient array), t (1-based
+  # step number), m and v (previous first and second moment estimates), and optional hyperparameters
+  # alpha (learning rate), beta1, beta2 and epsilon. Computes the bias-corrected step size, updates
+  # the moment estimates and the parameter. Returns a tuple of the new parameter, new first moment
+  # and new second moment. No side effects and no exceptions raised by this code itself.
   alpha_t = alpha * np.sqrt(1 - beta2**t) / (1 - beta1**t)
 
   m_t = beta1 * m + (1 - beta1) * g_t
@@ -52,8 +65,19 @@ def adam_update_numpy(param,
 
 
 class AdamOptimizerTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the legacy AdamOptimizer. Has no instance state of its own; each test builds
+  # its own graph, variables and optimizer and compares the results of three optimizer steps with
+  # the numpy reference update. Shared scenario drivers are doTestSparse and doTestBasic.
 
   def doTestSparse(self, use_resource=False):
+    # [FUNCTION DOC]
+    # HELPER: shared driver for the sparse-gradient tests (testSparse and testResourceSparse).
+    # Input use_resource (default false) selects resource variables instead of reference variables.
+    # For each of half, float32 and float64 it creates two variables, applies indexed-slices
+    # gradients that cover every row, runs three Adam steps in graph mode and asserts the beta power
+    # accumulators equal the beta values raised to the step number and the variables match the numpy
+    # reference. Returns nothing; assertion failures signal errors.
     for dtype in [dtypes.half, dtypes.float32, dtypes.float64]:
       with self.cached_session():
         # Initialize variables for numpy implementation.
@@ -102,14 +126,22 @@ class AdamOptimizerTest(test.TestCase):
           self.assertAllCloseAccordingToType(var1_np, self.evaluate(var1))
 
   def testSparse(self):
+    # [FUNCTION DOC]
+    # Runs the sparse gradient scenario in a fresh graph using reference variables.
     with ops.Graph().as_default():
       self.doTestSparse(use_resource=False)
 
   def testResourceSparse(self):
+    # [FUNCTION DOC]
+    # Runs the sparse gradient scenario in a fresh graph using resource variables.
     with ops.Graph().as_default():
       self.doTestSparse(use_resource=True)
 
   def testSparseDevicePlacement(self):
+    # [FUNCTION DOC]
+    # For int32 and int64 index types, builds a loss from a gather on a variable and minimizes it
+    # with Adam in graph mode, forcing GPU placement when a GPU exists. Asserts only that all
+    # optimizer ops can be placed and run without error.
     with ops.Graph().as_default():
       for index_dtype in [dtypes.int32, dtypes.int64]:
         with self.cached_session(force_gpu=test.is_gpu_available()):
@@ -124,6 +156,10 @@ class AdamOptimizerTest(test.TestCase):
           minimize_op.run()
 
   def testGatherGradientWithBadIndicesPolicy(self):
+    # [FUNCTION DOC]
+    # Builds a gather-nd with the ignore policy for bad indices (one index is negative), then
+    # minimizes the result with Adam and runs one step. Asserts only that the gradient flows
+    # through the optimizer without raising an error.
     with ops.Graph().as_default():
       with self.cached_session(force_gpu=test.is_gpu_available()):
         var = variables.Variable([1.0, 2.0])
@@ -138,6 +174,10 @@ class AdamOptimizerTest(test.TestCase):
         minimize_op.run()
 
   def testSparseRepeatedIndices(self):
+    # [FUNCTION DOC]
+    # For each float dtype, applies Adam to one variable with a sparse gradient that repeats an
+    # index and to another with the pre-aggregated equivalent gradient. Asserts both variables are
+    # equal initially and after each of three steps, i.e. repeated indices are summed.
     with ops.Graph().as_default():
       for dtype in [dtypes.half, dtypes.float32, dtypes.float64]:
         with self.cached_session():
@@ -169,6 +209,18 @@ class AdamOptimizerTest(test.TestCase):
                                 self.evaluate(repeated_index_update_var))
 
   def doTestBasic(self, use_resource=False, use_callable_params=False):
+    # [FUNCTION DOC]
+    # HELPER: shared driver for the dense-gradient tests (testBasic, testResourceBasic,
+    # testBasicCallableParams).
+    # Inputs: use_resource (default false) chooses resource over reference variables;
+    # use_callable_params (default false) intends to pass hyperparameters as callables.
+    # KNOWN ISSUE: only the learning rate is actually passed to the optimizer; the beta1, beta2 and
+    # epsilon values (callable or not) are computed but never used.
+    # Skips the test when running eagerly without resource variables. For each float dtype it
+    # builds variables, applies gradients, checks the beta accumulators exist, are in the optimizer
+    # variables, have the requested variable type and are not visible from another graph, then runs
+    # three steps comparing with the numpy reference and, for resource variables, checks the slot
+    # name. Returns nothing.
     if context.executing_eagerly() and not use_resource:
       self.skipTest(
           "Skipping test with use_resource=False and executing eagerly.")
@@ -253,6 +305,8 @@ class AdamOptimizerTest(test.TestCase):
                              opt.get_slot(var=var0, name="m").name)
 
   def testBasic(self):
+    # [FUNCTION DOC]
+    # Runs the dense scenario with reference variables inside a cached session.
     with self.cached_session():
       self.doTestBasic(use_resource=False)
 
@@ -260,14 +314,21 @@ class AdamOptimizerTest(test.TestCase):
   @test_util.disable_tfrt("b/168527439: invalid runtime fallback "
                           "resource variable reference on GPU.")
   def testResourceBasic(self):
+    # [FUNCTION DOC]
+    # Runs the dense scenario with resource variables in both graph and eager modes.
     self.doTestBasic(use_resource=True)
 
   @test_util.disable_tfrt("b/153089059: cannot create half tensor on GPU.")
   def testBasicCallableParams(self):
+    # [FUNCTION DOC]
+    # Runs the dense scenario in eager mode with resource variables and a callable learning rate.
     with context.eager_mode():
       self.doTestBasic(use_resource=True, use_callable_params=True)
 
   def testTensorLearningRate(self):
+    # [FUNCTION DOC]
+    # In graph mode, creates Adam with a constant tensor as learning rate, runs three steps for
+    # each float dtype and asserts the beta powers and variable values match the numpy reference.
     with ops.Graph().as_default():
       for dtype in [dtypes.half, dtypes.float32, dtypes.float64]:
         with self.cached_session():
@@ -308,6 +369,10 @@ class AdamOptimizerTest(test.TestCase):
             self.assertAllCloseAccordingToType(var1_np, self.evaluate(var1))
 
   def testSharing(self):
+    # [FUNCTION DOC]
+    # Creates two update ops from one optimizer on the same variables and alternates running them
+    # for three steps. Asserts the shared beta accumulators and variables follow the numpy
+    # reference, showing slots and accumulators are shared rather than duplicated.
     with ops.Graph().as_default():
       for dtype in [dtypes.half, dtypes.float32, dtypes.float64]:
         with self.cached_session():
@@ -354,6 +419,10 @@ class AdamOptimizerTest(test.TestCase):
   @test_util.disable_tfrt("b/168527439: invalid runtime fallback "
                           "resource variable reference on GPU.")
   def testTwoSessions(self):
+    # [FUNCTION DOC]
+    # Reuses one optimizer first eagerly, then in two separate graphs with their own sessions.
+    # Asserts nothing explicitly; passes if applying gradients in each context raises no error,
+    # i.e. the optimizer keys its state by graph.
     optimizer = adam.AdamOptimizer()
 
     with context.eager_mode():
@@ -381,6 +450,9 @@ class AdamOptimizerTest(test.TestCase):
   @test_util.disable_tfrt("b/168527439: invalid runtime fallback "
                           "resource variable reference on GPU.")
   def testSlotsUniqueEager(self):
+    # [FUNCTION DOC]
+    # In eager mode, minimizes a sum of two resource variables with Adam and asserts the optimizer
+    # reports six distinct variables: two beta accumulators plus two slots for each variable.
     with context.eager_mode():
       v1 = resource_variable_ops.ResourceVariable(1.)
       v2 = resource_variable_ops.ResourceVariable(1.)
@@ -392,6 +464,10 @@ class AdamOptimizerTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testXlaSharding(self):
+    # [FUNCTION DOC]
+    # Graph-mode test: splits two resource variables with an XLA mesh split, applies one Adam
+    # step, and asserts the beta accumulators carry no sharding while the variables and their
+    # m and v slots do have a sharding annotation.
     dtype = dtypes.float32
     with self.session(graph=ops.Graph()):
       # Initialize variables for numpy implementation.

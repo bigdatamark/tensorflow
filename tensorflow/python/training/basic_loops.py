@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Provides basic_train_loop, a minimal training driver for the legacy Supervisor workflow. It is
+# exported publicly as the v1 train.basic_train_loop symbol. Only the exported decorator
+# registration happens at import time.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +27,16 @@ def basic_train_loop(supervisor,
                      args=None,
                      kwargs=None,
                      master=""):
+  # [FUNCTION DOC]
+  # Runs a training loop under a Supervisor. Inputs: supervisor (training services object),
+  # train_step_fn (callable invoked with the session followed by args and kwargs), args (optional
+  # list of positional arguments, defaults to empty), kwargs (optional mapping of keyword
+  # arguments, defaults to empty) and master (address used to create the session, empty string
+  # means a local in-process session). Repeatedly opens a managed session and calls the step
+  # function until the supervisor says to stop. If an aborted error is raised (a distributed
+  # server restarted) the whole managed session is recreated and the loop starts again; any other
+  # exception propagates. Returns nothing. Side effects: whatever the step function and
+  # supervisor do (checkpointing, summaries, threads).
   """Basic loop to train a model.
 
   Calls `train_step_fn` in a loop to train a model.  The function is called as:
