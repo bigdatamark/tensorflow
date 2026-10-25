@@ -1,3 +1,16 @@
+# [MODULE DOC]
+# HELPER: helper module that only supplies shared lists of operations for the ragged tensor tests.
+# KNOWN ISSUE: the module docstring is a loose sentence ("lists ops of RaggedTensor for the interest
+# of test"); the file contains data only and no test cases or functions itself.
+# Defines module-level constant lists that group the TensorFlow ops that the ragged elementwise-op
+# tests exercise: unary float ops (math, activation, special-function and string conversion ops),
+# unary boolean ops (logical not), unary string ops (base64 coding, strip, case, length, decompress),
+# binary float ops (arithmetic, comparison, min/max, power and special functions), binary boolean ops
+# (logical and, or, xor), unary integer ops (bitwise invert, unicode script), binary integer ops
+# (bitwise and, or, xor, shifts, truncating division and modulo) and binary assertion ops (equality,
+# near, ordering checks in both v1 and v2 forms).
+# Each op is meant to appear in at least one list, or be tested separately when it needs extra arguments.
+# Import-time side effects: only imports the op modules; no registrations or flags.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
