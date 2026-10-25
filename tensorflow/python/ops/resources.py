@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Helpers for generic (non-variable) resources that are tracked in graph collections.
+# Defines a record type pairing a resource handle with its create op and is-initialized op, and
+# functions to register such records in the shared or local resource collection, list them, build
+# an op reporting which are uninitialized, and group their create ops into one initializer.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,6 +38,12 @@ _Resource = collections.namedtuple("_Resource",
 
 
 def register_resource(handle, create_op, is_initialized_op, is_shared=True):
+  # [FUNCTION DOC]
+  # Records a resource in a graph collection so it can be found later.
+  # Inputs: handle (op returning the resource handle), create_op (op that initializes it),
+  # is_initialized_op (op returning a scalar boolean tensor), is_shared (default true). Wraps them
+  # in the record type and adds it to the shared resources collection of the default graph when
+  # shared, otherwise to the local resources collection. Returns nothing.
   """Registers a resource into the appropriate collections.
 
   This makes the resource findable in either the shared or local resources
@@ -55,17 +66,30 @@ def register_resource(handle, create_op, is_initialized_op, is_shared=True):
 
 
 def shared_resources():
+  # [FUNCTION DOC]
+  # Returns the list of resource records in the shared resources collection of the default graph.
+  # Takes no inputs; has no side effects.
   """Returns resources visible to all tasks in the cluster."""
   return ops.get_collection(ops.GraphKeys.RESOURCES)
 
 
 def local_resources():
+  # [FUNCTION DOC]
+  # Returns the list of resource records in the local resources collection of the default graph.
+  # Takes no inputs; has no side effects.
   """Returns resources intended to be local to this session."""
   return ops.get_collection(ops.GraphKeys.LOCAL_RESOURCES)
 
 
 def report_uninitialized_resources(resource_list=None,
                                    name="report_uninitialized_resources"):
+  # [FUNCTION DOC]
+  # Builds a tensor holding the handle names of resources that are not yet initialized.
+  # Inputs: resource_list (optional list of resource records; when null, shared plus local ones
+  # are used) and name (scope name for the created ops). Ops are placed on the device named by
+  # an environment variable for uninitialized-variable reporting, defaulting to the first CPU.
+  # Returns an empty string tensor when the list is empty; otherwise stacks the is-initialized
+  # ops, negates them, and masks the constant name vector with the result. Adds ops to the graph.
   """Returns the names of all uninitialized resources in resource_list.
 
   If the returned tensor is empty then all resources have been initialized.
@@ -103,6 +127,11 @@ def report_uninitialized_resources(resource_list=None,
 
 @tf_should_use.should_use_result
 def initialize_resources(resource_list, name="init"):
+  # [FUNCTION DOC]
+  # Creates one op that initializes all given resources.
+  # Inputs: resource_list (list of resource records, may be empty or null) and name (op name).
+  # Returns a grouped op depending on every create op, or a no-op when the list is empty. The
+  # decorator warns if the returned op is never used.
   """Initializes the resources in the given list.
 
   Args:

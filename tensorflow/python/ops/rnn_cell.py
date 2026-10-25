@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Public RNN cell module of the legacy ops API. Re-exports every public name from the
+# rnn_cell_impl module through a wildcard import, so cell classes and helpers can be imported
+# from here. No logic of its own; the only effect is the import-time import of that module.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

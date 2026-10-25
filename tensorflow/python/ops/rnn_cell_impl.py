@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: internal implementation module behind the public RNN cell module.
+# Re-exports the legacy Keras RNN cell classes (basic, LSTM, GRU, multi-layer, wrappers, state
+# tuple, base classes) as module attributes, defines private variable-name constants, and offers
+# shape helpers for building zero states plus a check that an object behaves like an RNN cell.
+# No import-time side effects beyond imports.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -48,9 +54,19 @@ RNNCell = rnn_cell_impl.RNNCell
 
 
 def _zero_state_tensors(state_size, batch_size, dtype):
+  # [FUNCTION DOC]
+  # HELPER: builds zero-filled initial state tensors for an RNN cell.
+  # Inputs: state_size (an int, shape, or nested structure of them), batch_size (int or scalar
+  # tensor) and dtype. Returns a structure matching state_size of zero tensors whose shape is
+  # the batch size followed by each state size. Static shape is also set when not eager.
   """Create tensors of zeros based on state_size, batch_size, and dtype."""
 
   def get_state_shape(s):
+    # [FUNCTION DOC]
+    # HELPER: nested helper of the zero-state builder, applied to each state size entry.
+    # Input: s, one state size. Returns a zeros tensor of dtype taken from the enclosing call and
+    # shape formed by joining the batch size with s; outside eager mode it also sets the static
+    # shape computed with the static form of the concatenation.
     """Combine s with batch_size to get a proper tensor shape."""
     c = _concat(batch_size, s)
     size = array_ops.zeros(c, dtype=dtype)
@@ -63,6 +79,13 @@ def _zero_state_tensors(state_size, batch_size, dtype):
 
 
 def _concat(prefix, suffix, static=False):
+  # [FUNCTION DOC]
+  # HELPER: concatenates two size specifications, each an int, shape or tensor.
+  # Inputs: prefix (usually batch size), suffix, and static (default false). When static is
+  # true returns a list of ints (entries may be unknown) or null if rank is unknown; otherwise
+  # returns a 1-D integer tensor made by concatenating both parts. Raises a value error when a
+  # tensor prefix or suffix is not a scalar or vector, or when a dynamic result is requested
+  # while either part is not fully defined.
   """Concat that enables int, Tensor, or TensorShape values.
 
   This function takes a size specification, which can be an integer, a
@@ -134,6 +157,10 @@ def _concat(prefix, suffix, static=False):
 
 
 def _hasattr(obj, attr_name):
+  # [FUNCTION DOC]
+  # HELPER: reports whether an object has the named attribute.
+  # Inputs: obj and attr_name. Returns true if fetching the attribute succeeds, false if it
+  # raises an attribute error. Note that fetching may trigger properties on the object.
   try:
     getattr(obj, attr_name)
   except AttributeError:
@@ -143,6 +170,11 @@ def _hasattr(obj, attr_name):
 
 
 def assert_like_rnncell(cell_name, cell):
+  # [FUNCTION DOC]
+  # Validates that an object quacks like an RNN cell.
+  # Inputs: cell_name (string used in the error message) and cell (object to check). Checks for
+  # output size, state size, either an initial-state or zero-state method, and callability.
+  # Returns nothing; raises a type error listing every failed condition if any check fails.
   """Raises a TypeError if cell is not like an RNNCell.
 
   NOTE: Do not rely on the error message (in particular in tests) which can be

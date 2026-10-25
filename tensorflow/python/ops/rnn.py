@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Legacy (TF1-style) recurrent network construction helpers built on RNN cell objects.
+# Provides dynamic (while-loop based) and static (unrolled) RNN builders, bidirectional variants,
+# a low-level loop driven by a user callback, a state-saving variant, and private helpers for
+# transposing batch/time axes, inferring batch size and state dtype, deciding about a caching
+# device, stepping with per-example sequence lengths, and reversing sequences. Most public
+# functions are deprecated in favor of the Keras RNN layers and are exported under the v1 nn
+# namespace. Import-time side effect: binds a module alias for the cell-module concat helper.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -42,6 +50,11 @@ _concat = rnn_cell_impl._concat
 
 
 def _transpose_batch_time(x):
+  # [FUNCTION DOC]
+  # HELPER: swaps the batch and time axes of a tensor for the RNN builders.
+  # Input: x, a tensor. Returns x unchanged when its static rank is known and below two;
+  # otherwise returns x with the first two axes exchanged, keeping static shape information
+  # where available. Adds transpose ops to the graph; raises nothing itself.
   """Transposes the batch and time dimensions of a Tensor.
 
   If the input tensor has rank < 2 it returns the original tensor. Retains as
@@ -68,6 +81,12 @@ def _transpose_batch_time(x):
 
 
 def _best_effort_input_batch_size(flat_input):
+  # [FUNCTION DOC]
+  # HELPER: finds the batch size of time-major inputs, static if possible.
+  # Input: flat_input, an iterable of time-major tensors. Returns a Python integer taken from the
+  # first input whose static batch dimension is known, else a scalar tensor with the dynamic
+  # batch size of the first input. Inputs of unknown rank are skipped. Raises a value error if a
+  # known-rank input has rank below two.
   """Get static input batch size if available, with fallback to the dynamic one.
 
   Args:
@@ -95,6 +114,12 @@ def _best_effort_input_batch_size(flat_input):
 
 
 def _infer_state_dtype(explicit_dtype, state):
+  # [FUNCTION DOC]
+  # HELPER: determines the data type of an RNN state.
+  # Inputs: explicit_dtype (a declared type or nothing) and state (tensor or nested structure of
+  # tensors). Returns the explicit type if given; for a nested state returns the common type of
+  # all leaves; otherwise the state's own type. Raises a value error if a nested state is empty or
+  # its leaves have differing types.
   """Infer the dtype of an RNN state.
 
   Args:
@@ -126,6 +151,11 @@ def _infer_state_dtype(explicit_dtype, state):
 
 
 def _maybe_tensor_shape_from_tensor(shape):
+  # [FUNCTION DOC]
+  # HELPER: converts a size given as a tensor into a static shape when possible.
+  # Input: shape, either a tensor or already a shape-like value. For a tensor, returns the shape
+  # built from its constant value (this will fail if the value is not statically known);
+  # otherwise returns the input unchanged.
   if isinstance(shape, tensor.Tensor):
     return tensor_shape.as_shape(tensor_util.constant_value(shape))
   else:
@@ -133,6 +163,11 @@ def _maybe_tensor_shape_from_tensor(shape):
 
 
 def _should_cache():
+  # [FUNCTION DOC]
+  # HELPER: decides whether RNN variables should get a default caching device.
+  # Takes no inputs. Returns false in eager mode and when the default graph is inside a legacy
+  # or function-based while loop (caching would stop loop iterations from seeing updated
+  # weights); returns true otherwise. Only inspects graph state.
   """Returns True if a default caching device should be set, otherwise False."""
   if context.executing_eagerly():
     return False
@@ -158,6 +193,20 @@ def _rnn_step(time,
               call_cell,
               state_size,
               skip_conditionals=False):
+  # [FUNCTION DOC]
+  # HELPER: single-step logic shared by the dynamic and static RNN builders.
+  # KNOWN ISSUE: the parameter for the cell state size is accepted but never used, and the
+  # min-length argument is only used on the conditional path; the error text on the final length
+  # check also prints the combined length as the "expected" value and misspells concatenated.
+  # Runs one cell step for a minibatch with per-example sequence lengths. Inputs: time (scalar
+  # step index), sequence_length (vector of lengths), min and max sequence length (scalars),
+  # zero_output (structure of zero outputs), state (current state structure), call_cell
+  # (callback returning new output and state), state_size (unused) and skip_conditionals
+  # (default false; when true the selective copy is applied every step instead of using
+  # conditionals). Rows past their length get zero output and keep the old state. Returns the
+  # pair of final output and final state in the original structures, with static shapes
+  # restored. Raises a value error if the internal concatenation length check fails, and
+  # asserts the cell output and state structures match the given ones.
   """Calculate one step of a dynamic RNN minibatch.
 
   Returns an (output, state) pair conditioned on `sequence_length`.
@@ -217,6 +266,11 @@ def _rnn_step(time,
   copy_cond = time >= sequence_length
 
   def _copy_one_through(output, new_output):
+    # [FUNCTION DOC]
+    # HELPER: nested helper choosing, per tensor, between old and new value.
+    # Inputs: output (previous value) and new_output (computed value). Array-like containers and
+    # scalars pass the new value through; otherwise a per-row selection keeps the old value for
+    # finished rows and the new one for the rest, colocated with the new value.
     # TensorArray and scalar get passed through.
     if isinstance(output, tensor_array_ops.TensorArray):
       return new_output
@@ -227,6 +281,11 @@ def _rnn_step(time,
       return array_ops.where(copy_cond, output, new_output)
 
   def _copy_some_through(flat_new_output, flat_new_state):
+    # [FUNCTION DOC]
+    # HELPER: nested helper applying the selective copy to all outputs and states.
+    # Inputs: flat lists of new outputs and new states. Returns one list with the processed
+    # outputs followed by the processed states, using zero outputs and old states as the
+    # values kept for finished rows.
     # Use broadcasting select to determine which values should get
     # the previous state & zero output, and which values should get
     # a calculated state & output.
@@ -241,6 +300,11 @@ def _rnn_step(time,
     return flat_new_output + flat_new_state
 
   def _maybe_copy_some_through():
+    # [FUNCTION DOC]
+    # HELPER: nested helper run when the step may need partial copying.
+    # Calls the cell, checks output and state structures match the originals, then returns the
+    # flat new outputs and states unchanged if the step is before the minimum length, else the
+    # selectively copied versions. Takes no inputs; raises on structure mismatch.
     """Run RNN step.  Pass through either no or some past state."""
     new_output, new_state = call_cell()
 
@@ -301,6 +365,14 @@ def _rnn_step(time,
 
 
 def _reverse_seq(input_seq, lengths):
+  # [FUNCTION DOC]
+  # HELPER: reverses a list of per-time tensors within each sequence's valid length.
+  # Inputs: input_seq (list of tensors or nested structures, one per time step) and lengths
+  # (vector of per-example lengths, or nothing). With no lengths simply returns the list in
+  # reverse order. Otherwise stacks each leaf over time, reverses only the first valid steps of
+  # each example, unstacks and restores structure and static shape. Returns the reversed list.
+  # May set the static shape of the input tensors in place. Raises a value error if shapes of
+  # corresponding inputs are incompatible.
   """Reverse a list of Tensors up to specified lengths.
 
   Args:
@@ -358,6 +430,15 @@ def bidirectional_dynamic_rnn(cell_fw,
                               swap_memory=False,
                               time_major=False,
                               scope=None):
+  # [FUNCTION DOC]
+  # Builds a bidirectional dynamic RNN from a forward and a backward cell (deprecated).
+  # Inputs: both cells, inputs (batch-major or time-major per time_major, possibly nested),
+  # optional sequence lengths, optional initial states per direction, dtype (needed when no
+  # initial states), parallel iterations, swap-memory flag, time_major flag and optional scope
+  # name (default bidirectional rnn). Runs the forward cell with the dynamic RNN, reverses the
+  # inputs per sequence, runs the backward cell, and reverses its outputs back. Returns a pair:
+  # a tuple of forward and backward outputs, and a tuple of final states. Raises a type error if
+  # a cell does not look like an RNN cell. Creates variables in the named scopes.
   """Creates a dynamic version of bidirectional recurrent neural network.
 
   Takes input and builds independent forward and backward RNNs. The input_size
@@ -458,6 +539,11 @@ def bidirectional_dynamic_rnn(cell_fw,
       batch_axis = 1
 
     def _reverse(input_, seq_lengths, seq_axis, batch_axis):
+      # [FUNCTION DOC]
+      # HELPER: nested helper reversing one tensor along the time axis.
+      # Inputs: input_, seq_lengths (vector or nothing), seq_axis and batch_axis. With lengths,
+      # reverses each example only up to its length; otherwise reverses the whole time axis.
+      # Returns the reversed tensor.
       if seq_lengths is not None:
         return array_ops.reverse_sequence(
             input=input_,
@@ -470,6 +556,9 @@ def bidirectional_dynamic_rnn(cell_fw,
     with vs.variable_scope("bw") as bw_scope:
 
       def _map_reverse(inp):
+        # [FUNCTION DOC]
+        # HELPER: nested helper applying the reversal to one input of the (possibly nested)
+        # inputs, using the enclosing sequence lengths and axes. Returns the reversed tensor.
         return _reverse(
             inp,
             seq_lengths=sequence_length,
@@ -514,6 +603,18 @@ def dynamic_rnn(cell,
                 swap_memory=False,
                 time_major=False,
                 scope=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says a value error is raised when inputs is none or an empty list,
+  # but no such check exists here; the function actually raises a value error for a
+  # sequence_length that is not a vector, and when neither initial state nor dtype is given.
+  # Builds a dynamically unrolled RNN with a while loop (deprecated, graph mode oriented).
+  # Inputs: cell, inputs (batch-major by default or time-major, possibly nested), optional
+  # sequence_length, optional initial_state, dtype (required without initial state), parallel
+  # iterations (default 32), swap_memory flag, time_major flag and optional scope (default rnn).
+  # Sets a caching device on the scope when appropriate, transposes inputs to time-major,
+  # validates sequence length shape, builds the initial state from the cell, runs the internal
+  # loop and transposes outputs back. Returns a pair of outputs and final state. Raises a type
+  # error for a cell not like an RNN cell and value errors as described above. Creates variables.
   """Creates a recurrent neural network specified by RNNCell `cell`.
 
   Performs fully dynamic unrolling of `inputs`.
@@ -730,6 +831,10 @@ def dynamic_rnn(cell,
         state = cell.zero_state(batch_size, dtype)
 
     def _assert_has_shape(x, shape):
+      # [FUNCTION DOC]
+      # HELPER: nested helper building an assertion op that a tensor has an expected shape.
+      # Inputs: x (tensor) and shape (list of dimension values). Returns an assert op that fails
+      # at run time with a message naming the tensor and both shapes if the shapes differ.
       x_shape = array_ops.shape(x)
       packed_shape = array_ops_stack.stack(shape)
       return control_flow_assert.Assert(
@@ -773,6 +878,15 @@ def _dynamic_rnn_loop(cell,
                       swap_memory,
                       sequence_length=None,
                       dtype=None):
+  # [FUNCTION DOC]
+  # HELPER: internal implementation of the dynamic RNN, called by the dynamic RNN builder.
+  # Inputs: cell, time-major inputs, initial_state, parallel_iterations (must be an integer),
+  # swap_memory, optional sequence_length and optional dtype. Checks static input shapes, creates
+  # zero outputs, input and output tensor arrays (plain lists in eager mode), and runs a while
+  # loop with one cell step per iteration, using the sequence-length step helper when lengths
+  # are given. Returns a pair of time-major outputs (matching the cell output structure) and the
+  # final state. Raises value errors if the input depth is unknown or time steps or batch sizes
+  # differ between inputs. Fails an assertion if parallel_iterations is not an integer.
   """Internal implementation of Dynamic RNN.
 
   Args:
@@ -844,6 +958,9 @@ def _dynamic_rnn_loop(cell,
 
   # Prepare dynamic conditional copying of state & output
   def _create_zero_arrays(size):
+    # [FUNCTION DOC]
+    # HELPER: nested helper making a zero tensor for one output size.
+    # Input: size (int or shape). Returns zeros with the batch size prepended, of the state dtype.
     size = _concat(batch_size, size)
     return array_ops.zeros(
         array_ops_stack.stack(size), _infer_state_dtype(dtype, state))
@@ -865,6 +982,10 @@ def _dynamic_rnn_loop(cell,
     base_name = scope
 
   def _create_ta(name, element_shape, dtype):
+    # [FUNCTION DOC]
+    # HELPER: nested helper creating a tensor array with one element per time step.
+    # Inputs: name suffix, element_shape and dtype. Returns a tensor array sized to the number of
+    # time steps whose name is the loop scope name plus the suffix.
     return tensor_array_ops.TensorArray(
         dtype=dtype,
         size=time_steps,
@@ -895,6 +1016,12 @@ def _dynamic_rnn_loop(cell,
     input_ta = flat_input
 
   def _time_step(time, output_ta_t, state):
+    # [FUNCTION DOC]
+    # HELPER: loop body of the dynamic RNN.
+    # Inputs: time (scalar), output_ta_t (output containers) and state. Reads the inputs for
+    # this step (tensor array read in graph mode, indexing in eager mode), calls the cell,
+    # applies the sequence-length step logic when lengths exist, and writes the flattened
+    # outputs for this step. Returns the incremented time, updated outputs and new state.
     """Take a time step of the dynamic RNN.
 
     Args:
@@ -990,6 +1117,17 @@ def raw_rnn(cell,
             parallel_iterations=None,
             swap_memory=False,
             scope=None):
+  # [FUNCTION DOC]
+  # Builds a low-level RNN driven by a user callback that supplies inputs, states and
+  # termination (not stable API). Inputs: cell, loop_fn (callable taking time, cell output, cell
+  # state and loop state and returning finished flags, next input, next state, emit output and
+  # next loop state), parallel iterations (default 32), swap_memory flag and optional scope
+  # (default rnn). Calls loop_fn once at time zero to get initial state and structures, then
+  # runs a while loop calling the cell and loop_fn until all batch entries are finished, writing
+  # emitted outputs to dynamically sized tensor arrays and copying old values through for
+  # finished entries. Returns a tuple of emit tensor arrays, final state, and final loop state
+  # (nothing if loop_fn gave no initial loop state). Raises a type error if the cell is not like
+  # an RNN cell or loop_fn is not callable, and errors on mismatched structures or batch sizes.
   """Creates an `RNN` specified by RNNCell `cell` and loop function `loop_fn`.
 
   **NOTE: This method is still in testing, and the API may change.**
@@ -1230,10 +1368,20 @@ def raw_rnn(cell,
         structure=emit_structure, flat_sequence=flat_zero_emit)
 
     def condition(unused_time, elements_finished, *_):
+      # [FUNCTION DOC]
+      # HELPER: loop condition of the raw RNN; ignores all arguments but the finished vector
+      # and returns a boolean that is true while some batch entry is not finished.
       return math_ops.logical_not(math_ops.reduce_all(elements_finished))
 
     def body(time, elements_finished, current_input, emit_ta, state,
              loop_state):
+      # [FUNCTION DOC]
+      # HELPER: loop body of the raw RNN.
+      # Inputs: time, elements_finished, current_input, emit_ta, state and loop_state. Runs the
+      # cell, calls the user callback for the next step, checks all structures match, keeps old
+      # values for finished entries, writes the emitted output at this time, and ORs the new
+      # finished flags. Returns the updated tuple of the same six items (with next time).
+      # Raises on structure mismatches.
       """Internal while loop body for raw_rnn.
 
       Args:
@@ -1266,9 +1414,15 @@ def raw_rnn(cell,
       loop_state = loop_state if next_loop_state is None else next_loop_state
 
       def _copy_some_through(current, candidate):
+        # [FUNCTION DOC]
+        # HELPER: nested helper applying the keep-old-value-for-finished-rows rule over a
+        # structure. Inputs: current and candidate structures. Returns the merged structure.
         """Copy some tensors through via array_ops.where."""
 
         def copy_fn(cur_i, cand_i):
+          # [FUNCTION DOC]
+          # HELPER: per-leaf rule: tensor arrays and scalars take the candidate; other tensors
+          # take the old value for finished rows and the candidate otherwise. Returns a tensor.
           # TensorArray and scalar get passed through.
           if isinstance(cur_i, tensor_array_ops.TensorArray):
             return cand_i
@@ -1319,6 +1473,16 @@ def static_rnn(cell,
                dtype=None,
                sequence_length=None,
                scope=None):
+  # [FUNCTION DOC]
+  # Builds a statically unrolled RNN over a list of per-step inputs (deprecated).
+  # Inputs: cell, inputs (non-empty list of tensors or nested structures), optional initial_state,
+  # dtype (required without initial state), optional sequence_length, optional scope (default
+  # rnn). Checks input shapes, derives the batch size, makes the initial state, and calls the
+  # cell once per step reusing variables after the first, using the sequence-length step helper
+  # when lengths are given. Returns a pair of the list of per-step outputs and the final state.
+  # Raises a type error for a cell not like an RNN cell or inputs that are not a sequence, and
+  # value errors for empty inputs, unknown input depth, bad sequence_length rank or a missing
+  # dtype. Creates variables in the scope.
   """Creates a recurrent neural network specified by RNNCell `cell`.
 
   The simplest form of RNN network generated is:
@@ -1443,6 +1607,9 @@ def static_rnn(cell,
             f"{batch_size}. Received sequence_length={sequence_length}.")
 
       def _create_zero_output(output_size):
+        # [FUNCTION DOC]
+        # HELPER: nested helper making a zero tensor for one output size, with batch size
+        # prepended and static shape set. Input: output_size. Returns the zero tensor.
         # convert int to TensorShape if necessary
         size = _concat(batch_size, output_size)
         output = array_ops.zeros(
@@ -1499,6 +1666,15 @@ def static_state_saving_rnn(cell,
                             state_name,
                             sequence_length=None,
                             scope=None):
+  # [FUNCTION DOC]
+  # Builds a static RNN whose initial state comes from, and final state goes to, a state saver
+  # (deprecated). Inputs: cell, inputs (list of per-step tensors), state_saver (object with
+  # methods to fetch and save states), state_name (a string, or tuple of strings matching a
+  # tuple state size), optional sequence_length and optional scope. Reads initial states from
+  # the saver, runs the static RNN, saves final states, and returns outputs and state wrapped
+  # in identity ops that depend on the save ops. Returns a pair of outputs list and final state.
+  # Raises a value error if state_name does not match the type or length of the cell state
+  # size. Side effect: calls the saver to store state.
   """RNN that accepts a state saver for time-truncated RNN calculation.
 
   Args:
@@ -1599,6 +1775,14 @@ def static_bidirectional_rnn(cell_fw,
                              dtype=None,
                              sequence_length=None,
                              scope=None):
+  # [FUNCTION DOC]
+  # Builds a bidirectional static RNN (deprecated) with outputs joined along depth.
+  # Inputs: both cells, inputs (non-empty list of per-step tensors), optional initial states,
+  # dtype, sequence_length and scope (default bidirectional rnn). Runs the forward static RNN,
+  # reverses inputs per sequence, runs the backward one, reverses its outputs and concatenates
+  # forward and backward outputs per step along the depth axis. Returns a tuple of the list of
+  # outputs, forward final state and backward final state. Raises a type error for cells not
+  # like RNN cells or inputs that are not a sequence, and a value error for empty inputs.
   """Creates a bidirectional recurrent neural network.
 
   Similar to the unidirectional case above (rnn) but takes input and builds

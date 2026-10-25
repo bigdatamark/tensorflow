@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: thin alias module forwarding to the legacy Keras RNN cell wrapper implementation.
+# Exposes the device, dropout and residual wrapper base classes under their original names by
+# binding module attributes to the classes in the legacy Keras rnn_cell_wrapper_impl module.
+# No logic or import-time side effects beyond the import itself.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

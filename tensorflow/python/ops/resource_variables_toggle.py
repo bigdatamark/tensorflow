@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Global toggle for whether variables are created as resource variables by default.
+# Holds a module-level flag initialised from the TF2 behavior setting at import time, plus
+# functions to enable, disable and query it. Import-time side effect: creates a boolean usage
+# gauge for the monitoring system. Other variable-creation code reads the flag via the query
+# function.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,6 +36,10 @@ _DEFAULT_USE_RESOURCE = tf2.enabled()
 
 @tf_export(v1=["enable_resource_variables"])
 def enable_resource_variables() -> None:
+  # [FUNCTION DOC]
+  # Turns on resource-variable creation by default for variables made afterwards.
+  # Takes no inputs and returns nothing. Sets the module-level default flag to true, logs a
+  # verbose message and records true in the API usage gauge metric.
   """Creates resource variables by default.
 
   Resource variables are improved versions of TensorFlow variables with a
@@ -54,6 +64,10 @@ def enable_resource_variables() -> None:
     None, "non-resource variables are not supported in the long term")
 @tf_export(v1=["disable_resource_variables"])
 def disable_resource_variables() -> None:
+  # [FUNCTION DOC]
+  # Turns off resource-variable creation by default (deprecated; emits a deprecation warning).
+  # Takes no inputs and returns nothing. Sets the module-level default flag to false, logs a
+  # verbose message and records false in the API usage gauge.
   """Opts out of resource variables.
 
   If your code needs tf.disable_resource_variables() to be called to work
@@ -67,6 +81,11 @@ def disable_resource_variables() -> None:
 
 @tf_export(v1=["resource_variables_enabled"])
 def resource_variables_enabled() -> bool:
+  # [FUNCTION DOC]
+  # Reports whether resource variables are currently the default variable kind.
+  # Takes no inputs. Returns a boolean read from the module-level default flag, which starts as
+  # the TF2 behavior setting at import time and is changed by the enable/disable functions.
+  # No side effects and raises nothing.
   """Returns `True` if resource variables are enabled.
 
   Resource variables are improved versions of TensorFlow variables with a
