@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# HELPER: Thin re-export module for the bijector base class.
+# Re-exports the Bijector class from the implementation module so users can import it from this
+# shorter path. Defines nothing else and has no side effects beyond importing the implementation.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

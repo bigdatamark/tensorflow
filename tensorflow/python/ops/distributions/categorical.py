@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Defines the deprecated Categorical distribution (a discrete distribution over class indices
+# parameterized by logits or probabilities), a private broadcasting helper, and registers the
+# analytic KL divergence between two Categorical distributions with the KL registry (import-time
+# side effect). The class is exported to the public v1 distributions namespace. Builds on the
+# generic distribution base class and distribution utility functions.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,6 +36,16 @@ from tensorflow.python.util.tf_export import tf_export
 
 
 def _broadcast_cat_event_and_params(event, params, base_dtype):
+  # [FUNCTION DOC]
+  # HELPER: Shared by the Categorical cdf and log-probability computations.
+  # Inputs: event (tensor of class indices, integer or floating dtype), params (tensor of
+  # logits or probabilities whose last dimension indexes classes) and base_dtype (the
+  # distribution's dtype, used only in the error message). Integer events are kept, floating
+  # events are cast to 32-bit integers, other dtypes raise a type error. If the batch shape of
+  # params and the shape of event are not both statically known and equal, both are broadcast
+  # against each other (params gains the event's shape in front of its class dimension; event
+  # is multiplied by ones of the params' batch shape) and the static shape of event is
+  # updated when the params rank is known. Returns a pair: the broadcast event and params.
   """Broadcasts the event or distribution parameters."""
   if event.dtype.is_integer:
     pass
@@ -57,6 +73,15 @@ def _broadcast_cat_event_and_params(event, params, base_dtype):
 
 @tf_export(v1=["distributions.Categorical"])
 class Categorical(distribution.Distribution):
+  # [CLASS DOC]
+  # KNOWN ISSUE: The docstring says the support is the integers zero through K, but with K
+  # classes the support is zero through K minus one.
+  # Deprecated discrete distribution over K class indices, parameterized by a logits tensor or
+  # a probabilities tensor whose last dimension is the class axis and whose leading dimensions
+  # form the batch. Stores logits, probs, batch rank, event size and batch shape tensors
+  # computed at construction. Events are scalars of the configured integer or float dtype;
+  # samples are not reparameterized. Overrides the underscore hooks for shapes, sampling, cdf,
+  # log probability, entropy and mode. Construction emits a one-time deprecation warning.
   """Categorical distribution.
 
   The Categorical distribution is parameterized by either probabilities or
@@ -162,6 +187,16 @@ class Categorical(distribution.Distribution):
       validate_args=False,
       allow_nan_stats=True,
       name="Categorical"):
+    # [FUNCTION DOC]
+    # Constructs a batch of Categorical distributions. Inputs: logits or probs (exactly one
+    # should be given; tensors of rank at least one with classes on the last axis; the other
+    # is derived), dtype (event sample type, default 32-bit integer), validate_args (adds
+    # parameter checks, including a check that the class count fits the event dtype),
+    # allow_nan_stats and a name for the op scope. Converts the parameters via the shared
+    # logits/probs utility (which raises a value error if both or neither are provided),
+    # records the batch rank, event size (number of classes) and batch shape as tensors using
+    # static information when available and dynamic shape ops otherwise, and calls the base
+    # constructor with non-reparameterized sampling. Returns nothing; emits a deprecation warning.
     """Initialize Categorical distributions using class log-probabilities.
 
     Args:
@@ -239,32 +274,53 @@ class Categorical(distribution.Distribution):
 
   @property
   def event_size(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the scalar 32-bit integer tensor holding the number of classes.
     """Scalar `int32` tensor: the number of classes."""
     return self._event_size
 
   @property
   def logits(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the logits tensor (given directly or derived from probs).
     """Vector of coordinatewise logits."""
     return self._logits
 
   @property
   def probs(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the probabilities tensor (given directly or derived from logits).
     """Vector of coordinatewise probabilities."""
     return self._probs
 
   def _batch_shape_tensor(self):
+    # [FUNCTION DOC]
+    # Returns the dynamic batch shape as an integer tensor (a copy of the stored batch shape,
+    # i.e. all logits dimensions except the class axis).
     return array_ops.identity(self._batch_shape_val)
 
   def _batch_shape(self):
+    # [FUNCTION DOC]
+    # Returns the static batch shape: the static shape of the logits without its last dimension.
     return self.logits.get_shape()[:-1]
 
   def _event_shape_tensor(self):
+    # [FUNCTION DOC]
+    # Returns the dynamic event shape: an empty 32-bit integer vector, since events are scalars.
     return constant_op.constant([], dtype=dtypes.int32)
 
   def _event_shape(self):
+    # [FUNCTION DOC]
+    # Returns the static event shape: a fully known empty (scalar) shape.
     return tensor_shape.TensorShape([])
 
   def _sample_n(self, n, seed=None):
+    # [FUNCTION DOC]
+    # Draws n samples. Inputs: n (scalar sample count) and an optional integer seed. Flattens the
+    # logits to two dimensions if needed, draws from the multinomial sampler (64-bit output when
+    # the distribution dtype is wider than four bytes, else 32-bit), transposes and reshapes the
+    # draws to the sample count followed by the batch shape, and casts to the distribution dtype.
+    # Consumes randomness; returns the sample tensor.
     if self.logits.get_shape().ndims == 2:
       logits_2d = self.logits
     else:
@@ -278,6 +334,15 @@ class Categorical(distribution.Distribution):
     return math_ops.cast(draws, self.dtype)
 
   def _cdf(self, k):
+    # [FUNCTION DOC]
+    # Cumulative distribution function. Input: k, class indices (integer or float values
+    # convertible to a tensor). With validation on, checks the values can be cast to integers
+    # without loss. Broadcasts k with the probabilities, flattens the batch, and sums the
+    # probabilities of all classes strictly below each k (a sequence mask selects them), then
+    # reshapes to the shape of k. Returns a tensor of probabilities. Note this is the
+    # probability of values strictly less than k, not less than or equal to k.
+    # KNOWN ISSUE: Because the mask excludes class k itself, this returns P(X < k), which differs
+    # from the conventional definition of a cdf, P(X <= k).
     k = ops.convert_to_tensor(k, name="k")
     if self.validate_args:
       k = distribution_util.embed_check_integer_casting_closed(
@@ -300,6 +365,11 @@ class Categorical(distribution.Distribution):
     return array_ops.reshape(batch_flattened_cdf, array_ops.shape(k))
 
   def _log_prob(self, k):
+    # [FUNCTION DOC]
+    # Log probability mass. Input: k, class indices (integer or float values convertible to a
+    # tensor; validated for lossless integer casting when validate_args is set). Broadcasts k with
+    # the logits and returns the negative sparse softmax cross entropy, which equals the log
+    # probability of each class index. Out-of-range indices are not checked here.
     k = ops.convert_to_tensor(k, name="k")
     if self.validate_args:
       k = distribution_util.embed_check_integer_casting_closed(
@@ -313,10 +383,16 @@ class Categorical(distribution.Distribution):
         logits=logits)
 
   def _entropy(self):
+    # [FUNCTION DOC]
+    # Entropy per batch member: negative sum over classes of log-softmax of the logits times the
+    # probabilities. Returns a tensor of the batch shape.
     return -math_ops.reduce_sum(
         nn_ops.log_softmax(self.logits) * self.probs, axis=-1)
 
   def _mode(self):
+    # [FUNCTION DOC]
+    # Mode per batch member: the index of the largest logit along the class axis, cast to the
+    # distribution dtype with its static shape set to the batch shape.
     ret = math_ops.argmax(self.logits, axis=self._batch_rank)
     ret = math_ops.cast(ret, self.dtype)
     ret.set_shape(self.batch_shape)
@@ -325,6 +401,11 @@ class Categorical(distribution.Distribution):
 
 @kullback_leibler.RegisterKL(Categorical, Categorical)
 def _kl_categorical_categorical(a, b, name=None):
+  # [FUNCTION DOC]
+  # HELPER: KL divergence implementation registered for the pair (Categorical, Categorical).
+  # Inputs: a and b, Categorical distributions with matching class counts and broadcastable batch
+  # shapes, and an optional op name. Returns the batchwise KL divergence of a from b: the sum over
+  # classes of a's probabilities times the difference of the two log-softmaxes of the logits.
   """Calculate the batched KL divergence KL(a || b) with a and b Categorical.
 
   Args:

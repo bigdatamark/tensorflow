@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: Shared assertion utilities for unit tests of bijector implementations.
+# Provides finiteness and monotonicity assertions on numpy arrays, a scalar congruency check
+# (forward/inverse consistency and change-of-measure for the Jacobian via Monte Carlo with
+# uniform samples) and a bijectivity-and-finiteness check near domain edges. Evaluates graph
+# tensors through a v1 session. No import-time side effects.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,19 +28,36 @@ from tensorflow.python.ops.distributions import uniform as uniform_lib
 
 
 def assert_finite(array):
+  # [FUNCTION DOC]
+  # HELPER: Test assertion used by the bijector checks in this module.
+  # Input: a numpy array. Raises an assertion error (message includes up to the first 15
+  # elements) if any element is infinite or not-a-number. Returns nothing.
   if not np.isfinite(array).all():
     raise AssertionError("array was not all finite. %s" % array[:15])
 
 
 def assert_strictly_increasing(array):
+  # [FUNCTION DOC]
+  # HELPER: Test assertion used by the monotonicity check.
+  # Input: a one-dimensional numpy array. Fails (assertion error) unless every successive
+  # difference is strictly positive. Returns nothing.
   np.testing.assert_array_less(0., np.diff(array))
 
 
 def assert_strictly_decreasing(array):
+  # [FUNCTION DOC]
+  # HELPER: Test assertion used by the monotonicity check.
+  # Input: a one-dimensional numpy array. Fails (assertion error) unless every successive
+  # difference is strictly negative. Returns nothing.
   np.testing.assert_array_less(np.diff(array), 0.)
 
 
 def assert_strictly_monotonic(array):
+  # [FUNCTION DOC]
+  # HELPER: Test assertion used by the scalar congruency check.
+  # Input: a one-dimensional numpy array. Compares the first and last elements to decide the
+  # direction, then asserts strictly increasing or strictly decreasing accordingly (assertion
+  # error on failure). Returns nothing.
   if array[0] < array[-1]:
     assert_strictly_increasing(array)
   else:
@@ -47,6 +70,16 @@ def assert_scalar_congruency(bijector,
                              n=int(10e3),
                              rtol=0.01,
                              sess=None):
+  # [FUNCTION DOC]
+  # HELPER: Shared test utility for validating scalar-to-scalar bijectors.
+  # Inputs: bijector (instance to test), lower_x and upper_x (scalars bounding a sub-interval
+  # of its domain, lower less than upper), n (number of Monte Carlo samples, default 10000),
+  # rtol (relative tolerance for the change-of-measure check, default 0.01) and sess (session
+  # used to run tensors; defaults to the current default session). Checks that the forward map
+  # is strictly monotonic on ten evenly spaced points, that forward and inverse compose to the
+  # identity on uniform samples, that the Jacobian integrates to the interval length (Monte
+  # Carlo estimate) and that inverse and forward Jacobians are reciprocal. Raises an assertion
+  # error on any failure; returns nothing. Draws seeded uniform samples and runs session calls.
   """Assert `bijector`'s forward/inverse/inverse_log_det_jacobian are congruent.
 
   We draw samples `X ~ U(lower_x, upper_x)`, then feed these through the
@@ -158,6 +191,14 @@ def assert_scalar_congruency(bijector,
 
 def assert_bijective_and_finite(
     bijector, x, y, event_ndims, atol=0, rtol=1e-5, sess=None):
+  # [FUNCTION DOC]
+  # HELPER: Shared test utility for edge-of-domain checks of bijectors.
+  # Inputs: bijector; x and y (numpy arrays inside the forward and inverse domains); event_ndims
+  # (integer count of event dimensions); atol and rtol (tolerances, defaults 0 and 1e-5); sess
+  # (defaults to the default session). Asserts the inputs are finite, runs forward, inverse and
+  # both log-det Jacobians through the session, asserts all results are finite, that inverse
+  # undoes forward in both directions, and that forward and inverse Jacobians are negatives of
+  # each other. Raises an assertion error on failure; returns nothing.
   """Assert that forward/inverse (along with jacobians) are inverses and finite.
 
   It is recommended to use x and y values that are very very close to the edge

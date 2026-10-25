@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Implementation module of the Bijector abstract base class, the interface for differentiable
+# (mostly injective) transformations of distribution samples, together with a private caching
+# record type. A bijector offers forward and inverse maps, log determinants of the Jacobian
+# (with reduction over event dimensions), event shape transformation hooks, and an internal
+# cache of previously computed forward/inverse/Jacobian results keyed by tensor identity.
+# Concrete bijectors subclass Bijector and implement the underscore hooks. The public module
+# for the class simply re-exports it from here. No import-time side effects beyond definitions.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -39,9 +47,20 @@ __all__ = [
 
 class _Mapping(collections.namedtuple(
     "_Mapping", ["x", "y", "ildj_map", "kwargs"])):
+  # [CLASS DOC]
+  # HELPER: Internal cache record for the Bijector class.
+  # Immutable named record with four fields: x (forward input), y (forward output), ildj_map
+  # (mapping from event dimension counts to cached inverse log-det-Jacobian tensors) and kwargs
+  # (extra arguments the transformation was called with). Provides cache keys based on tensor
+  # identity and a merge operation that combines two records while rejecting conflicting values.
   """Helper class to make it easier to manage caching in `Bijector`."""
 
   def __new__(cls, x=None, y=None, ildj_map=None, kwargs=None):
+    # [FUNCTION DOC]
+    # HELPER: Constructor override giving the record's fields default values.
+    # Inputs: x, y (tensors or nothing), ildj_map (mapping from event dimension count to tensor,
+    # or nothing) and kwargs (mapping of extra call arguments, or nothing); all default to
+    # nothing. Returns a new record holding them.
     """Custom __new__ so namedtuple items have defaults.
 
     Args:
@@ -59,17 +78,33 @@ class _Mapping(collections.namedtuple(
 
   @property
   def x_key(self):
+    # [FUNCTION DOC]
+    # HELPER: Cache key for the forward-direction lookup table.
+    # Returns a tuple made of an identity-based reference to x followed by the call arguments
+    # sorted by name with lists converted to tuples. Fails with an attribute error if the
+    # record's kwargs is nothing.
     """Returns key used for caching Y=g(X)."""
     return ((object_identity.Reference(self.x),) +
             self._deep_tuple(tuple(sorted(self.kwargs.items()))))
 
   @property
   def y_key(self):
+    # [FUNCTION DOC]
+    # HELPER: Cache key for the inverse-direction lookup table.
+    # Same as the forward key but built from an identity-based reference to y. Fails with an
+    # attribute error if the record's kwargs is nothing.
     """Returns key used for caching X=g^{-1}(Y)."""
     return ((object_identity.Reference(self.y),) +
             self._deep_tuple(tuple(sorted(self.kwargs.items()))))
 
   def merge(self, x=None, y=None, ildj_map=None, kwargs=None, mapping=None):
+    # [FUNCTION DOC]
+    # HELPER: Combines cache information for the Bijector caching logic.
+    # Inputs: either a ready record (mapping) or individual x, y, ildj_map and kwargs values, all
+    # optional. Raises a value error if both a record and any individual value are given, or if a
+    # field present in both records holds different objects. Returns a new record combining
+    # this one with the given data; the ildj_map merge writes into the existing mapping of this
+    # record (side effect on that dictionary).
     """Returns new _Mapping with args merged with self.
 
     Args:
@@ -101,6 +136,11 @@ class _Mapping(collections.namedtuple(
         kwargs=self._merge(self.kwargs, mapping.kwargs))
 
   def _merge_dicts(self, old=None, new=None):
+    # [FUNCTION DOC]
+    # HELPER: Dictionary merge used by the record merge operation.
+    # Inputs: old and new mappings (either may be nothing). Copies every entry of new into old
+    # (creating an empty mapping if old is nothing) and returns old. Raises a value error if a
+    # key already maps to a different non-null object. Mutates old.
     """Helper to merge two dictionaries."""
     old = {} if old is None else old
     new = {} if new is None else new
@@ -114,6 +154,10 @@ class _Mapping(collections.namedtuple(
     return old
 
   def _merge(self, old, new):
+    # [FUNCTION DOC]
+    # HELPER: Single-value merge used by the record merge operation.
+    # Returns new if old is nothing, otherwise old; raises a value error if both are present and
+    # are not the same object.
     """Helper to merge which handles merging one value."""
     if old is None:
       return new
@@ -122,12 +166,28 @@ class _Mapping(collections.namedtuple(
     return old
 
   def _deep_tuple(self, x):
+    # [FUNCTION DOC]
+    # HELPER: Makes cache keys hashable.
+    # Recursively converts lists and tuples (including nested ones) into tuples; other values are
+    # returned unchanged.
     """Converts lists of lists to tuples of tuples."""
     return (tuple(map(self._deep_tuple, x))
             if isinstance(x, (list, tuple)) else x)
 
 
 class Bijector(metaclass=abc.ABCMeta):
+  # [CLASS DOC]
+  # KNOWN ISSUE: The class docstring example describes inverse log determinant as depending on
+  # an event dimension argument in the hook, but subclasses implement hooks without that argument;
+  # only the public methods take it.
+  # Abstract base class for invertible, differentiable transformations of tensors used with
+  # transformed distributions. Subclasses implement the underscore hooks for forward, inverse and
+  # log-det-Jacobian (and optionally event shape hooks); the public methods validate dtype and
+  # event dimension counts, apply the minimal-event reduction of Jacobians, and cache results.
+  # State: graph parents, minimal event dimension counts for forward and inverse, a constant
+  # Jacobian flag and cache of constant values, validation flag, optional dtype, a name (defaults
+  # to snake case of the class name), and two caches (from x and from y). Non-injective bijectors
+  # are supported through a hidden flag; their results bypass the cache and are returned as tuples.
   r"""Interface for transformations of a `Distribution` sample.
 
   Bijectors can be used to represent any differentiable and injective
@@ -493,6 +553,15 @@ class Bijector(metaclass=abc.ABCMeta):
                forward_min_event_ndims=None,
                inverse_min_event_ndims=None,
                name=None):
+    # [FUNCTION DOC]
+    # Abstract constructor (subclasses must call it). Inputs: graph_parents (list of tensors this
+    # bijector depends on; default empty), is_constant_jacobian (boolean, default false),
+    # validate_args (boolean, default false), dtype (required input dtype or nothing for no
+    # enforcement), forward_min_event_ndims and inverse_min_event_ndims (non-negative integers; at
+    # least one is required and a missing one copies the other) and name (default derived from
+    # the class name in snake case, ignoring leading underscores). Raises a value error if neither
+    # event count is given, if either is negative, or if a graph parent is not a tensor; raises a
+    # type error if an event count is not an integer. Initializes empty caches. Returns nothing.
     """Constructs Bijector.
 
     A `Bijector` transforms random variables into new random variables.
@@ -573,6 +642,10 @@ class Bijector(metaclass=abc.ABCMeta):
       # We want the default convention to be snake_case rather than CamelCase
       # since `Chain` uses bijector.name as the kwargs dictionary key.
       def camel_to_snake(name):
+        # [FUNCTION DOC]
+        # HELPER: Default-name conversion for the bijector constructor.
+        # Input: a camel case class name. Returns it converted to lower snake case by inserting
+        # underscores before capitalized words and between lowercase/digit and uppercase letters.
         s1 = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", name)
         return re.sub("([a-z0-9])([A-Z])", r"\1_\2", s1).lower()
       self._name = camel_to_snake(type(self).__name__.lstrip("_"))
@@ -583,21 +656,30 @@ class Bijector(metaclass=abc.ABCMeta):
 
   @property
   def graph_parents(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the list of graph prerequisite tensors given at construction.
     """Returns this `Bijector`'s graph_parents as a Python list."""
     return self._graph_parents
 
   @property
   def forward_min_event_ndims(self):
+    # [FUNCTION DOC]
+    # Read-only property: minimum number of trailing dimensions the forward map acts on.
     """Returns the minimal number of dimensions bijector.forward operates on."""
     return self._forward_min_event_ndims
 
   @property
   def inverse_min_event_ndims(self):
+    # [FUNCTION DOC]
+    # Read-only property: minimum number of trailing dimensions the inverse map acts on.
     """Returns the minimal number of dimensions bijector.inverse operates on."""
     return self._inverse_min_event_ndims
 
   @property
   def is_constant_jacobian(self):
+    # [FUNCTION DOC]
+    # Read-only property: true if the Jacobian does not depend on the input, which lets the
+    # first computed log determinant be reused for later calls with the same event dimensions.
     """Returns true iff the Jacobian matrix is not a function of x.
 
     Note: Jacobian matrix is either constant for both forward and inverse or
@@ -610,6 +692,10 @@ class Bijector(metaclass=abc.ABCMeta):
 
   @property
   def _is_injective(self):
+    # [FUNCTION DOC]
+    # HELPER: Hidden hook that subclasses override to declare non-injective maps.
+    # Returns true by default. When false, results are not cached and inverse/Jacobian methods
+    # return tuples (one entry per branch); forward Jacobian is unsupported.
     """Returns true iff the forward map `g` is injective (one-to-one function).
 
     **WARNING** This hidden property and its behavior are subject to change.
@@ -626,20 +712,29 @@ class Bijector(metaclass=abc.ABCMeta):
 
   @property
   def validate_args(self):
+    # [FUNCTION DOC]
+    # Read-only property: whether runtime assertions are added to inputs.
     """Returns True if Tensor arguments will be validated."""
     return self._validate_args
 
   @property
   def dtype(self):
+    # [FUNCTION DOC]
+    # Read-only property: the dtype inputs must have, or nothing if not enforced.
     """dtype of `Tensor`s transformable by this distribution."""
     return self._dtype
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Read-only property: the bijector's name, used as the outer scope for created ops.
     """Returns the string name of this `Bijector`."""
     return self._name
 
   def _forward_event_shape_tensor(self, input_shape):
+    # [FUNCTION DOC]
+    # Overridable hook for the dynamic forward event shape. Input: a 32-bit integer vector shape.
+    # Default returns it unchanged (the transformation preserves event shape).
     """Subclass implementation for `forward_event_shape_tensor` function."""
     # By default, we assume event_shape is unchanged.
     return input_shape
@@ -647,6 +742,11 @@ class Bijector(metaclass=abc.ABCMeta):
   def forward_event_shape_tensor(self,
                                  input_shape,
                                  name="forward_event_shape_tensor"):
+    # [FUNCTION DOC]
+    # Computes the event shape after applying the forward map. Inputs: input_shape (integer
+    # vector or convertible value giving the event-portion shape fed to forward) and an op name.
+    # Converts the shape to a 32-bit integer tensor inside the bijector's name scope and returns
+    # the result of the subclass hook (default: the same shape).
     """Shape of a single sample from a single batch as an `int32` 1D `Tensor`.
 
     Args:
@@ -664,11 +764,18 @@ class Bijector(metaclass=abc.ABCMeta):
       return self._forward_event_shape_tensor(input_shape)
 
   def _forward_event_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Overridable hook for the static forward event shape. Input: a static shape object. Default
+    # returns it unchanged.
     """Subclass implementation for `forward_event_shape` public function."""
     # By default, we assume event_shape is unchanged.
     return input_shape
 
   def forward_event_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Static (possibly partially known) event shape after the forward map. Input: a shape or
+    # value convertible to a static shape object. Converts it and returns the subclass hook's
+    # result (default: the same shape).
     """Shape of a single sample from a single batch as a `TensorShape`.
 
     Same meaning as `forward_event_shape_tensor`. May be only partially defined.
@@ -684,6 +791,9 @@ class Bijector(metaclass=abc.ABCMeta):
     return self._forward_event_shape(tensor_shape.TensorShape(input_shape))
 
   def _inverse_event_shape_tensor(self, output_shape):
+    # [FUNCTION DOC]
+    # Overridable hook for the dynamic inverse event shape. Input: a 32-bit integer vector shape.
+    # Default returns it unchanged.
     """Subclass implementation for `inverse_event_shape_tensor` function."""
     # By default, we assume event_shape is unchanged.
     return output_shape
@@ -691,6 +801,11 @@ class Bijector(metaclass=abc.ABCMeta):
   def inverse_event_shape_tensor(self,
                                  output_shape,
                                  name="inverse_event_shape_tensor"):
+    # [FUNCTION DOC]
+    # Computes the event shape after applying the inverse map. Inputs: output_shape (integer
+    # vector or convertible value giving the event-portion shape fed to inverse) and an op name.
+    # Converts the shape to a 32-bit integer tensor inside the bijector's name scope and returns
+    # the result of the subclass hook (default: the same shape).
     """Shape of a single sample from a single batch as an `int32` 1D `Tensor`.
 
     Args:
@@ -708,11 +823,19 @@ class Bijector(metaclass=abc.ABCMeta):
       return self._inverse_event_shape_tensor(output_shape)
 
   def _inverse_event_shape(self, output_shape):
+    # [FUNCTION DOC]
+    # Overridable hook for the static inverse event shape. Input: a shape. Default converts it to
+    # a static shape object and returns it (event shape assumed unchanged).
     """Subclass implementation for `inverse_event_shape` public function."""
     # By default, we assume event_shape is unchanged.
     return tensor_shape.TensorShape(output_shape)
 
   def inverse_event_shape(self, output_shape):
+    # [FUNCTION DOC]
+    # Static (possibly partially known) event shape after the inverse map. Input: a shape.
+    # Passes it straight to the subclass hook and returns the result.
+    # KNOWN ISSUE: Unlike the forward counterpart, this does not convert the input to a static
+    # shape object before calling the hook, so a plain list reaches the hook unconverted.
     """Shape of a single sample from a single batch as a `TensorShape`.
 
     Same meaning as `inverse_event_shape_tensor`. May be only partially defined.
@@ -728,10 +851,20 @@ class Bijector(metaclass=abc.ABCMeta):
     return self._inverse_event_shape(output_shape)
 
   def _forward(self, x):
+    # [FUNCTION DOC]
+    # Abstract-style hook for the forward map; subclasses override it. Default raises a
+    # not-implemented error.
     """Subclass implementation for `forward` public function."""
     raise NotImplementedError("forward not implemented.")
 
   def _call_forward(self, x, name, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: Implementation behind the public forward method.
+    # Inputs: x (tensor-like), name (scope name) and extra keyword arguments forwarded to the
+    # hook. Inside the name scope converts x to a tensor and checks dtype (type error on
+    # mismatch). Non-injective bijectors call the hook directly without caching. Otherwise looks
+    # up the cache by x and arguments, returns a cached result if present, else computes the
+    # forward value via the hook, stores it in the cache (side effect) and returns it.
     with self._name_scope(name, [x]):
       x = ops.convert_to_tensor(x, name="x")
       self._maybe_assert_dtype(x)
@@ -745,6 +878,12 @@ class Bijector(metaclass=abc.ABCMeta):
       return mapping.y
 
   def forward(self, x, name="forward"):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: The docstring writes the relation as X = g(Y); the method actually computes
+    # Y = g(X) from the input X.
+    # Public forward evaluation. Inputs: x (tensor-like) and an op name. Returns the transformed
+    # tensor (cached for repeat calls). Raises a type error if a dtype is enforced and x differs;
+    # raises not-implemented if the subclass lacks the forward hook.
     """Returns the forward `Bijector` evaluation, i.e., X = g(Y).
 
     Args:
@@ -762,10 +901,18 @@ class Bijector(metaclass=abc.ABCMeta):
     return self._call_forward(x, name)
 
   def _inverse(self, y):
+    # [FUNCTION DOC]
+    # Abstract-style hook for the inverse map; subclasses override it. Default raises a
+    # not-implemented error.
     """Subclass implementation for `inverse` public function."""
     raise NotImplementedError("inverse not implemented")
 
   def _call_inverse(self, y, name, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: Implementation behind the public inverse method.
+    # Mirror of the forward helper: converts y to a tensor, checks dtype, bypasses the cache for
+    # non-injective bijectors, otherwise returns a cached x for y or computes it with the inverse
+    # hook, caches it (side effect) and returns it.
     with self._name_scope(name, [y]):
       y = ops.convert_to_tensor(y, name="y")
       self._maybe_assert_dtype(y)
@@ -779,6 +926,11 @@ class Bijector(metaclass=abc.ABCMeta):
       return mapping.x
 
   def inverse(self, y, name="inverse"):
+    # [FUNCTION DOC]
+    # Public inverse evaluation. Inputs: y (tensor-like) and an op name. Returns the tensor x
+    # such that forward of x equals y (cached for repeat calls; a tuple of preimages for
+    # non-injective bijectors). Raises a type error on dtype mismatch and not-implemented if the
+    # subclass lacks the inverse hook.
     """Returns the inverse `Bijector` evaluation, i.e., X = g^{-1}(Y).
 
     Args:
@@ -798,6 +950,10 @@ class Bijector(metaclass=abc.ABCMeta):
     return self._call_inverse(y, name)
 
   def _inverse_log_det_jacobian(self, y):
+    # [FUNCTION DOC]
+    # Hook for the inverse log determinant of the Jacobian over the minimal event dimensions.
+    # Input: y tensor. Subclasses override; default raises not-implemented, which the public
+    # method treats as a cue to fall back on the negated forward Jacobian.
     """Subclass implementation of `inverse_log_det_jacobian` public function.
 
     In particular, this method differs from the public function, in that it
@@ -814,6 +970,17 @@ class Bijector(metaclass=abc.ABCMeta):
     raise NotImplementedError("inverse_log_det_jacobian not implemented.")
 
   def _call_inverse_log_det_jacobian(self, y, event_ndims, name, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: Implementation behind the public inverse log-det-Jacobian method.
+    # Inputs: y, event_ndims (scalar integer, at least the inverse minimal count), name and extra
+    # keyword arguments for the hooks. Returns a cached constant value if one exists for this
+    # event_ndims. Otherwise converts y, checks dtype and event_ndims validity, and for
+    # non-injective bijectors returns a tuple of reduced Jacobians (falling back on negated forward
+    # Jacobians of the inverse points; the original not-implemented error is re-raised if both
+    # fail). For injective bijectors consults the cache, computes via the inverse hook or else the
+    # negated forward hook at the inverse point, reduces the result over the extra event
+    # dimensions, caches it (and remembers it permanently when the Jacobian is constant) and
+    # returns it. Raises not-implemented if neither hook exists.
     with self._name_scope(name, [y]):
       if event_ndims in self._constant_ildj_map:
         return self._constant_ildj_map[event_ndims]
@@ -864,6 +1031,12 @@ class Bijector(metaclass=abc.ABCMeta):
 
   def inverse_log_det_jacobian(
       self, y, event_ndims, name="inverse_log_det_jacobian"):
+    # [FUNCTION DOC]
+    # Public inverse log-determinant of the Jacobian at y. Inputs: y (tensor-like), event_ndims
+    # (scalar integer count of event dimensions; at least the inverse minimal count; the result
+    # is summed over the extra event dimensions) and an op name. Returns a tensor (a tuple of
+    # tensors for non-injective bijectors). Raises a type error on dtype mismatch, a value error
+    # for bad event_ndims, and not-implemented when no hook can supply the value.
     """Returns the (log o det o Jacobian o inverse)(y).
 
     Mathematically, returns: `log(det(dX/dY))(Y)`. (Recall that: `X=g^{-1}(Y)`.)
@@ -894,6 +1067,10 @@ class Bijector(metaclass=abc.ABCMeta):
     return self._call_inverse_log_det_jacobian(y, event_ndims, name)
 
   def _forward_log_det_jacobian(self, x):
+    # [FUNCTION DOC]
+    # Hook for the forward log determinant of the Jacobian over the minimal event dimensions.
+    # Input: x tensor. Subclasses override; default raises not-implemented, which the public
+    # method treats as a cue to fall back on the inverse Jacobian at the forward image.
     """Subclass implementation of `forward_log_det_jacobian` public function.
 
     In particular, this method differs from the public function, in that it
@@ -913,6 +1090,18 @@ class Bijector(metaclass=abc.ABCMeta):
         "forward_log_det_jacobian not implemented.")
 
   def _call_forward_log_det_jacobian(self, x, event_ndims, name, **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: The branch that handles non-injective bijectors further down is unreachable,
+    # because non-injective bijectors already raise not-implemented at the top.
+    # HELPER: Implementation behind the public forward log-det-Jacobian method.
+    # Inputs: x, event_ndims (scalar integer, at least the forward minimal count), name and extra
+    # keyword arguments for the hooks. Raises not-implemented for non-injective bijectors. Checks
+    # event_ndims validity; returns the negation of a cached constant value if one exists.
+    # Otherwise converts x, checks dtype, consults the cache for a stored inverse Jacobian
+    # (returning its negation), else computes via the forward hook or falls back on the inverse
+    # hook at the forward image, reduces over extra event dimensions, caches the result (and
+    # keeps it permanently when the Jacobian is constant) and returns the forward value.
+    # Raises not-implemented when neither hook exists.
     if not self._is_injective:
       raise NotImplementedError(
           "forward_log_det_jacobian cannot be implemented for non-injective "
@@ -966,6 +1155,14 @@ class Bijector(metaclass=abc.ABCMeta):
 
   def forward_log_det_jacobian(
       self, x, event_ndims, name="forward_log_det_jacobian"):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: The docstring says it returns "both" values and names y.dtype in the error
+    # text; it actually returns a single tensor and the dtype checked is that of x.
+    # Public forward log-determinant of the Jacobian at x. Inputs: x (tensor-like), event_ndims
+    # (scalar integer count, at least the forward minimal count; the result is summed over the
+    # extra event dimensions) and an op name. Returns a tensor. Raises a type error on dtype
+    # mismatch, a value error for bad event_ndims, and not-implemented for non-injective
+    # bijectors or when no hook can supply the value.
     """Returns both the forward_log_det_jacobian.
 
     Args:
@@ -992,6 +1189,11 @@ class Bijector(metaclass=abc.ABCMeta):
 
   @contextlib.contextmanager
   def _name_scope(self, name=None, values=None):
+    # [FUNCTION DOC]
+    # HELPER: Context manager standardizing op naming for all public methods.
+    # Inputs: name (inner scope name) and values (tensors the scope depends on, plus the graph
+    # parents are appended). Enters an outer scope named after the bijector then the inner scope,
+    # and yields the inner scope's name string.
     """Helper function to standardize op scope."""
     with ops.name_scope(self.name):
       with ops.name_scope(
@@ -999,12 +1201,24 @@ class Bijector(metaclass=abc.ABCMeta):
         yield scope
 
   def _maybe_assert_dtype(self, x):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: The error message's two dtypes are swapped: it prints the bijector's required
+    # dtype as the input dtype and the input's dtype as the expected one.
+    # HELPER: Input dtype check for the public methods.
+    # Input: tensor x. If the bijector enforces a dtype and x has a different base dtype, raises
+    # a type error; otherwise returns nothing.
     """Helper to check dtype when self.dtype is known."""
     if self.dtype is not None and self.dtype.base_dtype != x.dtype.base_dtype:
       raise TypeError("Input had dtype %s but expected %s." %
                       (self.dtype, x.dtype))
 
   def _cache(self, mapping):
+    # [FUNCTION DOC]
+    # HELPER: Stores computed results for reuse.
+    # Input: a cache record. Merges it with any existing entry (which detects conflicting
+    # overwrites), raises a value error if neither x nor y is known, then stores the record under
+    # both its forward key and its inverse key (side effect on the two cache tables). Returns
+    # nothing.
     """Helper which stores mapping info in forward/inverse dicts."""
     # Merging from lookup is an added check that we're not overwriting anything
     # which is not None.
@@ -1017,6 +1231,11 @@ class Bijector(metaclass=abc.ABCMeta):
     self._from_y[mapping.y_key] = mapping
 
   def _lookup(self, x=None, y=None, kwargs=None):
+    # [FUNCTION DOC]
+    # HELPER: Cache retrieval for the public methods.
+    # Inputs: x and y (tensors, at most one normally supplied) and kwargs (mapping of call
+    # arguments). Builds a record, then returns the stored record for the given x (preferred) or
+    # y if one exists, else the freshly built record. Does not modify the caches.
     """Helper which retrieves mapping info from forward/inverse dicts."""
     mapping = _Mapping(x=x, y=y, kwargs=kwargs)
     # Since _cache requires both x,y to be set, we only need to do one cache
@@ -1029,6 +1248,13 @@ class Bijector(metaclass=abc.ABCMeta):
 
   def _reduce_jacobian_det_over_event(
       self, y, ildj, min_event_ndims, event_ndims):
+    # [FUNCTION DOC]
+    # HELPER: Event-dimension reduction of Jacobian log determinants.
+    # Inputs: y (tensor whose trailing dimensions are the event), ildj (log determinant computed
+    # over the minimal event dimensions), min_event_ndims and event_ndims (integers or scalar
+    # tensors). Tiles the log determinant over the extra event dimensions (multiplying by ones of
+    # those dimensions' sizes) and sums over them, then tries to restore the static shape lost in
+    # that broadcasting when ranks are statically known. Returns the reduced tensor.
     """Reduce jacobian over event_ndims - min_event_ndims."""
     # In this case, we need to tile the Jacobian over the event and reduce.
     y_rank = array_ops.rank(y)
@@ -1055,6 +1281,11 @@ class Bijector(metaclass=abc.ABCMeta):
     return reduced_ildj
 
   def _get_event_reduce_dims(self, min_event_ndims, event_ndims):
+    # [FUNCTION DOC]
+    # HELPER: Chooses which axes the Jacobian reduction sums over.
+    # Inputs: min_event_ndims (integer) and event_ndims (integer or scalar tensor). Returns the
+    # list of negative axis indices counting the extra event dimensions from the end when
+    # event_ndims is statically known, else a tensor range of those negative axes.
     """Compute the reduction dimensions given event_ndims."""
     event_ndims_ = self._maybe_get_static_event_ndims(event_ndims)
 
@@ -1065,6 +1296,15 @@ class Bijector(metaclass=abc.ABCMeta):
       return math_ops.range(-reduce_ndims, 0)
 
   def _check_valid_event_ndims(self, min_event_ndims, event_ndims):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: The error text says event_ndims must be "larger than" the minimum, but equality
+    # is accepted (the check only fails when the minimum is strictly greater).
+    # HELPER: Validation of the event_ndims argument for the Jacobian methods.
+    # Inputs: min_event_ndims (integer) and event_ndims (integer or scalar tensor). Raises a
+    # value error for a non-integer dtype, a statically known non-scalar shape, or a statically
+    # known value below the minimum. When values are not static and validate_args is on, adds
+    # run-time assertions (at least the minimum, rank zero). Returns the list of assertion ops
+    # (possibly empty).
     """Check whether event_ndims is at least min_event_ndims."""
     event_ndims = ops.convert_to_tensor(event_ndims, name="event_ndims")
     event_ndims_ = tensor_util.constant_value(event_ndims)
@@ -1097,6 +1337,11 @@ class Bijector(metaclass=abc.ABCMeta):
     return assertions
 
   def _maybe_get_static_event_ndims(self, event_ndims):
+    # [FUNCTION DOC]
+    # HELPER: Extracts a plain integer from event_ndims when possible.
+    # Input: event_ndims (integer, array or tensor). Returns the statically known value (converted
+    # to a plain integer for numpy values) or nothing if unknown. Raises a value error if the
+    # known value has a non-32/64-bit-integer dtype or is not a scalar.
     """Helper which returns tries to return an integer static value."""
     event_ndims_ = distribution_util.maybe_get_static_value(event_ndims)
 

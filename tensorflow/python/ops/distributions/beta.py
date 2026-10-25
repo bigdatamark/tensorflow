@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Defines the deprecated Beta distribution over the open unit interval, a subclass of the
+# generic distribution base class, plus a variant that applies a softplus transform to its
+# concentration parameters. Also registers the analytic KL divergence between two Beta
+# distributions with the KL registry (import-time side effect). Only the Beta class is
+# exported to the public v1 distributions namespace; the softplus variant is listed in the
+# module's export list but has no public export decorator. Not a helper module.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -45,6 +52,14 @@ _beta_sample_note = """Note: `x` must have dtype `self.dtype` and be in
 
 @tf_export(v1=["distributions.Beta"])
 class Beta(distribution.Distribution):
+  # [CLASS DOC]
+  # Scalar-event Beta distribution on (0, 1), parameterized by two positive concentration
+  # tensors (concentration1 = alpha, concentration0 = beta) which are broadcast against each
+  # other to define the batch shape. Holds the validated concentration tensors and their
+  # sum as state. Samples are built from two gamma draws and are fully reparameterized.
+  # Subclass of the generic distribution base class; overrides the underscore hooks for
+  # shapes, sampling, density, cdf, entropy, mean, variance and mode. Construction emits a
+  # one-time deprecation warning.
   """Beta distribution.
 
   The Beta distribution is defined over the `(0, 1)` interval using parameters
@@ -165,6 +180,15 @@ class Beta(distribution.Distribution):
                validate_args=False,
                allow_nan_stats=True,
                name="Beta"):
+    # [FUNCTION DOC]
+    # Constructs a batch of Beta distributions. Inputs: concentration1 and concentration0
+    # (positive float tensors or values convertible to them; both required in practice even
+    # though they default to null), validate_args (when true adds positivity assertions),
+    # allow_nan_stats (whether undefined statistics return NaN instead of raising), and a name
+    # for the op scope. Converts both to tensors, optionally validates them, requires the same
+    # float dtype (raises a type error otherwise), stores them and their sum, then calls the
+    # base constructor with fully-reparameterized sampling and the captured constructor
+    # arguments. Returns nothing. Emits a one-time deprecation warning via the decorator.
     """Initialize a batch of Beta distributions.
 
     Args:
@@ -209,38 +233,65 @@ class Beta(distribution.Distribution):
 
   @staticmethod
   def _param_shapes(sample_shape):
+    # [FUNCTION DOC]
+    # Static helper used by the base class to report the shape each parameter needs for a
+    # desired sample shape. Input: sample_shape, a shape (list or tensor) converted to a 32-bit
+    # integer tensor. Returns a mapping from the names concentration1 and concentration0 to
+    # that same shape tensor.
     return dict(zip(
         ["concentration1", "concentration0"],
         [ops.convert_to_tensor(sample_shape, dtype=dtypes.int32)] * 2))
 
   @property
   def concentration1(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the stored concentration tensor for a 1 outcome (alpha).
     """Concentration parameter associated with a `1` outcome."""
     return self._concentration1
 
   @property
   def concentration0(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the stored concentration tensor for a 0 outcome (beta).
     """Concentration parameter associated with a `0` outcome."""
     return self._concentration0
 
   @property
   def total_concentration(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the precomputed sum of the two concentration tensors.
     """Sum of concentration parameters."""
     return self._total_concentration
 
   def _batch_shape_tensor(self):
+    # [FUNCTION DOC]
+    # Returns the dynamic batch shape as an integer tensor: the shape of the total
+    # concentration tensor (the broadcast of both concentrations).
     return array_ops.shape(self.total_concentration)
 
   def _batch_shape(self):
+    # [FUNCTION DOC]
+    # Returns the static batch shape, taken from the total concentration tensor's static shape.
     return self.total_concentration.get_shape()
 
   def _event_shape_tensor(self):
+    # [FUNCTION DOC]
+    # Returns the dynamic event shape: an empty 32-bit integer vector, since events are scalars.
     return constant_op.constant([], dtype=dtypes.int32)
 
   def _event_shape(self):
+    # [FUNCTION DOC]
+    # Returns the static event shape: a fully known empty (scalar) shape.
     return tensor_shape.TensorShape([])
 
   def _sample_n(self, n, seed=None):
+    # [FUNCTION DOC]
+    # Draws n samples. Inputs: n, the number of samples (scalar), and an optional integer seed.
+    # Broadcasts each concentration to the batch shape, draws one gamma sample per
+    # concentration (the second using a seed derived from the first with the label beta), and
+    # returns the first divided by the sum of both, giving a tensor whose leading dimension is
+    # n followed by the batch shape, with the distribution's dtype. Uses random ops, so it
+    # consumes randomness.
     expanded_concentration1 = array_ops.ones_like(
         self.total_concentration, dtype=self.dtype) * self.concentration1
     expanded_concentration0 = array_ops.ones_like(
@@ -260,31 +311,56 @@ class Beta(distribution.Distribution):
 
   @distribution_util.AppendDocstring(_beta_sample_note)
   def _log_prob(self, x):
+    # [FUNCTION DOC]
+    # Log probability density at x (float tensor in the unit interval, broadcastable to the
+    # batch shape): the unnormalized log density minus the log normalization constant. May
+    # raise via assertions if validate_args is set and x is out of range.
     return self._log_unnormalized_prob(x) - self._log_normalization()
 
   @distribution_util.AppendDocstring(_beta_sample_note)
   def _prob(self, x):
+    # [FUNCTION DOC]
+    # Probability density at x: the exponential of the log probability. Same input constraints
+    # as the log probability.
     return math_ops.exp(self._log_prob(x))
 
   @distribution_util.AppendDocstring(_beta_sample_note)
   def _log_cdf(self, x):
+    # [FUNCTION DOC]
+    # Log of the cumulative distribution function at x, computed as the log of the cdf (can
+    # lose precision or give negative infinity where the cdf underflows to zero).
     return math_ops.log(self._cdf(x))
 
   @distribution_util.AppendDocstring(_beta_sample_note)
   def _cdf(self, x):
+    # [FUNCTION DOC]
+    # Cumulative distribution function at x, computed with the regularized incomplete beta
+    # function using both concentrations. Returns a tensor of the batch shape.
     return math_ops.betainc(self.concentration1, self.concentration0, x)
 
   def _log_unnormalized_prob(self, x):
+    # [FUNCTION DOC]
+    # HELPER: Part of the log density computation for the Beta distribution.
+    # Validates x (only when validate_args is set), then returns the sum of
+    # (concentration1 - 1) times log x (zero-safe) and (concentration0 - 1) times log(1 - x).
     x = self._maybe_assert_valid_sample(x)
     return (math_ops.xlogy(self.concentration1 - 1., x) +
             (self.concentration0 - 1.) * math_ops.log1p(-x))  # pylint: disable=invalid-unary-operand-type
 
   def _log_normalization(self):
+    # [FUNCTION DOC]
+    # HELPER: Normalizer used by the log density and by the Beta-Beta KL divergence.
+    # Returns the log of the beta function: log-gamma of each concentration minus log-gamma of
+    # their sum, with the batch shape.
     return (math_ops.lgamma(self.concentration1)
             + math_ops.lgamma(self.concentration0)
             - math_ops.lgamma(self.total_concentration))
 
   def _entropy(self):
+    # [FUNCTION DOC]
+    # Differential entropy of the distribution, computed in closed form from the log
+    # normalization and digamma functions of both concentrations and their sum. Returns a
+    # tensor of the batch shape.
     return (
         self._log_normalization()
         - (self.concentration1 - 1.) * math_ops.digamma(self.concentration1)
@@ -293,9 +369,13 @@ class Beta(distribution.Distribution):
            math_ops.digamma(self.total_concentration)))
 
   def _mean(self):
+    # [FUNCTION DOC]
+    # Mean: concentration1 divided by the total concentration.
     return self._concentration1 / self._total_concentration
 
   def _variance(self):
+    # [FUNCTION DOC]
+    # Variance: mean times one minus mean, divided by one plus the total concentration.
     return self._mean() * (1. - self._mean()) / (1. + self.total_concentration)
 
   @distribution_util.AppendDocstring(
@@ -304,6 +384,11 @@ class Beta(distribution.Distribution):
       is used for undefined modes. If `self.allow_nan_stats` is `False` an
       exception is raised when one or more modes are undefined.""")
   def _mode(self):
+    # [FUNCTION DOC]
+    # Mode: (concentration1 - 1) divided by (total concentration - 2). It is only defined when
+    # both concentrations exceed one. If allow_nan_stats is true, undefined batch members are
+    # replaced by NaN. Otherwise the result is gated by assertions that raise an
+    # invalid-argument error at run time if either concentration is not greater than one.
     mode = (self.concentration1 - 1.) / (self.total_concentration - 2.)
     if self.allow_nan_stats:
       nan = array_ops.fill(
@@ -325,6 +410,11 @@ class Beta(distribution.Distribution):
     ], mode)
 
   def _maybe_assert_valid_concentration(self, concentration, validate_args):
+    # [FUNCTION DOC]
+    # HELPER: Parameter validation for the constructor.
+    # Inputs: a concentration tensor and the validate_args flag. If validation is off, returns
+    # the tensor unchanged; otherwise returns it with a control dependency on an assertion that
+    # all entries are positive (fails at run time with an invalid-argument error).
     """Checks the validity of a concentration parameter."""
     if not validate_args:
       return concentration
@@ -335,6 +425,12 @@ class Beta(distribution.Distribution):
     ], concentration)
 
   def _maybe_assert_valid_sample(self, x):
+    # [FUNCTION DOC]
+    # HELPER: Sample validation for the density computation.
+    # KNOWN ISSUE: The positivity check is strict, so samples of exactly zero (which the class
+    # docs say can occur) are rejected when validation is on.
+    # If validate_args is off, returns x unchanged; otherwise returns x gated on assertions that
+    # every entry is strictly positive and strictly less than one (fails at run time).
     """Checks the validity of a sample."""
     if not self.validate_args:
       return x
@@ -348,6 +444,10 @@ class Beta(distribution.Distribution):
 
 
 class BetaWithSoftplusConcentration(Beta):
+  # [CLASS DOC]
+  # Deprecated convenience subclass of Beta that passes both raw inputs through a softplus
+  # transform so they are always positive before being used as concentrations. Adds no other
+  # state or behavior.
   """Beta with softplus transform of `concentration1` and `concentration0`."""
 
   @deprecation.deprecated(
@@ -361,6 +461,14 @@ class BetaWithSoftplusConcentration(Beta):
                validate_args=False,
                allow_nan_stats=True,
                name="BetaWithSoftplusConcentration"):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: The deprecation message refers to a nonexistent concentration2 argument; the
+    # second parameter is actually named concentration0.
+    # Constructs the distribution from unconstrained concentration1 and concentration0 values
+    # (both required), applying softplus to each and delegating to the Beta constructor with the
+    # given validate_args, allow_nan_stats and name. Afterwards overwrites the stored parameters
+    # mapping with this constructor's own arguments. Returns nothing; emits a one-time
+    # deprecation warning.
     parameters = dict(locals())
     with ops.name_scope(name, values=[concentration1,
                                       concentration0]) as name:
@@ -377,6 +485,11 @@ class BetaWithSoftplusConcentration(Beta):
 
 @kullback_leibler.RegisterKL(Beta, Beta)
 def _kl_beta_beta(d1, d2, name=None):
+  # [FUNCTION DOC]
+  # HELPER: KL divergence implementation registered for the pair (Beta, Beta).
+  # Inputs: d1 and d2, two Beta distributions (batch shapes must broadcast), and an optional
+  # op name (default kl_beta_beta). Returns the batchwise KL divergence of d1 from d2 using the
+  # closed form based on log normalization differences and digamma terms. Creates ops only.
   """Calculate the batchwise KL divergence KL(d1 || d2) with d1 and d2 Beta.
 
   Args:
@@ -389,6 +502,11 @@ def _kl_beta_beta(d1, d2, name=None):
     Batchwise KL(d1 || d2)
   """
   def delta(fn, is_property=True):
+    # [FUNCTION DOC]
+    # HELPER: Nested helper of the Beta-Beta KL computation.
+    # Inputs: fn, the attribute name to read from both distributions, and is_property, whether
+    # it is a plain attribute (true) or a method to call (false). Returns the value from the
+    # second distribution minus the value from the first.
     fn1 = getattr(d1, fn)
     fn2 = getattr(d2, fn)
     return (fn2 - fn1) if is_property else (fn2() - fn1())
