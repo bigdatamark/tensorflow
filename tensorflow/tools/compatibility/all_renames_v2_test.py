@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Sanity test for the rename tables in the all_renames_v2 module: asserts that no symbol is
+# renamed to itself. Runs under the TensorFlow test runner when executed as a script. No
+# import-time side effects beyond importing the module under test.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,8 +24,13 @@ from tensorflow.tools.compatibility import all_renames_v2
 
 
 class AllRenamesV2Test(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering the merged rename table of the all_renames_v2 module. No shared fixtures.
 
   def test_no_identity_renames(self):
+    # [FUNCTION DOC]
+    # Scenario: iterate over the merged symbol rename table. Collects every old name equal to
+    # its new name. Expected: the collection is empty, i.e. no rename maps a symbol to itself.
     identity_renames = [
         old_name
         for old_name, new_name in all_renames_v2.symbol_renames.items()

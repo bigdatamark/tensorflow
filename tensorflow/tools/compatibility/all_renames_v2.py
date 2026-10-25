@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Data module for the TF 1.x to 2.0 upgrade tooling. Defines the hand-maintained mapping of
+# extra symbol renames (manual_symbol_renames), adds "contrib_" style aliases for contrib
+# entries, merges them into the generated rename table from the renames_v2 module as
+# symbol_renames, and defines a mapping from contrib symbols to TensorFlow Addons replacements.
+# Import-time side effects: the contrib alias function runs on the manual mapping, and the
+# generated table from renames_v2 is mutated in place (symbol_renames is the same object as that
+# table, so it is updated too). Consumed by the upgrade script and its tests.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -449,6 +457,12 @@ manual_symbol_renames = {
 
 
 def add_contrib_direct_import_support(symbol_dict):
+  # [FUNCTION DOC]
+  # HELPER: Prepares rename tables for code that imports contrib members directly.
+  # Input: symbol_dict, a mutable mapping from old symbol names to new names. For every key
+  # (snapshot taken first) it adds an extra entry whose key has the contrib prefix replaced by
+  # the contrib underscore alias form, with the same value. Keys without that prefix are
+  # re-added unchanged, so they are no-ops. Returns nothing; mutates the mapping in place.
   """Add support for `tf.contrib.*` alias `contrib_*.` Updates dict in place."""
   for symbol_name in list(symbol_dict.keys()):
     symbol_alias = symbol_name.replace("tf.contrib.", "contrib_")

@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# Core engine of the TensorFlow Python upgrade scripts. Given an API change specification (a
+# class with tables of symbol renames, keyword renames, argument reorders, warnings, custom
+# transformers, module deprecations and import renames) it parses Python source with the pasta
+# library (which preserves formatting), walks the syntax tree with a visitor that applies the
+# specification, and writes the modified source plus a log of changes and a list of warnings and
+# errors. Exposes: severity constants, an import-rename record type, tree-building and
+# argument-inspection helpers, the specification base classes, an edit visitor, an analysis
+# visitor that only detects usage, and the code upgrader that processes strings, files and
+# directory trees. Import-time side effects: compiles two regular expressions and defines
+# constants; requires the pasta package. Used by the version-specific upgrade scripts.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -41,6 +52,15 @@ ImportRename = collections.namedtuple(
 
 
 def full_name_node(name, ctx=ast.Load()):
+  # [FUNCTION DOC]
+  # HELPER: Builds syntax-tree nodes for qualified names used by rename logic.
+  # KNOWN ISSUE: the default context is a single shared instance created at definition time,
+  # and the returned outermost node's context is set to the given context object itself, so
+  # callers sharing the default share one context object. Behaviorally harmless in practice.
+  # Inputs: name, a dotted string such as a.b.c; ctx, the expression context to assign to the
+  # outermost node (default: load context). Output: a name node for a single component, or a
+  # chain of attribute nodes nested left to right for dotted names; inner nodes always get load
+  # context. Raises nothing for normal strings. No side effects.
   """Make an Attribute or Name node for name.
 
   Translate a qualified name into nested Attribute nodes (and a Name node).
@@ -64,6 +84,16 @@ def full_name_node(name, ctx=ast.Load()):
 
 
 def get_arg_value(node, arg_name, arg_pos=None):
+  # [FUNCTION DOC]
+  # HELPER: Argument lookup used by call-warning and transformer logic.
+  # KNOWN ISSUE: when a starred positional argument precedes the wanted position, it is skipped
+  # without advancing the index, so the positional lookup may return an argument that is not
+  # actually at that position at run time.
+  # Inputs: node, a call node; arg_name, keyword name to look for (may be nothing/null to skip
+  # the keyword search); arg_pos, optional zero-based position to check among positional
+  # arguments. Keywords are searched first, then positional arguments with starred ones skipped.
+  # Output: a pair of a boolean telling whether the argument was found and the value node (or
+  # nothing/null). No side effects, no exceptions.
   """Get the value of an argument from a ast.Call node.
 
   This function goes through the positional and keyword arguments to check
@@ -103,6 +133,13 @@ def get_arg_value(node, arg_name, arg_pos=None):
 
 
 def uses_star_args_in_call(node):
+  # [FUNCTION DOC]
+  # HELPER: Detects variadic positional arguments in a call.
+  # KNOWN ISSUE: the docstring's Returns text mentions keyword args too, but only starred
+  # positional arguments are checked. The legacy branch for Python older than 3.5 is dead on
+  # any supported interpreter.
+  # Input: node, a call node. Output: true if any positional argument is a starred expression
+  # (or, on very old Pythons, the node has a star-args field), else false. No side effects.
   """Check if an ast.Call node uses arbitrary-length positional *args.
 
   This function works with the AST call node format of Python3.5+
@@ -127,6 +164,12 @@ def uses_star_args_in_call(node):
 
 
 def uses_star_kwargs_in_call(node):
+  # [FUNCTION DOC]
+  # HELPER: Detects variadic keyword arguments in a call.
+  # KNOWN ISSUE: the docstring's Returns text mentions positional args too, but only
+  # double-star keyword expansion is checked. The pre-3.5 branch is dead on supported Pythons.
+  # Input: node, a call node. Output: true if any keyword entry has no name (a double-star
+  # expansion), else false. No side effects.
   """Check if an ast.Call node uses arbitrary-length **kwargs.
 
   This function works with the AST call node format of Python3.5+
@@ -151,6 +194,10 @@ def uses_star_kwargs_in_call(node):
 
 
 def uses_star_args_or_kwargs_in_call(node):
+  # [FUNCTION DOC]
+  # HELPER: Combined variadic-argument check used by call visitors.
+  # Input: node, a call node. Output: true if the call uses starred positional arguments or
+  # double-star keyword expansion, else false. No side effects.
   """Check if an ast.Call node uses arbitrary-length *args or **kwargs.
 
   This function works with the AST call node format of Python3.5+
@@ -167,6 +214,12 @@ def uses_star_args_or_kwargs_in_call(node):
 
 
 def excluded_from_module_rename(module, import_rename_spec):
+  # [FUNCTION DOC]
+  # HELPER: Exclusion test used when renaming imports.
+  # Inputs: module, a dotted module name string; import_rename_spec, an import-rename record
+  # holding a new name and a collection of excluded name prefixes. Output: true if the module
+  # name starts with any excluded prefix (plain string prefix, not component-aware), else
+  # false. No side effects.
   """Check if this module import should not be renamed.
 
   Args:
@@ -184,6 +237,12 @@ def excluded_from_module_rename(module, import_rename_spec):
 
 
 class APIChangeSpec:
+  # [CLASS DOC]
+  # Base class for API change specifications. Concrete subclasses (for example the TF 2.0 spec)
+  # supply the rule tables listed in the docstring as attributes; this base supplies only
+  # no-op preprocessing hooks. KNOWN ISSUE: the base class defines none of the documented
+  # fields itself, and the visitor also reads optional attributes not listed in the docstring
+  # (function arg warnings, max submodule depth, inserts after imports).
   """This class defines the transformations that need to happen.
 
   This class must provide the following fields:
@@ -207,10 +266,17 @@ class APIChangeSpec:
   """
 
   def preprocess(self, root_node):  # pylint: disable=unused-argument
+    # [FUNCTION DOC]
+    # Hook called on a freshly parsed tree before visiting. Input: root_node, the tree root.
+    # Default behavior: returns the same root plus an empty list of log entries and an empty
+    # list of errors. Subclasses may rewrite the tree and add rules (undone by the clearing hook).
     """Preprocess a parse tree. Return a preprocessed node, logs and errors."""
     return root_node, [], []
 
   def clear_preprocessing(self):
+    # [FUNCTION DOC]
+    # Hook called after a file has been visited to undo rule changes made during preprocessing.
+    # Default: does nothing, returns nothing.
     """Restore this APIChangeSpec to before it preprocessed a file.
 
     This is needed if preprocessing a file changed any rewriting rules.
@@ -219,9 +285,17 @@ class APIChangeSpec:
 
 
 class NoUpdateSpec(APIChangeSpec):
+  # [CLASS DOC]
+  # HELPER: Empty specification used by the analysis visitor so that inherited edit machinery
+  # has all rule tables present but empty. All tables are plain empty mappings created per
+  # instance.
   """A specification of an API change which doesn't change anything."""
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor with no inputs. Creates empty mappings for function handles, reorders,
+    # keyword renames, symbol renames, warnings, change-to-function, module deprecations,
+    # function transformers and import renames. Returns nothing.
     self.function_handle = {}
     self.function_reorders = {}
     self.function_keyword_renames = {}
@@ -234,6 +308,13 @@ class NoUpdateSpec(APIChangeSpec):
 
 
 class _PastaEditVisitor(ast.NodeVisitor):
+  # [CLASS DOC]
+  # HELPER: Internal tree visitor behind the code upgrader.
+  # Applies a change specification to a pasta-parsed tree: renames symbols, makes positional
+  # arguments keywords, renames or removes keyword arguments, runs custom transformers, adds
+  # warnings, and rewrites imports. State: the specification, a log list of (severity, line,
+  # column, message) tuples, and a stack of ancestor nodes so handlers can reach parents.
+  # Subclassed by the analysis visitor.
   """AST Visitor that processes function calls.
 
   Updates function calls from old API version to new API version using a given
@@ -241,41 +322,68 @@ class _PastaEditVisitor(ast.NodeVisitor):
   """
 
   def __init__(self, api_change_spec):
+    # [FUNCTION DOC]
+    # Constructor. Input: api_change_spec, the specification object whose tables drive edits.
+    # Stores it, and starts with an empty log list and an empty ancestor stack. Returns nothing.
     self._api_change_spec = api_change_spec
     self._log = []   # Holds 4-tuples: severity, line, col, msg.
     self._stack = []  # Allow easy access to parents.
 
   # Overridden to maintain a stack of nodes to allow for parent access
   def visit(self, node):
+    # [FUNCTION DOC]
+    # Override of the generic visit entry. Input: node, the tree node to visit. Pushes the node
+    # on the ancestor stack, dispatches to the normal visitor, then pops it (not exception safe:
+    # if a handler raises, the node stays on the stack). Returns nothing.
     self._stack.append(node)
     super(_PastaEditVisitor, self).visit(node)
     self._stack.pop()
 
   @property
   def errors(self):
+    # [FUNCTION DOC]
+    # Property returning a new list of log entries whose severity is error.
     return [log for log in self._log if log[0] == ERROR]
 
   @property
   def warnings(self):
+    # [FUNCTION DOC]
+    # Property returning a new list of log entries whose severity is warning.
     return [log for log in self._log if log[0] == WARNING]
 
   @property
   def warnings_and_errors(self):
+    # [FUNCTION DOC]
+    # Property returning a new list of log entries whose severity is warning or error, in log
+    # order. Used to build the per-file error report.
     return [log for log in self._log if log[0] in (WARNING, ERROR)]
 
   @property
   def info(self):
+    # [FUNCTION DOC]
+    # Property returning a new list of log entries whose severity is informational.
     return [log for log in self._log if log[0] == INFO]
 
   @property
   def log(self):
+    # [FUNCTION DOC]
+    # Property returning the live list of all log entries (severity, line, column, message).
     return self._log
 
   def add_log(self, severity, lineno, col, msg):
+    # [FUNCTION DOC]
+    # Records one log entry. Inputs: severity string, line number, column offset, message text.
+    # Side effects: appends the tuple to the log and prints a formatted line to standard output.
+    # Returns nothing.
     self._log.append((severity, lineno, col, msg))
     print("%s line %d:%d: %s" % (severity, lineno, col, msg))
 
   def add_logs(self, logs):
+    # [FUNCTION DOC]
+    # Records many log entries at once. Input: logs, a list of (severity, line, column,
+    # message) tuples, typically produced by custom transformers. Side effects: extends the log
+    # and prints each entry to standard output. Raises a formatting error if an entry is not a
+    # four-element tuple of the expected types. Returns nothing.
     """Record a log and print it.
 
     The log should be a tuple `(severity, lineno, col_offset, msg)`, which will
@@ -291,6 +399,12 @@ class _PastaEditVisitor(ast.NodeVisitor):
       print("%s line %d:%d: %s" % log)
 
   def _get_applicable_entries(self, transformer_field, full_name, name):
+    # [FUNCTION DOC]
+    # HELPER: Rule lookup for call handling.
+    # Inputs: transformer_field, name of a specification attribute holding a mapping (missing
+    # attribute treated as empty); full_name, dotted callable name or nothing; name, short name
+    # or nothing. Output: a list (possibly empty, in order) of the entries stored under the full
+    # name, under the wildcard-dot-name key, and under the single wildcard key. No side effects.
     """Get all list entries indexed by name that apply to full_name or name."""
     # Transformers are indexed to full name, name, or no name
     # as a performance optimization.
@@ -308,6 +422,12 @@ class _PastaEditVisitor(ast.NodeVisitor):
     return transformers
 
   def _get_applicable_dict(self, transformer_field, full_name, name):
+    # [FUNCTION DOC]
+    # HELPER: Rule lookup for keyword renames and argument warnings.
+    # Inputs: as for the entries lookup. Output: a new mapping merging a copy of the wildcard
+    # entry, then the wildcard-dot-name entry, then the full-name entry, with later (more
+    # specific) ones overriding earlier keys. Missing entries count as empty. The specification
+    # tables are not modified.
     """Get all dict entries indexed by name that apply to full_name or name."""
     # Transformers are indexed to full name, name, or no name
     # as a performance optimization.
@@ -321,6 +441,11 @@ class _PastaEditVisitor(ast.NodeVisitor):
     return transformers
 
   def _get_full_name(self, node):
+    # [FUNCTION DOC]
+    # HELPER: Name extraction used by all visit handlers.
+    # Input: node, an attribute or name node (or any expression). Output: the dotted name made
+    # from walking attribute chains down to a plain name, or nothing/null if the chain bottoms
+    # out in something else such as a call or subscript. No side effects.
     """Traverse an Attribute node to generate a full name, e.g., "tf.foo.bar".
 
     This is the inverse of `full_name_node`.
@@ -343,6 +468,12 @@ class _PastaEditVisitor(ast.NodeVisitor):
     return ".".join(reversed(items))
 
   def _maybe_add_warning(self, node, full_name):
+    # [FUNCTION DOC]
+    # HELPER: Emits a manual-check message for a symbol listed in the function warnings table.
+    # Inputs: node, node providing line and column; full_name, dotted name (may be a wildcard
+    # key built by the caller). If found, the stored level and message are retrieved, the
+    # function-name placeholder is replaced by the name, and a log entry is added (printed).
+    # Output: true if a warning was recorded, else false.
     """Adds an error to be printed about full_name at node."""
     function_warnings = self._api_change_spec.function_warnings
     if full_name in function_warnings:
@@ -355,6 +486,12 @@ class _PastaEditVisitor(ast.NodeVisitor):
       return False
 
   def _maybe_add_module_deprecation_warning(self, node, full_name, whole_name):
+    # [FUNCTION DOC]
+    # HELPER: Emits a warning when a member of a deprecated module is used.
+    # Inputs: node, for position; full_name, dotted module name looked up in the module
+    # deprecations table; whole_name, the dumped source text of the full expression using it.
+    # If found, adds a log entry naming the member and module with the stored message (placeholder
+    # replaced by the whole name). Output: true if a warning was added, else false.
     """Adds a warning if full_name is a deprecated module."""
     warnings = self._api_change_spec.module_deprecations
     if full_name in warnings:
@@ -369,6 +506,17 @@ class _PastaEditVisitor(ast.NodeVisitor):
       return False
 
   def _maybe_add_call_warning(self, node, full_name, name):
+    # [FUNCTION DOC]
+    # HELPER: Emits warnings for calls matching wildcard or argument-specific warning rules.
+    # KNOWN ISSUE: the argument-presence test takes the result of the argument lookup, which is
+    # a pair and therefore always true as a whole, so the fallback to the variadic flag never
+    # applies; the message variant for calls with variadic arguments is only used when the
+    # argument was actually found. Also the docstring refers to a nonexistent function name, and
+    # a null short name with an attribute call would fail when building the wildcard key.
+    # Inputs: node, call node; full_name, dotted callable name or nothing; name, short name or
+    # nothing. First warns using the wildcard-dot-name key if the callee is an attribute, then
+    # for each (keyword, position) rule applicable, in sorted order, warns when the argument is
+    # present. Side effects: log entries, printed. Output: true if any warning was recorded.
     """Print a warning when specific functions are called with selected args.
 
     The function _print_warning_for_function matches the full name of the called
@@ -413,6 +561,12 @@ class _PastaEditVisitor(ast.NodeVisitor):
     return warned
 
   def _maybe_rename(self, parent, node, full_name):
+    # [FUNCTION DOC]
+    # HELPER: Applies the symbol rename table to a name or attribute node.
+    # Inputs: parent, the node containing it; node, the name/attribute node; full_name, its
+    # dotted name. If a non-empty new name exists, logs an informational entry, builds a new
+    # node chain at the same location with the same context, and replaces the node in the parent
+    # in place. Output: true if renamed, else false.
     """Replace node (Attribute or Name) with a node representing full_name."""
     new_name = self._api_change_spec.symbol_renames.get(full_name, None)
     if new_name:
@@ -426,6 +580,13 @@ class _PastaEditVisitor(ast.NodeVisitor):
       return False
 
   def _maybe_change_to_function_call(self, parent, node, full_name):
+    # [FUNCTION DOC]
+    # HELPER: Turns a property-like attribute access into a call when the specification lists
+    # the name as changed to a function.
+    # Inputs: parent, containing node; node, attribute node; full_name, its dotted name. If the
+    # name is listed and the parent is not already a call, replaces the node by a call of it
+    # with no arguments, copies the location, and logs an informational entry. Output: true if
+    # changed, else false.
     """Wraps node (typically, an Attribute or Expr) in a Call."""
     if full_name in self._api_change_spec.change_to_function:
       if not isinstance(parent, ast.Call):
@@ -440,6 +601,18 @@ class _PastaEditVisitor(ast.NodeVisitor):
     return False
 
   def _maybe_add_arg_names(self, node, full_name):
+    # [FUNCTION DOC]
+    # HELPER: Converts positional arguments into keyword arguments for functions whose argument
+    # order changed.
+    # KNOWN ISSUE: the lookup into the reorder list is not bounds checked, so a call with more
+    # non-starred positional arguments than the list has entries raises an index error; also a
+    # starred argument is skipped without advancing the position, so later positions can be
+    # mapped to the wrong names.
+    # Inputs: node, call node; full_name, dotted callable name or nothing. If the function is in
+    # the reorder table, warns when starred positional arguments are used, then for each
+    # positional argument looks up its new keyword (empty entries stay positional). If any
+    # keyword was created, replaces the node's positional and keyword lists in place (new
+    # keywords first) and logs. Output: true if modified, else false.
     """Make args into keyword args if function called full_name requires it."""
     function_reorders = self._api_change_spec.function_reorders
 
@@ -474,6 +647,13 @@ class _PastaEditVisitor(ast.NodeVisitor):
     return False
 
   def _maybe_modify_args(self, node, full_name, name):
+    # [FUNCTION DOC]
+    # HELPER: Renames or removes keyword arguments according to the keyword rename rules.
+    # Inputs: node, call node; full_name, dotted callable name or nothing; name, short name.
+    # Applicable rules map old keyword names to new names, where nothing/null means remove. If
+    # the call uses double-star expansion, adds a manual-check warning. Matching keywords are
+    # renamed in place or dropped, each with an informational log (printed); the node's keyword
+    # list is replaced when anything changed. Output: true if modified, else false.
     """Rename keyword args if the function called full_name requires it."""
     renamed_keywords = self._get_applicable_dict("function_keyword_renames",
                                                  full_name, name)
@@ -516,6 +696,14 @@ class _PastaEditVisitor(ast.NodeVisitor):
     return modified
 
   def visit_Call(self, node):  # pylint: disable=invalid-name
+    # [FUNCTION DOC]
+    # Visitor for call nodes. Input: node, the call node, which must be on top of the ancestor
+    # stack (asserted). Computes the dotted and short callee names, then in order: emits call
+    # warnings, converts arguments to keywords where required, renames or removes keywords,
+    # warns if custom transformers exist and the call has variadic arguments, and runs each
+    # applicable custom transformer with parent, node, names and a log list; transformer logs are
+    # recorded and a returned different node replaces the node in the parent (and the stack top).
+    # Finally visits children. Returns nothing; mutates the tree and the log.
     """Handle visiting a call node in the AST.
 
     Args:
@@ -576,6 +764,12 @@ class _PastaEditVisitor(ast.NodeVisitor):
     self.generic_visit(node)
 
   def visit_Attribute(self, node):  # pylint: disable=invalid-name
+    # [FUNCTION DOC]
+    # Visitor for attribute nodes not handled as calls. Input: node, which must be on top of the
+    # stack (asserted). If the dotted name can be built: emits a symbol warning, then tries to
+    # rename the symbol or turn it into a function call (and stops descending if either
+    # happened); otherwise finds the outermost enclosing attribute chain, dumps it to text, and
+    # emits a module-deprecation warning. Then visits children. Returns nothing.
     """Handle bare Attributes i.e. [tf.foo, tf.bar]."""
     assert self._stack[-1] is node
 
@@ -605,6 +799,16 @@ class _PastaEditVisitor(ast.NodeVisitor):
     self.generic_visit(node)
 
   def visit_Import(self, node):  # pylint: disable=invalid-name
+    # [FUNCTION DOC]
+    # Visitor for plain import statements, applying the import rename table. Input: node, the
+    # import node. For each imported module, tries the longest allowed dotted prefix first (up to
+    # the specification's maximum submodule depth, default one) against the rename table, skipping
+    # excluded names; on a match builds a renamed alias (a single-component import keeps its
+    # original name as the alias), and inserts any follow-up statements configured for that import
+    # right after it, copying location, indentation and ensuring a newline, with log entries.
+    # If anything was renamed, replaces the import node and logs the change. Then visits children.
+    # KNOWN ISSUE: after replacing the node the children of the old node are visited. Returns
+    # nothing.
     """Handle visiting an import node in the AST.
 
     Args:
@@ -703,6 +907,14 @@ class _PastaEditVisitor(ast.NodeVisitor):
     self.generic_visit(node)
 
   def visit_ImportFrom(self, node):  # pylint: disable=invalid-name
+    # [FUNCTION DOC]
+    # Visitor for from-import statements, applying the import rename table. Input: node, the
+    # statement node. Does nothing special for relative imports without a module name or when
+    # the first module component has no rename rule. Otherwise splits the imported names into
+    # those to move to the renamed module and those excluded by prefix; replaces the statement
+    # with one using the renamed module for the first group, inserts an extra statement with the
+    # original module for the excluded group before it (copying indentation), and logs the change.
+    # Always ends by visiting children. Returns nothing; mutates the tree and the log.
     """Handle visiting an import-from node in the AST.
 
     Args:
@@ -776,6 +988,10 @@ class _PastaEditVisitor(ast.NodeVisitor):
 
 
 class AnalysisResult:
+  # [CLASS DOC]
+  # Marker/base class for analysis detections. Defines no members itself; implementations are
+  # expected to provide a log level and a log message. Instances are produced by analysis
+  # specifications and recorded by the analysis visitor.
   """This class represents an analysis result and how it should be logged.
 
   This class must provide the following fields:
@@ -788,6 +1004,11 @@ class AnalysisResult:
 
 
 class APIAnalysisSpec:
+  # [CLASS DOC]
+  # Base class for analysis specifications. Defines no members itself; subclasses provide a
+  # mapping of symbol names to detections and a mapping of (module name, alias) pairs to
+  # detections. KNOWN ISSUE: the docstring contains a stray dangling line about notifications
+  # that does not describe any field.
   """This class defines how `AnalysisResult`s should be generated.
 
   It specifies how to map imports and symbols to `AnalysisResult`s.
@@ -804,6 +1025,11 @@ class APIAnalysisSpec:
 
 
 class PastaAnalyzeVisitor(_PastaEditVisitor):
+  # [CLASS DOC]
+  # Read-only visitor that scans a tree for specific symbols and imports listed in an analysis
+  # specification and records detections plus log entries, without changing the tree. Extends
+  # the edit visitor (using an empty change specification) and overrides the attribute and import
+  # handlers. State: the analysis specification and a list of detections.
   """AST Visitor that looks for specific API usage without editing anything.
 
   This is used before any rewriting is done to detect if any symbols are used
@@ -811,18 +1037,32 @@ class PastaAnalyzeVisitor(_PastaEditVisitor):
   """
 
   def __init__(self, api_analysis_spec):
+    # [FUNCTION DOC]
+    # Constructor. Input: api_analysis_spec, the analysis specification. Initializes the parent
+    # visitor with an empty change specification, stores the analysis spec and starts with an
+    # empty results list. Returns nothing.
     super(PastaAnalyzeVisitor, self).__init__(NoUpdateSpec())
     self._api_analysis_spec = api_analysis_spec
     self._results = []   # Holds AnalysisResult objects
 
   @property
   def results(self):
+    # [FUNCTION DOC]
+    # Property returning the live list of detections recorded so far, in visit order.
     return self._results
 
   def add_result(self, analysis_result):
+    # [FUNCTION DOC]
+    # Appends a detection to the results list. Input: analysis_result, a detection object.
+    # Returns nothing.
     self._results.append(analysis_result)
 
   def visit_Attribute(self, node):  # pylint: disable=invalid-name
+    # [FUNCTION DOC]
+    # Visitor for attribute nodes in analysis mode. Input: node. If the dotted name matches an
+    # entry in the specification's symbols-to-detect mapping, records the detection and adds a
+    # log entry (printed) with its level and message. Then visits children. Does not modify the
+    # tree and does not use the ancestor-stack assertions. Returns nothing.
     """Handle bare Attributes i.e. [tf.foo, tf.bar]."""
     full_name = self._get_full_name(node)
     if full_name:
@@ -836,6 +1076,10 @@ class PastaAnalyzeVisitor(_PastaEditVisitor):
     self.generic_visit(node)
 
   def visit_Import(self, node):  # pylint: disable=invalid-name
+    # [FUNCTION DOC]
+    # Visitor for plain imports in analysis mode. Input: node. For each imported name, looks up
+    # the pair of full name and alias in the specification's imports-to-detect mapping; on a
+    # match records the detection and logs it (printed). Then visits children. No tree changes.
     """Handle visiting an import node in the AST.
 
     Args:
@@ -855,6 +1099,11 @@ class PastaAnalyzeVisitor(_PastaEditVisitor):
     self.generic_visit(node)
 
   def visit_ImportFrom(self, node):  # pylint: disable=invalid-name
+    # [FUNCTION DOC]
+    # Visitor for from-imports in analysis mode. Input: node. Ignores statements without a
+    # module name. For each imported name, joins module and name with a dot, looks up that
+    # string with the alias in the imports-to-detect mapping, and on a match records the
+    # detection and logs it (printed). Then visits children. No tree changes.
     """Handle visiting an import-from node in the AST.
 
     Args:
@@ -882,9 +1131,16 @@ class PastaAnalyzeVisitor(_PastaEditVisitor):
 
 
 class ASTCodeUpgrader:
+  # [CLASS DOC]
+  # Driver that upgrades Python source using a change specification: strings, single files,
+  # opened file objects, and whole directory trees (in place or into a new output tree). Holds
+  # the specification. Reports are strings; per-file errors are lists of formatted messages.
   """Handles upgrading a set of Python files using a given API change spec."""
 
   def __init__(self, api_change_spec):
+    # [FUNCTION DOC]
+    # Constructor. Input: api_change_spec, which must be an instance of the change specification
+    # base class. Raises a type error otherwise. Stores it. Returns nothing.
     if not isinstance(api_change_spec, APIChangeSpec):
       raise TypeError("Must pass APIChangeSpec to ASTCodeUpgrader, got %s" %
                       type(api_change_spec))
@@ -894,6 +1150,16 @@ class ASTCodeUpgrader:
                    in_filename,
                    out_filename,
                    no_change_to_outfile_on_error=False):
+    # [FUNCTION DOC]
+    # Upgrades one file on disk. Inputs: in_filename, path to read; out_filename, path to write
+    # (may equal the input for in-place edits); no_change_to_outfile_on_error, flag, default false.
+    # Writes the result to a temporary file first, then moves it to the output path. Output: the
+    # triple (files processed count, report text, list of error messages) from the opened-file
+    # step. KNOWN ISSUE: the flag name suggests keeping the output untouched on errors, but the
+    # temporary file is discarded whenever the processed count is zero (i.e. parse failure), not
+    # when warnings or errors were found; the move into place also happens otherwise. The
+    # temporary file is created outside the destination directory, so the move may copy across
+    # file systems. Raises file errors if files cannot be opened or moved.
     """Process the given python file for incompatible changes.
 
     Args:
@@ -919,6 +1185,10 @@ class ASTCodeUpgrader:
     return ret
 
   def format_log(self, log, in_filename):
+    # [FUNCTION DOC]
+    # Formats one log entry as text. Inputs: log, a (severity, line, column, message) tuple;
+    # in_filename, optional file name (empty or nothing for none). Output: a line with line,
+    # column, severity and message, prefixed by the file name and a colon when given.
     log_string = "%d:%d: %s: %s" % (log[1], log[2], log[0], log[3])
     if in_filename:
       return in_filename + ":" + log_string
@@ -926,6 +1196,14 @@ class ASTCodeUpgrader:
       return log_string
 
   def update_string_pasta(self, text, in_filename):
+    # [FUNCTION DOC]
+    # Upgrades source text. Inputs: text, the source code; in_filename, used only to prefix
+    # errors. Parses with pasta; on syntax, value or type errors returns a zero count, empty text,
+    # a single log message with the traceback, and an empty error list. Otherwise runs the
+    # specification's preprocessing hook, visits the tree with the edit visitor, calls the hook
+    # that clears preprocessing, and returns the tuple (1, new source text, formatted log lines
+    # without file names, formatted warning and error lines with the file name). Side effects: the
+    # visitor prints log lines; the specification may be mutated by its hooks.
     """Updates a file using pasta."""
     try:
       t = pasta.parse(text)
@@ -948,6 +1226,10 @@ class ASTCodeUpgrader:
     return 1, pasta.dump(t), logs, errors
 
   def _format_log(self, log, in_filename, out_filename):
+    # [FUNCTION DOC]
+    # HELPER: Builds the per-file report block. Inputs: log, list of log lines; in_filename and
+    # out_filename, names shown in the header. Output: a text with separator lines, a header
+    # naming input and output files, the log lines one per line, and a closing separator.
     text = "-" * 80 + "\n"
     text += "Processing file %r\n outputting to %r\n" % (in_filename,
                                                          out_filename)
@@ -957,6 +1239,12 @@ class ASTCodeUpgrader:
     return text
 
   def process_opened_file(self, in_filename, in_file, out_filename, out_file):
+    # [FUNCTION DOC]
+    # Upgrades the contents of an already opened input. Inputs: in_filename and out_filename,
+    # names used in reports; in_file, readable file-like object; out_file, writable file-like
+    # object or nothing. Reads all lines, upgrades the text, and writes the new text to out_file
+    # only when it exists and the text was successfully processed. Output: a triple of the
+    # processed count (1 or 0), the formatted report text, and the list of error messages.
     """Process the given python file for incompatible changes.
 
     This function is split out to facilitate StringIO testing from
@@ -983,6 +1271,19 @@ class ASTCodeUpgrader:
 
   def process_tree(self, root_directory, output_root_directory,
                    copy_other_files):
+    # [FUNCTION DOC]
+    # Upgrades every Python file under a directory into a separate output tree. Inputs:
+    # root_directory, the tree to read; output_root_directory, the new tree (if equal to the
+    # input, delegates to the in-place variant); copy_other_files, whether to copy non-Python
+    # files unchanged. Exits the whole process with status one (after printing a message) if the
+    # output directory already exists or normalizes to the same path as the input. KNOWN ISSUE:
+    # the docstring says the tree is processed in place, but this path writes to a new tree; the
+    # overlap check compares only split parent/leaf pairs, so nested output directories are not
+    # caught, and the final-name existing-directory check is run before the same-directory check
+    # so that message is rarely reachable. Symbolic links to files in the tree are recreated as
+    # links (retargeted if the target is also processed) rather than processed. Creates output
+    # directories, writes files, copies other files. Output: triple of the number of processed
+    # files, a report text, and a mapping from input path to its list of errors.
     """Processes upgrades on an entire tree of python files in place.
 
     Note that only Python files. If you have custom code in other languages,
@@ -1074,6 +1375,11 @@ class ASTCodeUpgrader:
     return file_count, report, tree_errors
 
   def process_tree_inplace(self, root_directory):
+    # [FUNCTION DOC]
+    # Upgrades every Python file under a directory, overwriting each file. Input:
+    # root_directory. Symbolic links are skipped with a note in the report. Output: triple of
+    # the number of files processed, the report text, and a mapping from file path to its list
+    # of errors. Side effects: rewrites files on disk.
     """Process a directory of python files in place."""
     files_to_process = []
     for dir_name, _, file_list in os.walk(root_directory):

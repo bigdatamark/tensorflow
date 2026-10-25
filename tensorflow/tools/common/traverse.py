@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Provides the traverse function, a depth-first walker over Python modules and classes used by
+# API tooling (golden API checks, documentation generation). Parent-child relations come from
+# member listing through the tf inspection helpers. Only the name traverse is exported. Combined
+# with filtering visitors such as the public API visitor. No import-time side effects other than
+# imports.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +29,18 @@ __all__ = ['traverse']
 
 
 def _traverse_internal(root, visit, stack, path):
+  # [FUNCTION DOC]
+  # HELPER: Recursive worker behind the traverse function.
+  # Inputs: root, the object to explore; visit, callback taking path, parent and children;
+  # stack, list of ancestor objects used for cycle detection; path, dotted name of root
+  # relative to the traversal start (empty at the top). Returns nothing. Does nothing unless
+  # root is a class or module. Lists members of root; if that raises an import error, falls
+  # back to the names in the module's export list (lazy-loaded or non-enumerable modules), or an
+  # empty list if there is none. For enumeration classes it adds alias members from the member
+  # table and sorts the list. Calls the visitor once for root with the children list (which the
+  # visitor may edit in place), then recurses into each remaining child, skipping built-in
+  # modules and any child that is identical to an object on the current stack (cycles).
+  # Side effects: whatever the visitor does.
   """Internal helper for traverse."""
 
   # Only traverse modules and classes
@@ -67,6 +85,11 @@ def _traverse_internal(root, visit, stack, path):
 
 
 def traverse(root, visit):
+  # [FUNCTION DOC]
+  # Public entry point: depth-first enumeration of members of root. Inputs: root, any object
+  # (only modules and classes are explored); visit, callback taking path, parent and a mutable
+  # list of (name, object) children. Returns nothing. Starts the recursive worker with an empty
+  # ancestor stack and empty path. Exceptions from the visitor propagate. No other side effects.
   """Recursively enumerate all members of `root`.
 
   Similar to the Python library function `os.path.walk`.

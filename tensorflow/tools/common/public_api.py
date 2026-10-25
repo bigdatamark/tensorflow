@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: Support module for API-traversal tools (documentation generators and API golden checks).
+# Defines a single visitor class that wraps another visitor so that traversal of the tensorflow
+# package only reports the public API. Works together with the traverse module, which calls a
+# visitor with a path, a parent object and a mutable list of children. There are no import-time
+# side effects other than importing the regular-expression module and the tf inspection helpers.
+# Exposes the class PublicAPIVisitor.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,9 +27,26 @@ from tensorflow.python.util import tf_inspect
 
 
 class PublicAPIVisitor:
+  # [CLASS DOC]
+  # HELPER: Filtering adapter used with the traverse function when walking the public TF API.
+  # Wraps a user supplied visitor callable. Before the wrapped visitor sees the children of a
+  # module or class, private members (underscore names, and entries in the private map) are
+  # removed; after the wrapped visitor returns, members listed in the do-not-descend map are
+  # removed so that traversal does not recurse into them. Holds the wrapped visitor, the root
+  # name (default 'tf') used to build fully qualified paths, and two mappings from fully
+  # qualified parent names to lists of member names. Instances are callable and are passed
+  # directly to the traversal function.
   """Visitor to use with `traverse` to visit exactly the public TF API."""
 
   def __init__(self, visitor):
+    # [FUNCTION DOC]
+    # Constructor. Input: visitor, a callable taking a path, a parent object and a list of
+    # (name, child) pairs; it is stored and invoked for public members only. Returns nothing.
+    # Side effects: initializes the root name to 'tf', and builds the private map (names to
+    # hide entirely, such as compiler, core, python, dtensor, security, tsl under 'tf' and
+    # cpp_flags under 'tf.flags') and the do-not-descend map (names that are shown but not
+    # explored, such as examples, flags, platform, tools, tensorboard under 'tf', flags under
+    # 'tf.app', mock under 'tf.test'). Raises nothing.
     """Constructor.
 
     `visitor` should be a callable suitable as a visitor for `traverse`. It will
@@ -83,6 +107,10 @@ class PublicAPIVisitor:
 
   @property
   def private_map(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the live (not copied) mapping from fully qualified parent
+    # names to lists of member names that are hidden completely. Callers may mutate it before
+    # traversal starts. No inputs, no exceptions, no side effects.
     """A map from parents to symbols that should not be included at all.
 
     This map can be edited, but it should not be edited once traversal has
@@ -95,6 +123,10 @@ class PublicAPIVisitor:
 
   @property
   def do_not_descend_map(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the live (not copied) mapping from fully qualified parent
+    # names to lists of member names that are reported to the visitor but not explored further.
+    # Callers may mutate it before traversal starts. No inputs, no exceptions, no side effects.
     """A map from parents to symbols that should not be descended into.
 
     This map can be edited, but it should not be edited once traversal has
@@ -106,10 +138,24 @@ class PublicAPIVisitor:
     return self._do_not_descend_map
 
   def set_root_name(self, root_name):
+    # [FUNCTION DOC]
+    # Replaces the root name used as the first component of fully qualified paths when looking
+    # up the private and do-not-descend maps. Input: root_name, a string. Returns nothing.
+    # Side effect: mutates the visitor's root name. Note the maps themselves keep their
+    # original keys starting with 'tf', so a different root name will not match them unless the
+    # maps are edited too.
     """Override the default root name of 'tf'."""
     self._root_name = root_name
 
   def _is_private(self, path, name, obj=None):
+    # [FUNCTION DOC]
+    # HELPER: Member filter used by the call method of this visitor.
+    # Decides whether a child should be hidden. Inputs: path, the fully qualified parent name
+    # including the root name; name, the child's name; obj, the child object, which is ignored.
+    # Returns true when the name is listed in the private map under the parent path, or when the
+    # name starts with an underscore and is not a double-underscore dunder name, or when the
+    # name is one of the base, class or next-in-method-resolution-order special attributes.
+    # Otherwise returns false. No side effects and no exceptions.
     """Return whether a name is private."""
     # TODO(wicke): Find out what names to exclude.
     del obj  # Unused.
@@ -118,11 +164,26 @@ class PublicAPIVisitor:
              name in ['__base__', '__class__', '__next_in_mro__']))
 
   def _do_not_descend(self, path, name):
+    # [FUNCTION DOC]
+    # HELPER: Member filter used by the call method of this visitor.
+    # Inputs: path, the fully qualified parent name; name, the child's name. Returns true if the
+    # parent path has an entry in the do-not-descend map and the name is listed in it, else
+    # false. Missing parent entries are handled safely. No side effects, no exceptions.
     """Safely queries if a specific fully qualified name should be excluded."""
     return (path in self._do_not_descend_map and
             name in self._do_not_descend_map[path])
 
   def __call__(self, path, parent, children):
+    # [FUNCTION DOC]
+    # Visitor entry point invoked by the traversal. Inputs: path, dotted name of the parent
+    # relative to the root (empty for the root itself); parent, the module or class being
+    # visited; children, a mutable list of (name, object) pairs. Steps: first raises a runtime
+    # error if the parent is a module whose path has more than ten components, to fail fast on
+    # accidental public imports; then builds the full path by prefixing the root name; removes
+    # private children from the list in place; calls the wrapped visitor with the original
+    # path, the parent and the filtered list; finally removes from the list, in place, the
+    # children that must not be descended into. Returns nothing. Side effects: mutates the
+    # children list and whatever the wrapped visitor does.
     """Visitor interface, see `traverse` for details."""
 
     # Avoid long waits in cases of pretty unambiguous failure.
