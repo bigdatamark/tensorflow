@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Defines LinearOperatorKronecker, an operator representing the Kronecker product of one or
+# more operators, plus two private static-shape helper functions. Exposes only the class
+# (exported publicly via the linalg namespace and made a composite tensor at import time).
+# Builds on the base operator module and the shape/array ops of the framework.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,12 +37,20 @@ __all__ = ["LinearOperatorKronecker"]
 
 
 def _prefer_static_shape(x):
+  # [FUNCTION DOC]
+  # HELPER: shape utility for the Kronecker matmul/solve and dense conversion.
+  # Returns the static shape of tensor x if it is fully defined, otherwise a runtime shape tensor.
   if x.shape.is_fully_defined():
     return x.shape
   return array_ops.shape(x)
 
 
 def _prefer_static_concat_shape(first_shape, second_shape_int_list):
+  # [FUNCTION DOC]
+  # HELPER: shape utility for the Kronecker matmul/solve and dense conversion.
+  # Concatenates first_shape (a static shape object or a shape tensor) with a list of scalar
+  # integer tensors. If first_shape is a static shape and every item of the list has a
+  # statically known value, returns a static shape; otherwise returns a concatenated tensor.
   """Concatenate a shape with a list of integers as statically as possible.
 
   Args:
@@ -60,6 +73,12 @@ def _prefer_static_concat_shape(first_shape, second_shape_int_list):
 @tf_export("linalg.LinearOperatorKronecker")
 @linear_operator.make_composite_tensor
 class LinearOperatorKronecker(linear_operator.LinearOperator):
+  # [CLASS DOC]
+  # Operator representing the Kronecker product of one or more operators, without forming it.
+  # Holds the list of factors privately. The shape is the broadcast batch shape plus the product
+  # of the factors' row and column counts. matmul and solve use reshaping tricks on each factor;
+  # determinant, trace, eigenvalues and diagonal come from the factors. Created from the factor
+  # list and optional hints; registered as a composite tensor and exported publicly.
   """Kronecker product between two `LinearOperators`.
 
   This operator composes one or more linear operators `[op1,...,opJ]`,
@@ -137,6 +156,14 @@ class LinearOperatorKronecker(linear_operator.LinearOperator):
                is_positive_definite=None,
                is_square=None,
                name=None):
+    # [FUNCTION DOC]
+    # Constructor. Takes an iterable of factor operators (at least one, all with the same dtype),
+    # optional is_* hints and an optional name (default: factor names joined by a separator).
+    # Raises a value error if the list is empty or if a hint contradicts a derived fact (for
+    # example false non-singular when all factors are non-singular), a type error on mixed
+    # dtypes, and an error if operators is not a proper iterable. Auto-sets non-singular,
+    # self-adjoint and positive-definite to true when all factors have them. Calls the base class
+    # constructor in a name scope and stores the factor list privately.
     r"""Initialize a `LinearOperatorKronecker`.
 
     `LinearOperatorKronecker` is initialized with a list of operators
@@ -234,9 +261,15 @@ class LinearOperatorKronecker(linear_operator.LinearOperator):
 
   @property
   def operators(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the list of factor operators in Kronecker order.
     return self._operators
 
   def _shape(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the static-shape hook of the LinearOperator base class.
+    # Multiplies the factors' static range and domain dimensions, broadcasts their static batch
+    # shapes (raising if incompatible) and returns batch shape plus the matrix shape.
     # Get final matrix shape.
     domain_dimension = self.operators[0].domain_dimension
     for operator in self.operators[1:]:
@@ -259,6 +292,10 @@ class LinearOperatorKronecker(linear_operator.LinearOperator):
     return batch_shape.concatenate(matrix_shape)
 
   def _shape_tensor(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the dynamic-shape hook of the LinearOperator base class.
+    # Multiplies the factors' runtime domain and range dimensions, broadcasts their runtime
+    # batch shapes and returns the concatenation as an integer tensor.
     domain_dimension = self.operators[0].domain_dimension_tensor()
     for operator in self.operators[1:]:
       domain_dimension = domain_dimension * operator.domain_dimension_tensor()
@@ -279,6 +316,10 @@ class LinearOperatorKronecker(linear_operator.LinearOperator):
     return array_ops.concat((batch_shape, matrix_shape), 0)
 
   def _linop_adjoint(self) -> "LinearOperatorKronecker":
+    # [FUNCTION DOC]
+    # HELPER: implements the adjoint-operator hook of the LinearOperator base class.
+    # Returns a new Kronecker operator whose factors are the adjoints of the factors, carrying
+    # over the non-singular, self-adjoint and positive-definite hints and marked square.
     return LinearOperatorKronecker(
         operators=[operator.adjoint() for operator in self.operators],
         is_non_singular=self.is_non_singular,
@@ -287,6 +328,10 @@ class LinearOperatorKronecker(linear_operator.LinearOperator):
         is_square=True)
 
   def _linop_cholesky(self) -> "LinearOperatorKronecker":
+    # [FUNCTION DOC]
+    # HELPER: implements the Cholesky-operator hook of the LinearOperator base class.
+    # Returns a new Kronecker operator whose factors are the Cholesky factors of the factors,
+    # marked non-singular and square, leaving the self-adjoint hint to be decided by the factors.
     # Cholesky decomposition of a Kronecker product is the Kronecker product
     # of cholesky decompositions.
     return LinearOperatorKronecker(
@@ -296,6 +341,10 @@ class LinearOperatorKronecker(linear_operator.LinearOperator):
         is_square=True)
 
   def _linop_inverse(self) -> "LinearOperatorKronecker":
+    # [FUNCTION DOC]
+    # HELPER: implements the inverse-operator hook of the LinearOperator base class.
+    # Returns a new Kronecker operator whose factors are the inverses of the factors, carrying
+    # over the non-singular, self-adjoint and positive-definite hints and marked square.
     # Inverse decomposition of a Kronecker product is the Kronecker product
     # of inverse decompositions.
     return LinearOperatorKronecker(
@@ -312,6 +361,19 @@ class LinearOperatorKronecker(linear_operator.LinearOperator):
       solve_matmul_fn,
       adjoint=False,
       adjoint_arg=False):
+    # [FUNCTION DOC]
+    # HELPER: shared implementation of matmul and solve for LinearOperatorKronecker.
+    # KNOWN ISSUE: when the factor's domain dimension is statically known but the static shape of
+    # the intermediate tensor has an unknown last two dimensions, the reshape size is never
+    # computed, so a local variable can be used before assignment.
+    # Applies the Kronecker structure without materializing it, using the identity that a
+    # Kronecker product times a vectorized matrix equals a product of reshaped matrices. Inputs:
+    # x (tensor to multiply or solve), solve_matmul_fn (callback taking a factor, a tensor and the
+    # adjoint flags and returning the factor's matmul or solve), adjoint and adjoint_arg flags.
+    # It transposes (or conjugates) x, then for each factor in reverse order reshapes the
+    # intermediate result (statically where possible), conjugates for complex dtypes and applies
+    # the callback with the argument adjointed. Finally it reshapes to the output matrix shape
+    # and, if x has fully defined static shape, sets the broadcast static shape. Returns the result.
     # We heavily rely on Roth's column Lemma [1]:
     # (A x B) * vec X = vec BXA^T
     # where vec stacks all the columns of the matrix under each other.
@@ -394,7 +456,15 @@ class LinearOperatorKronecker(linear_operator.LinearOperator):
     return output
 
   def _matmul(self, x, adjoint=False, adjoint_arg=False):
+    # [FUNCTION DOC]
+    # HELPER: implements the matmul hook of the LinearOperator base class.
+    # Multiplies by running the shared Kronecker routine with a callback that calls each
+    # factor's matmul. Inputs: x tensor, adjoint (use the adjoint operator) and adjoint_arg
+    # (use the adjoint of x). Returns the product tensor.
     def matmul_fn(o, x, adjoint, adjoint_arg):
+      # [FUNCTION DOC]
+      # HELPER: callback for the shared Kronecker routine. Multiplies one factor operator o by x,
+      # passing the adjoint flags through, and returns the product.
       return o.matmul(x, adjoint=adjoint, adjoint_arg=adjoint_arg)
     return self._solve_matmul_internal(
         x=x,
@@ -403,7 +473,15 @@ class LinearOperatorKronecker(linear_operator.LinearOperator):
         adjoint_arg=adjoint_arg)
 
   def _solve(self, rhs, adjoint=False, adjoint_arg=False):
+    # [FUNCTION DOC]
+    # HELPER: implements the solve hook of the LinearOperator base class.
+    # Solves by running the shared Kronecker routine with a callback that calls each factor's
+    # solve. Inputs: rhs tensor, adjoint (solve with the adjoint operator) and adjoint_arg
+    # (use the adjoint of rhs). Returns the solution tensor.
     def solve_fn(o, rhs, adjoint, adjoint_arg):
+      # [FUNCTION DOC]
+      # HELPER: callback for the shared Kronecker routine. Solves one factor operator o against
+      # rhs, passing the adjoint flags through, and returns the solution.
       return o.solve(rhs, adjoint=adjoint, adjoint_arg=adjoint_arg)
     return self._solve_matmul_internal(
         x=rhs,
@@ -412,6 +490,10 @@ class LinearOperatorKronecker(linear_operator.LinearOperator):
         adjoint_arg=adjoint_arg)
 
   def _determinant(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the determinant hook of the LinearOperator base class.
+    # Multiplies, over factors, each factor's determinant raised to the power of the total
+    # domain dimension divided by the factor's domain dimension. Returns the resulting tensor.
     # Note that we have |X1 x X2| = |X1| ** n * |X2| ** m, where X1 is an m x m
     # matrix, and X2 is an n x n matrix. We can iteratively apply this property
     # to get the determinant of |X1 x X2 x X3 ...|. If T is the product of the
@@ -430,6 +512,10 @@ class LinearOperatorKronecker(linear_operator.LinearOperator):
     return determinant
 
   def _log_abs_determinant(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the log-determinant hook of the LinearOperator base class.
+    # Sums, over factors, the factor's log absolute determinant weighted by the total domain
+    # dimension divided by the factor's domain dimension. Returns the resulting tensor.
     # This will be sum((total / dim(x_i)) * log |X_i|)
     total = self.domain_dimension_tensor()
     log_abs_det = 0.
@@ -440,6 +526,9 @@ class LinearOperatorKronecker(linear_operator.LinearOperator):
     return log_abs_det
 
   def _trace(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the trace hook of the LinearOperator base class.
+    # Returns the product of the traces of all factor operators.
     # tr(A x B) = tr(A) * tr(B)
     trace = 1.
     for operator in self.operators:
@@ -447,6 +536,11 @@ class LinearOperatorKronecker(linear_operator.LinearOperator):
     return trace
 
   def _diag_part(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the diagonal hook of the LinearOperator base class.
+    # The diagonal of the product is built as the Kronecker product of the factors' diagonals
+    # (repeated broadcasted multiply and reshape). The static shape is set to batch shape plus
+    # the smaller of the range and domain dimensions. Returns the diagonal tensor.
     diag_part = self.operators[0].diag_part()
     for operator in self.operators[1:]:
       diag_part = diag_part[..., :, array_ops.newaxis]
@@ -465,6 +559,11 @@ class LinearOperatorKronecker(linear_operator.LinearOperator):
     return diag_part
 
   def _to_dense(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the dense-conversion hook of the LinearOperator base class.
+    # Materializes each factor and folds them with an outer-product style broadcast and a
+    # reshape that merges row and column dimensions, yielding the full Kronecker product with
+    # shape batch + [rows, columns]. Sets the static shape of the result to the operator shape.
     product = self.operators[0].to_dense()
     for operator in self.operators[1:]:
       # Product has shape [B, R1, 1, C1, 1].
@@ -487,6 +586,11 @@ class LinearOperatorKronecker(linear_operator.LinearOperator):
     return product
 
   def _eigvals(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the eigenvalue hook of the LinearOperator base class.
+    # Computes the Kronecker product of the factors' eigenvalue vectors by repeated broadcasted
+    # products and reshapes, then sets the static shape to the operator shape without the last
+    # dimension. Returns a tensor of shape batch + [product of factor dimensions].
     # This will be the kronecker product of all the eigenvalues.
     # Note: It doesn't matter which kronecker product it is, since every
     # kronecker product of the same matrices are similar.
@@ -506,6 +610,11 @@ class LinearOperatorKronecker(linear_operator.LinearOperator):
     return product
 
   def _assert_non_singular(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the non-singular assertion hook of the LinearOperator base class.
+    # If every factor is square, returns a grouped operation of every factor's non-singular
+    # assertion. Otherwise raises an invalid-argument error immediately, since a Kronecker
+    # product with a non-square factor cannot be invertible.
     if all(operator.is_square for operator in self.operators):
       asserts = [operator.assert_non_singular() for operator in self.operators]
       return control_flow_ops.group(asserts)
@@ -518,6 +627,13 @@ class LinearOperatorKronecker(linear_operator.LinearOperator):
           "in argument `operators`.")
 
   def _assert_self_adjoint(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the self-adjoint assertion hook of the LinearOperator base class.
+    # KNOWN ISSUE: the error message talks about the product being invertible (copied from the
+    # non-singular assertion) although this assertion is about self-adjointness. Also, a product
+    # of self-adjoint factors is self-adjoint, but this check only groups the factor assertions.
+    # If every factor is square, returns a grouped operation of every factor's self-adjoint
+    # assertion. Otherwise raises an invalid-argument error immediately.
     if all(operator.is_square for operator in self.operators):
       asserts = [operator.assert_self_adjoint() for operator in self.operators]
       return control_flow_ops.group(asserts)
@@ -531,8 +647,16 @@ class LinearOperatorKronecker(linear_operator.LinearOperator):
 
   @property
   def _composite_tensor_fields(self):
+    # [FUNCTION DOC]
+    # HELPER: composite-tensor support for LinearOperatorKronecker.
+    # Property returning the tuple of parameter names treated as components of the composite
+    # tensor: only the list of factor operators.
     return ("operators",)
 
   @property
   def _experimental_parameter_ndims_to_matrix_ndims(self):
+    # [FUNCTION DOC]
+    # HELPER: composite-tensor / batching support for LinearOperatorKronecker.
+    # Property mapping the operators parameter to a list of zeros, one per factor operator,
+    # meaning each factor is itself an operator with no extra trailing matrix dimensions.
     return {"operators": [0] * len(self.operators)}

@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Defines LinearOperatorHouseholder, an operator acting like a (batch of) Householder
+# reflection defined by a single vector. Exposes only that class (exported publicly via the
+# linalg namespace and made a composite tensor at import time). Builds on the base operator
+# and utility modules of this package.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,7 +18,6 @@
 # limitations under the License.
 # ==============================================================================
 """`LinearOperator` acting like a Householder transformation."""
-
 from tensorflow.python.framework import errors
 from tensorflow.python.framework import ops
 from tensorflow.python.framework import tensor_conversion
@@ -32,6 +36,13 @@ __all__ = ["LinearOperatorHouseholder",]
 @tf_export("linalg.LinearOperatorHouseholder")
 @linear_operator.make_composite_tensor
 class LinearOperatorHouseholder(linear_operator.LinearOperator):
+  # [CLASS DOC]
+  # Operator acting like a (batch of) Householder reflection matrices of shape batch + [N, N],
+  # defined only by a reflection-axis vector and never materialized unless to_dense is called.
+  # Holds the axis in a private attribute. It is always self-adjoint, square, not positive
+  # definite, has determinant minus one and condition number one; matmul and solve are
+  # computed from the axis directly. Created with the axis and optional hints; registered as a
+  # composite tensor and exported publicly.
   """`LinearOperator` acting like a [batch] of Householder transformations.
 
   This operator acts like a [batch] of householder reflections with shape
@@ -98,6 +109,16 @@ class LinearOperatorHouseholder(linear_operator.LinearOperator):
                is_positive_definite=None,
                is_square=None,
                name="LinearOperatorHouseholder"):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says is_self_adjoint must be True and is_positive_definite and
+    # is_square are autoset, but the code only raises when is_self_adjoint is explicitly false,
+    # is_positive_definite explicitly true or is_square explicitly false; other values are
+    # silently overwritten. The reflection axis dtype is also not validated despite the docstring.
+    # Constructor. Takes reflection_axis (vector or batch of vectors, float or complex), the
+    # optional is_* hints and a name. Converts the axis to a tensor (non-reference values only)
+    # in a name scope, validates its rank, then forces self-adjoint true, positive-definite
+    # false and square true. Raises a value error for contradicting hints. Calls the base class
+    # constructor with the axis dtype and the parameter mapping, and stores the axis privately.
     r"""Initialize a `LinearOperatorHouseholder`.
 
     Args:
@@ -162,6 +183,10 @@ class LinearOperatorHouseholder(linear_operator.LinearOperator):
           name=name)
 
   def _check_reflection_axis(self, reflection_axis):
+    # [FUNCTION DOC]
+    # HELPER: argument validation for the constructor of LinearOperatorHouseholder.
+    # Raises a value error if the static rank of the reflection axis is known and below 1.
+    # Returns nothing.
     """Static check of reflection_axis."""
     if (reflection_axis.shape.ndims is not None and
         reflection_axis.shape.ndims < 1):
@@ -170,33 +195,64 @@ class LinearOperatorHouseholder(linear_operator.LinearOperator):
           "Found: %s" % reflection_axis)
 
   def _shape(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the static-shape hook of the LinearOperator base class.
+    # Returns the static shape of the reflection axis with its last dimension repeated, giving
+    # batch dimensions followed by [N, N].
     # If d_shape = [5, 3], we return [5, 3, 3].
     d_shape = self._reflection_axis.shape
     return d_shape.concatenate(d_shape[-1:])
 
   def _shape_tensor(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the dynamic-shape hook of the LinearOperator base class.
+    # Returns an integer tensor: the runtime shape of the reflection axis with its last
+    # dimension appended again, i.e. batch dimensions followed by [N, N].
     d_shape = array_ops.shape(self._reflection_axis)
     k = d_shape[-1]
     return array_ops.concat((d_shape, [k]), 0)
 
   def _assert_non_singular(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the non-singular assertion hook of the LinearOperator base class.
+    # A reflection is always invertible, so returns a no-op graph operation named for the
+    # assertion; nothing is checked at runtime.
     return control_flow_ops.no_op("assert_non_singular")
 
   def _assert_positive_definite(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the positive-definite assertion hook of the LinearOperator base class.
+    # Always raises an invalid-argument error stating that Householder operators are never
+    # positive definite (they have a negative eigenvalue). Takes no inputs and returns nothing.
     raise errors.InvalidArgumentError(
         node_def=None, op=None, message="Householder operators are always "
         "non-positive definite.")
 
   def _assert_self_adjoint(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the self-adjoint assertion hook of the LinearOperator base class.
+    # Always true for a reflection, so returns a no-op graph operation named for the assertion.
     return control_flow_ops.no_op("assert_self_adjoint")
 
   def _linop_adjoint(self) -> "LinearOperatorHouseholder":
+    # [FUNCTION DOC]
+    # HELPER: implements the adjoint-operator hook of the LinearOperator base class.
+    # A reflection is self-adjoint, so returns this same operator.
     return self
 
   def _linop_inverse(self) -> "LinearOperatorHouseholder":
+    # [FUNCTION DOC]
+    # HELPER: implements the inverse-operator hook of the LinearOperator base class.
+    # A reflection is its own inverse, so returns this same operator.
     return self
 
   def _matmul(self, x, adjoint=False, adjoint_arg=False):
+    # [FUNCTION DOC]
+    # HELPER: implements the matmul hook of the LinearOperator base class.
+    # Applies the reflection to x without materializing the matrix: x minus twice the projection
+    # of x onto the unit-normalized reflection axis. If adjoint_arg is true, x is conjugate
+    # transposed first. The adjoint flag is ignored because the operator is self-adjoint.
+    # Returns a tensor shaped like the product.
     # Given a vector `v`, we would like to reflect `x` about the hyperplane
     # orthogonal to `v` going through the origin.  We first project `x` to `v`
     # to get v * dot(v, x) / dot(v, v).  After we project, we can reflect the
@@ -220,6 +276,10 @@ class LinearOperatorHouseholder(linear_operator.LinearOperator):
     return x - 2 * mat * x_dot_normalized_v
 
   def _trace(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the trace hook of the LinearOperator base class.
+    # Returns, for every batch member, N - 2 (N-1 eigenvalues of one plus one eigenvalue of minus
+    # one) as a tensor of batch shape in the operator dtype.
     # We have (n - 1) +1 eigenvalues and a single -1 eigenvalue.
     shape = self.shape_tensor()
     return math_ops.cast(
@@ -228,19 +288,35 @@ class LinearOperatorHouseholder(linear_operator.LinearOperator):
             shape=self._batch_shape_tensor(shape=shape), dtype=self.dtype)
 
   def _determinant(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the determinant hook of the LinearOperator base class.
+    # Returns a tensor of minus ones with batch shape and operator dtype, because every
+    # Householder reflection has determinant minus one.
     # For householder transformations, the determinant is -1.
     return -array_ops.ones(shape=self.batch_shape_tensor(), dtype=self.dtype)  # pylint: disable=invalid-unary-operand-type
 
   def _log_abs_determinant(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the log-determinant hook of the LinearOperator base class.
+    # Returns zeros of batch shape and operator dtype, since the matrix is orthogonal/unitary.
     # Orthogonal matrix -> log|Q| = 0.
     return array_ops.zeros(shape=self.batch_shape_tensor(), dtype=self.dtype)
 
   def _solve(self, rhs, adjoint=False, adjoint_arg=False):
+    # [FUNCTION DOC]
+    # HELPER: implements the solve hook of the LinearOperator base class.
+    # Because a reflection is its own inverse and self-adjoint, solving is the same as applying
+    # the operator: forwards rhs, adjoint and adjoint_arg to the matmul implementation and
+    # returns that result.
     # A householder reflection is a reflection, hence is idempotent. Thus we
     # can just apply a matmul.
     return self._matmul(rhs, adjoint, adjoint_arg)
 
   def _to_dense(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the dense-conversion hook of the LinearOperator base class.
+    # Materializes the reflection matrix: the identity minus twice the outer product of the
+    # unit-normalized reflection axis with its conjugate. Returns a tensor of shape batch + [N, N].
     reflection_axis = tensor_conversion.convert_to_tensor_v2_with_dispatch(
         self.reflection_axis
     )
@@ -251,6 +327,10 @@ class LinearOperatorHouseholder(linear_operator.LinearOperator):
         matrix, 1. + array_ops.matrix_diag_part(matrix))
 
   def _diag_part(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the diagonal hook of the LinearOperator base class.
+    # Normalizes the reflection axis to unit length and returns one minus twice the squared
+    # magnitude of each component, which is the diagonal of the reflection matrix (batched).
     reflection_axis = tensor_conversion.convert_to_tensor_v2_with_dispatch(
         self.reflection_axis
     )
@@ -258,6 +338,11 @@ class LinearOperatorHouseholder(linear_operator.LinearOperator):
     return 1. - 2 * normalized_axis * math_ops.conj(normalized_axis)
 
   def _eigvals(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the eigenvalue hook of the LinearOperator base class.
+    # Returns a tensor with shape equal to the reflection axis shape: a single eigenvalue of
+    # minus one followed by (N - 1) eigenvalues of plus one, for every batch member, in the
+    # operator dtype.
     # We have (n - 1) +1 eigenvalues and a single -1 eigenvalue.
     result_shape = array_ops.shape(self.reflection_axis)
     n = result_shape[-1]
@@ -269,17 +354,32 @@ class LinearOperatorHouseholder(linear_operator.LinearOperator):
     return eigvals
 
   def _cond(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the condition-number hook of the LinearOperator base class.
+    # Returns a tensor of ones with the batch shape and operator dtype, since a Householder
+    # reflection is orthogonal/unitary and has condition number one.
     # Householder matrices are rotations which have condition number 1.
     return array_ops.ones(self.batch_shape_tensor(), dtype=self.dtype)
 
   @property
   def reflection_axis(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the vector (possibly batched) that defines the hyperplane
+    # of reflection, as stored at construction (converted to a tensor unless it is a reference).
     return self._reflection_axis
 
   @property
   def _composite_tensor_fields(self):
+    # [FUNCTION DOC]
+    # HELPER: composite-tensor support for LinearOperatorHouseholder.
+    # Property returning the tuple of parameter names treated as tensor components: only the
+    # reflection axis.
     return ("reflection_axis",)
 
   @property
   def _experimental_parameter_ndims_to_matrix_ndims(self):
+    # [FUNCTION DOC]
+    # HELPER: composite-tensor / batching support for LinearOperatorHouseholder.
+    # Property mapping the reflection_axis constructor parameter to 1, the number of trailing
+    # dimensions of that parameter that belong to the matrix part (the vector length).
     return {"reflection_axis": 1}

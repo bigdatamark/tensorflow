@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Defines the identity-like linear operators: LinearOperatorIdentity (a possibly batched
+# identity matrix), LinearOperatorScaledIdentity (identity times a scalar per batch member) and
+# their shared private base class. Both public classes are exported through the linalg
+# namespace and made composite tensors at import time. Builds on the base operator, diagonal
+# operator, property hint and utility modules of this package.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -40,9 +46,19 @@ __all__ = [
 
 
 class BaseLinearOperatorIdentity(linear_operator.LinearOperator):
+  # [CLASS DOC]
+  # HELPER: shared base of the plain and scaled identity operators.
+  # Provides common utilities: validation of the number of rows, the minimal matrix dimension
+  # (static and dynamic) and a tensor of ones for the diagonal. Expects subclasses to set the
+  # assert-proper-shapes flag, the number of rows tensor and its static value.
   """Base class for Identity operators."""
 
   def _check_num_rows_possibly_add_asserts(self):
+    # [FUNCTION DOC]
+    # HELPER: argument validation shared by the constructors of the identity operators.
+    # Optionally wraps the stored number of rows in graph assertions (scalar, non-negative), then
+    # statically checks it. Raises a type error for a non-integer dtype and value errors if the
+    # static value is not a scalar or is negative. May replace the stored tensor. Returns nothing.
     """Static check of init arg `num_rows`, possibly add asserts."""
     # Possibly add asserts.
     if self._assert_proper_shapes:
@@ -75,6 +91,10 @@ class BaseLinearOperatorIdentity(linear_operator.LinearOperator):
                        " %s" % num_rows_static)
 
   def _min_matrix_dim(self):
+    # [FUNCTION DOC]
+    # HELPER: shared by the identity operators for trace and diagonal computations.
+    # Returns the smaller of the static domain and range dimensions as a number, or nothing if
+    # either is not statically known.
     """Minimum of domain/range dimension, if statically available, else None."""
     domain_dim = tensor_shape.dimension_value(self.domain_dimension)
     range_dim = tensor_shape.dimension_value(self.range_dimension)
@@ -83,10 +103,17 @@ class BaseLinearOperatorIdentity(linear_operator.LinearOperator):
     return min(domain_dim, range_dim)
 
   def _min_matrix_dim_tensor(self):
+    # [FUNCTION DOC]
+    # HELPER: shared by the identity operators for trace and diagonal computations.
+    # Returns a scalar tensor: the minimum of the last two entries of the runtime shape.
     """Minimum of domain/range dimension, as a tensor."""
     return math_ops.reduce_min(self.shape_tensor()[-2:])
 
   def _ones_diag(self):
+    # [FUNCTION DOC]
+    # HELPER: shared by diagonal and eigenvalue computations of the identity operators.
+    # Returns a tensor of ones in the operator dtype with the batch shape followed by the minimal
+    # matrix dimension, using static shapes when fully defined and runtime shapes otherwise.
     """Returns the diagonal of this operator as all ones."""
     if self.shape.is_fully_defined():
       d_shape = self.batch_shape.concatenate([self._min_matrix_dim()])
@@ -101,6 +128,13 @@ class BaseLinearOperatorIdentity(linear_operator.LinearOperator):
 @tf_export("linalg.LinearOperatorIdentity")
 @linear_operator.make_composite_tensor
 class LinearOperatorIdentity(BaseLinearOperatorIdentity):
+  # [CLASS DOC]
+  # Operator acting like a (batch of) square identity matrix, never materialized. Holds the
+  # number of rows (tensor and static value), an optional batch shape, the dtype and the
+  # assert-proper-shapes flag. Matmul passes the argument through, broadcasting batch
+  # dimensions only when needed; solve, determinant, trace and eigenvalues are trivial. Hints
+  # must all be true. Created with num_rows and optional batch_shape and dtype; composite
+  # tensor, exported publicly.
   """`LinearOperator` acting like a [batch] square identity matrix.
 
   This operator acts like a [batch] identity matrix `A` with shape
@@ -215,6 +249,16 @@ class LinearOperatorIdentity(BaseLinearOperatorIdentity):
                is_square=True,
                assert_proper_shapes=False,
                name="LinearOperatorIdentity"):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says only a true value is allowed for the hints, and the code
+    # rejects any false-like value, including the nothing value, with a value error. Also the
+    # docstring says the exception for reference-type arguments is a type error, which depends
+    # on the helper used.
+    # Constructor. Takes num_rows (scalar non-negative integer), optional batch_shape (1-D
+    # integer), dtype (default float32), is_* hints (all must be true), an assert-proper-shapes
+    # flag and a name. Raises a value error for a false hint or invalid num_rows or batch_shape.
+    # Calls the base constructor, then stores num_rows, its static value and the optional batch
+    # shape, running the static checks (which may wrap them with graph assertions).
     r"""Initialize a `LinearOperatorIdentity`.
 
     The `LinearOperatorIdentity` is initialized with arguments defining `dtype`
@@ -305,6 +349,10 @@ class LinearOperatorIdentity(BaseLinearOperatorIdentity):
         self._check_batch_shape_possibly_add_asserts()
 
   def _shape(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the static-shape hook of the LinearOperator base class.
+    # Returns the static batch shape (if any) followed by the static number of rows twice
+    # (unknown if the row count is not statically known).
     matrix_shape = tensor_shape.TensorShape((self._num_rows_static,
                                              self._num_rows_static))
     if self._batch_shape_arg is None:
@@ -314,6 +362,9 @@ class LinearOperatorIdentity(BaseLinearOperatorIdentity):
     return batch_shape.concatenate(matrix_shape)
 
   def _shape_tensor(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the dynamic-shape hook of the LinearOperator base class.
+    # Returns an integer tensor: the batch shape (if any) followed by the number of rows twice.
     matrix_shape = array_ops_stack.stack(
         (self._num_rows, self._num_rows), axis=0)
     if self._batch_shape_arg is None:
@@ -322,9 +373,16 @@ class LinearOperatorIdentity(BaseLinearOperatorIdentity):
     return array_ops.concat((self._batch_shape_arg, matrix_shape), 0)
 
   def _linop_adjoint(self) -> "LinearOperatorIdentity":
+    # [FUNCTION DOC]
+    # HELPER: implements the adjoint-operator hook of the LinearOperator base class.
+    # The identity is self-adjoint; returns this same operator.
     return self
 
   def _linop_cholesky(self) -> "LinearOperatorIdentity":
+    # [FUNCTION DOC]
+    # HELPER: implements the Cholesky-operator hook of the LinearOperator base class.
+    # The Cholesky factor of the identity is the identity: returns a new identity operator with
+    # the same number of rows, batch shape and dtype and all hints true.
     return LinearOperatorIdentity(
         num_rows=self._num_rows,  # pylint: disable=protected-access
         batch_shape=self.batch_shape,
@@ -335,6 +393,9 @@ class LinearOperatorIdentity(BaseLinearOperatorIdentity):
         is_square=True)
 
   def _linop_inverse(self) -> "LinearOperatorIdentity":
+    # [FUNCTION DOC]
+    # HELPER: implements the inverse-operator hook of the LinearOperator base class.
+    # The identity is its own inverse; returns this same operator.
     return self
 
   def _linop_matmul(
@@ -342,6 +403,12 @@ class LinearOperatorIdentity(BaseLinearOperatorIdentity):
       left_operator: "LinearOperatorIdentity",
       right_operator: linear_operator.LinearOperator,
     ) -> "LinearOperatorIdentity":
+    # [FUNCTION DOC]
+    # HELPER: hook used by the base class to simplify multiplying two operators.
+    # KNOWN ISSUE: the return annotation says an identity operator, but the right operator
+    # (any LinearOperator) is what is returned.
+    # The identity times an operator is that operator, so the left operator is discarded and the
+    # right operator returned.
     del left_operator
     return right_operator
 
@@ -350,19 +417,37 @@ class LinearOperatorIdentity(BaseLinearOperatorIdentity):
       left_operator: "LinearOperatorIdentity",
       right_operator: linear_operator.LinearOperator,
   ) -> linear_operator.LinearOperator:
+    # [FUNCTION DOC]
+    # HELPER: hook used by the base class to simplify solving this operator against another.
+    # Solving the identity against an operator returns that operator, so the left operator is
+    # discarded and the right operator returned.
     del left_operator
     return right_operator
 
   def _assert_non_singular(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the non-singular assertion hook of the LinearOperator base class.
+    # The identity is always invertible; returns a no-op graph operation.
     return control_flow_ops.no_op("assert_non_singular")
 
   def _assert_positive_definite(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the positive-definite assertion hook of the LinearOperator base class.
+    # The identity is always positive definite; returns a no-op graph operation.
     return control_flow_ops.no_op("assert_positive_definite")
 
   def _assert_self_adjoint(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the self-adjoint assertion hook of the LinearOperator base class.
+    # The identity is always self-adjoint; returns a no-op graph operation.
     return control_flow_ops.no_op("assert_self_adjoint")
 
   def _possibly_broadcast_batch_shape(self, x):
+    # [FUNCTION DOC]
+    # HELPER: batch broadcasting for the identity matmul.
+    # Returns x unchanged when the operator has no batch shape or the static shapes show no
+    # broadcast is needed; otherwise adds an array of zeros of the operator batch shape (static
+    # when fully defined, dynamic otherwise) to trigger broadcasting, avoiding conditionals.
     """Return 'x', possibly after broadcasting the leading dimensions."""
     # If we have no batch shape, our batch shape broadcasts with everything!
     if self._batch_shape_arg is None:
@@ -396,6 +481,11 @@ class LinearOperatorIdentity(BaseLinearOperatorIdentity):
     return x + zeros
 
   def _matmul(self, x, adjoint=False, adjoint_arg=False):
+    # [FUNCTION DOC]
+    # HELPER: implements the matmul hook of the LinearOperator base class.
+    # Passes x through (adjointed first if adjoint_arg is set), optionally adding a graph
+    # assertion of compatible matrix dimensions, and broadcasts the batch dimensions if the
+    # operator has a batch shape. The adjoint flag has no effect. Returns the result tensor.
     # Note that adjoint has no effect since this matrix is self-adjoint.
     x = linalg.adjoint(x) if adjoint_arg else x
     if self._assert_proper_shapes:
@@ -404,15 +494,29 @@ class LinearOperatorIdentity(BaseLinearOperatorIdentity):
     return self._possibly_broadcast_batch_shape(x)
 
   def _determinant(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the determinant hook of the LinearOperator base class.
+    # Returns ones with the batch shape and operator dtype.
     return array_ops.ones(shape=self.batch_shape_tensor(), dtype=self.dtype)
 
   def _log_abs_determinant(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the log-determinant hook of the LinearOperator base class.
+    # Returns zeros with the batch shape and operator dtype.
     return array_ops.zeros(shape=self.batch_shape_tensor(), dtype=self.dtype)
 
   def _solve(self, rhs, adjoint=False, adjoint_arg=False):
+    # [FUNCTION DOC]
+    # HELPER: implements the solve hook of the LinearOperator base class.
+    # The identity is its own inverse and self-adjoint, so this multiplies: forwards rhs and
+    # adjoint_arg to the matmul implementation (adjoint is irrelevant) and returns the result.
     return self._matmul(rhs, adjoint_arg=adjoint_arg)
 
   def _trace(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the trace hook of the LinearOperator base class.
+    # Returns, per batch member, the minimal matrix dimension (static if known, otherwise a cast
+    # runtime value) as a tensor of the batch shape.
     # Get Tensor of all ones of same shape as self.batch_shape.
     if self.batch_shape.is_fully_defined():
       batch_of_ones = array_ops.ones(shape=self.batch_shape, dtype=self.dtype)
@@ -427,9 +531,17 @@ class LinearOperatorIdentity(BaseLinearOperatorIdentity):
               batch_of_ones)
 
   def _diag_part(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the diagonal hook of the LinearOperator base class.
+    # Returns a tensor of ones: batch shape followed by the minimal matrix dimension.
     return self._ones_diag()
 
   def add_to_tensor(self, mat, name="add_to_tensor"):
+    # [FUNCTION DOC]
+    # Adds the identity matrix to the matrix tensor mat without materializing the identity.
+    # Converts mat to a tensor, adds one to its diagonal and writes the diagonal back. Inputs:
+    # mat (batch of matrices, same dtype) and a name for the op scope. Returns a tensor of the
+    # broadcast shape.
     """Add matrix represented by this operator to `mat`.  Equiv to `I + mat`.
 
     Args:
@@ -448,12 +560,25 @@ class LinearOperatorIdentity(BaseLinearOperatorIdentity):
       return array_ops.matrix_set_diag(mat, new_diag)
 
   def _eigvals(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the eigenvalue hook of the LinearOperator base class.
+    # Returns a tensor of ones: batch shape followed by the minimal matrix dimension.
     return self._ones_diag()
 
   def _cond(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the condition-number hook of the LinearOperator base class.
+    # Returns a tensor of ones with the batch shape, since the identity has condition number one.
     return array_ops.ones(self.batch_shape_tensor(), dtype=self.dtype)
 
   def _check_num_rows_possibly_add_asserts(self):
+    # [FUNCTION DOC]
+    # HELPER: argument validation for the constructor of LinearOperatorIdentity.
+    # KNOWN ISSUE: this duplicates, line for line, the method of the same name inherited from the
+    # base identity class; it is redundant.
+    # Optionally wraps the stored number of rows in graph assertions (scalar, non-negative), then
+    # statically checks it. Raises a type error for a non-integer dtype and value errors if the
+    # static value is not a scalar or is negative. May replace the stored tensor. Returns nothing.
     """Static check of init arg `num_rows`, possibly add asserts."""
     # Possibly add asserts.
     if self._assert_proper_shapes:
@@ -486,6 +611,12 @@ class LinearOperatorIdentity(BaseLinearOperatorIdentity):
                        " %s" % num_rows_static)
 
   def _check_batch_shape_possibly_add_asserts(self):
+    # [FUNCTION DOC]
+    # HELPER: argument validation for the constructor of LinearOperatorIdentity.
+    # Does nothing when no batch shape was given. Otherwise optionally wraps the batch shape in
+    # graph assertions (rank one, non-negative), then statically checks it. Raises a type error
+    # for a non-integer dtype and value errors if the static value is not one-dimensional or has
+    # negative entries. May replace the stored batch shape tensor. Returns nothing.
     """Static check of init arg `batch_shape`, possibly add asserts."""
     if self._batch_shape_arg is None:
       return
@@ -520,13 +651,27 @@ class LinearOperatorIdentity(BaseLinearOperatorIdentity):
 
   @property
   def _composite_tensor_prefer_static_fields(self):
+    # [FUNCTION DOC]
+    # HELPER: composite-tensor support for LinearOperatorIdentity.
+    # Property returning the parameter names whose static values should be preferred when the
+    # operator is rebuilt: the number of rows and the batch shape.
     return ("num_rows", "batch_shape")
 
   @property
   def _composite_tensor_fields(self):
+    # [FUNCTION DOC]
+    # HELPER: composite-tensor support for LinearOperatorIdentity.
+    # Property returning the parameter names treated as components of the composite tensor: the
+    # number of rows, batch shape, dtype and the assert-proper-shapes flag.
     return ("num_rows", "batch_shape", "dtype", "assert_proper_shapes")
 
   def __getitem__(self, slices):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: if the operator was built without a batch shape, the stored batch shape is
+    # nothing, so slicing fails when it tries to build a proxy tensor from it.
+    # Slices the batch dimensions of the operator. Builds a proxy tensor of ones with the batch
+    # shape, slices it with the given slice specification and uses the resulting shape as the
+    # new batch shape. Returns a new identity operator with the same other parameters.
     # Slice the batch shape and return a new LinearOperatorIdentity.
     # Use a proxy shape and slice it. Use this as the new batch shape
     new_batch_shape = array_ops.shape(
@@ -538,6 +683,12 @@ class LinearOperatorIdentity(BaseLinearOperatorIdentity):
 @tf_export("linalg.LinearOperatorScaledIdentity")
 @linear_operator.make_composite_tensor
 class LinearOperatorScaledIdentity(BaseLinearOperatorIdentity):
+  # [CLASS DOC]
+  # Operator acting like a (batch of) square identity matrix scaled by a scalar multiplier,
+  # never materialized. Holds the multiplier, the number of rows (tensor and static value) and
+  # the assert-proper-shapes flag. Matmul, solve, determinant, trace and eigenvalues are
+  # computed from the multiplier; products and solves with scaled identity or diagonal
+  # operators are simplified. Created with num_rows and multiplier; composite tensor, exported.
   """`LinearOperator` acting like a scaled [batch] identity matrix `A = c I`.
 
   This operator acts like a scaled [batch] identity matrix `A` with shape
@@ -631,6 +782,14 @@ class LinearOperatorScaledIdentity(BaseLinearOperatorIdentity):
                is_square=True,
                assert_proper_shapes=False,
                name="LinearOperatorScaledIdentity"):
+    # [FUNCTION DOC]
+    # Constructor. Takes num_rows (scalar non-negative integer), multiplier (scalar or batch of
+    # scalars; defines dtype and batch shape), optional is_* hints, an assert-proper-shapes flag
+    # and a name. Converts a non-reference multiplier to a tensor and auto-sets self-adjoint true
+    # for real dtypes. Raises a value error if self-adjoint is explicitly false for a real dtype
+    # or if is_square is false, a type or value error for a bad num_rows, and an error if
+    # num_rows is a variable-like reference. Calls the base constructor and stores num_rows, its
+    # static value and casts of it to the dtype and real dtype.
     r"""Initialize a `LinearOperatorScaledIdentity`.
 
     The `LinearOperatorScaledIdentity` is initialized with `num_rows`, which
@@ -711,6 +870,10 @@ class LinearOperatorScaledIdentity(BaseLinearOperatorIdentity):
                                                         self.dtype.real_dtype)
 
   def _shape(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the static-shape hook of the LinearOperator base class.
+    # Returns the static shape of the multiplier followed by the static number of rows twice
+    # (unknown if the row count is not statically known).
     matrix_shape = tensor_shape.TensorShape((self._num_rows_static,
                                              self._num_rows_static))
 
@@ -718,6 +881,10 @@ class LinearOperatorScaledIdentity(BaseLinearOperatorIdentity):
     return batch_shape.concatenate(matrix_shape)
 
   def _shape_tensor(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the dynamic-shape hook of the LinearOperator base class.
+    # Returns an integer tensor: the runtime shape of the multiplier followed by the number of
+    # rows twice.
     matrix_shape = array_ops_stack.stack(
         (self._num_rows, self._num_rows), axis=0)
 
@@ -725,15 +892,24 @@ class LinearOperatorScaledIdentity(BaseLinearOperatorIdentity):
     return array_ops.concat((batch_shape, matrix_shape), 0)
 
   def _assert_non_singular(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the non-singular assertion hook of the LinearOperator base class.
+    # Returns a graph assertion that the absolute value of the multiplier is strictly positive.
     return check_ops.assert_positive(
         math_ops.abs(self.multiplier), message="LinearOperator was singular")
 
   def _assert_positive_definite(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the positive-definite assertion hook of the LinearOperator base class.
+    # Returns a graph assertion that the real part of the multiplier is strictly positive.
     return check_ops.assert_positive(
         math_ops.real(self.multiplier),
         message="LinearOperator was not positive definite.")
 
   def _assert_self_adjoint(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the self-adjoint assertion hook of the LinearOperator base class.
+    # Returns a graph assertion that the imaginary part of the multiplier is zero everywhere.
     imag_multiplier = math_ops.imag(self.multiplier)
     return check_ops.assert_equal(
         array_ops.zeros_like(imag_multiplier),
@@ -741,6 +917,10 @@ class LinearOperatorScaledIdentity(BaseLinearOperatorIdentity):
         message="LinearOperator was not self-adjoint")
 
   def _make_multiplier_matrix(self, conjugate=False):
+    # [FUNCTION DOC]
+    # HELPER: builds the broadcastable multiplier used by matmul and solve.
+    # Returns the multiplier reshaped by appending two trailing singleton dimensions, optionally
+    # complex conjugated when conjugate is true.
     # Shape [B1,...Bb, 1, 1]
     multiplier_matrix = array_ops.expand_dims(
         array_ops.expand_dims(self.multiplier, -1), -1)
@@ -749,6 +929,10 @@ class LinearOperatorScaledIdentity(BaseLinearOperatorIdentity):
     return multiplier_matrix
 
   def _linop_adjoint(self) -> "LinearOperatorScaledIdentity":
+    # [FUNCTION DOC]
+    # HELPER: implements the adjoint-operator hook of the LinearOperator base class.
+    # Returns a scaled identity of the same size whose multiplier is the complex conjugate of
+    # this one (unchanged for real dtypes), carrying over the hints and marked square.
     multiplier = self.multiplier
     if multiplier.dtype.is_complex:
       multiplier = math_ops.conj(multiplier)
@@ -762,6 +946,10 @@ class LinearOperatorScaledIdentity(BaseLinearOperatorIdentity):
         is_square=True)
 
   def _linop_cholesky(self) -> "LinearOperatorScaledIdentity":
+    # [FUNCTION DOC]
+    # HELPER: implements the Cholesky-operator hook of the LinearOperator base class.
+    # Returns a scaled identity of the same size whose multiplier is the square root of this
+    # one, with all hints set to true.
     return LinearOperatorScaledIdentity(
         num_rows=self._num_rows,
         multiplier=math_ops.sqrt(self.multiplier),
@@ -771,6 +959,10 @@ class LinearOperatorScaledIdentity(BaseLinearOperatorIdentity):
         is_square=True)
 
   def _linop_inverse(self) -> "LinearOperatorScaledIdentity":
+    # [FUNCTION DOC]
+    # HELPER: implements the inverse-operator hook of the LinearOperator base class.
+    # Returns a scaled identity of the same size whose multiplier is the reciprocal of this one,
+    # self-adjoint and square, carrying over the non-singular and positive-definite hints.
     return LinearOperatorScaledIdentity(
         num_rows=self._num_rows,
         multiplier=1. / self.multiplier,
@@ -784,6 +976,14 @@ class LinearOperatorScaledIdentity(BaseLinearOperatorIdentity):
       left_operator: "LinearOperatorScaledIdentity",
       right_operator: linear_operator.LinearOperator,
     ) -> "LinearOperatorScaledIdentity":
+    # [FUNCTION DOC]
+    # HELPER: hook used by the base class to simplify multiplying two operators.
+    # KNOWN ISSUE: the return annotation says a scaled identity, but a diagonal operator or
+    # whatever the base class returns may be returned for other right operands.
+    # Combines the property hints of both operators. If the right operator is another scaled
+    # identity, returns a scaled identity with the product of multipliers; if it is a diagonal
+    # operator, returns a diagonal operator scaled by the multiplier; otherwise defers to the
+    # base class implementation.
     is_non_singular = property_hint_util.combined_non_singular_hint(
         left_operator, right_operator)
     is_self_adjoint = property_hint_util.combined_commuting_self_adjoint_hint(
@@ -814,6 +1014,12 @@ class LinearOperatorScaledIdentity(BaseLinearOperatorIdentity):
       left_operator: "LinearOperatorScaledIdentity",
       right_operator: linear_operator.LinearOperator,
   ) -> linear_operator.LinearOperator:
+    # [FUNCTION DOC]
+    # HELPER: hook used by the base class to simplify solving this operator against another.
+    # Combines the property hints of both operators. If the right operator is another scaled
+    # identity, returns a scaled identity with multiplier right over left; if it is a diagonal
+    # operator, returns a diagonal operator with the diagonal divided by the multiplier;
+    # otherwise defers to the base class implementation.
     is_non_singular = property_hint_util.combined_non_singular_hint(
         left_operator, right_operator)
     is_self_adjoint = property_hint_util.combined_commuting_self_adjoint_hint(
@@ -840,6 +1046,11 @@ class LinearOperatorScaledIdentity(BaseLinearOperatorIdentity):
       return super()._linop_solve(left_operator, right_operator)
 
   def _matmul(self, x, adjoint=False, adjoint_arg=False):
+    # [FUNCTION DOC]
+    # HELPER: implements the matmul hook of the LinearOperator base class.
+    # Optionally takes the adjoint of x, optionally adds a graph assertion of compatible matrix
+    # dimensions, and multiplies x by the multiplier (conjugated when adjoint is true), relying
+    # on broadcasting. Returns the product tensor.
     x = linalg.adjoint(x) if adjoint_arg else x
     if self._assert_proper_shapes:
       aps = linear_operator_util.assert_compatible_matrix_dimensions(self, x)
@@ -847,13 +1058,24 @@ class LinearOperatorScaledIdentity(BaseLinearOperatorIdentity):
     return x * self._make_multiplier_matrix(conjugate=adjoint)
 
   def _determinant(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the determinant hook of the LinearOperator base class.
+    # Returns the multiplier raised to the power of the number of rows.
     return self.multiplier**self._num_rows_cast_to_dtype
 
   def _log_abs_determinant(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the log-determinant hook of the LinearOperator base class.
+    # Returns the number of rows times the log of the absolute value of the multiplier.
     return self._num_rows_cast_to_real_dtype * math_ops.log(
         math_ops.abs(self.multiplier))
 
   def _solve(self, rhs, adjoint=False, adjoint_arg=False):
+    # [FUNCTION DOC]
+    # HELPER: implements the solve hook of the LinearOperator base class.
+    # Optionally takes the adjoint of rhs, optionally adds a graph assertion that the matrix
+    # dimensions are compatible, and divides rhs by the multiplier (conjugated when adjoint is
+    # true). Returns the solution tensor.
     rhs = linalg.adjoint(rhs) if adjoint_arg else rhs
     if self._assert_proper_shapes:
       aps = linear_operator_util.assert_compatible_matrix_dimensions(self, rhs)
@@ -861,6 +1083,10 @@ class LinearOperatorScaledIdentity(BaseLinearOperatorIdentity):
     return rhs / self._make_multiplier_matrix(conjugate=adjoint)
 
   def _trace(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the trace hook of the LinearOperator base class.
+    # Returns, per batch member, the multiplier times the minimal matrix dimension (static if
+    # known, otherwise a cast runtime value) as a tensor of the batch shape.
     # Get Tensor of all ones of same shape as self.batch_shape.
     if self.batch_shape.is_fully_defined():
       batch_of_ones = array_ops.ones(shape=self.batch_shape, dtype=self.dtype)
@@ -875,9 +1101,20 @@ class LinearOperatorScaledIdentity(BaseLinearOperatorIdentity):
                                               self.dtype) * batch_of_ones)
 
   def _diag_part(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the diagonal hook of the LinearOperator base class.
+    # Returns a tensor of the multiplier repeated along the diagonal (length equal to the minimal
+    # matrix dimension) for each batch member.
     return self._ones_diag() * self.multiplier[..., array_ops.newaxis]
 
   def add_to_tensor(self, mat, name="add_to_tensor"):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says this is equivalent to adding the identity to mat, but this
+    # operator is a scaled identity: the multiplier (not one) is added to the diagonal of mat.
+    # Adds this operator's matrix to the matrix tensor mat without materializing it. Converts mat
+    # to a tensor, extracts its diagonal, adds the broadcast multiplier and writes the new
+    # diagonal back. Inputs: mat (batch of matrices, same dtype) and a name for the op scope.
+    # Returns a tensor of the broadcast shape.
     """Add matrix represented by this operator to `mat`.  Equiv to `I + mat`.
 
     Args:
@@ -905,9 +1142,19 @@ class LinearOperatorScaledIdentity(BaseLinearOperatorIdentity):
       return array_ops.matrix_set_diag(mat, new_diag)
 
   def _eigvals(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the eigenvalue hook of the LinearOperator base class.
+    # Returns a tensor of the multiplier repeated along a new trailing axis of the minimal matrix
+    # dimension, i.e. every eigenvalue equals the multiplier of its batch member.
     return self._ones_diag() * self.multiplier[..., array_ops.newaxis]
 
   def _cond(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the condition-number hook of the LinearOperator base class.
+    # KNOWN ISSUE: a zero multiplier gives not-a-number rather than infinity as the condition
+    # number of a singular matrix.
+    # Returns a tensor of ones in the operator dtype, with not-a-number where the multiplier is
+    # exactly zero.
     # Condition number for a scalar time identity matrix is one, except when the
     # scalar is zero.
     return array_ops.where_v2(
@@ -917,17 +1164,31 @@ class LinearOperatorScaledIdentity(BaseLinearOperatorIdentity):
 
   @property
   def multiplier(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the (batch of) scalar tensor that scales the identity matrix.
     """The [batch] scalar `Tensor`, `c` in `cI`."""
     return self._multiplier
 
   @property
   def _composite_tensor_prefer_static_fields(self):
+    # [FUNCTION DOC]
+    # HELPER: composite-tensor support for LinearOperatorScaledIdentity.
+    # Property returning the names of parameters whose static value should be preferred when
+    # rebuilding the operator: only the number of rows.
     return ("num_rows",)
 
   @property
   def _composite_tensor_fields(self):
+    # [FUNCTION DOC]
+    # HELPER: composite-tensor support for LinearOperatorScaledIdentity.
+    # Property returning the names of constructor parameters treated as components of the
+    # composite tensor: number of rows, multiplier and the assert-proper-shapes flag.
     return ("num_rows", "multiplier", "assert_proper_shapes")
 
   @property
   def _experimental_parameter_ndims_to_matrix_ndims(self):
+    # [FUNCTION DOC]
+    # HELPER: composite-tensor / batching support for LinearOperatorScaledIdentity.
+    # Property mapping the multiplier parameter to 0: the multiplier is a (batch of) scalars
+    # and has no trailing matrix dimensions.
     return {"multiplier": 0}

@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Defines LinearOperatorInversion, which lazily represents the inverse of a non-singular
+# operator by swapping matmul and solve. Exposes only that class (exported publicly via the
+# linalg namespace and made a composite tensor at import time). Builds on the base operator
+# and utility modules of this package.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +30,12 @@ __all__ = ["LinearOperatorInversion"]
 @tf_export("linalg.LinearOperatorInversion")
 @linear_operator.make_composite_tensor
 class LinearOperatorInversion(linear_operator.LinearOperator):
+  # [CLASS DOC]
+  # Operator representing the inverse of another, non-singular, square operator without
+  # forming the inverse. Holds the wrapped operator privately. Multiplication and solve are
+  # swapped relative to the wrapped operator, the determinant is inverted, the log determinant
+  # negated and eigenvalues reciprocated. Created from the operator and optional hints;
+  # registered as a composite tensor and exported publicly.
   """`LinearOperator` representing the inverse of another operator.
 
   This operator represents the inverse of another operator.
@@ -77,6 +88,13 @@ class LinearOperatorInversion(linear_operator.LinearOperator):
                is_positive_definite=None,
                is_square=None,
                name=None):
+    # [FUNCTION DOC]
+    # Constructor. Takes the operator to invert, optional is_* hints (true, false or nothing) and
+    # an optional name (default: the operator name with an inverse suffix). Raises a value error
+    # if either the operator or the argument says the operator is not non-singular, or if either
+    # says it is not square. Each hint is merged with the operator's own hint, raising on a
+    # contradiction. Calls the base class constructor with the operator dtype inside a name scope
+    # and stores the operator privately.
     r"""Initialize a `LinearOperatorInversion`.
 
     `LinearOperatorInversion` is initialized with an operator `A`.  The `solve`
@@ -175,10 +193,17 @@ class LinearOperatorInversion(linear_operator.LinearOperator):
 
   @property
   def operator(self) -> "LinearOperatorInversion":
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the return annotation names LinearOperatorInversion, but the value returned is
+    # the wrapped (un-inverted) operator, which may be any LinearOperator.
+    # Read-only property returning the operator that this object inverts.
     """The operator before inversion."""
     return self._operator
 
   def _linop_inverse(self) -> linear_operator.LinearOperator:
+    # [FUNCTION DOC]
+    # HELPER: implements the inverse-operator hook of the LinearOperator base class.
+    # The inverse of an inversion operator is the original wrapped operator; returns it.
     return self.operator
 
   def _linop_solve(
@@ -186,46 +211,94 @@ class LinearOperatorInversion(linear_operator.LinearOperator):
       left_operator: "LinearOperatorInversion",
       right_operator: linear_operator.LinearOperator,
   ) -> linear_operator.LinearOperator:
+    # [FUNCTION DOC]
+    # HELPER: registered-style hook used by the base class to solve between two operators.
+    # Given an inversion operator on the left and any operator on the right, returns an operator
+    # equal to the left operator's wrapped operator multiplied by the right operator (the solve
+    # of an inverse is a product). Inputs are not validated; no side effects.
     """Solve inverse of generic `LinearOperator`s."""
     return left_operator.operator.matmul(right_operator)
 
   def _assert_non_singular(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the non-singular assertion hook of the LinearOperator base class.
+    # Delegates to the wrapped operator's assertion and returns the resulting graph operation.
     return self.operator.assert_non_singular()
 
   def _assert_positive_definite(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the positive-definite assertion hook of the LinearOperator base class.
+    # Delegates to the wrapped operator's assertion and returns the resulting graph operation.
     return self.operator.assert_positive_definite()
 
   def _assert_self_adjoint(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the self-adjoint assertion hook of the LinearOperator base class.
+    # Delegates to the wrapped operator's assertion and returns the resulting graph operation.
     return self.operator.assert_self_adjoint()
 
   def _shape(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the static-shape hook of the LinearOperator base class.
+    # Returns the static shape of the wrapped operator (the inverse has the same shape).
     return self.operator.shape
 
   def _shape_tensor(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the dynamic-shape hook of the LinearOperator base class.
+    # Returns the runtime shape tensor of the wrapped operator (the inverse has the same shape).
     return self.operator.shape_tensor()
 
   def _matmul(self, x, adjoint=False, adjoint_arg=False):
+    # [FUNCTION DOC]
+    # HELPER: implements the matmul hook of the LinearOperator base class.
+    # Multiplying by the inverse is solving with the wrapped operator, so forwards x and the
+    # adjoint and adjoint_arg flags to the wrapped operator's solve and returns the result.
     return self.operator.solve(x, adjoint=adjoint, adjoint_arg=adjoint_arg)
 
   def _determinant(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the determinant hook of the LinearOperator base class.
+    # Returns the reciprocal of the wrapped operator's determinant.
     return 1. / self.operator.determinant()
 
   def _log_abs_determinant(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the log-determinant hook of the LinearOperator base class.
+    # Returns the negation of the wrapped operator's log absolute determinant.
     return -1. * self.operator.log_abs_determinant()
 
   def _solve(self, rhs, adjoint=False, adjoint_arg=False):
+    # [FUNCTION DOC]
+    # HELPER: implements the solve hook of the LinearOperator base class.
+    # Solving with the inverse is multiplying by the wrapped operator, so forwards rhs and the
+    # adjoint and adjoint_arg flags to the wrapped operator's matmul and returns the result.
     return self.operator.matmul(rhs, adjoint=adjoint, adjoint_arg=adjoint_arg)
 
   def _eigvals(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the eigenvalue hook of the LinearOperator base class.
+    # Returns the element-wise reciprocal of the wrapped operator's eigenvalues.
     return 1. / self.operator.eigvals()
 
   def _cond(self):
+    # [FUNCTION DOC]
+    # HELPER: implements the condition-number hook of the LinearOperator base class.
+    # Returns the condition number of the wrapped operator, which equals that of its inverse.
     return self.operator.cond()
 
   @property
   def _composite_tensor_fields(self):
+    # [FUNCTION DOC]
+    # HELPER: composite-tensor support for LinearOperatorInversion.
+    # Property returning the tuple of parameter names treated as components of the composite
+    # tensor: only the wrapped operator.
     return ("operator",)
 
   @property
   def _experimental_parameter_ndims_to_matrix_ndims(self):
+    # [FUNCTION DOC]
+    # HELPER: composite-tensor / batching support for LinearOperatorInversion.
+    # Property mapping the operator parameter to 0, meaning it is itself an operator and has no
+    # extra trailing matrix dimensions to account for.
     return {"operator": 0}
