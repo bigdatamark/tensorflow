@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# Implements ProfileContext, a context manager that monkey-patches the graph-mode Session class so
+# that every session run is counted, selectively traced with full tracing, fed into a profiler
+# object, automatically profiled at chosen steps and dumped to a profile directory.
+# Exposes the ProfileContext class plus the module constants for the warm-up step count and the
+# maximum number of traced steps, and two private replacement functions for session init and run.
+# Import-time side effects: none beyond imports; patching of the session class happens only when a
+# context is entered and is undone on exit.
+# Relies on the model analyzer Profiler and on the native tfprof wrapper for deleting the profiler.
+# Public entry point is exposed to users through the profiler package.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -34,6 +44,12 @@ MAX_TRACED_STEPS = 100
 
 
 def _profiled_init(self, target='', graph=None, config=None):
+  # [FUNCTION DOC]
+  # HELPER: Replacement session constructor installed by ProfileContext while a context is active.
+  # Simply forwards the target, graph and config arguments to the saved original constructor
+  # (stored on the session class under an internal name), so session creation behaves as before.
+  # The call is made so that the session object gets its normal initialization; returns nothing.
+  # Exists only so the original constructor can be swapped in and out reversibly.
   """Overwrites the session.__init__."""
   self._profiler_init_internal(target, graph, config)  # pylint: disable=protected-access
 
@@ -43,6 +59,23 @@ def _profiled_run(self,
                   feed_dict=None,
                   options=None,
                   run_metadata=None):
+  # [FUNCTION DOC]
+  # HELPER: Replacement for the session run method installed by ProfileContext while active.
+  # KNOWN ISSUE: On the non-traced slow path the original run is called without the caller's
+  # run_metadata argument, so a caller-supplied run_metadata is not filled for those steps.
+  # KNOWN ISSUE: When the caller passes no options, the saved "old trace level" is read after the
+  # new options were created with full tracing, so restoring it is a no-op (harmless).
+  # Wraps each run in the context's step counter. Arguments are the same as the real run:
+  # fetches, optional feed mapping, optional run options and optional run metadata.
+  # If the step is not on the fast path, decides whether to trace: when tracing, it creates
+  # metadata/options if missing, forces full trace level, runs the original run, optionally writes
+  # the raw metadata to the profile directory in debug mode, points the profiler at the session
+  # graph and adds the step's metadata to it, then restores the caller's trace level.
+  # Afterwards it may dump the profile and executes every auto-profiling command scheduled for the
+  # step (graph, scope, op or code views), saving each result per command and step in the
+  # context's view store. Raises a value error for an unknown profiling command.
+  # If the lock is already held (concurrent run) it just calls the original run directly.
+  # Returns the fetched values of the original run. Writes debug messages to standard error.
   """Overwrites the session.run()."""
   # pylint: disable=protected-access
   # Count the session steps.
@@ -107,6 +140,15 @@ def _profiled_run(self,
 
 
 class ProfileContext(object):
+  # [CLASS DOC]
+  # Context manager that enables step-aware tracing and profiling of graph-mode session runs.
+  # On entering, it replaces the session class run and constructor with wrappers (and attaches
+  # itself to the session class); on exit it undoes this and deletes the native profiler.
+  # State: profile directory, debug flag, enabled flag, sets of trace/dump/slow-path steps, an
+  # auto-tracing flag (used when no trace steps are given), the list of auto-profiling commands,
+  # a lazily created Profiler, a mapping of saved profile views per command and step, a lock
+  # guarding concurrent runs, a seeded random generator and a step counter.
+  # When disabled, constructor returns early and all public methods become near no-ops.
   """A Context that captures RunMetadata and performs profiling.
 
   ```python
@@ -152,6 +194,16 @@ class ProfileContext(object):
                dump_steps=None,
                enabled=True,
                debug=False):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: When enabled is false the constructor returns before creating most attributes
+    # (for example the saved views), so get_profiles on a disabled context fails with an
+    # attribute error instead of the documented value error.
+    # Creates the context. Inputs: profile_dir (required directory for dumped profiles),
+    # trace_steps (optional list of step numbers to trace; nothing means automatic tracing),
+    # dump_steps (optional list of steps at which to dump; nothing means one dump at the maximum
+    # traced step count), enabled (default true) and debug (default false).
+    # Raises a value error if profile_dir is empty or more than the maximum number of trace steps
+    # is given. Copies the step lists into sets, initializes counters, lock and views.
     self._enabled = enabled
     if not self._enabled:
       return
@@ -188,6 +240,10 @@ class ProfileContext(object):
     self._lock = threading.Lock()
 
   def get_profiles(self, cmd):
+    # [FUNCTION DOC]
+    # Looks up saved auto-profiling results for one command. Input: cmd, the command name that
+    # was registered through add_auto_profiling. Returns a mapping from step number to the
+    # profile result recorded at that step. Raises a value error if no result exists for cmd.
     """Returns profiling results for each step at which `cmd` was run.
 
     Args:
@@ -209,6 +265,13 @@ class ProfileContext(object):
     return self._views[cmd]
 
   def add_auto_profiling(self, cmd, options, profile_steps):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: The docstring lists python as a command, but the run wrapper only recognizes
+    # graph, scope, op and code; any other name raises a value error at run time.
+    # Schedules a profiling command. Inputs: cmd (view name), options (profiling options) and
+    # profile_steps (list of step numbers). Stores a copy of the steps, and adds them to both the
+    # slow-path and trace step sets so those steps are traced. Returns nothing; does nothing
+    # when the context is disabled.
     """Traces and profiles at some session run steps.
 
     Args:
@@ -226,6 +289,10 @@ class ProfileContext(object):
 
   @property
   def profiler(self):
+    # [FUNCTION DOC]
+    # Property giving the Profiler object of this context. Returns nothing (null) if the context
+    # is disabled; otherwise lazily creates a Profiler for the default graph on first access and
+    # returns the same object afterwards. Side effect: creates the profiler on first use.
     """Returns the current profiler object."""
     if not self._enabled:
       return None
@@ -234,6 +301,10 @@ class ProfileContext(object):
     return self._profiler
 
   def trace_next_step(self):
+    # [FUNCTION DOC]
+    # Requests full tracing (and adding the trace to the profiler) of the next session run.
+    # Sets a one-shot flag and marks the current step as a slow-path step. No inputs, returns
+    # nothing; does nothing if disabled. The flag is cleared when the step finishes.
     """Enables tracing and adds traces to profiler at next step."""
     if not self._enabled:
       return
@@ -241,6 +312,11 @@ class ProfileContext(object):
     self._slow_path_steps.add(self._step)
 
   def dump_next_step(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: The docstring says tracing is enabled too, but this only sets the dump flag and
+    # slow-path marker; the step is traced only if tracing was otherwise requested.
+    # Requests that the profile be dumped to the profile directory after the next session run.
+    # No inputs, returns nothing; does nothing if disabled. The flag is cleared after the step.
     """Enable tracing and dump profiles at next step."""
     if not self._enabled:
       return
@@ -248,6 +324,13 @@ class ProfileContext(object):
     self._slow_path_steps.add(self._step)
 
   def _is_fast_path(self, step):
+    # [FUNCTION DOC]
+    # HELPER: Used by the patched session run to skip all profiling work cheaply.
+    # KNOWN ISSUE: The auto-tracing limit here uses "at most" the maximum traced steps while the
+    # should-trace check uses "more than", an off-by-one inconsistency at the boundary.
+    # Input: step number. Returns false if the step is explicitly scheduled (slow-path set) or
+    # if auto tracing is on, the warm-up steps are over and the traced-step budget is not
+    # exhausted; otherwise returns true. No side effects.
     if step in self._slow_path_steps:
       return False
     # When user doesn't set the tracing steps explicitly, auto decide it.
@@ -257,6 +340,14 @@ class ProfileContext(object):
     return True
 
   def _should_trace(self, step, graph, fetches):
+    # [FUNCTION DOC]
+    # HELPER: Decision logic used by the patched session run.
+    # Inputs: step number, the session graph and the fetches of the run. Returns true if the step
+    # should be traced. False when the traced-step budget is exceeded. True if the step is in the
+    # trace set or a next-step trace was requested. In auto mode after warm-up it traces when the
+    # combination of fetch names has not been seen before, or randomly (seeded generator) when
+    # profiler coverage is below one half. Side effects: increments the traced-step counter,
+    # records fetch names, writes debug output to standard error.
     """Whether should do tracing at current step."""
     if self._traced_steps > MAX_TRACED_STEPS:
       return False
@@ -286,6 +377,11 @@ class ProfileContext(object):
     return False
 
   def _maybe_dump(self, step):
+    # [FUNCTION DOC]
+    # HELPER: Dump hook called after each slow-path run.
+    # Input: step number. If the step is a dump step or a dump was requested, creates the profile
+    # directory if needed and writes the profiler state to a file named with the step number in
+    # it. Otherwise returns immediately. Returns nothing; writes to the file system.
     """Maybe dump the profile file."""
     if not (step in self._dump_steps or self._dump_next_step):
       return
@@ -298,12 +394,25 @@ class ProfileContext(object):
     self.profiler._write_profile(filename)  # pylint: disable=protected-access
 
   def _dump_file(self, pb, basename):
+    # [FUNCTION DOC]
+    # HELPER: Debug utility writing a raw proto (run metadata) as text.
+    # Inputs: pb (the message object) and basename (file name inside the profile directory).
+    # Creates the directory if missing and writes the string form of the message to the file.
+    # Returns nothing; side effect is a file write.
     gfile.MakeDirs(self._profiler_dir)
     with gfile.Open(os.path.join(self._profiler_dir, basename), 'w') as f:
       f.write('%s' % pb)
 
   @contextlib.contextmanager
   def _new_step(self):
+    # [FUNCTION DOC]
+    # HELPER: Context manager bracketing one session run for the patched run function.
+    # KNOWN ISSUE: There is no protection against exceptions: if the body raises, the code after
+    # the yield (step increment, flag reset, lock release) does not run, so the lock stays held
+    # and later runs always take the unprofiled path.
+    # Tries to take the lock without blocking, yields the current step number and whether the lock
+    # was acquired, then increments the step, clears the one-shot trace/dump flags and releases
+    # the lock if it was taken.
     acquired = self._lock.acquire(False)  # pylint: disable=assignment-from-no-return
     yield (self._step, acquired)
     self._step += 1
@@ -313,6 +422,10 @@ class ProfileContext(object):
       self._lock.release()
 
   def _profile_candidates(self):
+    # [FUNCTION DOC]
+    # HELPER: Selects auto-profiling entries due at the current step.
+    # Returns a list of the registered (command, options, steps) entries whose step list contains
+    # the current step number. No side effects.
     to_profile = []
     for auto_prof in self._auto_profiles:
       _, _, prof_steps = auto_prof
@@ -321,6 +434,12 @@ class ProfileContext(object):
     return to_profile
 
   def __enter__(self):
+    # [FUNCTION DOC]
+    # Enters the context. If enabled, saves the session class original run and constructor, and
+    # raises an internal error if either is missing or if a previous context was not cleaned up
+    # (the internal-name attributes already exist). Otherwise replaces run and constructor with
+    # the profiling wrappers, stores the originals under internal names and attaches this context
+    # to the session class. Returns this context (also when disabled, without patching).
     if self._enabled:
       self.old_run = getattr(session.BaseSession, 'run', None)
       self.old_init = getattr(session.BaseSession, '__init__', None)
@@ -346,6 +465,11 @@ class ProfileContext(object):
       return self
 
   def __exit__(self, exec_type, exec_value, exec_tb):
+    # [FUNCTION DOC]
+    # Leaves the context. Arguments are the usual exception type, value and traceback (ignored).
+    # If enabled, deletes the native profiler and restores the original session run and
+    # constructor, clears the internal attributes and the attached context. Does not suppress
+    # exceptions. Returns nothing.
     if not self._enabled:
       return
     print_mdl.DeleteProfiler()

@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Unit tests for the ProfileContext context manager (graph-mode session profiling).
+# Covers automatic profiling at chosen steps with dump files, automatic tracing in debug mode
+# (warm-up steps, run metadata dumps) and the disabled context behavior.
+# Uses the shared model analyzer test library to build a full model. Runs under the test main.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,9 +36,18 @@ builder = option_builder.ProfileOptionBuilder
 
 
 class ProfilerContextTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for ProfileContext. Each test resets the default graph, builds the shared full test
+  # model and runs session steps inside a profile context writing to the temporary directory.
 
   @test_util.run_deprecated_v1
   def testBasics(self):
+    # [FUNCTION DOC]
+    # Scenario: a context with auto profiling of the operation view at steps 15, 50 and 100 is
+    # active while the model is evaluated for 101 steps in a session.
+    # Asserts: output file exists after steps 15 and 50 (then removes it), the step-100 profile
+    # file exists, the saved views contain exactly steps 15, 50 and 100, and a profiler loaded
+    # from the dumped step-100 file reproduces the same operation profile text.
     ops.reset_default_graph()
     outfile = os.path.join(test.get_temp_dir(), "dump")
     opts = builder(builder.time_and_memory()).with_file_output(outfile).build()
@@ -68,6 +82,11 @@ class ProfilerContextTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testAutoTracingInDeubMode(self):
+    # [FUNCTION DOC]
+    # Scenario: a debug-mode context with default (automatic) tracing evaluates the model.
+    # Asserts: no run metadata dump appears during the 10 warm-up steps, one named for step 11
+    # appears on the next run (new fetches get traced), and no further dump appears when the same
+    # fetches are evaluated again. Cleans up the dump file.
     ops.reset_default_graph()
     x = lib.BuildFullModel()
 
@@ -90,6 +109,10 @@ class ProfilerContextTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testDisabled(self):
+    # [FUNCTION DOC]
+    # Scenario: first a context created with enabled false, then a normal one, each running 10
+    # steps. Asserts: for the disabled one the profiler is null and the session class has no
+    # attached profile context; for the enabled one the profiler exists and the context is attached.
     ops.reset_default_graph()
     x = lib.BuildFullModel()
     with profile_context.ProfileContext(

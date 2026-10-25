@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: Test utility module for the profiler integration tests.
+# Provides a synthetic MNIST-like dataset builder and a small deterministically initialized
+# convolutional Keras model used to exercise profiling under distribution strategies.
+# No import-time side effects besides importing TensorFlow.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,6 +23,15 @@ import tensorflow as tf
 
 
 def mnist_synthetic_dataset(batch_size, steps_per_epoch):
+  # [FUNCTION DOC]
+  # HELPER: Supplies data for the profiler integration tests.
+  # KNOWN ISSUE: The training dataset is always batched with a fixed size of 64; the batch_size
+  # argument only affects how many all-ones samples are created, not the batch size.
+  # Inputs: batch_size and steps_per_epoch (integers; their product is the number of training
+  # samples). Builds a training dataset of all-one images (28 by 28 by 1) with all-one integer
+  # labels, repeated forever and batched by 64 dropping the remainder, and an evaluation dataset
+  # of 10000 random images with random labels from 0 to 8, batched by 64.
+  # Returns the pair (training dataset, evaluation dataset). Uses random numbers for eval data.
   """Generate synthetic MNIST dataset for testing."""
   # train dataset
   x_train = tf.ones([batch_size * steps_per_epoch, 28, 28, 1],
@@ -41,6 +55,14 @@ def mnist_synthetic_dataset(batch_size, steps_per_epoch):
 
 
 def get_mnist_model(input_shape):
+  # [FUNCTION DOC]
+  # HELPER: Model factory for the profiler integration tests.
+  # Input: input_shape, the shape of one input image (height, width, channels). Builds a
+  # functional Keras model: a 32-filter 3 by 3 convolution with relu, batch normalization,
+  # flatten added to itself, and a 10-way softmax dense layer, with fixed-seed truncated normal
+  # kernel initializers for determinism. Compiles it with sparse categorical cross-entropy,
+  # stochastic gradient descent at learning rate 0.001 and an accuracy metric.
+  # Returns the compiled model. Creates variables in the current strategy scope if any.
   """Define a deterministically-initialized CNN model for MNIST testing."""
   inputs = tf.keras.Input(shape=input_shape)
   x = tf.keras.layers.Conv2D(

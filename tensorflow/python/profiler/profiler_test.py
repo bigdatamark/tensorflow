@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit tests for the model analyzer Profiler class compared against the one-shot profile
+# function, plus multi-step profiling, advice checkers and several profiles per step.
+# Uses the shared model analyzer test library to build models. Runs under the test main.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,9 +35,18 @@ builder = option_builder.ProfileOptionBuilder
 
 
 class ProfilerTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the Profiler class and related model analyzer functions. Each test resets the
+  # default graph, builds a test model, runs it with full tracing and inspects profile output.
 
   @test_util.run_deprecated_v1
   def testProfileBasic(self):
+    # [FUNCTION DOC]
+    # Scenario: build the full test model, run it once with full tracing, and for each view
+    # (graph, name scope, python code, operations) compare the text written by the Profiler object
+    # with the text written by the one-shot profile function for the same options.
+    # Asserts: each pair is equal; finally a scope profile differs from the last operations output.
+    # Side effects: writes and rereads a dump file in the temporary directory.
     ops.reset_default_graph()
     outfile = os.path.join(test.get_temp_dir(), 'dump')
     opts = (builder(builder.trainable_variables_parameter())
@@ -103,6 +116,13 @@ class ProfilerTest(test.TestCase):
     self.assertNotEqual(pma_str, profiler_str)
 
   def testMultiStepProfile(self):
+    # [FUNCTION DOC]
+    # Scenario: a splittable model with three outputs is traced step by step and added to one
+    # Profiler. After each step a name-scope profile is taken.
+    # Asserts: nodes appear progressively (the first has only the first branch, then the second,
+    # then the add node), execution times are positive for executed nodes and absent beforehand,
+    # and the advice contains the three checkers; the accelerator checker has reports only when a
+    # GPU is available and the expensive operation checker always has reports.
     ops.reset_default_graph()
     opts = builder.time_and_memory(min_bytes=0)
 
@@ -171,6 +191,12 @@ class ProfilerTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testMultipleProfilePerStep(self):
+    # [FUNCTION DOC]
+    # Scenario: a small model is run twice with full tracing (variable initialization and a
+    # training run). First only the training metadata is added as step 0, then the initialization
+    # metadata is added to the same step.
+    # Asserts: the initializer node has zero time and memory figures before the second add, and
+    # positive time, requested, peak and residual bytes afterwards.
     ops.reset_default_graph()
     opts = (builder(builder.trainable_variables_parameter())
             .with_empty_output()

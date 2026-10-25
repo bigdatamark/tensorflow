@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Public facade module for the v1 profiler API. Re-exports the profiler protos (op log, advice,
+# graph node, multi-graph node), the model analyzer functions profile and advise, the Profiler
+# class, the option builder and the op-log writer.
+# Import-time side effects: registers the four proto classes under the v1 profiler namespace
+# through the export decorator. Defines a list of allowed symbols (not otherwise enforced here).
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

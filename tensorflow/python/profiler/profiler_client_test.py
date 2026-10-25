@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Unit tests for the profiler client API (trace and monitor). Starts a local profiler server on
+# an unused port and checks the error behavior when nothing is running or the address is invalid.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,8 +26,15 @@ from tensorflow.python.profiler import profiler_v2 as profiler
 
 
 class ProfilerClientTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case for the profiler client functions. Each test that needs a server picks an unused
+  # local port and starts a profiler server on it (process-wide side effect).
 
   def testTrace_ProfileIdleServer(self):
+    # [FUNCTION DOC]
+    # Scenario: start a profiler server on an unused port, then request a 10 ms trace from it
+    # while no operations run. Asserts: a runtime error is raised and its message starts with the
+    # unavailable, no-trace-event-collected text.
     test_port = portpicker.pick_unused_port()
     profiler.start_server(test_port)
     # Test the profilers are successfully started and connected to profiler
@@ -39,6 +49,10 @@ class ProfilerClientTest(test_util.TensorFlowTestCase):
     )
 
   def testTrace_ProfileIdleServerWithOptions(self):
+    # [FUNCTION DOC]
+    # Same as the idle-server trace test, but passes profiler options (host tracer level 3,
+    # device tracer level 0). Asserts: a runtime error whose message starts with the unavailable,
+    # no-trace-event-collected text.
     test_port = portpicker.pick_unused_port()
     profiler.start_server(test_port)
     # Test the profilers are successfully started and connected to profiler
@@ -59,6 +73,9 @@ class ProfilerClientTest(test_util.TensorFlowTestCase):
     )
 
   def testMonitor_ProcessInvalidAddress(self):
+    # [FUNCTION DOC]
+    # Scenario: monitoring is only supported on Cloud TPU, so call monitor with a local address
+    # that has no such service. Asserts: a runtime error is raised.
     # Monitor is only supported in cloud TPU. Test invalid address instead.
     with self.assertRaises(RuntimeError):
       profiler_client.monitor('localhost:6006', 2000)

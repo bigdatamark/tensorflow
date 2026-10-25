@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Public TensorFlow 2.x profiler API. Exposes the options tuple type, start, stop, warmup,
+# start_server and the Profile context manager (most exported under the experimental profiler
+# namespace for v2). Wraps the native profiler session and server bindings.
+# Module state: one global profiler session handle guarded by a lock, so only one programmatic
+# profiling session can be active per process.
+# Import-time side effects: creates the lock and registers exported symbols; nothing else.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -48,6 +55,12 @@ class ProfilerOptions(
         'host_tracer_level', 'python_tracer_level', 'device_tracer_level',
         'delay_ms'
     ])):
+  # [CLASS DOC]
+  # Immutable named tuple of profiler settings with four fields: host tracer level, python tracer
+  # level, device tracer level and delay in milliseconds. Created by users and passed to start
+  # (or the Profile context manager, or the client trace call), where it is converted to a mapping.
+  # The overridden constructor supplies defaults: host level 2, python level 0, device level 1 and
+  # no delay (nothing, letting the profiler pick). No validation of values is performed here.
   """Options for finer control over the profiler.
 
   Use `tf.profiler.experimental.ProfilerOptions` to control `tf.profiler`
@@ -72,6 +85,10 @@ class ProfilerOptions(
               python_tracer_level=0,
               device_tracer_level=1,
               delay_ms=None):
+    # [FUNCTION DOC]
+    # Constructor for the options tuple. Inputs (all optional): host_tracer_level (default 2),
+    # python_tracer_level (default 0), device_tracer_level (default 1), delay_ms (default
+    # nothing). Returns a new immutable options instance holding these values. No validation.
     return super(ProfilerOptions,
                  cls).__new__(cls, host_tracer_level, python_tracer_level,
                               device_tracer_level, delay_ms)
@@ -79,6 +96,16 @@ class ProfilerOptions(
 
 @tf_export('profiler.experimental.start', v1=[])
 def start(logdir, options=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: If the native start reports that a session already exists, the freshly created
+  # global session handle is not cleared before re-raising, so the module keeps a handle and
+  # later start calls fail until stop is called.
+  # Starts a profiling session. Inputs: logdir (directory for results), options (optional options
+  # tuple, converted to a mapping; nothing means defaults). Under the module lock: raises an
+  # already-exists error if a session is already held; otherwise creates a native session and
+  # starts it. On already-exists from native code it logs a warning about mixing server and API
+  # and raises already-exists; on any other failure it clears the session handle and re-raises.
+  # Returns nothing. Side effect: sets the module-level session.
   """Start profiling TensorFlow performance.
 
   Args:
@@ -128,6 +155,11 @@ def start(logdir, options=None):
 
 @tf_export('profiler.experimental.stop', v1=[])
 def stop(save=True):
+  # [FUNCTION DOC]
+  # Stops the active profiling session. Input: save (default true) whether to export results to
+  # the TensorBoard log directory. Under the module lock: raises an unavailable error if no
+  # session is running; if save is true exports results (on failure clears the handle and
+  # re-raises). Always clears the module-level session handle afterwards. Returns nothing.
   """Stops the current profiling session.
 
   The profiler session will be stopped and profile results can be saved.
@@ -154,6 +186,11 @@ def stop(save=True):
 
 
 def warmup():
+  # [FUNCTION DOC]
+  # Warms up the profiler by starting a session with an empty log directory and stopping it
+  # without saving, so that one-time setup (such as loading the GPU tracing library) happens
+  # before real profiling. No inputs, returns nothing. Raises already-exists if a session is
+  # active. Not exported as a public symbol in this module.
   """Warm-up the profiler session.
 
   The profiler session will set up profiling context, including loading CUPTI
@@ -167,6 +204,11 @@ def warmup():
 
 @tf_export('profiler.experimental.server.start', v1=[])
 def start_server(port):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: The docstring example is garbled (an unterminated code fence run into prose).
+  # Starts a gRPC profiler server in the background listening on the given port (integer). The
+  # server lives until the process exits; profiling happens when a client requests it.
+  # Returns nothing; errors come from the native layer. Side effect: opens a network port.
   """Start a profiler grpc server that listens to given port.
 
   The profiler server will exit when the process finishes. The service is
@@ -182,6 +224,10 @@ def start_server(port):
 
 @tf_export('profiler.experimental.Profile', v1=[])
 class Profile(object):
+  # [CLASS DOC]
+  # Context manager wrapping start and stop. Holds the log directory and optional options given at
+  # construction. Entering starts profiling; exiting stops it and saves results to the log
+  # directory. Only one profiling session may be active at a time.
   """Context-manager profile API.
 
   Profiling will start when entering the scope, and stop and save the results to
@@ -195,6 +241,9 @@ class Profile(object):
   """
 
   def __init__(self, logdir, options=None):
+    # [FUNCTION DOC]
+    # Stores the log directory (where results are saved) and optional profiler options for later
+    # use on entry. Does not start profiling. Returns nothing.
     """Creates a context manager object for profiler API.
 
     Args:
@@ -206,7 +255,13 @@ class Profile(object):
     self._options = options
 
   def __enter__(self):
+    # [FUNCTION DOC]
+    # Starts profiling with the stored log directory and options. Raises already-exists if a
+    # session is already active. Returns nothing (not the context object).
     start(self._logdir, self._options)
 
   def __exit__(self, typ, value, tb):
+    # [FUNCTION DOC]
+    # Stops profiling and saves results; exception arguments are ignored and exceptions are not
+    # suppressed. Raises an unavailable error if no session is active. Returns nothing.
     stop()

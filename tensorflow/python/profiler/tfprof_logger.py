@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Builds and writes the tfprof op log (a protocol message carrying extra per-operation model
+# information) used by the profiler for offline analysis: floating point operation counts,
+# trainable-variable markers and Python stack traces of op creation.
+# Exposes the public write_op_log function (exported for v1) and merge_default_with_oplog, plus
+# private helpers that fill unknown tensor shapes from run metadata, intern strings to ids and
+# collect per-op log entries from a graph. Defines two module constants for type names.
+# Import-time side effect: imports the flops registry so op statistics are registered.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,6 +40,14 @@ REGISTERED_FLOP_STATS = 'flops'
 
 
 def _fill_missing_graph_shape(graph, run_meta):
+  # [FUNCTION DOC]
+  # HELPER: Shape completion step for building the op log (needed for flops statistics).
+  # Inputs: graph (a computation graph) and run_meta (run metadata with per-node output shapes).
+  # For every executed node with outputs that exists in the graph and whose output count matches,
+  # merges the run-time shape into each output tensor whose static shape is not fully defined.
+  # Nodes missing from the graph or with a different output count are skipped; incompatible
+  # shapes are reported on standard error and skipped. Mutates tensor shapes in the graph and
+  # returns the same graph.
   """Fill Tensor shapes in 'graph' with run time shape from 'run_meta'."""
   for dev_stat in run_meta.step_stats.dev_stats:
     for node_stat in dev_stat.node_stats:
@@ -61,6 +77,11 @@ def _fill_missing_graph_shape(graph, run_meta):
 
 
 def _str_id(s, str_to_id):
+  # [FUNCTION DOC]
+  # HELPER: String interning for the op log id-to-string table.
+  # Inputs: s (a string) and str_to_id (mapping from strings to integer ids, mutated). Returns the
+  # existing id of s, or assigns the next free integer (the current mapping size), stores it
+  # and returns it.
   """Maps string to id."""
   num = str_to_id.get(s, None)
   if num is None:
@@ -71,6 +92,19 @@ def _str_id(s, str_to_id):
 
 def _get_logged_ops(graph, run_meta=None, add_trace=True,
                     add_trainable_var=True):
+  # [FUNCTION DOC]
+  # HELPER: Collects default log entries for merge_default_with_oplog.
+  # KNOWN ISSUE: When add_trace is true, the entry is marked for inclusion even if the op has no
+  # traceback, so every op gets an entry (the inclusion flag is set outside the traceback check).
+  # Inputs: graph, optional run_meta (used to complete shapes first, which mutates the graph),
+  # add_trace (default true, record stack frames as file/function/line string ids and line numbers,
+  # with minus one when the line number is missing), add_trainable_var (default true, mark trainable
+  # variables with the trainable-variables type, creating entries if needed).
+  # For each op, computes flop statistics; ops with incomplete shapes are counted and skipped for
+  # statistics (a count message goes to standard error if no run_meta). Entries are kept only if they
+  # have flops or traces.
+  # Returns a pair: mapping from op name to log entry, and mapping from string to id (id zero is
+  # reserved for the word none).
   """Extract trainable model parameters and FLOPs for ops from a Graph.
 
   Args:
@@ -140,6 +174,15 @@ def _get_logged_ops(graph, run_meta=None, add_trace=True,
 
 def merge_default_with_oplog(graph, op_log=None, run_meta=None,
                              add_trace=True, add_trainable_var=True):
+  # [FUNCTION DOC]
+  # Merges the automatically collected op information with a caller supplied op log.
+  # Inputs: graph (if nothing and not eager, the default graph is used), op_log (optional existing
+  # log; its entries are reused and mutated), run_meta (optional, completes shapes), add_trace and
+  # add_trainable_var (default true, forwarded to the collector).
+  # Returns a new op log message. With no graph, it is empty. With no op_log it holds the
+  # collected entries. Otherwise, entries are merged by op name: types are appended, flops are
+  # copied if the existing entry has none, and code traces are copied if it has none; ops absent
+  # from the caller log are added. The string table is filled from the collector's ids.
   """Merge the tfprof default extra info with caller's op_log.
 
   Args:
@@ -187,6 +230,13 @@ def merge_default_with_oplog(graph, op_log=None, run_meta=None,
 
 @tf_export(v1=['profiler.write_op_log'])
 def write_op_log(graph, log_dir, op_log=None, run_meta=None, add_trace=True):
+  # [FUNCTION DOC]
+  # Writes an op log file for offline analysis. Inputs: graph (default graph used if nothing and
+  # not eager), log_dir (existing directory), op_log (optional log to extend), run_meta
+  # (optional, completes shapes) and add_trace (default true, include Python traces).
+  # Merges the default information into the log and writes the serialized result to a file named
+  # for the tfprof log inside log_dir, overwriting it. Returns nothing. The trainable variable
+  # marking always uses its default (enabled). File errors propagate.
   """Log provided 'op_log', and add additional model information below.
 
     The API also assigns ops in tf.compat.v1.trainable_variables() an op type

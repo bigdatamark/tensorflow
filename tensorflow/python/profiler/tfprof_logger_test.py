@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test module for the tfprof logger. Currently contains no active tests: the actual test methods
+# are disabled inside a string literal pending a move out of contrib dependencies. Only two
+# small model-building helper methods remain active.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,14 +25,24 @@ from tensorflow.python.platform import test
 
 
 class TFProfLoggerTest(test.TestCase):
+  # [CLASS DOC]
+  # KNOWN ISSUE: The class has no runnable tests; its test methods are inside a disabled string.
+  # Intended to test shape filling in the tfprof logger; provides model-building helper methods.
 
   def _BuildSmallPlaceholderlModel(self):
+    # [FUNCTION DOC]
+    # HELPER: Model builder for the (currently disabled) shape filling tests.
+    # Creates two integer placeholders of shape two by two and a matrix multiplication of them.
+    # Returns the triple of both placeholders and the product tensor. Adds ops to the default graph.
     a = array_ops.placeholder(dtypes.int32, [2, 2])
     b = array_ops.placeholder(dtypes.int32, [2, 2])
     y = math_ops.matmul(a, b)
     return a, b, y
 
   def _BuildSmallModel(self):
+    # [FUNCTION DOC]
+    # HELPER: Model builder for the (currently disabled) failed shape filling test.
+    # Creates two constant two by two integer matrices and returns their matrix product tensor.
     a = constant_op.constant([[1, 2], [3, 4]])
     b = constant_op.constant([[1, 2], [3, 4]])
     return math_ops.matmul(a, b)

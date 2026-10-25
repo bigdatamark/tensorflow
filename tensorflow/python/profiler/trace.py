@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Python tracing API for the profiler. Exposes the enabled check (a direct, low-overhead binding
+# to the native check that the profiler is on), the Trace context manager that emits a named trace
+# event with metadata, and trace_wrapper, a decorator form of the same.
+# Trace events are produced only while a profiler session is active.
+# Import-time side effects: binds the enabled name and registers the Trace class export.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +32,11 @@ enabled = _pywrap_traceme.traceme_enabled
 
 @tf_export('profiler.experimental.Trace', v1=[])
 class Trace(object):
+  # [CLASS DOC]
+  # Context manager that records one named trace event in the profiler timeline. The event starts
+  # when constructed (the native clock starts at creation) and stops on exit. Holds a native trace
+  # object when the profiler is enabled at construction time, otherwise nothing, making all
+  # operations no-ops. Supports adding metadata after creation.
   """Context manager that generates a trace event in the profiler.
 
   A trace event will start when entering the context, and stop and save the
@@ -48,6 +59,10 @@ class Trace(object):
   """
 
   def __init__(self, name, **kwargs):
+    # [FUNCTION DOC]
+    # Creates the trace event. Inputs: name (event name) and keyword arguments (metadata whose keys
+    # and values are convertible to strings). If the profiler is enabled, creates the native trace
+    # object, which starts the clock immediately; otherwise stores nothing. Returns nothing.
     """Creates a trace event in the profiler.
 
     Args:
@@ -81,10 +96,17 @@ class Trace(object):
       self._traceme = None
 
   def __enter__(self):
+    # [FUNCTION DOC]
+    # Entry hook of the context manager. Does no work (the clock already started in the
+    # constructor, to avoid an extra native call). Returns this trace object.
     # Starting the TraceMe clock here would require an extra Python->C++ call.
     return self
 
   def set_metadata(self, **kwargs):
+    # [FUNCTION DOC]
+    # Adds metadata to the event after creation. Input: keyword arguments of key-value pairs.
+    # Forwards them to the native trace object only if the profiler was enabled at construction
+    # and at least one pair is given; otherwise does nothing. Returns nothing.
     """Sets metadata in this trace event.
 
     Args:
@@ -119,11 +141,22 @@ class Trace(object):
       self._traceme.SetMetadata(**kwargs)
 
   def __exit__(self, exc_type, exc_val, exc_tb):
+    # [FUNCTION DOC]
+    # Exit hook: stops the native trace event (recording its duration) if one exists. Exception
+    # arguments are ignored and exceptions are not suppressed. Returns nothing.
     if self._traceme:
       self._traceme.Stop()
 
 
 def trace_wrapper(trace_name, **trace_kwargs):
+  # [FUNCTION DOC]
+  # Decorator form of the Trace context manager. Inputs: trace_name (either an event name, or
+  # directly a callable to decorate, in which case the name comes from its qualified name, else
+  # its plain name, else a placeholder) and keyword arguments added to each event.
+  # Returns a decorator when given a name, or the decorated function when given a callable.
+  # The wrapped function checks at call time whether the profiler is enabled and only then
+  # runs inside a Trace scope; otherwise it calls the function directly (faster). The wrapper
+  # keeps the original function metadata and passes through arguments and the return value.
   """Decorator alternative to `with Trace(): ...`.  It's faster.
 
   Args:
@@ -174,9 +207,18 @@ def trace_wrapper(trace_name, **trace_kwargs):
     return trace_wrapper(name)(func)
 
   def inner_wrapper(func):
+    # [FUNCTION DOC]
+    # HELPER: Decorator produced by trace_wrapper for a given event name.
+    # Input: func, the function to wrap. Returns the wrapped function that adds a trace scope
+    # around calls when the profiler is enabled.
 
     @functools.wraps(func)
     def wrapped(*args, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: The wrapper returned by the decorator. Accepts any positional and keyword
+      # arguments, forwards them to the wrapped function and returns its result. If the profiler
+      # is enabled when called, the call is wrapped in a trace event with the configured name and
+      # metadata; exceptions from the function propagate.
       if enabled():
         with Trace(trace_name, **trace_kwargs):
           return func(*args, **kwargs)

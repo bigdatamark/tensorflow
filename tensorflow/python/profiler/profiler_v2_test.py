@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit tests for the TensorFlow 2.x profiler API: error handling of start and stop, saving
+# results to a log directory, profiler options, the Profile context manager and the trace
+# enabled callback. Uses temporary directories; runs under the test main.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,8 +31,16 @@ from tensorflow.python.profiler import trace
 
 
 class ProfilerTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case for the profiler start/stop API. Each test uses the test's temporary directory as
+  # the log directory and always stops any profiling it starts.
 
   def test_profile_exceptions(self):
+    # [FUNCTION DOC]
+    # Scenario: start twice, stop twice, then start on an invalid directory.
+    # Asserts: second start raises already-exists; stop after a successful stop raises
+    # unavailable; with a bad log directory start succeeds but stop raises some exception and
+    # clears the session, so a later start and stop on a good directory work.
     logdir = self.get_temp_dir()
     profiler.start(logdir)
     with self.assertRaises(errors.AlreadyExistsError):
@@ -49,6 +61,11 @@ class ProfilerTest(test_util.TensorFlowTestCase):
     profiler.stop()
 
   def test_save_profile(self):
+    # [FUNCTION DOC]
+    # Scenario: profile a small multiplication inside a named trace scope, then stop.
+    # Asserts: the product is fifteen, the log directory holds exactly one entry (a plugins
+    # directory), and a cross-plane profile file named after the host exists under the profile
+    # plugin run directory.
     logdir = self.get_temp_dir()
     profiler.start(logdir)
     with trace.Trace('three_times_five'):
@@ -70,6 +87,9 @@ class ProfilerTest(test_util.TensorFlowTestCase):
     self.assertTrue(gfile.Exists(xplane))
 
   def test_profile_with_options(self):
+    # [FUNCTION DOC]
+    # Scenario: start with options (host tracer level 3, python tracer level 1), run a traced
+    # multiplication and stop. Asserts: product is fifteen and the log directory has one entry.
     logdir = self.get_temp_dir()
     options = profiler.ProfilerOptions(
         host_tracer_level=3, python_tracer_level=1)
@@ -85,6 +105,9 @@ class ProfilerTest(test_util.TensorFlowTestCase):
     self.assertEqual(len(file_list), 1)
 
   def test_context_manager_with_options(self):
+    # [FUNCTION DOC]
+    # Scenario: use the Profile context manager with options around a traced multiplication.
+    # Asserts: product is fifteen inside the scope and, after exit, the log directory has one entry.
     logdir = self.get_temp_dir()
     options = profiler.ProfilerOptions(
         host_tracer_level=3, python_tracer_level=1)
@@ -99,6 +122,9 @@ class ProfilerTest(test_util.TensorFlowTestCase):
     self.assertEqual(len(file_list), 1)
 
   def test_callback(self):
+    # [FUNCTION DOC]
+    # Scenario: check the trace-enabled flag around a start/stop pair. Asserts: false before
+    # start, true while profiling, false again after stop.
     logdir = self.get_temp_dir()
     self.assertFalse(trace.enabled())
     profiler.start(logdir)

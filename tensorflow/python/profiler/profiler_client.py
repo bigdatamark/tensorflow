@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Client-side API for on-demand profiling of remote profiler servers over gRPC. Exposes the
+# trace and monitor functions (exported under the experimental client namespace for v2) and two
+# private address-prefix helpers. Delegates the real work to the native profiler plugin wrapper.
+# No import-time side effects besides export registration.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,6 +33,17 @@ def trace(service_addr,
           worker_list='',
           num_tracing_attempts=3,
           options=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: The multiple-GPU example in the docstring assigns into the options value with
+  # item syntax, but options is expected to be a named tuple (it is converted with its
+  # as-dictionary method), so that example would not work as written.
+  # Requests a trace from one or more profiler servers and blocks until they respond.
+  # Inputs: service_addr (comma separated server addresses, optional grpc prefix is stripped),
+  # logdir (where servers save results), duration_ms (must be positive), worker_list (optional
+  # TPU worker list, default empty), num_tracing_attempts (retries when no events, default 3),
+  # options (optional named tuple of profiler options, converted to a mapping).
+  # Raises an invalid-argument error if duration_ms is not positive; the native call may raise an
+  # unavailable error if nothing was collected. Returns nothing. Side effect: servers write files.
   """Sends gRPC requests to one or more profiler servers to perform on-demand profiling.
 
   This method will block the calling thread until it receives responses from all
@@ -138,6 +154,11 @@ def trace(service_addr,
 
 @tf_export('profiler.experimental.client.monitor', v1=[])
 def monitor(service_addr, duration_ms, level=1):
+  # [FUNCTION DOC]
+  # Asks a profiler server (Cloud TPU only) for a lightweight performance summary and blocks
+  # until it arrives. Inputs: service_addr (single address, optional grpc prefix stripped),
+  # duration_ms (monitoring duration), level (1 or 2, higher is more verbose, default 1).
+  # Returns the monitoring output as a string. Errors come from the native plugin.
   """Sends grpc requests to profiler server to perform on-demand monitoring.
 
   The monitoring result is a light weight performance summary of your model
@@ -171,8 +192,15 @@ def monitor(service_addr, duration_ms, level=1):
 
 
 def _strip_prefix(s, prefix):
+  # [FUNCTION DOC]
+  # HELPER: Address cleanup for trace and monitor.
+  # Returns the string without the given leading prefix if present, otherwise unchanged.
   return s[len(prefix):] if s.startswith(prefix) else s
 
 
 def _strip_addresses(addresses, prefix):
+  # [FUNCTION DOC]
+  # HELPER: Address cleanup for trace.
+  # Splits a comma separated address string, strips the prefix from each entry and joins them
+  # back with commas. Returns the resulting string.
   return ','.join([_strip_prefix(s, prefix) for s in addresses.split(',')])
