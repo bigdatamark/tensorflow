@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# Test module for the legacy (graph-oriented) RNN cell library and the static and dynamic RNN
+# drivers. It defines small dummy cells (a plus-one cell, a multi-dimensional dummy LSTM, a nested
+# tuple cell) and state-saver stand-ins used as fixtures, then three test cases: RNNTest (basic
+# static RNN, dropout, sequence-length masking, variable scoping), LSTMTest (LSTM cell with/without
+# projection, sharding, clipping, state savers, dynamic-versus-static equivalence, and error
+# handling of the raw LSTM block kernels) and BidirectionalRNNTest (bidirectional static/dynamic RNN
+# behavior, plus further cell tests later in the file). Many tests are restricted to graph mode.
+# It exposes no public API; running it as a main program starts the TensorFlow test runner.
+# No import-time side effects beyond imports.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -57,21 +67,43 @@ from tensorflow.python.util import nest
 
 
 class Plus1RNNCell(rnn_cell.RNNCell):
+  # [CLASS DOC]
+  # HELPER: dummy cell fixture for the RNN driver tests in this file.
+  # Stateless toy recurrent cell. Each step returns the input plus one as output and the previous
+  # state plus one as the new state, with both output size and state size fixed at five. It holds
+  # no variables, so it is used to verify unrolling, masking and shapes in the RNN drivers.
   """RNN Cell generating (output, new_state) = (input + 1, state + 1)."""
 
   @property
   def output_size(self):
+    # [FUNCTION DOC]
+    # HELPER: property required by the cell interface for Plus1RNNCell.
+    # Returns the constant integer 5 as the size of the cell output. Takes no inputs, no side effects.
     return 5
 
   @property
   def state_size(self):
+    # [FUNCTION DOC]
+    # HELPER: property required by the cell interface for Plus1RNNCell.
+    # Returns the constant integer 5 as the size of the cell state. Takes no inputs, no side effects.
     return 5
 
   def __call__(self, input_, state, scope=None):
+    # [FUNCTION DOC]
+    # HELPER: single-step computation of the Plus1RNNCell fixture.
+    # Inputs: input_ is the step input tensor, state is the previous state tensor, scope is an
+    # ignored optional variable scope. Returns a pair of the input plus one (the output) and the
+    # state plus one (the new state). Raises nothing and creates no variables.
     return (input_ + 1, state + 1)
 
 
 class DummyMultiDimensionalLSTM(rnn_cell.RNNCell):
+  # [CLASS DOC]
+  # HELPER: dummy cell fixture for testing RNN drivers with multi-dimensional per-step data.
+  # Toy cell whose output and its two state components (a hidden and a cell part) are tensors of an
+  # arbitrary, caller-chosen shape without time and batch dimensions. Each step adds one to the
+  # input and to both state parts. It stores the shape in private attributes for the size
+  # properties and has no variables.
   """LSTM Cell generating (output, new_state) = (input + 1, state + 1).
 
   The input to this cell may have an arbitrary number of dimensions that follow
@@ -79,6 +111,10 @@ class DummyMultiDimensionalLSTM(rnn_cell.RNNCell):
   """
 
   def __init__(self, dims):
+    # [FUNCTION DOC]
+    # Constructor. Input dims must be a tuple of integers giving the per-step shape without time or
+    # batch dimensions. Raises a type error if dims is not a tuple. Stores the dims and builds the
+    # output size (one shape object) and state size (a pair of identical shape objects).
     """Initialize the Multi-dimensional LSTM cell.
 
     Args:
@@ -95,18 +131,33 @@ class DummyMultiDimensionalLSTM(rnn_cell.RNNCell):
 
   @property
   def output_size(self):
+    # [FUNCTION DOC]
+    # HELPER: property required by the cell interface.
+    # Returns the shape object computed in the constructor as the output size of the cell.
     return self._output_size
 
   @property
   def state_size(self):
+    # [FUNCTION DOC]
+    # HELPER: property required by the cell interface.
+    # Returns the pair of shape objects computed in the constructor as the two-part state size.
     return self._state_size
 
   def __call__(self, input_, state, scope=None):
+    # [FUNCTION DOC]
+    # HELPER: single-step computation of the dummy multi-dimensional LSTM fixture.
+    # Inputs: input_ is the step input tensor, state is a pair of tensors (hidden, cell), scope is an
+    # ignored optional variable scope. Returns the input plus one as output and a pair holding each
+    # state part plus one as the new state. No variables are created, nothing is raised.
     h, c = state
     return (input_ + 1, (h + 1, c + 1))
 
 
 class NestedRNNCell(rnn_cell.RNNCell):
+  # [CLASS DOC]
+  # HELPER: dummy cell fixture for testing RNN drivers with nested (tuple) inputs, outputs, states.
+  # Toy stateless cell whose input and output are pairs of tensors (size five each) and whose state
+  # is a pair of tensors (size six each). Each step adds one to every component.
   """RNN Cell generating (output, new_state) = (input + 1, state + 1).
 
   The input, output and state of this cell is a tuple of two tensors.
@@ -114,26 +165,52 @@ class NestedRNNCell(rnn_cell.RNNCell):
 
   @property
   def output_size(self):
+    # [FUNCTION DOC]
+    # HELPER: property required by the cell interface.
+    # Returns a pair of integers, both 5, describing the two output components.
     return (5, 5)
 
   @property
   def state_size(self):
+    # [FUNCTION DOC]
+    # HELPER: property required by the cell interface.
+    # Returns a pair of integers, both 6, describing the two state components.
     return (6, 6)
 
   def __call__(self, input_, state, scope=None):
+    # [FUNCTION DOC]
+    # HELPER: single-step computation of the nested-tuple cell fixture.
+    # Inputs: input_ is a pair of tensors, state is a pair of tensors (hidden, cell), scope is an
+    # ignored optional variable scope. Returns a pair: the output pair (each input part plus one)
+    # and the new state pair (each state part plus one). Raises a value error if either argument
+    # is not a pair (unpacking fails). No variables are created.
     h, c = state
     x, y = input_
     return ((x + 1, y + 1), (h + 1, c + 1))
 
 
 class TestStateSaver(object):
+  # [CLASS DOC]
+  # HELPER: fake state saver passed to the state-saving static RNN in tests.
+  # Provides zero initial states per name via the state method and records saved final states in a
+  # public mapping from state names to tensors via save_state. Holds the batch size and a state
+  # size that is either a single size or a mapping from state names to sizes.
 
   def __init__(self, batch_size, state_size):
+    # [FUNCTION DOC]
+    # Constructor. batch_size is the integer batch dimension of generated states; state_size is an
+    # integer, a tuple of integers, or a mapping from state name to such a value. Stores both and
+    # creates an empty mapping of saved states. Nothing is raised here.
     self._batch_size = batch_size
     self._state_size = state_size
     self.saved_state = {}
 
   def state(self, name):
+    # [FUNCTION DOC]
+    # Returns an all-zero float tensor of shape batch size followed by the state size to use as the
+    # initial value of the named state. name selects the entry when the state size is a mapping;
+    # otherwise it is ignored. An integer size is treated as a one-element tuple. Raises a type
+    # error if the selected size is neither an integer nor a tuple. Creates a graph op.
 
     if isinstance(self._state_size, dict):
       state_size = self._state_size[name]
@@ -149,19 +226,33 @@ class TestStateSaver(object):
     return array_ops.zeros((self._batch_size,) + state_size)
 
   def save_state(self, name, state):
+    # [FUNCTION DOC]
+    # Records the given state tensor under the given name in the saved-state mapping (side effect,
+    # overwriting any earlier entry) and returns an identity op of that tensor so callers can
+    # depend on the save. Inputs: name (string key), state (tensor). Raises nothing.
     self.saved_state[name] = state
     return array_ops.identity(state)
 
   @property
   def batch_size(self):
+    # [FUNCTION DOC]
+    # Property returning the integer batch size given at construction.
     return self._batch_size
 
   @property
   def state_size(self):
+    # [FUNCTION DOC]
+    # Property returning the state size (integer, tuple, or name-to-size mapping) given at
+    # construction.
     return self._state_size
 
 
 class TestStateSaverWithCounters(TestStateSaver):
+  # [CLASS DOC]
+  # HELPER: instrumented state saver for the static state-saving RNN tests.
+  # Extends TestStateSaver by counting, with two integer variables, how many times the state and
+  # save_state methods are executed in the graph (each call adds a control dependency that
+  # increments the matching counter). Counter variables are exposed through read-only properties.
   """Class wrapper around TestStateSaver.
 
   A dummy class used for testing of static_state_saving_rnn. It helps test if
@@ -172,37 +263,66 @@ class TestStateSaverWithCounters(TestStateSaver):
 
   @test_util.run_v1_only("b/124229375")
   def __init__(self, batch_size, state_size):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the v1-only test decorator is applied to a constructor, which is unusual; it is
+    # meant for test methods and wraps construction (skipping or altering it under v2 behavior).
+    # Constructor. Calls the base constructor with batch_size and state_size, then creates two
+    # integer counter variables (initially zero) for state calls and save_state calls. Side effect:
+    # creates two graph variables that must be initialized before use.
     super(TestStateSaverWithCounters, self).__init__(batch_size, state_size)
     self._num_state_calls = variable_v1.VariableV1(0)
     self._num_save_state_calls = variable_v1.VariableV1(0)
 
   def state(self, name):
+    # [FUNCTION DOC]
+    # Same as the base state method (returns a zero tensor for the named state) but first
+    # registers an increment of the state-call counter as a control dependency, so evaluating the
+    # returned tensor bumps the counter. Input: name of the state. Returns the zero tensor.
     with ops.control_dependencies(
         [state_ops.assign_add(self._num_state_calls, 1)]):
       return super(TestStateSaverWithCounters, self).state(name)
 
   def save_state(self, name, state):
+    # [FUNCTION DOC]
+    # Same as the base save_state method (records the tensor under the name and returns an
+    # identity op) but with a control dependency incrementing the save-call counter. Inputs: name
+    # and state tensor. Returns the identity tensor.
     with ops.control_dependencies([state_ops.assign_add(
         self._num_save_state_calls, 1)]):
       return super(TestStateSaverWithCounters, self).save_state(name, state)
 
   @property
   def num_state_calls(self):
+    # [FUNCTION DOC]
+    # Property returning the counter variable tracking how many times state was evaluated.
     return self._num_state_calls
 
   @property
   def num_save_state_calls(self):
+    # [FUNCTION DOC]
+    # Property returning the counter variable tracking how many times save_state was evaluated.
     return self._num_save_state_calls
 
 
 class RNNTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the basic static RNN driver using the plus-one dummy cell. Covers output and
+  # state values, shape and dtype checks, dropout wrapping, sequence-length masking and variable
+  # scope naming. Most tests run in graph mode only. Fixture: setUp seeds numpy's random generator.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: does not call the parent setUp, so base-class test fixture setup is skipped.
+    # Fixture. Stores a fixed integer seed on the instance and seeds the numpy random generator
+    # with it so random input values are reproducible. Returns nothing.
     self._seed = 23489
     np.random.seed(self._seed)
 
   @test_util.run_v1_only("b/124229375")
   def testInvalidSequenceLengthShape(self):
+    # [FUNCTION DOC]
+    # Scenario: build the static RNN over one placeholder input but pass a scalar integer as the
+    # sequence length. Expectation: a value error whose message says the length must be a vector.
     cell = Plus1RNNCell()
     inputs = [array_ops.placeholder(dtypes.float32, shape=(3, 4))]
     with self.assertRaisesRegex(ValueError, "must be a vector"):
@@ -210,6 +330,11 @@ class RNNTest(test.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testRNN(self):
+    # [FUNCTION DOC]
+    # Scenario: unroll the plus-one cell over eight placeholder inputs of batch 2 and width 5 with
+    # the static RNN. Checks the number, shape and dtype of outputs. Runs a session with random
+    # input and asserts every output equals the input plus one and the final state equals the
+    # number of steps in every element.
     cell = Plus1RNNCell()
     batch_size = 2
     input_size = 5
@@ -238,6 +363,11 @@ class RNNTest(test.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testDropout(self):
+    # [FUNCTION DOC]
+    # Scenario: wrap the plus-one cell in a dropout wrapper with an almost-zero input keep
+    # probability and a fixed seed. Asserts the wrapper tracks the wrapped cell as a child, runs the
+    # plain and dropped RNNs in separate scopes, and checks the plain outputs equal input plus one
+    # while the dropped outputs (input all zeroed) equal one everywhere.
     cell = Plus1RNNCell()
     full_dropout_cell = rnn_cell.DropoutWrapper(
         cell, input_keep_prob=1e-6, seed=0)
@@ -274,6 +404,11 @@ class RNNTest(test.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testDynamicCalculation(self):
+    # [FUNCTION DOC]
+    # Scenario: static RNN with the plus-one cell and a placeholder of per-example sequence
+    # lengths, fed lengths 2 and 3. Asserts outputs are computed for the first two steps, at step
+    # three only for the longer example (zero for the other), zero afterwards, and that the final
+    # states are copied from the last valid step of each example.
     cell = Plus1RNNCell()
     sequence_length = array_ops.placeholder(dtypes.int64)
     batch_size = 2
@@ -323,6 +458,15 @@ class RNNTest(test.TestCase):
                                      1.0 * (2 + 1) * np.ones((input_size)))))
 
   def _testScope(self, factory, prefix="prefix", use_outer_scope=True):
+    # [FUNCTION DOC]
+    # HELPER: shared body for the variable-scope naming test.
+    # KNOWN ISSUE: the call that creates the global variables initializer op is made but its
+    # result is never run, so it has no effect on the check.
+    # Inputs: factory is a callback that builds an RNN given a scope or scope name; prefix is the
+    # expected scope name (a nothing value means the default rnn scope); use_outer_scope chooses
+    # whether to pass a variable scope object (true) or just the name string (false). Builds the RNN
+    # in a fresh graph, logs the variable names, and asserts every global variable name starts with
+    # the prefix followed by a slash. Returns nothing.
     with self.session(graph=ops.Graph()):
       if use_outer_scope:
         with variable_scope.variable_scope(prefix) as scope:
@@ -344,8 +488,17 @@ class RNNTest(test.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testScope(self):
+    # [FUNCTION DOC]
+    # Scenario: build a static RNN with the plus-one cell via a nested factory and check variable
+    # scoping three ways: with an outer variable scope object, with a scope name string, and with
+    # no scope name (default rnn scope). Delegates assertions to the scope-checking helper.
 
     def factory(scope):
+      # [FUNCTION DOC]
+      # HELPER: builds the RNN under test for the scope helper.
+      # Input: scope, a variable scope object or a name string. Creates eight placeholder inputs
+      # (batch 2, width 5), runs the static RNN with the plus-one cell in that scope, and returns
+      # its (outputs, final state) pair.
       cell = Plus1RNNCell()
       batch_size = 2
       input_size = 5
@@ -361,12 +514,24 @@ class RNNTest(test.TestCase):
 
 
 class LSTMTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the LSTM cell and its interaction with the RNN drivers: dtype handling, plain,
+  # clipped, peephole, projected and sharded variants, state savers, weight sharing and scoping,
+  # dynamic versus static equivalence, and invalid-argument handling of the raw LSTM block ops.
+  # Fixture: setUp seeds numpy and stores a seed used by weight initializers.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: does not call the parent setUp, so base-class test fixture setup is skipped.
+    # Fixture. Stores a fixed integer seed on the instance and seeds numpy's random generator.
     self._seed = 23489
     np.random.seed(self._seed)
 
   def testDType(self):
+    # [FUNCTION DOC]
+    # Scenario (regression for a reported dtype issue): build LSTM cells and call build on a ten by
+    # fifty shape. Asserts the bias variable is float32 when no dtype is given, and equals the
+    # requested dtype for float16, float32 and float64.
     # Test case for GitHub issue 16228
     # Not passing dtype in constructor results in default float32
     lstm = rnn_cell.LSTMCell(10)
@@ -383,6 +548,10 @@ class LSTMTest(test.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testNoProjNoSharding(self):
+    # [FUNCTION DOC]
+    # Smoke scenario: static RNN of eight steps with a plain 3-unit LSTM cell (no projection, no
+    # sharding, non-tuple state). Asserts each output has static shape batch by units and that the
+    # graph runs with random input after variable initialization.
     num_units = 3
     input_size = 5
     batch_size = 2
@@ -406,6 +575,10 @@ class LSTMTest(test.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testCellClipping(self):
+    # [FUNCTION DOC]
+    # Scenario: peephole LSTM with the cell clip value set to zero in a static RNN. Because the
+    # cell state is clipped to zero, asserts every output across all steps is exactly zero, and
+    # that output shapes are batch by units.
     num_units = 3
     input_size = 5
     batch_size = 2
@@ -437,6 +610,10 @@ class LSTMTest(test.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testNoProjNoShardingSimpleStateSaver(self):
+    # [FUNCTION DOC]
+    # Scenario: state-saving static RNN with a non-tuple-state LSTM and the fake state saver whose
+    # state size is twice the units. Asserts output shapes, then evaluates the final state and
+    # the saved state under the given name and checks they are equal.
     num_units = 3
     input_size = 5
     batch_size = 2
@@ -471,6 +648,10 @@ class LSTMTest(test.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testNoProjNoShardingTupleStateSaver(self):
+    # [FUNCTION DOC]
+    # Scenario: state-saving static RNN with a tuple-state LSTM and two state names (cell and
+    # hidden). Asserts output shapes and that the evaluated final state tuple equals the two
+    # saved states recorded by the fake state saver.
     num_units = 3
     input_size = 5
     batch_size = 2
@@ -506,6 +687,11 @@ class LSTMTest(test.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testNoProjNoShardingNestedTupleStateSaver(self):
+    # [FUNCTION DOC]
+    # Scenario: a stack of four tuple-state LSTM cells of growing size run through the state-saving
+    # static RNN with a fake saver keyed by eight state names. Asserts the nested state structure,
+    # that outputs have the last cell's width, and that all eight final state tensors equal the
+    # corresponding saved states.
     num_units = 3
     input_size = 5
     batch_size = 2
@@ -526,6 +712,10 @@ class LSTMTest(test.TestCase):
           })
 
       def _cell(i):
+        # [FUNCTION DOC]
+        # HELPER: builds one tuple-state LSTM cell for the stacked-cell scenario.
+        # Input: i, integer offset added to the unit count. Returns an LSTM cell with units plus i,
+        # no peepholes and the shared initializer.
         return rnn_cell.LSTMCell(
             num_units + i,
             use_peepholes=False,
@@ -577,6 +767,9 @@ class LSTMTest(test.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testProjNoSharding(self):
+    # [FUNCTION DOC]
+    # Smoke scenario: peephole LSTM with a projection layer of four units and no sharding in a
+    # static RNN with unknown batch dimension. Asserts the output count and that the graph runs.
     num_units = 3
     input_size = 5
     batch_size = 2
@@ -602,6 +795,13 @@ class LSTMTest(test.TestCase):
       sess.run(outputs, feed_dict={inputs[0]: input_value})
 
   def _testStateTupleWithProjAndSequenceLength(self):
+    # [FUNCTION DOC]
+    # HELPER: shared scenario body, apparently not invoked by any test method here.
+    # KNOWN ISSUE: the name starts with an underscore and no test calls it, so it is never run.
+    # Scenario: two peephole projected LSTM cells, one with tuple state and one without, share
+    # weights by reusing the scope, run over eight steps with sequence lengths 4 and 6. Asserts
+    # state types (tuple versus tensor), identical outputs, and that the non-tuple state equals the
+    # horizontal concatenation of the tuple state parts.
     num_units = 3
     input_size = 5
     batch_size = 2
@@ -673,6 +873,9 @@ class LSTMTest(test.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testProjSharding(self):
+    # [FUNCTION DOC]
+    # Smoke scenario: peephole LSTM with projection and with weight sharding (two unit shards,
+    # three projection shards) in a static RNN. Asserts the output count and that the graph runs.
     num_units = 3
     input_size = 5
     batch_size = 2
@@ -707,6 +910,9 @@ class LSTMTest(test.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testDoubleInput(self):
+    # [FUNCTION DOC]
+    # Scenario: sharded, projected, peephole LSTM fed float64 placeholders with an explicit float64
+    # zero initial state. Asserts the first output value has dtype float64 like the input.
     num_units = 3
     input_size = 5
     batch_size = 2
@@ -744,6 +950,10 @@ class LSTMTest(test.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testShardNoShardEquivalentOutput(self):
+    # [FUNCTION DOC]
+    # Scenario: two LSTMs with the same constant initializer, one sharded and one not, run in
+    # separate scopes on identical inputs. Asserts output and state lists have equal length and
+    # values agree within a tolerance of one thousandth.
     num_units = 3
     input_size = 5
     batch_size = 2
@@ -799,6 +1009,10 @@ class LSTMTest(test.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testDoubleInputWithDropoutAndDynamicCalculation(self):
+    # [FUNCTION DOC]
+    # Smoke scenario: float64 inputs, a dropout-wrapped sharded projected LSTM, a sequence-length
+    # placeholder fed lengths 2 and 3 and a float64 initial state. Asserts the output and the final
+    # state keep dtype float64.
     """Smoke test for using LSTM with doubles, dropout, dynamic calculation."""
 
     num_units = 3
@@ -854,6 +1068,11 @@ class LSTMTest(test.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testSharingWeightsWithReuse(self):
+    # [FUNCTION DOC]
+    # Scenario: run one LSTM twice, the second time in the same variable scope with reuse enabled,
+    # and a different LSTM (other initializer) in another scope. Asserts the two runs of the same
+    # cell give identical outputs while the other cell's outputs differ by a norm above a small
+    # threshold.
     num_units = 3
     input_size = 5
     batch_size = 2
@@ -905,6 +1124,10 @@ class LSTMTest(test.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testSharingWeightsWithDifferentNamescope(self):
+    # [FUNCTION DOC]
+    # Scenario: reuse one LSTM's weights in the same variable scope but under two different name
+    # scopes. Asserts the output values of both runs are exactly equal, showing variable sharing
+    # does not depend on the name scope.
     num_units = 3
     input_size = 5
     batch_size = 2
@@ -943,6 +1166,9 @@ class LSTMTest(test.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testDynamicRNNAllowsUnknownTimeDimension(self):
+    # [FUNCTION DOC]
+    # Smoke scenario: build the dynamic RNN with a GRU cell over a placeholder whose time
+    # dimension is unknown. Expectation: graph construction does not raise; nothing is asserted.
     inputs = array_ops.placeholder(dtypes.float32, shape=[1, None, 20])
     cell = rnn_cell.GRUCell(30)
     # Smoke test, this should not raise an error
@@ -950,6 +1176,11 @@ class LSTMTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testDynamicRNNWithTupleStates(self):
+    # [FUNCTION DOC]
+    # Scenario (graph and eager modes): a tuple-state peephole projected LSTM run by both the
+    # static RNN and the time-major dynamic RNN with sequence lengths 4 and 6, sharing weights.
+    # Asserts both final states are the LSTM state tuple type with consistent indexing, and that
+    # outputs and states match (exactly, or within tolerance when XLA is enabled).
     num_units = 3
     input_size = 5
     batch_size = 2
@@ -1030,6 +1261,10 @@ class LSTMTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testDynamicRNNWithNestedTupleStates(self):
+    # [FUNCTION DOC]
+    # Scenario (graph and eager modes): four stacked tuple-state LSTM cells compared between the
+    # static and dynamic RNN with weight sharing and sequence lengths 4 and 6. Asserts the state
+    # structure, zero-state shapes, and equality of flattened outputs and states between drivers.
     num_units = 3
     input_size = 5
     batch_size = 2
@@ -1052,6 +1287,9 @@ class LSTMTest(test.TestCase):
       inputs_c = array_ops_stack.stack(inputs)
 
       def _cell(i):
+        # [FUNCTION DOC]
+        # HELPER: builds one peephole projected tuple-state LSTM cell for the stacked scenario.
+        # Input: i, integer added to both the unit count and the projection size. Returns the cell.
         return rnn_cell.LSTMCell(
             num_units + i,
             use_peepholes=True,
@@ -1122,6 +1360,14 @@ class LSTMTest(test.TestCase):
       comparison_fn(np.hstack(state_static), np.hstack(state_dynamic))
 
   def _testDynamicEquivalentToStaticRNN(self, use_sequence_length):
+    # [FUNCTION DOC]
+    # HELPER: shared body for the static versus dynamic RNN equivalence tests.
+    # Input: use_sequence_length, boolean; when true random per-example lengths are used, else none.
+    # Builds a peephole projected LSTM, runs it with the static RNN then the dynamic RNN on the same
+    # random time-major input (in separate graphs; in eager mode one cell is reused because of an
+    # operation-seed limitation). In graph mode also computes gradients of outputs, final state and
+    # individual outputs with respect to inputs and trainable variables. Asserts outputs, final
+    # states and all gradients are close between the two drivers. Returns nothing.
     time_steps = 8
     num_units = 3
     num_proj = 4
@@ -1324,14 +1570,22 @@ class LSTMTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testDynamicEquivalentToStaticRNN(self):
+    # [FUNCTION DOC]
+    # Runs the equivalence helper without sequence lengths (graph and eager modes).
     self._testDynamicEquivalentToStaticRNN(use_sequence_length=False)
 
   @test_util.run_in_graph_and_eager_modes
   def testDynamicEquivalentToStaticRNNWithSequenceLength(self):
+    # [FUNCTION DOC]
+    # Runs the equivalence helper with random sequence lengths (graph and eager modes).
     self._testDynamicEquivalentToStaticRNN(use_sequence_length=True)
 
   @test_util.run_in_graph_and_eager_modes
   def testLSTMBlockCellErrorHandling(self):
+    # [FUNCTION DOC]
+    # Scenario: call the raw LSTM block cell kernel with constants whose peephole weight shapes
+    # (a scalar and mismatched vectors) are inconsistent with the other inputs. Expectation: an
+    # invalid-argument error is raised on evaluation.
     forget_bias = 1
     cell_clip = 0
     use_peephole = False
@@ -1362,6 +1616,10 @@ class LSTMTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testLSTMBlockCellEmptyInputRaisesError(self):
+    # [FUNCTION DOC]
+    # Scenario: call the raw LSTM block cell kernel with half-precision constants where several
+    # inputs have a zero-sized dimension. Expectation: an invalid-argument error whose message
+    # contains the phrase "is empty".
     with self.assertRaisesRegex(errors_impl.InvalidArgumentError, "is empty"):
       self.evaluate(
           gen_rnn_ops.lstm_block_cell(
@@ -1381,6 +1639,10 @@ class LSTMTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testLSTMBlockCellGradErrorHandling(self):
+    # [FUNCTION DOC]
+    # Scenario: call the second-version block LSTM gradient kernel with inputs of the wrong rank
+    # (rank-3 tensors where lower rank is required). Expectation: either a value error or an
+    # invalid-argument error whose message contains "must be rank".
     use_peephole = False
     seq_len_max = constant_op.constant(1, shape=[], dtype=dtypes.int64)
     x = constant_op.constant(0.504355371, shape=[1, 1, 1], dtype=dtypes.float32)
@@ -1432,6 +1694,10 @@ class LSTMTest(test.TestCase):
               use_peephole=use_peephole))
 
   def testLSTMBlockInvalidArgument(self):
+    # [FUNCTION DOC]
+    # Scenario (regression for a reported crash): call the full block LSTM op with random inputs
+    # that include zero-sized dimensions and an oddly shaped sequence-length tensor, with negative
+    # forget bias and clip. Expectation: an invalid-argument error is raised rather than a crash.
     # Test case for GitHub issue 58175
     forget_bias = -121.22699269620765
     cell_clip = -106.82307555235684
@@ -1470,12 +1736,30 @@ class LSTMTest(test.TestCase):
 
 
 class BidirectionalRNNTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the static and dynamic bidirectional RNN drivers using LSTM cells with identical
+  # initialization in both directions, so the backward output is the forward output reversed in
+  # time. Has builder helpers returning inputs, outputs, states and sequence lengths, check helpers
+  # parameterized over shape knowledge, state tuples, time-major layout and sequence lengths, and
+  # variable-scope naming tests. Fixture: setUp seeds numpy.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: does not call the parent setUp, so base-class test fixture setup is skipped.
+    # Fixture. Stores a fixed integer seed on the instance and seeds numpy's random generator.
     self._seed = 23489
     np.random.seed(self._seed)
 
   def _createBidirectionalRNN(self, use_shape, use_sequence_length, scope=None):
+    # [FUNCTION DOC]
+    # HELPER: builds the static bidirectional LSTM graph for the tests of that driver.
+    # Inputs: use_shape (boolean) chooses a fully known batch dimension versus an unknown one;
+    # use_sequence_length (boolean) adds an integer sequence-length placeholder; scope is an
+    # optional variable scope or name. Builds forward and backward LSTM cells (non-tuple state)
+    # with the same seeded initializer, runs the static bidirectional RNN over eight placeholders,
+    # asserts the number of outputs and that each output has width twice the units, and stacks the
+    # outputs. Returns a tuple of: random input value, the input placeholder list, stacked
+    # outputs, forward state, backward state, and the sequence-length placeholder (or nothing).
     num_units = 3
     input_size = 5
     batch_size = 2
@@ -1512,6 +1796,14 @@ class BidirectionalRNNTest(test.TestCase):
     return input_value, inputs, outputs, state_fw, state_bw, sequence_length
 
   def _testBidirectionalRNN(self, use_shape):
+    # [FUNCTION DOC]
+    # HELPER: shared body of the bidirectional static RNN test with sequence lengths.
+    # KNOWN ISSUE: the in-body comment says the backward output occupies depths 4 to 5 but the
+    # assertions (correctly) use depths 3 to 5; the comment is off by one.
+    # Input: use_shape, whether the batch dimension is statically known. Builds the graph with
+    # sequence lengths 2 and 3 fed in, runs it, and asserts that forward outputs equal the
+    # backward outputs mirrored within each example's valid length, and that final forward and
+    # backward states are the same.
     with self.session(graph=ops.Graph()) as sess:
       input_value, inputs, outputs, state_fw, state_bw, sequence_length = (
           self._createBidirectionalRNN(use_shape, True))
@@ -1559,6 +1851,11 @@ class BidirectionalRNNTest(test.TestCase):
       self.assertAllClose(s_fw, s_bw)
 
   def _testBidirectionalRNNWithoutSequenceLength(self, use_shape):
+    # [FUNCTION DOC]
+    # HELPER: shared body of the bidirectional static RNN test without sequence lengths.
+    # Input: use_shape, whether the batch dimension is statically known. Runs the graph and
+    # asserts that, for all eight steps, the forward output at step i equals the backward output at
+    # the mirrored step, and that final forward and backward states are close.
     with self.session(graph=ops.Graph()) as sess:
       input_value, inputs, outputs, state_fw, state_bw, _ = (
           self._createBidirectionalRNN(use_shape, False))
@@ -1586,11 +1883,17 @@ class BidirectionalRNNTest(test.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testBidirectionalRNN(self):
+    # [FUNCTION DOC]
+    # Runs the static bidirectional check with sequence lengths for both unknown and known batch
+    # shapes (graph mode only).
     self._testBidirectionalRNN(use_shape=False)
     self._testBidirectionalRNN(use_shape=True)
 
   @test_util.run_v1_only("b/124229375")
   def testBidirectionalRNNWithoutSequenceLength(self):
+    # [FUNCTION DOC]
+    # Runs the static bidirectional check without sequence lengths for both unknown and known
+    # batch shapes (graph mode only).
     self._testBidirectionalRNNWithoutSequenceLength(use_shape=False)
     self._testBidirectionalRNNWithoutSequenceLength(use_shape=True)
 
@@ -1600,6 +1903,15 @@ class BidirectionalRNNTest(test.TestCase):
                                      use_time_major,
                                      use_sequence_length,
                                      scope=None):
+    # [FUNCTION DOC]
+    # HELPER: builds the dynamic bidirectional LSTM graph for the tests of that driver.
+    # Inputs: use_shape (known versus unknown batch dimension), use_state_tuple (tuple versus
+    # concatenated LSTM state), use_time_major (time-major versus batch-major inputs and outputs),
+    # use_sequence_length (add a sequence-length placeholder), scope (optional scope or name).
+    # Builds two seeded LSTM cells, stacks eight placeholders (transposing when batch-major), runs
+    # the bidirectional dynamic RNN, concatenates the two directions' outputs, and asserts the
+    # resulting static shape. Returns a tuple of: random input value, input placeholders, outputs,
+    # forward state, backward state, and the sequence-length placeholder (or nothing).
     num_units = 3
     input_size = 5
     batch_size = 2
@@ -1644,6 +1956,14 @@ class BidirectionalRNNTest(test.TestCase):
 
   def _testBidirectionalDynamicRNN(self, use_shape, use_state_tuple,
                                    use_time_major, use_sequence_length):
+    # [FUNCTION DOC]
+    # HELPER: shared body of the dynamic bidirectional RNN check for one option combination.
+    # KNOWN ISSUE: the in-body comment says the backward output occupies depths 4 to 5 while the
+    # assertions use depths 3 to 5.
+    # Inputs: four booleans (known batch shape, tuple state, time-major layout, sequence lengths).
+    # Builds and runs the graph (lengths 2 and 3 when used), swaps axes for batch-major results,
+    # then asserts forward outputs mirror backward outputs within each valid length (or over the
+    # full eight steps without lengths) and that forward and backward final states match.
     with self.session(graph=ops.Graph()) as sess:
       input_value, inputs, outputs, state_fw, state_bw, sequence_length = (
           self._createBidirectionalDynamicRNN(
@@ -1708,6 +2028,11 @@ class BidirectionalRNNTest(test.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testBidirectionalDynamicRNN(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the comment in the body claims 2^5 option values and five flags, but the code
+    # takes the product over four booleans, giving 16 combinations.
+    # Runs the dynamic bidirectional check over every combination of the four boolean options
+    # (known shape, tuple state, time-major, sequence lengths). Graph mode only.
     # Generate 2^5 option values
     # from [True, True, True, True, True] to [False, False, False, False, False]
     options = itertools.product([True, False], repeat=4)
@@ -1719,6 +2044,15 @@ class BidirectionalRNNTest(test.TestCase):
           use_sequence_length=option[3])
 
   def _testScope(self, factory, prefix="prefix", use_outer_scope=True):
+    # [FUNCTION DOC]
+    # HELPER: shared body for the bidirectional variable-scope naming tests.
+    # KNOWN ISSUE: the call that creates the global variables initializer op is made but never run,
+    # so it has no effect.
+    # Inputs: factory is a callback that builds a bidirectional RNN given a scope (nothing, a
+    # string or a scope object); prefix is the expected scope name (nothing means the default
+    # bidirectional scope); use_outer_scope selects passing a scope object versus a string. Builds
+    # in a fresh graph, logs variable names, and asserts every global variable name begins with the
+    # prefix and a slash. Returns nothing.
     # REMARKS: factory(scope) is a function accepting a scope
     #          as an argument, such scope can be None, a string
     #          or a VariableScope instance.
@@ -1743,8 +2077,14 @@ class BidirectionalRNNTest(test.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testBidirectionalRNNScope(self):
+    # [FUNCTION DOC]
+    # Scenario: build the static bidirectional RNN through a factory and check variable naming with
+    # an outer scope object, a scope name string and the default scope, using the scope helper.
 
     def factory(scope):
+      # [FUNCTION DOC]
+      # HELPER: builds the static bidirectional RNN (known shape, with sequence length) in the
+      # given scope and returns the builder's result tuple.
       return self._createBidirectionalRNN(
           use_shape=True, use_sequence_length=True, scope=scope)
 
@@ -1754,10 +2094,21 @@ class BidirectionalRNNTest(test.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testBidirectionalDynamicRNNScope(self):
+    # [FUNCTION DOC]
+    # Scenario: build the dynamic bidirectional RNN (tuple state, sequence lengths, known shape)
+    # in both time-major and batch-major layouts and check variable naming for an outer scope
+    # object, a name string and the default scope, using the scope helper.
 
     def get_factory(use_time_major):
+      # [FUNCTION DOC]
+      # HELPER: creates a scope-taking builder for the scope helper.
+      # Input: use_time_major, whether the dynamic RNN uses time-major layout. Returns the nested
+      # factory callback.
 
       def factory(scope):
+        # [FUNCTION DOC]
+        # HELPER: builds the dynamic bidirectional RNN in the given scope with the layout chosen
+        # by the enclosing call, and returns the builder's result tuple.
         return self._createBidirectionalDynamicRNN(
             use_shape=True,
             use_state_tuple=True,
@@ -1776,13 +2127,26 @@ class BidirectionalRNNTest(test.TestCase):
 
 
 class MultiDimensionalLSTMTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case checking that all RNN drivers (static, dynamic, static bidirectional, static
+  # state-saving) accept per-step inputs with several feature dimensions, using the dummy
+  # multi-dimensional cell. Fixture: setUp seeds numpy.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: does not call the parent setUp, so base-class test fixture setup is skipped.
+    # Fixture. Stores a fixed integer seed on the instance and seeds numpy's random generator.
     self._seed = 23489
     np.random.seed(self._seed)
 
   @test_util.run_v1_only("b/124229375")
   def testMultiDimensionalLSTMAllRNNContainers(self):
+    # [FUNCTION DOC]
+    # Scenario: run the dummy multi-dimensional cell (feature shape 3 by 4 by 5) through static,
+    # dynamic, bidirectional and state-saving drivers with sequence lengths 4 and 6. Asserts output
+    # static shapes (doubled feature axis for bidirectional), that static, dynamic and
+    # state-saving outputs are equal, that bidirectional output equals static output duplicated
+    # along the feature axis, and that all final states agree.
     feature_dims = (3, 4, 5)
     input_size = feature_dims
     batch_size = 2
@@ -1888,13 +2252,25 @@ class MultiDimensionalLSTMTest(test.TestCase):
 
 
 class NestedLSTMTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case checking that all RNN drivers handle cells whose inputs, outputs and states are
+  # nested tuples, using the nested dummy cell. Fixture: setUp seeds numpy.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: does not call the parent setUp, so base-class test fixture setup is skipped.
+    # Fixture. Stores a fixed integer seed on the instance and seeds numpy's random generator.
     self._seed = 23489
     np.random.seed(self._seed)
 
   @test_util.run_v1_only("b/124229375")
   def testNestedIOLSTMAllRNNContainers(self):
+    # [FUNCTION DOC]
+    # Scenario: run the nested tuple dummy cell (pairs of inputs and outputs, pair state) through
+    # the dynamic, static, bidirectional and state-saving drivers with sequence lengths 4 and 6.
+    # Asserts matching nested shapes, static outputs equal to transposed dynamic outputs and to
+    # state-saving outputs, bidirectional outputs equal to static outputs duplicated along the
+    # feature axis, and equal final states across drivers.
     input_size = 5
     batch_size = 2
     state_size = 6
@@ -1941,6 +2317,11 @@ class NestedLSTMTest(test.TestCase):
           state_name=("h", "c"))
 
       def _assert_same_shape(input1, input2, double=False):
+        # [FUNCTION DOC]
+        # HELPER: shape comparison for the nested driver scenario.
+        # Inputs: two possibly nested structures of tensors, and a boolean double that, when true,
+        # expects the second structure's second dimension to be twice the first's. Flattens both,
+        # pairs the tensors and asserts the static shapes agree. Returns nothing.
         flat_input1 = nest.flatten(input1)
         flat_input2 = nest.flatten(input2)
         for inp1, inp2 in zip(flat_input1, flat_input2):
@@ -2012,12 +2393,25 @@ class NestedLSTMTest(test.TestCase):
 
 
 class StateSaverRNNTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the state-saving static RNN: variable scoping and (currently skipped) checks
+  # that state-saver methods are evaluated the same number of times. Uses the fake state savers
+  # defined in this file. Fixture: setUp seeds numpy.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: does not call the parent setUp, so base-class test fixture setup is skipped.
+    # Fixture. Stores a fixed integer seed on the instance and seeds numpy's random generator.
     self._seed = 23489
     np.random.seed(self._seed)
 
   def _factory(self, scope, state_saver):
+    # [FUNCTION DOC]
+    # HELPER: builds the state-saving RNN graph for the tests of this class.
+    # Inputs: scope (variable scope, name or nothing) and state_saver (fake saver whose state size
+    # is twice the unit count). Creates a non-tuple LSTM, eight zero inputs, and runs the
+    # state-saving static RNN under the name save_lstm. Returns a tuple of outputs, final state and
+    # the same state saver.
     num_units = state_saver.state_size // 2
     batch_size = state_saver.batch_size
     input_size = 5
@@ -2041,6 +2435,13 @@ class StateSaverRNNTest(test.TestCase):
     return out, state, state_saver
 
   def _testScope(self, prefix="prefix", use_outer_scope=True):
+    # [FUNCTION DOC]
+    # HELPER: shared body for the state-saver RNN variable-scope test.
+    # KNOWN ISSUE: the variables initializer op is created only in the string-scope branch and
+    # is never run, so it has no effect.
+    # Inputs: prefix (expected scope name, nothing means default rnn) and use_outer_scope (pass a
+    # scope object versus a string). Builds the state-saving RNN with a fake saver in a fresh graph
+    # and asserts all global variable names start with the prefix and a slash. Returns nothing.
     num_units = 3
     batch_size = 2
     state_saver = TestStateSaver(batch_size, 2 * num_units)
@@ -2065,11 +2466,19 @@ class StateSaverRNNTest(test.TestCase):
       self.assertEqual(len(scope_vars), len(all_vars))
 
   def testStateSaverRNNScope(self):
+    # [FUNCTION DOC]
+    # Checks variable naming of the state-saving RNN with an outer scope object, a name string and
+    # the default scope, via the scope helper.
     self._testScope(use_outer_scope=True)
     self._testScope(use_outer_scope=False)
     self._testScope(prefix=None, use_outer_scope=False)
 
   def testStateSaverCallsSaveState(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the test skips itself immediately (referencing a known bug), so everything
+    # after the skip call is dead code and nothing is verified.
+    # Intended scenario: with a counting state saver, evaluate outputs and state together, outputs
+    # alone and state alone, and assert the state-call counter equals the save-state-call counter.
     """Test that number of calls to state and save_state is equal.
 
     Test if the order of actual evaluating or skipping evaluation of out,
@@ -2108,13 +2517,23 @@ class StateSaverRNNTest(test.TestCase):
       self.assertEqual(num_state_calls, num_save_state_calls)
 
 class GRUTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the GRU cell inside the dynamic RNN: a smoke run with random sequence lengths
+  # and a variable-scope naming check. Fixture: setUp seeds numpy.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: does not call the parent setUp, so base-class test fixture setup is skipped.
+    # Fixture. Stores a fixed integer seed on the instance and seeds numpy's random generator.
     self._seed = 23489
     np.random.seed(self._seed)
 
   @test_util.run_v1_only("b/124229375")
   def testDynamic(self):
+    # [FUNCTION DOC]
+    # Smoke scenario: time-major dynamic RNN with a GRU cell over a placeholder of eight steps and
+    # random sequence lengths. Initializes variables and runs outputs and state; nothing is
+    # asserted beyond the run not failing.
     time_steps = 8
     num_units = 3
     input_size = 5
@@ -2146,6 +2565,13 @@ class GRUTest(test.TestCase):
       sess.run([outputs_dynamic, state_dynamic], feed_dict=feeds)
 
   def _testScope(self, factory, prefix="prefix", use_outer_scope=True):
+    # [FUNCTION DOC]
+    # HELPER: shared body for the GRU variable-scope naming test.
+    # KNOWN ISSUE: the variables initializer op is created only in the string-scope branch and is
+    # never run, so it has no effect.
+    # Inputs: factory (callback building a dynamic GRU RNN given a scope or name), prefix (expected
+    # scope name, nothing means default rnn) and use_outer_scope (scope object versus string).
+    # Asserts all global variable names start with the prefix and a slash. Returns nothing.
     with self.session(graph=ops.Graph()):
       if use_outer_scope:
         with variable_scope.variable_scope(prefix) as scope:
@@ -2167,6 +2593,9 @@ class GRUTest(test.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testDynamicScope(self):
+    # [FUNCTION DOC]
+    # Scenario: build a time-major dynamic GRU RNN with random sequence lengths through a nested
+    # factory and check variable naming for a scope object, a name string and the default scope.
     time_steps = 8
     num_units = 3
     input_size = 5
@@ -2174,6 +2603,10 @@ class GRUTest(test.TestCase):
     sequence_length = np.random.randint(0, time_steps, size=batch_size)
 
     def factory(scope):
+      # [FUNCTION DOC]
+      # HELPER: builds the dynamic GRU RNN in the given scope for the scope helper.
+      # Input: scope (object, string or nothing). Creates a time-major placeholder, a GRU cell, and
+      # returns the (outputs, final state) pair from the dynamic RNN.
       concat_inputs = array_ops.placeholder(
           dtypes.float32, shape=(time_steps, batch_size, input_size))
       cell = rnn_cell.GRUCell(num_units=num_units)
@@ -2191,13 +2624,27 @@ class GRUTest(test.TestCase):
 
 
 class RawRNNTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the low-level raw RNN driver driven by a user loop function. Compares it with
+  # the dynamic RNN (outputs, states, gradients), and exercises loop state handling and emitting
+  # outputs with a structure different from the cell output. Fixture: setUp seeds numpy.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: does not call the parent setUp, so base-class test fixture setup is skipped.
+    # Fixture. Stores a fixed integer seed on the instance and seeds numpy's random generator.
     self._seed = 23489
     np.random.seed(self._seed)
 
   @test_util.run_v1_only("b/124229375")
   def _testRawRNN(self, max_time):
+    # [FUNCTION DOC]
+    # HELPER: shared body for the raw RNN versus dynamic RNN comparison tests.
+    # Input: max_time, the number of time steps (zero is allowed). Builds a tuple-state LSTM, a
+    # loop function that feeds inputs from a tensor array until each example's sequence length is
+    # reached, runs the raw RNN and then the dynamic RNN with shared weights, and computes
+    # gradients of both. Asserts outputs and final states are close, and (only when max_time is
+    # positive) that gradients with respect to inputs and variables are close. Returns nothing.
     with self.session(graph=ops.Graph()) as sess:
       batch_size = 16
       input_depth = 4
@@ -2214,6 +2661,14 @@ class RawRNNTest(test.TestCase):
       cell = rnn_cell.LSTMCell(num_units, state_is_tuple=True)
 
       def loop_fn(time_, cell_output, cell_state, unused_loop_state):
+        # [FUNCTION DOC]
+        # HELPER: loop callback handed to the raw RNN driver.
+        # Inputs: time step, previous cell output (nothing at step zero), previous cell state, and
+        # an unused loop state. Emits the cell output, starts from the zero state at step zero and
+        # otherwise passes the state through, marks examples finished when the time reaches their
+        # sequence length, and reads the next input from the tensor array (a zero dummy on the very
+        # last iteration). Returns the tuple of finished flags, next input, next state, emitted
+        # output and a nothing loop state.
         emit_output = cell_output  # == None for time == 0
         if cell_output is None:  # time == 0
           next_state = cell.zero_state(batch_size, dtypes.float32)
@@ -2298,6 +2753,9 @@ class RawRNNTest(test.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testRawRNNZeroLength(self):
+    # [FUNCTION DOC]
+    # Runs the raw-versus-dynamic comparison with zero time steps (gradient checks are skipped for
+    # this case). Graph mode only.
     # NOTE: Because with 0 time steps, raw_rnn does not have shape
     # information about the input, it is impossible to perform
     # gradients comparisons as the gradients eval will fail.  So this
@@ -2305,10 +2763,17 @@ class RawRNNTest(test.TestCase):
     self._testRawRNN(max_time=0)
 
   def testRawRNN(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: unlike its zero-length sibling, this test has no graph-only decorator, though
+    # the shared helper it calls is decorated as graph-only.
+    # Runs the raw-versus-dynamic comparison with ten time steps, including gradients.
     self._testRawRNN(max_time=10)
 
   @test_util.run_v1_only("b/124229375")
   def testLoopState(self):
+    # [FUNCTION DOC]
+    # Scenario: raw RNN whose loop function carries an integer loop state that is incremented each
+    # step after the first. Runs ten steps and asserts the final loop state evaluates to ten.
     with self.session(graph=ops.Graph()):
       max_time = 10
       batch_size = 16
@@ -2323,6 +2788,13 @@ class RawRNNTest(test.TestCase):
       cell = rnn_cell.LSTMCell(num_units, state_is_tuple=True)
 
       def loop_fn(time_, cell_output, cell_state, loop_state):
+        # [FUNCTION DOC]
+        # HELPER: loop callback for the raw RNN with an integer loop state.
+        # Inputs: time step, previous output (nothing at step zero), previous state, loop state.
+        # At step zero sets the loop state to zero and the zero cell state; afterwards adds one to
+        # the loop state and passes the cell state through. All examples finish at the maximum
+        # time. Returns the tuple of finished flags, next input, next state, emitted output, loop
+        # state.
         if cell_output is None:
           loop_state = constant_op.constant([0])
           next_state = cell.zero_state(batch_size, dtypes.float32)
@@ -2347,6 +2819,10 @@ class RawRNNTest(test.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testLoopStateWithTensorArray(self):
+    # [FUNCTION DOC]
+    # Scenario: raw RNN whose loop state is a growable tensor array of integers, writing the
+    # previous entry plus the time index at each step. Runs four steps and asserts the stacked
+    # final loop state equals one, two, four, seven, eleven.
     with self.session(graph=ops.Graph()):
       max_time = 4
       batch_size = 16
@@ -2361,6 +2837,13 @@ class RawRNNTest(test.TestCase):
       cell = rnn_cell.LSTMCell(num_units, state_is_tuple=True)
 
       def loop_fn(time_, cell_output, cell_state, loop_state):
+        # [FUNCTION DOC]
+        # HELPER: loop callback for the raw RNN with a tensor array loop state.
+        # Inputs: time step, previous output (nothing at step zero), previous state, loop state.
+        # At step zero creates a growable integer tensor array holding one at index zero; later
+        # writes the previous entry plus the time index at the current index. Cell state is passed
+        # through; all examples finish at the maximum time. Returns the tuple of finished flags,
+        # next input, next state, emitted output and loop state.
         if cell_output is None:
           loop_state = tensor_array_ops.TensorArray(
               dynamic_size=True,
@@ -2391,6 +2874,11 @@ class RawRNNTest(test.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testEmitDifferentStructureThanCellOutput(self):
+    # [FUNCTION DOC]
+    # Scenario: raw RNN whose loop function emits a pair of integer tensors (one with a shape
+    # that depends on a placeholder fed at run time) instead of the cell output. Asserts two output
+    # tensor arrays with the expected integer dtypes and that stacked emitted values are all ones
+    # with shapes time by batch by two by three and time by batch by one.
     with self.session(graph=ops.Graph()) as sess:
       max_time = 10
       batch_size = 16
@@ -2408,6 +2896,13 @@ class RawRNNTest(test.TestCase):
       cell = rnn_cell.LSTMCell(num_units, state_is_tuple=True)
 
       def loop_fn(time_, cell_output, cell_state, _):
+        # [FUNCTION DOC]
+        # HELPER: loop callback for the emit-structure scenario.
+        # Inputs: time step, previous output (nothing at step zero), previous state, unused loop
+        # state. Emits a pair of integer zero tensors at step zero and pair of ones (batch-sized,
+        # one with run-time-dependent width) afterwards; cell state is zero then passed through; all
+        # examples finish at the maximum time. Returns finished flags, next input, next state,
+        # emitted pair and a nothing loop state.
         if cell_output is None:
           emit_output = (array_ops.zeros([2, 3], dtype=dtypes.int32),
                          array_ops.zeros([unknown_dim], dtype=dtypes.int64))
@@ -2439,6 +2934,13 @@ class RawRNNTest(test.TestCase):
           np.ones((max_time, batch_size, 1), np.int64), output_vals[1])
 
   def _testScope(self, factory, prefix="prefix", use_outer_scope=True):
+    # [FUNCTION DOC]
+    # HELPER: shared body for the raw RNN variable-scope naming test.
+    # KNOWN ISSUE: the variables initializer op is created only in the string-scope branch and is
+    # never run, so it has no effect.
+    # Inputs: factory (callback building a raw RNN given a scope or name), prefix (expected scope
+    # name, nothing means default rnn) and use_outer_scope (scope object versus string). Builds in
+    # a fresh graph and asserts every global variable name starts with the prefix and a slash.
     with self.session(graph=ops.Graph()):
       if use_outer_scope:
         with variable_scope.variable_scope(prefix) as scope:
@@ -2460,12 +2962,20 @@ class RawRNNTest(test.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testRawRNNScope(self):
+    # [FUNCTION DOC]
+    # Scenario: build a raw RNN with an LSTM and a sequence-length-driven loop function through a
+    # nested factory, then check variable naming for a scope object, a name string and the
+    # default scope via the scope helper.
     max_time = 10
     batch_size = 16
     input_depth = 4
     num_units = 3
 
     def factory(scope):
+      # [FUNCTION DOC]
+      # HELPER: builds the raw RNN in the given scope for the scope helper.
+      # Input: scope (object, string or nothing). Creates input and sequence-length placeholders,
+      # a tensor array of inputs, an LSTM cell and a loop function, and returns the raw RNN result.
       inputs = array_ops.placeholder(
           shape=(max_time, batch_size, input_depth), dtype=dtypes.float32)
       sequence_length = array_ops.placeholder(
@@ -2477,6 +2987,12 @@ class RawRNNTest(test.TestCase):
       cell = rnn_cell.LSTMCell(num_units, state_is_tuple=True)
 
       def loop_fn(time_, cell_output, cell_state, unused_loop_state):
+        # [FUNCTION DOC]
+        # HELPER: loop callback for the raw RNN used by the scope test.
+        # Same behavior as the comparison test's callback: emits the cell output, zero state at
+        # step zero then state pass-through, finishes examples at their sequence length and reads
+        # inputs from the tensor array. Returns the five-element loop result tuple (loop state is
+        # nothing).
         emit_output = cell_output  # == None for time == 0
         if cell_output is None:  # time == 0
           next_state = cell.zero_state(batch_size, dtypes.float32)
@@ -2500,21 +3016,38 @@ class RawRNNTest(test.TestCase):
 
 
 class DeviceWrapperCell(rnn_cell.RNNCell):
+  # [CLASS DOC]
+  # HELPER: test-local wrapper cell for the device placement tests.
+  # Delegates size properties and the step computation to a wrapped cell, but executes the wrapped
+  # cell under a device scope when a device string is configured. Holds the wrapped cell and the
+  # device (or nothing for no placement).
   """Class to ensure cell calculation happens on a specific device."""
 
   def __init__(self, cell, device):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: does not call the base-class constructor, so base cell initialization is
+    # skipped.
+    # Constructor. cell is the cell to wrap; device is a device name string or nothing. Stores both.
     self._cell = cell
     self._device = device
 
   @property
   def output_size(self):
+    # [FUNCTION DOC]
+    # Property returning the wrapped cell's output size.
     return self._cell.output_size
 
   @property
   def state_size(self):
+    # [FUNCTION DOC]
+    # Property returning the wrapped cell's state size.
     return self._cell.state_size
 
   def __call__(self, input_, state, scope=None):
+    # [FUNCTION DOC]
+    # Runs one step of the wrapped cell. Inputs: input_ tensor, state, optional scope forwarded to
+    # the wrapped cell. If a device was configured, the call happens inside that device scope.
+    # Returns whatever the wrapped cell returns (output and new state).
     if self._device is not None:
       with ops.device(self._device):
         return self._cell(input_, state, scope=scope)
@@ -2523,11 +3056,22 @@ class DeviceWrapperCell(rnn_cell.RNNCell):
 
 
 class TensorArrayOnCorrectDeviceTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case verifying, via run-time step statistics, that the dynamic RNN places tensor array
+  # operations on the expected devices (CPU or GPU) depending on where the RNN, cell and inputs
+  # are placed. All tests silently return when no GPU is available.
 
   def _execute_rnn_on(self,
                       rnn_device=None,
                       cell_device=None,
                       input_device=None):
+    # [FUNCTION DOC]
+    # HELPER: runs a dynamic RNN with device placement options and returns its trace metadata.
+    # Inputs (all optional device name strings or nothing): rnn_device is the device scope for
+    # building the RNN, cell_device the device used by the wrapped LSTM cell, input_device the
+    # device on which the input constant is created. Builds a peephole LSTM wrapped in the device
+    # cell, random inputs and sequence lengths, runs the outputs with full tracing after
+    # initializing variables, and returns the run metadata containing per-device step stats.
     batch_size = 3
     time_steps = 7
     input_size = 5
@@ -2566,6 +3110,11 @@ class TensorArrayOnCorrectDeviceTest(test.TestCase):
     return run_metadata
 
   def _retrieve_cpu_gpu_stats(self, run_metadata):
+    # [FUNCTION DOC]
+    # HELPER: extracts per-device node statistics from run metadata.
+    # Input: run_metadata, the trace metadata of a session run. Scans device statistics; takes the
+    # one whose device name ends with cpu:0 and the one ending exactly with gpu:0. Returns a pair
+    # (CPU node stats, GPU node stats), each nothing if the device is not present.
     cpu_stats = None
     gpu_stats = None
     step_stats = run_metadata.step_stats
@@ -2578,6 +3127,12 @@ class TensorArrayOnCorrectDeviceTest(test.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testRNNOnCPUCellOnGPU(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: returns silently (counts as a pass) when no GPU is available, so the check is
+    # not performed on CPU-only machines.
+    # Scenario: RNN scope on the CPU, cell on the GPU. Asserts tensor array write and gather
+    # operations appear on the GPU and not the CPU, and read and scatter operations appear on the
+    # CPU and not the GPU.
     if not test.is_gpu_available():
       return  # Test requires access to a GPU
 
@@ -2587,6 +3142,10 @@ class TensorArrayOnCorrectDeviceTest(test.TestCase):
     cpu_stats, gpu_stats = self._retrieve_cpu_gpu_stats(run_metadata)
 
     def _assert_in(op_str, in_stats, out_stats):
+      # [FUNCTION DOC]
+      # HELPER: placement assertion. Inputs: op_str (operation name fragment), in_stats (node
+      # stats expected to contain it), out_stats (node stats expected not to). Asserts some node in
+      # the first contains the fragment and none in the second does.
       self.assertTrue(any(op_str in s.node_name for s in in_stats))
       self.assertFalse(any(op_str in s.node_name for s in out_stats))
 
@@ -2601,6 +3160,10 @@ class TensorArrayOnCorrectDeviceTest(test.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testRNNOnCPUCellOnCPU(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: returns silently (counts as a pass) when no GPU is available.
+    # Scenario: RNN and cell on the CPU while the input constant lives on the GPU. Asserts all
+    # tensor array operations are on the CPU and none on the GPU.
     if not test.is_gpu_available():
       return  # Test requires access to a GPU
 
@@ -2610,6 +3173,10 @@ class TensorArrayOnCorrectDeviceTest(test.TestCase):
     cpu_stats, gpu_stats = self._retrieve_cpu_gpu_stats(run_metadata)
 
     def _assert_in(op_str, in_stats, out_stats):
+      # [FUNCTION DOC]
+      # HELPER: placement assertion. Inputs: op_str (operation name fragment), in_stats (node
+      # stats expected to contain it), out_stats (node stats expected not to). Asserts some node in
+      # the first contains the fragment and none in the second does.
       self.assertTrue(any(op_str in s.node_name for s in in_stats))
       self.assertFalse(any(op_str in s.node_name for s in out_stats))
 
@@ -2618,6 +3185,10 @@ class TensorArrayOnCorrectDeviceTest(test.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testInputOnGPUCellNotDeclared(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: returns silently (counts as a pass) when no GPU is available.
+    # Scenario: input on the GPU with no device declared for the RNN or cell. Asserts all tensor
+    # array operations run on the GPU and none on the CPU.
     if not test.is_gpu_available():
       return  # Test requires access to a GPU
 
@@ -2626,6 +3197,10 @@ class TensorArrayOnCorrectDeviceTest(test.TestCase):
     cpu_stats, gpu_stats = self._retrieve_cpu_gpu_stats(run_metadata)
 
     def _assert_in(op_str, in_stats, out_stats):
+      # [FUNCTION DOC]
+      # HELPER: placement assertion. Inputs: op_str (operation name fragment), in_stats (node
+      # stats expected to contain it), out_stats (node stats expected not to). Asserts some node in
+      # the first contains the fragment and none in the second does.
       self.assertTrue(any(op_str in s.node_name for s in in_stats))
       self.assertFalse(any(op_str in s.node_name for s in out_stats))
 
@@ -2634,9 +3209,19 @@ class TensorArrayOnCorrectDeviceTest(test.TestCase):
 
 
 class RNNCellTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for the individual cell implementations and wrappers of the cell implementation
+  # module: basic RNN, GRU, basic LSTM, LSTM (with projection), multi-layer cell, residual, dropout
+  # and device wrappers. Covers variable naming and trainability, numeric smoke results with
+  # constant initializers, state tuple types, checkpointing, configuration serialization and
+  # saved-model export. Many tests are graph-mode only.
 
   @test_util.run_v1_only("b/124229375")
   def testBasicRNNCell(self):
+    # [FUNCTION DOC]
+    # Scenario: apply a two-unit basic RNN cell to zero input and state with constant weights.
+    # Asserts the trainable variable names (weights and bias under the cell scope), that there are
+    # no non-trainable variables, and that the output has shape one by two.
     with self.cached_session() as sess:
       with variable_scope.variable_scope(
           "root", initializer=init_ops.constant_initializer(0.5)):
@@ -2658,9 +3243,16 @@ class RNNCellTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testBasicRNNCellNotTrainable(self):
+    # [FUNCTION DOC]
+    # Scenario: build a basic RNN cell inside a variable scope whose custom getter forces every
+    # variable to be non-trainable. Asserts the cell reports no trainable variables, lists its
+    # weights and bias as non-trainable, and produces an output of shape one by two.
     with self.cached_session() as sess:
 
       def not_trainable_getter(getter, *args, **kwargs):
+        # [FUNCTION DOC]
+        # HELPER: custom variable getter for the scenario. Forces the trainable option to false in
+        # the keyword arguments and delegates to the original getter, returning its variable.
         kwargs["trainable"] = False
         return getter(*args, **kwargs)
 
@@ -2686,6 +3278,10 @@ class RNNCellTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testGRUCell(self):
+    # [FUNCTION DOC]
+    # Scenario: smoke test of a two-unit GRU cell with constant weights, first with input width
+    # equal to units, then (in another scope) with a wider input. Asserts the outputs equal fixed
+    # reference numbers within the default tolerance.
     with self.cached_session() as sess:
       with variable_scope.variable_scope(
           "root", initializer=init_ops.constant_initializer(0.5)):
@@ -2715,6 +3311,12 @@ class RNNCellTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testBasicLSTMCell(self):
+    # [FUNCTION DOC]
+    # Scenario: for half and single precision, a two-layer multi-layer cell of basic LSTM cells
+    # (non-tuple state) with constant weights. Asserts the initial dtype is unset and later
+    # inferred from the input, tracked child cell names, that the configuration can be produced,
+    # exact variable names and trainability, result count, and smoke values for output and memory
+    # within a loose tolerance. Then checks a separate cell with input width different from units.
     for dtype in [dtypes.float16, dtypes.float32]:
       np_dtype = dtype.as_numpy_dtype
       with self.session(graph=ops.Graph()) as sess:
@@ -2780,6 +3382,9 @@ class RNNCellTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testBasicLSTMCellDimension0Error(self):
+    # [FUNCTION DOC]
+    # Scenario: a basic LSTM cell is applied to an input with batch size three and a state with
+    # batch size two. Expectation: a value error is raised.
     """Tests that dimension 0 in both(x and m) shape must be equal."""
     with self.cached_session() as sess:
       with variable_scope.variable_scope(
@@ -2801,6 +3406,9 @@ class RNNCellTest(test.TestCase, parameterized.TestCase):
               })
 
   def testBasicLSTMCellStateSizeError(self):
+    # [FUNCTION DOC]
+    # Scenario: a basic LSTM cell (non-tuple state) is given a state whose width is three times
+    # the units instead of two times. Expectation: a value error or an invalid-argument error.
     """Tests that state_size must be num_units * 2."""
     with self.cached_session() as sess:
       with variable_scope.variable_scope(
@@ -2823,6 +3431,10 @@ class RNNCellTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testBasicLSTMCellStateTupleType(self):
+    # [FUNCTION DOC]
+    # Scenario: a two-layer multi-layer cell of tuple-state basic LSTM cells. Asserts the state
+    # size is a tuple of LSTM state tuples, that passing plain tuples as state yields LSTM state
+    # tuples as the new states, and the same when passing the cell's zero state.
     with self.cached_session():
       with variable_scope.variable_scope(
           "root", initializer=init_ops.constant_initializer(0.5)):
@@ -2855,6 +3467,10 @@ class RNNCellTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testBasicLSTMCellWithStateTuple(self):
+    # [FUNCTION DOC]
+    # Scenario: a multi-layer cell with tuple state over non-tuple basic LSTM cells, called with
+    # two state tensors. Asserts three results and that output and the two new memories equal
+    # fixed reference values (matching the non-tuple variant).
     with self.cached_session() as sess:
       with variable_scope.variable_scope(
           "root", initializer=init_ops.constant_initializer(0.5)):
@@ -2889,6 +3505,10 @@ class RNNCellTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testLSTMCell(self):
+    # [FUNCTION DOC]
+    # Scenario: LSTM cell with eight units, projection to six and non-tuple state, batch of three
+    # distinct inputs. Asserts output shape batch by projection, state shape batch by units plus
+    # projection, and that the outputs and states of examples differ from the first example's.
     with self.cached_session() as sess:
       num_units = 8
       num_proj = 6
@@ -2925,6 +3545,9 @@ class RNNCellTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testLSTMCellVariables(self):
+    # [FUNCTION DOC]
+    # Scenario: build an LSTM cell with projection by calling it once. Asserts the global variable
+    # names in creation order are the cell kernel, the bias and the projection kernel.
     with self.cached_session():
       num_units = 8
       num_proj = 6
@@ -2948,6 +3571,11 @@ class RNNCellTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testWrapperCheckpointing(self):
+    # [FUNCTION DOC]
+    # Scenario (graph and eager modes): for each of the dropout wrapper, residual wrapper and a
+    # multi-layer wrapper around a one-unit basic RNN cell, run it once, set the bias to forty,
+    # save a checkpoint to a temporary directory, change the bias to zero, restore, and assert all
+    # checkpointed values were consumed and the bias is forty again. Writes a checkpoint file.
     for wrapper_type in [
         rnn_cell_impl.DropoutWrapper,
         rnn_cell_impl.ResidualWrapper,
@@ -2967,6 +3595,10 @@ class RNNCellTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testResidualWrapper(self):
+    # [FUNCTION DOC]
+    # Scenario (graph and eager modes): wrap a three-unit GRU cell with the residual wrapper.
+    # Asserts configuration works, the wrapped cell is a tracked child, the wrapper output equals
+    # the cell output plus the input, and the new state is unchanged by the wrapper.
     wrapper_type = rnn_cell_impl.ResidualWrapper
     x = ops.convert_to_tensor(np.array([[1., 1., 1.]]))
     m = ops.convert_to_tensor(np.array([[0.1, 0.1, 0.1]]))
@@ -2990,6 +3622,10 @@ class RNNCellTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testResidualWrapperWithSlice(self):
+    # [FUNCTION DOC]
+    # Scenario (graph and eager modes): residual wrapper with a custom residual function that
+    # slices the five-wide input down to the cell's three units before adding. Asserts the output
+    # equals the cell output plus the sliced input and states are unchanged.
     wrapper_type = rnn_cell_impl.ResidualWrapper
     x = ops.convert_to_tensor(np.array([[1., 1., 1., 1., 1.]]))
     m = ops.convert_to_tensor(np.array([[0.1, 0.1, 0.1]]))
@@ -2999,6 +3635,9 @@ class RNNCellTest(test.TestCase, parameterized.TestCase):
     g, m_new = base_cell(x, m)
 
     def residual_with_slice_fn(inp, out):
+      # [FUNCTION DOC]
+      # HELPER: custom residual function. Inputs: inp (wrapper input tensor) and out (cell output
+      # tensor). Takes the first three features of inp for all rows and returns them added to out.
       inp_sliced = array_ops.slice(inp, [0, 0], [-1, 3])
       return inp_sliced + out
 
@@ -3013,6 +3652,10 @@ class RNNCellTest(test.TestCase, parameterized.TestCase):
     self.assertAllClose(res_m_new, res_m_new_res)
 
   def testDeviceWrapper(self):
+    # [FUNCTION DOC]
+    # Scenario: wrap a GRU cell in the device wrapper pinned to the first CPU. Asserts the config
+    # can be produced, the wrapped cell is a tracked child, and the output tensor's device name
+    # mentions cpu:0.
     wrapper_type = rnn_cell_impl.DeviceWrapper
     x = array_ops.zeros([1, 3])
     m = array_ops.zeros([1, 3])
@@ -3025,6 +3668,11 @@ class RNNCellTest(test.TestCase, parameterized.TestCase):
     self.assertIn("cpu:0", outputs.device.lower())
 
   def _retrieve_cpu_gpu_stats(self, run_metadata):
+    # [FUNCTION DOC]
+    # HELPER: extracts per-device node statistics from run metadata (same logic as the helper in
+    # the tensor array placement test case).
+    # Input: run_metadata, trace metadata of a session run. Returns a pair (CPU node stats, GPU
+    # node stats), each nothing if that device does not appear.
     cpu_stats = None
     gpu_stats = None
     step_stats = run_metadata.step_stats
@@ -3037,6 +3685,10 @@ class RNNCellTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testDeviceWrapperDynamicExecutionNodesAreAllProperlyLocated(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: returns silently (counts as a pass) when no GPU is available.
+    # Scenario: dynamic RNN built under a CPU scope with a GRU cell wrapped for the GPU, run with
+    # full tracing. Asserts no GRU cell nodes run on the CPU and some run on the GPU.
     if not test.is_gpu_available():
       # Can't perform this test w/o a GPU
       return
@@ -3063,6 +3715,11 @@ class RNNCellTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testMultiRNNCell(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the last assertion checks the truth of a non-empty list of booleans, which is
+    # always true, so the weight dtype check is vacuous.
+    # Scenario: two stacked two-unit GRU cells with a concatenated (non-tuple) state. Asserts the
+    # new state equals fixed reference values and the cell has eight weights.
     with self.cached_session() as sess:
       with variable_scope.variable_scope(
           "root", initializer=init_ops.constant_initializer(0.5)):
@@ -3085,6 +3742,10 @@ class RNNCellTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_v1_only("b/124229375")
   def testMultiRNNCellWithStateTuple(self):
+    # [FUNCTION DOC]
+    # Scenario: stacked GRU cells with tuple state. Asserts passing a single concatenated state
+    # raises a value error saying a tuple was expected, and that passing a proper tuple of states
+    # gives results equal to those of the non-tuple variant's reference values.
     with self.cached_session() as sess:
       with variable_scope.variable_scope(
           "root", initializer=init_ops.constant_initializer(0.5)):
@@ -3117,6 +3778,11 @@ class RNNCellTest(test.TestCase, parameterized.TestCase):
         self.assertAllClose(res[1], [[0.13248, 0.13248]])
 
   def testDeviceWrapperSerialization(self):
+    # [FUNCTION DOC]
+    # Scenario: get the configuration of a device wrapper around an LSTM cell, replace the stored
+    # cell entry with a real cell rebuilt from its config (to avoid a reverse dependency), and
+    # rebuild the wrapper from the configuration. Asserts the rebuilt wrapper has an equal
+    # configuration and is the same wrapper type.
     wrapper_cls = rnn_cell_impl.DeviceWrapper
     cell = rnn_cell_impl.LSTMCell(10)
     wrapper = wrapper_cls(cell, "/cpu:0")
@@ -3132,6 +3798,12 @@ class RNNCellTest(test.TestCase, parameterized.TestCase):
     self.assertIsInstance(reconstructed_wrapper, wrapper_cls)
 
   def testResidualWrapperSerialization(self):
+    # [FUNCTION DOC]
+    # Scenario: round-trip the residual wrapper through its configuration three times: with the
+    # default residual function (config equality and type checked), with an anonymous function
+    # (the rebuilt function maps inputs one and two to four), and with a named function (rebuilt
+    # function maps one and two to five). The cell entry in each config is replaced with a real
+    # rebuilt cell before reconstruction.
     wrapper_cls = rnn_cell_impl.ResidualWrapper
     cell = rnn_cell_impl.LSTMCell(10)
     wrapper = wrapper_cls(cell)
@@ -3157,6 +3829,9 @@ class RNNCellTest(test.TestCase, parameterized.TestCase):
     self.assertEqual(reconstructed_wrapper._residual_fn(1, 2), 4)
 
     def residual_fn(inputs, outputs):
+      # [FUNCTION DOC]
+      # HELPER: named residual function for the serialization scenario. Returns three times the
+      # inputs plus the outputs.
       return inputs * 3 + outputs
 
     wrapper = wrapper_cls(cell, residual_fn=residual_fn)
@@ -3170,6 +3845,11 @@ class RNNCellTest(test.TestCase, parameterized.TestCase):
     self.assertEqual(reconstructed_wrapper._residual_fn(1, 2), 5)
 
   def testDropoutWrapperSerialization(self):
+    # [FUNCTION DOC]
+    # Scenario: round-trip the dropout wrapper through its configuration three times: with defaults
+    # (config equality and type checked), with an anonymous state-filter function that returns
+    # true (rebuilt filter returns true), and with a named filter returning false (rebuilt filter
+    # returns false). The cell entry in each config is replaced with a real rebuilt cell.
     wrapper_cls = rnn_cell_impl.DropoutWrapper
     cell = rnn_cell_impl.LSTMCell(10)
     wrapper = wrapper_cls(cell)
@@ -3192,6 +3872,9 @@ class RNNCellTest(test.TestCase, parameterized.TestCase):
     self.assertTrue(reconstructed_wrapper._dropout_state_filter(None))
 
     def dropout_state_filter_visitor(unused_state):
+      # [FUNCTION DOC]
+      # HELPER: named state filter for the serialization scenario. Ignores its argument and
+      # returns false (never drop out any state part).
       return False
 
     wrapper = wrapper_cls(
@@ -3205,6 +3888,12 @@ class RNNCellTest(test.TestCase, parameterized.TestCase):
     self.assertFalse(reconstructed_wrapper._dropout_state_filter(None))
 
   def testSavedModel(self):
+    # [FUNCTION DOC]
+    # Scenario: export and reload an LSTM cell step function. Skipped on GPU machines (known
+    # bug). Builds a trackable root holding an LSTM cell and a compiled function with a fixed
+    # input signature that applies the cell to a zero state, saves it to a temporary directory,
+    # loads it back, and asserts the loaded function output equals the original on zero input.
+    # Side effect: writes a saved model to the test temp directory.
     if test_util.is_gpu_available():
       self.skipTest("b/175887901")
 
@@ -3213,6 +3902,10 @@ class RNNCellTest(test.TestCase, parameterized.TestCase):
       root.cell = rnn_cell_impl.LSTMCell(8)
       @def_function.function(input_signature=[tensor.TensorSpec([3, 8])])
       def call(x):
+        # [FUNCTION DOC]
+        # HELPER: compiled step function that is saved. Input x is a three by eight float tensor.
+        # Creates the cell's zero state for batch three with x's dtype, applies the cell once, and
+        # returns only the output (the new state is discarded).
         state = root.cell.zero_state(3, dtype=x.dtype)
         y, _ = root.cell(x, state)
         return y
@@ -3232,6 +3925,11 @@ class RNNCellTest(test.TestCase, parameterized.TestCase):
 @test_util.run_all_without_tensor_float_32(
     "Uses an LSTMCell, which calls matmul")
 class DropoutWrapperTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for the dropout wrapper cell in graph and eager modes (class decorators run every
+  # test in both and disable reduced-precision matmul). Uses a shared helper that runs a dynamic
+  # RNN with a dropout-wrapped LSTM and checks properties such as keep-everything equivalence,
+  # dropping outputs, inputs or state, seeding, and variational (time-consistent) masks.
 
   def _testDropoutWrapper(self,
                           batch_size=None,
@@ -3240,6 +3938,17 @@ class DropoutWrapperTest(test.TestCase, parameterized.TestCase):
                           wrapper_type=None,
                           scope="root",
                           **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: shared runner for the dropout wrapper tests.
+    # Inputs: batch_size and time_steps (integers; if both are nothing a fixed two-step, batch-one
+    # example is used, otherwise random normal time-major inputs of width three); parallel_iterations
+    # (optional integer for the dynamic RNN); wrapper_type (the wrapper class to apply); scope
+    # (variable scope name, default root); extra keyword arguments (keep probabilities, seed,
+    # variational option, input size, and so on) forwarded to the wrapper along with the input
+    # dtype. Wraps a three-unit LSTM with constant weights, runs a time-major dynamic RNN from a
+    # constant initial state, and initializes variables. Asserts output shape (time, batch, 3) and
+    # that the final cell and hidden states have shape (batch, 3). Returns a list of the evaluated
+    # outputs and the final state tuple.
     if batch_size is None and time_steps is None:
       # 2 time steps, batch size 1, depth 3
       batch_size = 1
@@ -3272,6 +3981,9 @@ class DropoutWrapperTest(test.TestCase, parameterized.TestCase):
     return res
 
   def testDropoutWrapperProperties(self):
+    # [FUNCTION DOC]
+    # Scenario (regression for a reported issue): wrap a ten-unit basic RNN cell. Asserts the
+    # wrapper exposes the wrapped cell and reports state and output sizes of ten.
     wrapper_type = rnn_cell_impl.DropoutWrapper
     cell = rnn_cell_impl.BasicRNNCell(10)
     wrapper = wrapper_type(cell)
@@ -3281,17 +3993,29 @@ class DropoutWrapperTest(test.TestCase, parameterized.TestCase):
     self.assertEqual(wrapper.output_size, 10)
 
   def testDropoutWrapperZeroState(self):
+    # [FUNCTION DOC]
+    # Scenario: wrap a custom cell whose zero-state method returns a marker string. Asserts the
+    # wrapper's own zero-state method returns that marker, i.e. it delegates to the wrapped cell.
     wrapper_type = rnn_cell_impl.DropoutWrapper
 
     class _Cell(rnn_cell_impl.BasicRNNCell):
+      # [CLASS DOC]
+      # HELPER: test-local ten-unit basic RNN cell whose zero-state method is overridden to
+      # return a fixed marker string, used to check delegation by the dropout wrapper.
 
       def zero_state(self, batch_size=None, dtype=None):
+        # [FUNCTION DOC]
+        # HELPER: overridden zero-state method. Ignores the optional batch size and dtype and
+        # returns the fixed marker string.
         return "wrapped_cell_zero_state"
     wrapper = wrapper_type(_Cell(10))
     self.assertEqual(wrapper.zero_state(10, dtypes.float32),
                      "wrapped_cell_zero_state")
 
   def testDropoutWrapperKeepAllConstantInput(self):
+    # [FUNCTION DOC]
+    # Scenario: dropout wrapper with all keep probabilities given as a constant tensor equal to
+    # one. Asserts outputs and final states equal the known no-dropout reference values.
     wrapper_type = rnn_cell_impl.DropoutWrapper
     keep = array_ops.ones([])
     res = self._testDropoutWrapper(
@@ -3307,6 +4031,9 @@ class DropoutWrapperTest(test.TestCase, parameterized.TestCase):
     self.assertAllClose(true_full_final_c, res[1].c)
 
   def testDropoutWrapperKeepAll(self):
+    # [FUNCTION DOC]
+    # Scenario: dropout wrapper with all keep probabilities given by a variable equal to one.
+    # Asserts outputs and final states equal the known no-dropout reference values.
     wrapper_type = rnn_cell_impl.DropoutWrapper
     keep = variable_scope.get_variable("all", initializer=1.0)
     res = self._testDropoutWrapper(
@@ -3322,6 +4049,10 @@ class DropoutWrapperTest(test.TestCase, parameterized.TestCase):
     self.assertAllClose(true_full_final_c, res[1].c)
 
   def testDropoutWrapperWithSeed(self):
+    # [FUNCTION DOC]
+    # Scenario: run the helper twice with keep probability one half, the same global and wrapper
+    # seeds and one parallel iteration, in different scopes. Asserts outputs and final cell and
+    # hidden states are identical between the two runs. Side effect: sets the global random seed.
     wrapper_type = rnn_cell_impl.DropoutWrapper
     keep_some = 0.5
     random_seed.set_random_seed(2)
@@ -3351,6 +4082,9 @@ class DropoutWrapperTest(test.TestCase, parameterized.TestCase):
     self.assertAllClose(res_standard_1[1].h, res_standard_2[1].h)
 
   def testDropoutWrapperKeepNoOutput(self):
+    # [FUNCTION DOC]
+    # Scenario: output keep probability almost zero, input and state keep one. Asserts all
+    # outputs are zero while the final hidden and cell states match the no-dropout reference.
     wrapper_type = rnn_cell_impl.DropoutWrapper
     keep_all = variable_scope.get_variable("all", initializer=1.0)
     keep_none = variable_scope.get_variable("none", initializer=1e-6)
@@ -3369,6 +4103,11 @@ class DropoutWrapperTest(test.TestCase, parameterized.TestCase):
     self.assertAllClose(true_full_final_c, res[1].c)
 
   def testDropoutWrapperKeepNoStateExceptLSTMCellMemory(self):
+    # [FUNCTION DOC]
+    # Scenario: state keep probability almost zero, input and output keep one. Asserts the first
+    # output is unchanged, the second output differs (it sees the zeroed state), the final hidden
+    # state is zero, and the final cell (memory) state is a reference value because the wrapper
+    # never drops the memory part of an LSTM state tuple by default.
     wrapper_type = rnn_cell_impl.DropoutWrapper
     keep_all = variable_scope.get_variable("all", initializer=1.0)
     keep_none = variable_scope.get_variable("none", initializer=1e-6)
@@ -3392,6 +4131,10 @@ class DropoutWrapperTest(test.TestCase, parameterized.TestCase):
     self.assertAllClose(true_c_state, res[1].c)
 
   def testDropoutWrapperKeepNoInput(self):
+    # [FUNCTION DOC]
+    # Scenario: input keep probability almost zero, output and state keep one. Asserts the
+    # outputs, final hidden state and final cell state all differ noticeably from the no-dropout
+    # reference values because inputs were zeroed.
     wrapper_type = rnn_cell_impl.DropoutWrapper
     keep_all = variable_scope.get_variable("all", initializer=1.0)
     keep_none = variable_scope.get_variable("none", initializer=1e-6)
@@ -3411,6 +4154,10 @@ class DropoutWrapperTest(test.TestCase, parameterized.TestCase):
     self.assertGreater(np.linalg.norm(res[1].c - true_full_final_c), 1e-4)
 
   def testDropoutWrapperRecurrentOutput(self):
+    # [FUNCTION DOC]
+    # Scenario: variational (time-consistent) dropout with output keep probability 0.8, batch five
+    # and seven time steps. Asserts the pattern of zeroed output entries is the same at every time
+    # step.
     wrapper_type = rnn_cell_impl.DropoutWrapper
     keep_some = 0.8
     keep_all = variable_scope.get_variable("all", initializer=1.0)
@@ -3429,6 +4176,10 @@ class DropoutWrapperTest(test.TestCase, parameterized.TestCase):
       self.assertAllClose(output_mask[0], m)
 
   def testDropoutWrapperRecurrentStateInputAndOutput(self):
+    # [FUNCTION DOC]
+    # Scenario: variational dropout with input, output and state keep probabilities 0.9. Smoke
+    # asserts the output mask is the same at every time step and across batch entries, and that
+    # the final cell and hidden state masks are the same across batch entries.
     wrapper_type = rnn_cell_impl.DropoutWrapper
     keep_some = 0.9
     res = self._testDropoutWrapper(
@@ -3459,6 +4210,11 @@ class DropoutWrapperTest(test.TestCase, parameterized.TestCase):
       self.assertAllClose(batch_entry, state_h_mask[0])
 
   def testDropoutWrapperRecurrentStateInputAndOutputWithSeed(self):
+    # [FUNCTION DOC]
+    # Scenario: run the variational dropout helper twice with identical global, numpy and wrapper
+    # seeds in different scopes. Asserts the first run has batch- and time-consistent output and
+    # state masks, and that outputs and final cell and hidden states are identical across runs.
+    # Side effects: sets the global and numpy random seeds.
     wrapper_type = rnn_cell_impl.DropoutWrapper
     keep_some = 0.9
     random_seed.set_random_seed(2347)
