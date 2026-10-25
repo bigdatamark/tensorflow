@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Public v1 API facade for SavedModel loading. Re-exports the session-based load function and
+# the function that checks whether a directory holds a SavedModel from the implementation module.
+# The long documentation string below describes typical builder and loader usage. No logic of its
+# own; the only import-time effect is importing the implementation module.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

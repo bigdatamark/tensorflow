@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Utility for editing the method names of signature definitions inside an existing SavedModel on
+# disk. Exposes the updater class (exported in the v1 API) that parses the SavedModel, modifies
+# signature method names in memory, and rewrites the file in text or binary form. Import-time
+# effect: registers the API export.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +34,13 @@ from tensorflow.python.util.tf_export import tf_export
 # could do this from the command line directly.
 @tf_export(v1=["saved_model.signature_def_utils.MethodNameUpdater"])
 class MethodNameUpdater(object):
+  # [CLASS DOC]
+  # KNOWN ISSUE: the docstring's note names the alias builder.MethodNameUpdater, but the class is
+  # exported as signature_def_utils.MethodNameUpdater in the v1 API.
+  # Utility that parses a SavedModel from an export directory, lets callers replace the method
+  # name of signature definitions (across all MetaGraphs or the one matching given tags), and
+  # writes the modified SavedModel back (in place or to a new directory) in the same format
+  # (text or binary) as the input. Holds the export directory and the parsed SavedModel message.
   """Updates the method name(s) of the SavedModel stored in the given path.
 
   The `MethodNameUpdater` class provides the functionality to update the method
@@ -54,6 +66,10 @@ class MethodNameUpdater(object):
   """
 
   def __init__(self, export_dir):
+    # [FUNCTION DOC]
+    # Constructor. Input: export_dir, the directory containing the SavedModel file. Remembers the
+    # directory and parses the SavedModel (text or binary form) into memory. Raises an I/O style
+    # error (as raised by the parser) if the file is missing or cannot be parsed. Returns nothing.
     """Creates an MethodNameUpdater object.
 
     Args:
@@ -67,6 +83,17 @@ class MethodNameUpdater(object):
     self._saved_model = loader.parse_saved_model(export_dir)
 
   def replace_method_name(self, signature_key, method_name, tags=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says tags may be a sequence of tags, but only a list is kept as
+    # is; any other value (including a tuple or set) is wrapped in a one-element list, so such
+    # sequences never match. Also, with tags none, a MetaGraph lacking the key raises instead of
+    # being skipped, even though other MetaGraphs may have it; earlier MetaGraphs may already
+    # have been modified when the error is raised.
+    # Sets the method name of the signature definition with the given key in the in-memory
+    # SavedModel: in every MetaGraph if tags is nothing, otherwise in MetaGraphs whose tag set
+    # equals the given tags (a single string tag is accepted). Raises a value error if the key or
+    # method name is empty, if a selected MetaGraph lacks the key, or if no MetaGraph matched.
+    # Mutates the parsed SavedModel; nothing is written to disk. Returns nothing.
     """Replaces the method_name in the specified signature_def.
 
     This will match and replace multiple sig defs iff tags is None (i.e when
@@ -111,6 +138,13 @@ class MethodNameUpdater(object):
           "SavedModel does not have a MetaGraphDef with the specified tags.")
 
   def save(self, new_export_dir=None):
+    # [FUNCTION DOC]
+    # Writes the (possibly modified) SavedModel. Input: new_export_dir, the destination directory;
+    # if empty or nothing, the original export directory is overwritten. Output format follows
+    # the input: if the original directory had the text-format file, the text file is written,
+    # otherwise the binary file is written with deterministic serialization. The destination
+    # directory is not created and must already exist. Logs the written path. Raises an
+    # operation error from file writing on failure. Returns nothing.
     """Saves the updated `SavedModel`.
 
     Args:

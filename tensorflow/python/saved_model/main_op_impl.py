@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Implementation of the deprecated v1 SavedModel main op helpers: functions that build a single
+# grouped op initializing global variables, local variables and tables, optionally followed by a
+# restore op. Both functions are deprecated and exported only through the v1 API; the public
+# facade module re-exports them. Import-time effect: registers the API exports.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,6 +35,11 @@ _DEPRECATION_MSG = (
 @tf_export(v1=['saved_model.main_op.main_op'])
 @deprecation.deprecated(None, _DEPRECATION_MSG)
 def main_op():
+  # [FUNCTION DOC]
+  # Builds and returns a single grouped op that runs the global variable initializer, the local
+  # variable initializer and the table initializer of the default graph. Takes no inputs.
+  # Side effect: adds the initializer ops to the current default graph. Deprecated and exported
+  # only in the v1 API (calling it logs a deprecation warning).
   """Returns a main op to init variables and tables.
 
   Returns the main op including the group of ops that initializes all
@@ -49,6 +59,14 @@ def main_op():
                'saved_model.main_op.main_op_with_restore'])
 @deprecation.deprecated(None, _DEPRECATION_MSG)
 def main_op_with_restore(restore_op_name):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says restore_op_name is the name of an op, but the value is passed
+  # straight to the grouping function, which expects op or tensor objects, so a plain string
+  # name is not resolved to an op here. The local variable also shadows the function name.
+  # Builds a grouped op that depends on the main op (all variable, local variable and table
+  # initializers) and then groups the given restore op. Input: restore_op_name, the restore op
+  # (see issue above). Returns the grouped op. Side effect: adds ops to the default graph.
+  # Deprecated and exported only in the v1 API.
   """Returns a main op to init variables, tables and restore the graph.
 
   Returns the main op including the group of ops that initializes all

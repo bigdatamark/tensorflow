@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Support for loading TF1-style SavedModels (graph plus checkpoint, with signature defs) as
+# trackable objects usable in TF2 eager mode. It defines an initializer resource wrapper, an
+# eager loader subclass of the generic SavedModel loader, and a module-level load function.
+# The loader imports the MetaGraph into a wrapped function graph, restores variables, builds
+# signature concrete functions, and returns an auto-trackable root with attributes such as
+# signatures, variables, graph and prune. Internal to the saved_model package (used by the
+# public load entry point). No import-time side effects other than defining a metrics label.
+#
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -41,6 +50,12 @@ _LOAD_V1_V2_LABEL = "load_v1_in_v2"
 
 
 class _Initializer(resource.CapturableResource):
+  # [CLASS DOC]
+  # HELPER: internal glue that keeps the initialization procedure of a loaded v1 SavedModel.
+  # A capturable resource that wraps the pruned initialization function and the list of asset
+  # objects of a loaded TF1 SavedModel. Holds the init function and asset paths. When the loaded
+  # object is re-saved, the resource is exported so the init procedure is preserved; loading
+  # runs it automatically. Created by the eager loader's load method.
   """Represents an initialization operation restored from a SavedModel.
 
   Without this object re-export of imported 1.x SavedModels would omit the
@@ -55,23 +70,48 @@ class _Initializer(resource.CapturableResource):
   """
 
   def __init__(self, init_fn, asset_paths):
+    # [FUNCTION DOC]
+    # Constructor. Takes init_fn, a callable (pruned function) that runs the initialization op
+    # and accepts one argument per asset, and asset_paths, a list of asset objects whose path
+    # values are fed to it. Calls the parent constructor and stores both. Returns nothing.
     super(_Initializer, self).__init__()
     self._asset_paths = asset_paths
     self._init_fn = init_fn
 
   def _create_resource(self):
+    # [FUNCTION DOC]
+    # HELPER: override required by the capturable-resource base class.
+    # Returns a constant floating point tensor of value one as a placeholder resource handle so
+    # that the traced create-resource function has a valid return when the object is re-saved.
+    # Takes no inputs and has no side effects other than creating a constant.
     # Return a constant here so that when re-saved, the traced `create_resource`
     # has valid returns.
     return constant_op.constant(1.0)
 
   def _initialize(self):
+    # [FUNCTION DOC]
+    # HELPER: hook called by the resource machinery to run initialization.
+    # Calls the stored init function, passing the path of each stored asset in order. Returns
+    # whatever the init function returns (the dummy anchor tensor and the init op result).
+    # Side effect: executes the initialization ops in the loaded graph.
     return self._init_fn(*[path.asset_path for path in self._asset_paths])
 
 
 class _EagerSavedModelLoader(loader_impl.SavedModelLoader):
+  # [CLASS DOC]
+  # HELPER: internal implementation behind loading a v1 SavedModel in eager mode.
+  # Subclass of the generic SavedModel loader that imports the MetaGraph through a wrapped
+  # function instead of a session, restores variables via a pruned saver restore function, builds
+  # signature functions, and assembles a trackable root object. Constructed with an export
+  # directory; the main entry point is its load method.
   """Loads a SavedModel without using Sessions."""
 
   def get_meta_graph_def_from_tags(self, tags):
+    # [FUNCTION DOC]
+    # Selects a MetaGraph from the SavedModel. If tags is nothing, the SavedModel must contain
+    # exactly one MetaGraph, which is returned; otherwise a value error is raised listing the
+    # tag sets present. When tags is given, defers to the parent implementation (which matches
+    # the tag set and raises if none matches). Returns the MetaGraph definition. No side effects.
     """Override to support implicit one-MetaGraph loading with tags=None."""
     if tags is None:
       if len(self._saved_model.meta_graphs) != 1:
@@ -91,6 +131,11 @@ class _EagerSavedModelLoader(loader_impl.SavedModelLoader):
     )
 
   def load_graph(self, returns, meta_graph_def):
+    # [FUNCTION DOC]
+    # HELPER: body of the function passed to the function-wrapping utility during load.
+    # Imports the given MetaGraph definition into the current graph, obtaining the saver created
+    # by the import (possibly nothing), and stores it in the first slot of the mutable list
+    # returns, which acts as an out-parameter. Returns nothing.
     """Called from wrap_function to import `meta_graph_def`."""
     # pylint: disable=protected-access
     saver, _ = tf_saver._import_meta_graph_with_return_elements(meta_graph_def)
@@ -98,6 +143,12 @@ class _EagerSavedModelLoader(loader_impl.SavedModelLoader):
     returns[0] = saver
 
   def _extract_saver_restore(self, wrapped, saver):
+    # [FUNCTION DOC]
+    # HELPER: builds the restore callable for load.
+    # Inputs: wrapped, the wrapped function holding the imported graph, and saver, the imported
+    # saver or nothing. If saver is nothing, returns nothing. Otherwise prunes the wrapped
+    # function so that it takes the checkpoint filename tensor as feed and fetches both that
+    # tensor and the restore op. Returns the pruned function.
     if saver is None:
       return None
     saver_def = saver.saver_def
@@ -115,6 +166,15 @@ class _EagerSavedModelLoader(loader_impl.SavedModelLoader):
     )
 
   def restore_variables(self, wrapped, restore_from_saver):
+    # [FUNCTION DOC]
+    # Restores variables from the SavedModel checkpoint. Inputs: wrapped (the wrapped function
+    # with the graph) and restore_from_saver (pruned restore function or nothing; nothing means
+    # no-op). Runs the restore function on the variables path, which yields an initializer.
+    # When not executing eagerly outside functions (v1 graph building), it adds that initializer
+    # to the saved-model-initializers collection, assigns it as the initializer op of every
+    # global variable in the collection, and logs a warning if any variable remained in the
+    # wrapped graph (could not be lifted), telling the user to run the collection manually.
+    # Returns nothing.
     """Restores variables from the checkpoint."""
     if restore_from_saver is not None:
       initializer, _ = restore_from_saver(
@@ -143,6 +203,16 @@ class _EagerSavedModelLoader(loader_impl.SavedModelLoader):
           )
 
   def _extract_signatures(self, wrapped, meta_graph_def):
+    # [FUNCTION DOC]
+    # HELPER: builds the signature functions for load.
+    # For each signature definition in the MetaGraph, sorts inputs by name, resolves each input
+    # to a graph element, expands sparse tensors into indices/values/dense-shape arguments and
+    # other composite tensors into per-component arguments, then prunes the wrapped function to
+    # a concrete function with those feeds and the signature outputs as fetches. Sets its
+    # keyword argument names and allows a positional argument only if there is exactly one input.
+    # Returns a mapping from signature key to concrete function. If an output depends on an
+    # unfed placeholder, the underlying unliftable error is re-raised with an extended message.
+    """Creates ConcreteFunctions for signatures in `meta_graph_def`."""
     """Creates ConcreteFunctions for signatures in `meta_graph_def`."""
     signature_functions = {}
     for signature_key, signature_def in meta_graph_def.signature_def.items():
@@ -225,6 +295,16 @@ class _EagerSavedModelLoader(loader_impl.SavedModelLoader):
     return signature_functions
 
   def load(self, tags, skip_restoring_checkpoint=False):
+    # [FUNCTION DOC]
+    # Loads the MetaGraph selected by tags (or the only one if tags is nothing) and returns a
+    # trackable root object. Steps: renames library functions with a unique suffix and fixes
+    # node definitions accordingly; imports the graph via a wrapped function; builds the saver
+    # restore function; restores variables unless skip_restoring_checkpoint (boolean, default
+    # false) is true; computes an init op and prunes an init function using asset feeds; runs the
+    # initializer once (adding table initializers and local-variable initializer ops to
+    # collections when not eager); builds signatures. The root exposes restore (if a saver
+    # exists), initializer, asset paths, signatures, variables, TensorFlow version strings, graph
+    # and prune. Side effects: mutates the MetaGraph's function library, ops and graph collections.
     """Creates an object from the MetaGraph identified by `tags`."""
     meta_graph_def = self.get_meta_graph_def_from_tags(tags)
     load_shared_name_suffix = "_load_{}".format(ops.uid())
@@ -310,6 +390,12 @@ class _EagerSavedModelLoader(loader_impl.SavedModelLoader):
 
 
 def load(export_dir, tags, skip_restoring_checkpoint=False):
+  # [FUNCTION DOC]
+  # Public entry point of this module. Loads the v1-style SavedModel in export_dir (a directory
+  # path) using the MetaGraph with the given tags (list of strings, or nothing when the model
+  # has a single MetaGraph) and returns the trackable root object. skip_restoring_checkpoint
+  # (boolean, default false) skips variable restoration. Records read-API and read metrics
+  # (side effect). Errors from the loader propagate.
   """Load a v1-style SavedModel as an object."""
   metrics.IncrementReadApi(_LOAD_V1_V2_LABEL)
   loader = _EagerSavedModelLoader(export_dir)

@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Public v1 API facade for the SavedModel main op helpers. Simply re-exports the main op and
+# main op with restore functions from the implementation module. No logic of its own; the only
+# import-time effect is importing the implementation module.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

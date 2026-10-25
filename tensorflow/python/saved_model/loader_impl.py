@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Implementation of session-based (graph mode) SavedModel loading. Provides functions to parse
+# the SavedModel file (binary or text), read the debug info, find asset tensors, init and train
+# ops, check whether a directory looks like a SavedModel, the deprecated v1 load function, and the
+# loader class used by it (and subclassed by the eager v1 loader). Import-time effect: registers
+# public API exports and defines a metrics label. Public facade modules re-export parts of it.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -44,6 +50,12 @@ _LOADER_LABEL = "loader"
 
 
 def parse_saved_model_with_debug_info(export_dir):
+  # [FUNCTION DOC]
+  # Reads the SavedModel proto from export_dir (via parse_saved_model) and the optional graph debug
+  # info file from the debug subdirectory. A missing debug info file yields an empty debug info
+  # message. Returns a pair: the SavedModel proto and the GraphDebugInfo proto. Raises an I/O
+  # error if the SavedModel is missing or unparsable, or if the debug info file exists but cannot
+  # be parsed (that error does not chain the original decode error).
   """Reads the savedmodel as well as the graph debug info.
 
   Args:
@@ -74,6 +86,14 @@ def parse_saved_model_with_debug_info(export_dir):
 
 @tf_export("__internal__.saved_model.parse_saved_model", v1=[])
 def parse_saved_model(export_dir):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: a path for the cpb-format file is built but never used, so a directory holding
+  # only that format raises the does-not-exist error here, although the directory-check functions
+  # in this module treat that file as a SavedModel. The error message also lists only the pbtxt
+  # and pb names.
+  # Reads the SavedModel proto from export_dir (string or path-like). Prefers the binary file if
+  # it exists, otherwise the text format file. Returns the parsed SavedModel proto. Raises an I/O
+  # error if neither file exists or the file content cannot be parsed. Reads files only.
   """Reads the savedmodel.pb or savedmodel.pbtxt file containing `SavedModel`.
 
   Args:
@@ -124,6 +144,14 @@ def parse_saved_model(export_dir):
 
 
 def get_asset_tensors(export_dir, meta_graph_def_to_load, import_scope=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring promises absolute asset paths, but the value is just the assets
+  # directory joined under export_dir, so it is absolute only if export_dir is absolute.
+  # Collects asset file definitions from the MetaGraph, preferring the asset file definition list
+  # and falling back to the assets collection (unpacking the stored messages). Inputs: export_dir
+  # (SavedModel directory), the MetaGraph definition, and optional import_scope (string prefix
+  # added with a slash to tensor names). Returns a mapping from asset tensor name to the asset
+  # file path (bytes joined path). No side effects.
   """Gets the asset tensors, if defined in the meta graph def to load.
 
   Args:
@@ -168,6 +196,14 @@ def get_asset_tensors(export_dir, meta_graph_def_to_load, import_scope=None):
 
 def _get_main_op_tensor(
     meta_graph_def_to_load, init_op_key=constants.MAIN_OP_KEY):
+  # [FUNCTION DOC]
+  # HELPER: init op lookup for get_init_op and the collection-based op helper.
+  # KNOWN ISSUE: the op is fetched from the default graph's collection of the same name, not from
+  # the node list in the MetaGraph, so it assumes the graph was already imported into the default
+  # graph, and import scopes are not applied.
+  # Looks up the collection named init_op_key (default: the main op key) in the MetaGraph. If
+  # present it must hold exactly one node, otherwise a runtime error is raised; returns the first
+  # item of the default graph's collection with that key. Returns nothing if the key is absent.
   """Gets the main op tensor, if one exists.
 
   Args:
@@ -194,10 +230,18 @@ def _get_main_op_tensor(
 
 
 def _get_op_from_collection(meta_graph_def, op_key):
+  # [FUNCTION DOC]
+  # HELPER: thin alias for the main-op lookup used by get_init_op and get_train_op.
+  # Returns the single op stored in the named collection, or nothing if absent; see the lookup
+  # function for errors and side effects.
   return _get_main_op_tensor(meta_graph_def, op_key)
 
 
 def _get_op_from_signature_def(meta_graph_def, op_signature_key, import_scope):
+  # [FUNCTION DOC]
+  # HELPER: signature-based op lookup for get_init_op and get_train_op.
+  # If the MetaGraph has a signature definition under op_signature_key, returns the op loaded from
+  # it (honoring import_scope, a string prefix or nothing); otherwise returns nothing.
   """Retrieve op stored in the imported meta graph's signature def."""
   if op_signature_key in meta_graph_def.signature_def:
     return signature_def_utils.load_op_from_signature_def(
@@ -208,6 +252,11 @@ def _get_op_from_signature_def(meta_graph_def, op_signature_key, import_scope):
 
 
 def get_init_op(meta_graph_def, import_scope=None):
+  # [FUNCTION DOC]
+  # Finds the initialization op of a loaded MetaGraph. Tries, in order, the init op signature
+  # definition, the main op collection and the legacy init op collection, returning the first
+  # one found, or nothing. import_scope is an optional name prefix used for the signature lookup
+  # only. Raises a runtime error if a collection holds other than exactly one node.
   return (_get_op_from_signature_def(
       meta_graph_def, constants.INIT_OP_SIGNATURE_KEY, import_scope) or
           _get_op_from_collection(meta_graph_def, constants.MAIN_OP_KEY) or
@@ -215,6 +264,11 @@ def get_init_op(meta_graph_def, import_scope=None):
 
 
 def get_train_op(meta_graph_def, import_scope=None):
+  # [FUNCTION DOC]
+  # Finds the training op of a loaded MetaGraph: first from the train op signature definition,
+  # and if absent from the train op collection. import_scope is an optional name prefix for the
+  # signature lookup. Returns the op or nothing. Raises a runtime error if the collection holds
+  # other than exactly one node.
   train_op = _get_op_from_signature_def(
       meta_graph_def, constants.TRAIN_OP_SIGNATURE_KEY, import_scope)
   if train_op is None:
@@ -230,6 +284,11 @@ def get_train_op(meta_graph_def, import_scope=None):
 @deprecation.deprecated_endpoints(
     "saved_model.loader.maybe_saved_model_directory")
 def maybe_saved_model_directory(export_dir):
+  # [FUNCTION DOC]
+  # Cheap check for SavedModel presence. Input: export_dir, a string path (not a path-like
+  # object). Returns true if any of the text, binary or cpb format SavedModel files exists in the
+  # directory, false otherwise. Does not parse the file, so true does not guarantee loadability.
+  # Deprecated endpoint in the v1 API.
   """Checks whether the provided export directory could contain a SavedModel.
 
   Note that the method does not load any data by itself. If the method returns
@@ -256,6 +315,10 @@ def maybe_saved_model_directory(export_dir):
 
 @tf_export("saved_model.contains_saved_model", v1=[])
 def contains_saved_model(export_dir):
+  # [FUNCTION DOC]
+  # Public v2 wrapper around the directory check. Accepts a string or path-like export_dir
+  # (converted to a string) and returns true if a SavedModel file exists there, false otherwise.
+  # Does not verify that the model can be loaded.
   """Checks whether the provided export directory could contain a SavedModel.
 
   Note that the method does not load any data by itself. If the method returns
@@ -280,6 +343,12 @@ def contains_saved_model(export_dir):
     None,
     "Use `tf.saved_model.load` instead.")
 def load(sess, tags, export_dir, import_scope=None, **saver_kwargs):
+  # [FUNCTION DOC]
+  # Deprecated v1 function: loads the MetaGraph with the given tags (set or list of strings) from
+  # export_dir into the graph of session sess, restores variables and runs init ops. Optional
+  # import_scope prefixes tensor names; extra keyword arguments go to the saver import. Creates a
+  # loader object and delegates to its load method. Returns the loaded MetaGraph definition.
+  # Raises a runtime error if no MetaGraph matches the tags; file errors propagate.
   """Loads the model from a SavedModel as specified by tags.
 
   Args:
@@ -346,9 +415,18 @@ def load(sess, tags, export_dir, import_scope=None, **saver_kwargs):
 
 
 class SavedModelLoader(object):
+  # [CLASS DOC]
+  # Loader for a SavedModel in a directory. Parses the SavedModel proto on construction and keeps
+  # the export directory, the variables checkpoint path and the parsed proto (exposed through
+  # read-only properties). Provides steps to pick a MetaGraph by tags, import its graph, restore
+  # variables and run init ops, plus a combined load. Subclassed by the eager v1 loader.
   """Load graphs and restore variable values from a `SavedModel`."""
 
   def __init__(self, export_dir):
+    # [FUNCTION DOC]
+    # Constructor. Input: export_dir, the SavedModel directory. Stores it, computes the
+    # variables checkpoint path, and parses the SavedModel file. Raises an I/O error if the
+    # SavedModel file is missing or unparsable. Returns nothing.
     """Creates a `SavedModelLoader`.
 
     Args:
@@ -361,20 +439,30 @@ class SavedModelLoader(object):
 
   @property
   def export_dir(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the SavedModel directory given at construction.
     """Directory containing the SavedModel."""
     return self._export_dir
 
   @property
   def variables_path(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the path prefix of the variables checkpoint files.
     """Path to variable checkpoint files."""
     return self._variables_path
 
   @property
   def saved_model(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the parsed SavedModel proto held by the loader.
     """SavedModel object parsed from the export directory."""
     return self._saved_model
 
   def get_meta_graph_def_from_tags(self, tags):
+    # [FUNCTION DOC]
+    # Finds the MetaGraph whose tag set equals the set of the given tags (list or set of strings,
+    # order and duplicates ignored); the first match is returned. Raises a runtime error listing
+    # the available tag sets if none matches. No side effects.
     """Return MetaGraphDef with the exact specified tags.
 
     Args:
@@ -405,6 +493,15 @@ class SavedModelLoader(object):
     return meta_graph_def_to_load
 
   def load_graph(self, graph, tags, import_scope=None, **saver_kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it returns a tuple of saver and list of imported elements;
+    # that is what the underlying import returns, but the MetaGraph is modified in place on
+    # big-endian hosts, and the documented import_scope remark about the returned definition does
+    # not apply since no definition is returned.
+    # Imports the MetaGraph selected by tags into the given graph, passing import_scope and extra
+    # keyword arguments to the import. On big-endian machines first byte-swaps function tensor
+    # contents of the MetaGraph (mutating it). Returns the saver defined by the MetaGraph and the
+    # list of returned elements. Raises a runtime error if no MetaGraph matches the tags.
     """Load ops and nodes from SavedModel MetaGraph into graph.
 
     Args:
@@ -432,6 +529,12 @@ class SavedModelLoader(object):
           meta_graph_def, import_scope=import_scope, **saver_kwargs)
 
   def restore_variables(self, sess, saver, import_scope=None):
+    # [FUNCTION DOC]
+    # Restores variable values from the SavedModel checkpoint into session sess. If saver is
+    # nothing and the graph (within import_scope) has no saveable variables, logs that there is
+    # nothing to restore. If saver is a saver object, restores from the variables path. Otherwise
+    # raises a value error saying a saver is required. Side effect: assigns variable values in
+    # the session.
     """Restore SavedModel variable values into the session.
 
     Args:
@@ -462,6 +565,11 @@ class SavedModelLoader(object):
             " the graph, a saver is required.")
 
   def run_init_ops(self, sess, tags, import_scope=None):
+    # [FUNCTION DOC]
+    # Runs the initialization op of the MetaGraph selected by tags in session sess, feeding the
+    # asset file paths to their asset tensors. Does nothing if the MetaGraph has no init op.
+    # import_scope is an optional name prefix. Raises a runtime error if no MetaGraph matches.
+    # Returns nothing.
     """Run initialization ops defined in the `MetaGraphDef`.
 
     Args:
@@ -483,6 +591,12 @@ class SavedModelLoader(object):
         sess.run(fetches=[init_op], feed_dict=asset_tensors_dictionary)
 
   def load(self, sess, tags, import_scope=None, **saver_kwargs):
+    # [FUNCTION DOC]
+    # Full session-based load. Re-parses the SavedModel file (only to decide metrics), records a
+    # read-API metric, then within the session graph imports the MetaGraph for tags, restores
+    # variables and runs init ops. Records a read metric tagged version 2 if there is a single
+    # MetaGraph with an object graph, else version 1. Returns the loaded MetaGraph definition.
+    # Inputs: sess, tags, optional import_scope and saver keyword arguments. Errors propagate.
     """Load the MetaGraphDef graph and restore variable values into the session.
 
     Args:
