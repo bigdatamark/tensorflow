@@ -1,3 +1,15 @@
+# [MODULE DOC]
+# Implements efficient addition of linear operators. The public-style entry point is
+# add_operators, which takes several LinearOperator objects and returns a possibly shorter list
+# of operators whose sum acts the same way, by merging pairs using "adder" strategies organized
+# in tiers (cheapest result type first: scaled identity, diagonal, lower triangular, and finally
+# a dense full matrix as the catch-all).
+# Also defines internal helpers: a hints container, an abstract adder base class, four concrete
+# adders, a function classifying operators by type, static dimension/batch-shape checks, type
+# name constants and the default tier list.
+# The module has an empty export list, so it is not re-exported wholesale; users import the
+# module directly. Import-time side effects: creates one instance of each concrete adder for the
+# default tier list; no registrations or flags.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,6 +45,23 @@ def add_operators(operators,
                   operator_name=None,
                   addition_tiers=None,
                   name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring lists only value errors, but a type error is also raised when any
+  # element of operators is not a LinearOperator. The empty-input error message also prints the
+  # already reversed (and empty) list.
+  # Adds linear operators efficiently. Inputs: operators (an iterable of LinearOperator objects
+  # sharing dtype, domain and range dimensions, with broadcastable batch shapes), operator_name
+  # (optional string name for each created sum operator; default builds a name from the operand
+  # names), addition_tiers (optional list of tiers, each a list of adder objects; default is the
+  # module default tiers) and name (optional name scope, default "add_operators").
+  # Validates that the input is a proper iterable, non-empty, all LinearOperators, with static
+  # dimensions and batch shapes compatible. Then, for each tier in order, repeatedly takes an
+  # operator, looks for a partner it can be added to within the tier, and if found replaces the
+  # pair by their sum (which is retried in the same tier); unmatched operators move on to the
+  # next tier. Returns the list of remaining operators (their sum equals the original sum);
+  # the order follows the processing order and may change. Raises a value error for empty input
+  # or incompatible static shapes and a type error for non-operators. Creates ops inside a name
+  # scope; does not mutate the caller's list (it works on a reversed copy).
   """Efficiently add one or more linear operators.
 
   Given operators `[A1, A2,...]`, this `Op` returns a possibly shorter list of
@@ -129,6 +158,12 @@ def add_operators(operators,
 
 
 def _pop_a_match_at_tier(op1, operator_list, tier):
+  # [FUNCTION DOC]
+  # HELPER: partner search step used by add_operators.
+  # Searches operator_list from its back toward its front for an operator that some adder in the
+  # given tier (a list of adders) can add to op1. On the first match it removes that operator
+  # from operator_list (mutating it) and returns the pair of the removed operator and the adder.
+  # If nothing matches it returns a pair of null values and leaves the list unchanged.
   # Search from the back of list to the front in order to create nice default
   # order of operations.
   for i in range(1, len(operator_list) + 1):
@@ -140,6 +175,13 @@ def _pop_a_match_at_tier(op1, operator_list, tier):
 
 
 def _infer_hints_allowing_override(op1, op2, hints):
+  # [FUNCTION DOC]
+  # HELPER: computes matrix-property hints for the sum of two operators in Adder.add.
+  # Inputs: op1 and op2 (LinearOperators) and hints (a hints object or null). Explicit hints
+  # win; missing ones are inferred: the sum is self-adjoint / positive definite only if both
+  # operands are (an unknown operand hint yields a falsy or unknown result), and a positive
+  # definite result inferred this way implies non-singular. Otherwise non-singular is copied
+  # from hints. Returns a new hints object; no side effects.
   """Infer hints from op1 and op2.  hints argument is an override.
 
   Args:
@@ -181,6 +223,12 @@ def _infer_hints_allowing_override(op1, op2, hints):
 
 
 def _static_check_for_same_dimensions(operators):
+  # [FUNCTION DOC]
+  # HELPER: validation step used by add_operators.
+  # Given a list of operators, returns immediately if fewer than two. Otherwise collects the
+  # statically known domain dimensions and the statically known range dimensions (unknown ones
+  # are skipped) and raises a value error, listing operator names with their dimensions, if more
+  # than one distinct value occurs for either. Returns nothing; no side effects.
   """ValueError if operators determined to have different dimensions."""
   if len(operators) < 2:
     return
@@ -203,6 +251,11 @@ def _static_check_for_same_dimensions(operators):
 
 
 def _static_check_for_broadcastable_batch_shape(operators):
+  # [FUNCTION DOC]
+  # HELPER: validation step used by add_operators.
+  # Given a list of operators, returns immediately if fewer than two. Otherwise progressively
+  # broadcasts their static batch shapes together; the broadcasting helper raises a value error
+  # if two shapes cannot be broadcast. The result is discarded. Returns nothing.
   """ValueError if operators determined to have non-broadcastable shapes."""
   if len(operators) < 2:
     return
@@ -214,12 +267,23 @@ def _static_check_for_broadcastable_batch_shape(operators):
 
 
 class _Hints:
+  # [CLASS DOC]
+  # HELPER: plain data holder for the matrix-property hints passed between the addition helpers
+  # and adders.
+  # Holds three attributes: is_non_singular, is_positive_definite and is_self_adjoint, each true,
+  # false or null (unknown). Created by the helpers with no arguments or with keyword values and
+  # read when constructing the result operator of an addition.
   """Holds 'is_X' flags that every LinearOperator is initialized with."""
 
   def __init__(self,
                is_non_singular=None,
                is_positive_definite=None,
                is_self_adjoint=None):
+    # [FUNCTION DOC]
+    # HELPER: constructor of the hints holder.
+    # Stores the three optional hints (non-singular, positive definite, self-adjoint; each true,
+    # false or null for unknown, all defaulting to null) as attributes of the same names.
+    # Returns nothing.
     self.is_non_singular = is_non_singular
     self.is_positive_definite = is_positive_definite
     self.is_self_adjoint = is_self_adjoint
@@ -231,6 +295,12 @@ class _Hints:
 
 
 class _Adder(metaclass=abc.ABCMeta):
+  # [CLASS DOC]
+  # HELPER: abstract base class for the addition strategies used by add_operators.
+  # Stateless. Subclasses declare which pairs of operators they can add (can_add) and how to
+  # build the sum (the private add hook); the public add method wraps that with hint inference,
+  # default naming and a name scope. Uses an abstract-base-class metaclass, so subclasses must
+  # implement both abstract methods.
   """Abstract base class to add two operators.
 
   Each `Adder` acts independently, adding everything it can, paying no attention
@@ -239,20 +309,37 @@ class _Adder(metaclass=abc.ABCMeta):
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # HELPER: naming support for adders.
+    # Read-only property returning the adder's class name, used as the name scope of additions.
     return self.__class__.__name__
 
   @abc.abstractmethod
   def can_add(self, op1, op2):
+    # [FUNCTION DOC]
+    # Abstract predicate. Subclasses take two LinearOperators and return true if this adder is
+    # able to add them, false otherwise. The base implementation does nothing (returns null).
     """Returns `True` if this `Adder` can add `op1` and `op2`.  Else `False`."""
     pass
 
   @abc.abstractmethod
   def _add(self, op1, op2, operator_name, hints):
+    # [FUNCTION DOC]
+    # Abstract hook. Subclasses build and return the LinearOperator representing op1 plus op2,
+    # given the result name and a finished hints object. Callers guarantee that the operands
+    # were validated (same dtype, matching dimensions). The base implementation does nothing.
     # Derived classes can assume op1 and op2 have been validated, e.g. they have
     # the same dtype, and their domain/range dimensions match.
     pass
 
   def add(self, op1, op2, operator_name, hints=None):
+    # [FUNCTION DOC]
+    # Public entry point for adding two operators with this adder. Inputs: op1 and op2
+    # (LinearOperators that can be added), operator_name (string name for the result, or null to
+    # build "Add/" plus both names), and hints (optional hints object overriding inferred
+    # hints). Infers final hints, then calls the subclass hook inside a name scope named after
+    # the adder class (without a leading underscore). Returns the new LinearOperator. Does not
+    # itself verify can_add; callers are responsible.
     """Return new `LinearOperator` acting like `op1 + op2`.
 
     Args:
@@ -279,6 +366,10 @@ class _Adder(metaclass=abc.ABCMeta):
 
 
 class _AddAndReturnScaledIdentity(_Adder):
+  # [CLASS DOC]
+  # HELPER: concrete adder, first tier of the default tiers.
+  # Adds two operators that both belong to the identity family (identity or scaled identity) and
+  # returns a scaled identity operator, since that family is closed under addition. Stateless.
   """Handles additions resulting in an Identity family member.
 
   The Identity (`LinearOperatorScaledIdentity`, `LinearOperatorIdentity`) family
@@ -286,10 +377,18 @@ class _AddAndReturnScaledIdentity(_Adder):
   """
 
   def can_add(self, op1, op2):
+    # [FUNCTION DOC]
+    # Returns true when both operators are identity or scaled identity operators. Raises a type
+    # error (from the type classifier) if either operator is of an unsupported class.
     types = {_type(op1), _type(op2)}
     return not types.difference(_IDENTITY_FAMILY)
 
   def _add(self, op1, op2, operator_name, hints):
+    # [FUNCTION DOC]
+    # Builds a scaled identity operator equal to op1 plus op2. The multiplier of each operand is
+    # its own multiplier if it is a scaled identity, otherwise a tensor of ones (matching the
+    # operand's batch shape and dtype) for a plain identity. The result has the range dimension
+    # of op1, the sum of the multipliers, the given hints, and the given name.
     # Will build a LinearOperatorScaledIdentity.
 
     if _type(op1) == _SCALED_IDENTITY:
@@ -312,13 +411,23 @@ class _AddAndReturnScaledIdentity(_Adder):
 
 
 class _AddAndReturnDiag(_Adder):
+  # [CLASS DOC]
+  # HELPER: concrete adder, second tier of the default tiers.
+  # Adds two diagonal-like operators (diagonal, identity or scaled identity) and returns a
+  # diagonal operator. Stateless.
   """Handles additions resulting in a Diag operator."""
 
   def can_add(self, op1, op2):
+    # [FUNCTION DOC]
+    # Returns true when both operators are diagonal, identity or scaled identity operators.
+    # Raises a type error (from the type classifier) for unsupported operator classes.
     types = {_type(op1), _type(op2)}
     return not types.difference(_DIAG_LIKE)
 
   def _add(self, op1, op2, operator_name, hints):
+    # [FUNCTION DOC]
+    # Builds a diagonal operator whose diagonal is the sum of the two operands' diagonal parts,
+    # using the given hints and name.
     return linear_operator_diag.LinearOperatorDiag(
         diag=op1.diag_part() + op2.diag_part(),
         is_non_singular=hints.is_non_singular,
@@ -328,13 +437,25 @@ class _AddAndReturnDiag(_Adder):
 
 
 class _AddAndReturnTriL(_Adder):
+  # [CLASS DOC]
+  # HELPER: concrete adder, third tier of the default tiers.
+  # Adds operators that are each diagonal-like or lower triangular and returns a lower
+  # triangular operator. Stateless.
   """Handles additions resulting in a TriL operator."""
 
   def can_add(self, op1, op2):
+    # [FUNCTION DOC]
+    # Returns true when each operator is diagonal, identity, scaled identity or lower triangular.
+    # Raises a type error (from the type classifier) for unsupported operator classes.
     types = {_type(op1), _type(op2)}
     return not types.difference(_DIAG_LIKE.union({_TRIL}))
 
   def _add(self, op1, op2, operator_name, hints):
+    # [FUNCTION DOC]
+    # Builds a lower triangular operator. Picks as the "adding" operand the first one whose type
+    # has an efficient add-to-tensor method (diagonal-like), otherwise the second, then adds it to
+    # the dense form of the other operand. The resulting dense lower triangular matrix is wrapped
+    # with the given hints and name. Materializes a dense matrix.
     if _type(op1) in _EFFICIENT_ADD_TO_TENSOR:
       op_add_to_tensor, op_other = op1, op2
     else:
@@ -349,13 +470,26 @@ class _AddAndReturnTriL(_Adder):
 
 
 class _AddAndReturnMatrix(_Adder):
+  # [CLASS DOC]
+  # HELPER: concrete adder, last (catch-all) tier of the default tiers.
+  # KNOWN ISSUE: the docstring below starts with four quote characters, so the text begins with
+  # a stray quote mark; harmless but a typo.
+  # Adds any two LinearOperators by densifying and returns a full-matrix operator. Stateless.
   """"Handles additions resulting in a `LinearOperatorFullMatrix`."""
 
   def can_add(self, op1, op2):  # pylint: disable=unused-argument
+    # [FUNCTION DOC]
+    # Returns true if both arguments are LinearOperator instances (any kind), false otherwise.
     return isinstance(op1, linear_operator.LinearOperator) and isinstance(
         op2, linear_operator.LinearOperator)
 
   def _add(self, op1, op2, operator_name, hints):
+    # [FUNCTION DOC]
+    # Builds a full-matrix operator. Chooses as the "adding" operand the first one with an
+    # efficient add-to-tensor method (else the second), adds it to the other operand's dense
+    # form, and wraps the dense result with the given hints and name. Materializes the full
+    # matrix, which can be memory and time intensive. Raises a type error for unsupported
+    # operator classes (from the type classifier).
     if _type(op1) in _EFFICIENT_ADD_TO_TENSOR:
       op_add_to_tensor, op_other = op1, op2
     else:
@@ -396,6 +530,12 @@ SUPPORTED_OPERATORS = [
 
 
 def _type(operator):
+  # [FUNCTION DOC]
+  # HELPER: classifier used by the adders.
+  # Maps a LinearOperator to one of the type-name constants (diagonal, lower triangular, full
+  # matrix, identity, scaled identity) by checking its class. Raises a type error naming the
+  # supported classes if the operator is none of them (so subclasses of other operator types,
+  # such as the adjoint operator, are rejected). No side effects.
   """Returns the type name constant (e.g. _TRIL) for operator."""
   if isinstance(operator, linear_operator_diag.LinearOperatorDiag):
     return _DIAG
