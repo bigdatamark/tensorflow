@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# KNOWN ISSUE: the availability flag is read from the tb_summary module with a safe lookup, but that
+# module never defines it, so the flag is always false and every test in this module is skipped.
+# Test module for the version 1 summary functions when TF2 behavior is enabled: in eager mode they
+# forward to the version 2 TensorBoard summary functions (replaced by mocks here), emit a warning
+# and skip when no default writer or global step exists, and return an empty string tensor. Also
+# checks that the version 2 write functions reject non-scalar steps. Skipped entirely when the
+# TensorBoard package is unavailable. Run as a test binary.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -38,9 +46,18 @@ TENSORBOARD_AVAILABLE = (
 
 @unittest.skipIf(not TENSORBOARD_AVAILABLE, 'Tensorboard not installed.')
 class SummaryV2Test(test.TestCase):
+  # [CLASS DOC]
+  # Test case (skipped if TensorBoard is not installed) for the bridging between version 1
+  # summary functions and version 2 summary functions. Tests run only under TF2 behavior, replace
+  # the TensorBoard summary function with an auto-specced mock, write with a summary file writer
+  # in the temp directory, and assert on the call arguments and returned tensor.
 
   @test_util.run_v2_only
   def test_scalar_summary_v2__w_writer(self):
+    # [FUNCTION DOC]
+    # Test (TF2 only): with a default writer at step one, the version 1 scalar function returns an
+    # empty string tensor and calls the mocked version 2 scalar exactly once with the given name,
+    # data and the step.
     """Tests scalar v2 invocation with a v2 writer."""
     with test.mock.patch.object(
         tb_summary, 'scalar', autospec=True) as mock_scalar_v2:
@@ -55,6 +72,9 @@ class SummaryV2Test(test.TestCase):
 
   @test_util.run_v2_only
   def test_scalar_summary_v2__wo_writer(self):
+    # [FUNCTION DOC]
+    # Test (TF2 only): without any default writer the version 1 scalar function emits a user
+    # warning that no default summary writer was found and does not call the version 2 scalar.
     """Tests scalar v2 invocation with no writer."""
     with self.assertWarnsRegex(
         UserWarning, 'default summary writer not found'):
@@ -65,6 +85,9 @@ class SummaryV2Test(test.TestCase):
 
   @test_util.run_v2_only
   def test_scalar_summary_v2__global_step_not_set(self):
+    # [FUNCTION DOC]
+    # Test (TF2 only): with a default writer but no step set, the version 1 scalar function warns
+    # that the global step is not set and does not call the version 2 scalar.
     """Tests scalar v2 invocation when global step is not set."""
     with self.assertWarnsRegex(UserWarning, 'global step not set'):
       with test.mock.patch.object(
@@ -76,6 +99,10 @@ class SummaryV2Test(test.TestCase):
 
   @test_util.run_v2_only
   def test_tf_summary_scalar_invalid_step_shapes_raise(self):
+    # [FUNCTION DOC]
+    # Test (TF2 only): with a writer active, writing a scalar with each of several invalid steps
+    # (empty or multi-element tuples and lists, rank one and rank two tensors) raises a value
+    # error every time.
     writer = summary_ops_v2.create_summary_file_writer(self.get_temp_dir())
 
     invalid_steps = [
@@ -94,6 +121,8 @@ class SummaryV2Test(test.TestCase):
 
   @test_util.run_v2_only
   def test_tf_summary_histogram_invalid_step_raises(self):
+    # [FUNCTION DOC]
+    # Test (TF2 only): writing a histogram with an empty tuple as step raises a value error.
     writer = summary_ops_v2.create_summary_file_writer(self.get_temp_dir())
 
     with writer.as_default(step=1):
@@ -106,6 +135,8 @@ class SummaryV2Test(test.TestCase):
 
   @test_util.run_v2_only
   def test_tf_summary_image_invalid_step_raises(self):
+    # [FUNCTION DOC]
+    # Test (TF2 only): writing an image summary with an empty tuple as step raises a value error.
     writer = summary_ops_v2.create_summary_file_writer(self.get_temp_dir())
 
     image = array_ops.ones((1, 4, 4, 3))
@@ -120,6 +151,9 @@ class SummaryV2Test(test.TestCase):
 
   @test_util.run_v2_only
   def test_tf_summary_audio_invalid_step_raises(self):
+    # [FUNCTION DOC]
+    # Test (TF2 only): writing an audio summary (sample rate sixteen thousand, one output) with an
+    # empty tuple as step raises a value error.
     writer = summary_ops_v2.create_summary_file_writer(self.get_temp_dir())
 
     audio = array_ops.ones((1, 16000, 1))
@@ -136,6 +170,9 @@ class SummaryV2Test(test.TestCase):
 
   @test_util.run_v2_only
   def test_tf_summary_write_invalid_step_raises(self):
+    # [FUNCTION DOC]
+    # Test (TF2 only): the generic write function with an empty tuple as step raises a value
+    # error.
     writer = summary_ops_v2.create_summary_file_writer(self.get_temp_dir())
 
     with writer.as_default(step=1):
@@ -148,6 +185,9 @@ class SummaryV2Test(test.TestCase):
 
   @test_util.run_v2_only
   def test_tf_summary_trace_export_invalid_step_raises(self):
+    # [FUNCTION DOC]
+    # Test (TF2 only): turns graph tracing on under a default writer, then exporting the trace
+    # with an empty tuple as step raises a value error. Side effect: tracing is left on.
     writer = summary_ops_v2.create_summary_file_writer(self.get_temp_dir())
 
     with writer.as_default():
@@ -158,6 +198,10 @@ class SummaryV2Test(test.TestCase):
 
   @test_util.run_v2_only
   def test_scalar_summary_v2__family(self):
+    # [FUNCTION DOC]
+    # Test (TF2 only): version 1 scalar with a family argument forwards to the mocked version 2
+    # scalar with the family applied as a name prefix, repeated around the name (the family
+    # followed by the family-qualified scope), at step one; returns an empty string tensor.
     """Tests `family` arg handling when scalar v2 is invoked."""
     with test.mock.patch.object(
         tb_summary, 'scalar', autospec=True) as mock_scalar_v2:
@@ -176,6 +220,9 @@ class SummaryV2Test(test.TestCase):
 
   @test_util.run_v2_only
   def test_scalar_summary_v2__family_w_outer_scope(self):
+    # [FUNCTION DOC]
+    # Test (TF2 only): same as the family test but inside an outer name scope; asserts the
+    # forwarded name is the family, the outer scope, the family again and the base name.
     """Tests `family` arg handling when there is an outer scope."""
     with test.mock.patch.object(
         tb_summary, 'scalar', autospec=True) as mock_scalar_v2:
@@ -195,6 +242,11 @@ class SummaryV2Test(test.TestCase):
 
   @test_util.run_v2_only
   def test_scalar_summary_v2__v1_set_step(self):
+    # [FUNCTION DOC]
+    # Test (TF2 only): creates a version 1 global step and assigns 1024, then writes a scalar with
+    # a default writer that has no explicit step. Asserts the mocked version 2 scalar receives
+    # step 1024, i.e. the global step is used as fallback. Side effect: creates a global step in
+    # the default graph.
     """Tests scalar v2 invocation when v1 step is set."""
     global_step = training_util.create_global_step()
     global_step.assign(1024)
@@ -211,6 +263,10 @@ class SummaryV2Test(test.TestCase):
 
   @test_util.run_v2_only
   def test_image_summary_v2(self):
+    # [FUNCTION DOC]
+    # Test (TF2 only): version 1 image with a family, maximum outputs three, inside an outer scope
+    # at step two forwards to the mocked version 2 image with the combined family/scope name, the
+    # data, the step and max outputs; returns an empty string tensor.
     """Tests image v2 invocation."""
     with test.mock.patch.object(
         tb_summary, 'image', autospec=True) as mock_image_v2:
@@ -231,6 +287,10 @@ class SummaryV2Test(test.TestCase):
 
   @test_util.run_v2_only
   def test_histogram_summary_v2(self):
+    # [FUNCTION DOC]
+    # Test (TF2 only): version 1 histogram with a family at step three forwards to the mocked
+    # version 2 histogram with the family-prefixed name, data and step; returns an empty string
+    # tensor.
     """Tests histogram v2 invocation."""
     with test.mock.patch.object(
         tb_summary, 'histogram', autospec=True) as mock_histogram_v2:
@@ -249,6 +309,10 @@ class SummaryV2Test(test.TestCase):
 
   @test_util.run_v2_only
   def test_audio_summary_v2(self):
+    # [FUNCTION DOC]
+    # Test (TF2 only): version 1 audio inside an outer scope at step ten forwards to the mocked
+    # version 2 audio with the scoped name, data, sample rate 0.2, step and max outputs three;
+    # returns an empty string tensor.
     """Tests audio v2 invocation."""
     with test.mock.patch.object(
         tb_summary, 'audio', autospec=True) as mock_audio_v2:
@@ -270,6 +334,10 @@ class SummaryV2Test(test.TestCase):
 
   @test_util.run_v2_only
   def test_audio_summary_v2__2d_tensor(self):
+    # [FUNCTION DOC]
+    # Test (TF2 only): version 1 audio given a two-dimensional tensor forwards to the mocked
+    # version 2 audio with data reshaped to three dimensions by appending a channel axis of size
+    # one; asserts the forwarded data equals an all-ones tensor of shape five, three, one.
     """Tests audio v2 invocation with 2-D tensor input."""
     with test.mock.patch.object(
         tb_summary, 'audio', autospec=True) as mock_audio_v2:
@@ -294,6 +362,9 @@ class SummaryV2Test(test.TestCase):
 
   @test_util.run_v2_only
   def test_text_summary_v2(self):
+    # [FUNCTION DOC]
+    # Test (TF2 only): version 1 text of a string constant at step twenty-two forwards to the
+    # mocked version 2 text with the name, data and step; returns an empty string tensor.
     """Tests text v2 invocation."""
     with test.mock.patch.object(
         tb_summary, 'text', autospec=True) as mock_text_v2:

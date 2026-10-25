@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Test module guarding the allowlists of TensorFlow's saved-model registrations. It compares the
+# names registered at import time (serializable classes and checkpoint savers) with two text files
+# shipped as data (tf_serializable_allowlist.txt and tf_checkpoint_saver_allowlist.txt), so any
+# added or removed registration must be approved by the Saved Model team.
+# Import-time side effects: touches the TPU embedding class and the save function so their modules
+# load and register, registers a dummy serializable class and two dummy checkpoint savers that are
+# deliberately absent from the allowlists, and defines the allowlist path constants.
+# Run as a test binary via the platform test main entry point.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -39,6 +48,11 @@ _ = tf.saved_model.save
 
 @registration.register_tf_serializable()
 class NotInAllowlistExample(tf.Variable):
+  # [CLASS DOC]
+  # HELPER: sentinel fixture for AllowlistTest.
+  # Empty variable subclass registered as a serializable class under the tf namespace. It is
+  # intentionally missing from the allowlist so the test can verify that unlisted registrations
+  # are detected. It has no state or behavior of its own.
   pass
 
 
@@ -56,8 +70,22 @@ registration.register_tf_checkpoint_saver(
 
 
 class AllowlistTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case verifying that the set of registered checkpoint savers and registered serializable
+  # classes exactly matches the corresponding allowlist data files. Holds no fixtures; each test
+  # delegates to the shared allowlist comparison helper.
 
   def _test_allowlist(self, allowlist_file, registrations):
+    # [FUNCTION DOC]
+    # HELPER: shared comparison logic for the allowlist tests in AllowlistTest.
+    # Reads the allowlist file (path given by allowlist_file), ignoring blank lines and lines
+    # starting with a hash, and compares it to registrations (an iterable of registered names).
+    # First it asserts that the sentinel name for the unlisted example class is reported as
+    # missing from the allowlist, then removes it from consideration. It then builds a message
+    # listing names registered but not allowlisted, and names allowlisted but no longer
+    # registered. Returns nothing. Raises an assertion error with instructions to update the
+    # allowlist and obtain owner approval if either difference is non-empty; otherwise passes.
+    # The sentinel assertion itself fails if the sentinel is not reported missing.
     allowlist = set([
         s.strip()
         for s in file_io.read_file_to_string(allowlist_file).splitlines()
@@ -98,10 +126,18 @@ class AllowlistTest(test.TestCase):
           " tf-saved-model-owners@.")
 
   def test_checkpoint_savers(self):
+    # [FUNCTION DOC]
+    # Test: compares all registered checkpoint savers, obtained from the registration test
+    # utilities, against the checkpoint saver allowlist file. Expects no differences apart from
+    # the deliberately unlisted sentinel saver.
     self._test_allowlist(CHECKPOINT_SAVER_ALLOWLIST,
                          test_util.get_all_registered_checkpoint_savers())
 
   def test_serializables(self):
+    # [FUNCTION DOC]
+    # Test: compares all registered serializable classes, obtained from the registration test
+    # utilities, against the serializable allowlist file. Expects no differences apart from the
+    # deliberately unlisted sentinel class.
     self._test_allowlist(SERIALIZABLE_ALLOWLIST,
                          test_util.get_all_registered_serializables())
 

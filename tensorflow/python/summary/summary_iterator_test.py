@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test module for the summary iterator: writes events with a file writer and checks that the
+# iterator yields them in order and can resume reading after reaching end of file when new
+# events are appended. Run as a test binary.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,9 +29,18 @@ from tensorflow.python.summary.writer import writer
 
 
 class SummaryIteratorTestCase(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the summary iterator reading events produced by a version 1 file writer into a
+  # temporary directory. No shared fixtures.
 
   @test_util.run_deprecated_v1
   def testSummaryIteratorEventsAddedAfterEndOfFile(self):
+    # [FUNCTION DOC]
+    # Test (runs in version 1 mode): writes a session-start log at step one, flushes, and opens an
+    # iterator on the event file. Asserts the first event carries the file version marker, the
+    # second is the step one start event, and then end of file raises stop-iteration. Appends a
+    # step two start log, flushes, and asserts the same iterator now yields it, then hits end of
+    # file again.
     test_dir = os.path.join(self.get_temp_dir(), "events")
     with writer.FileWriter(test_dir) as w:
       session_log_start = event_pb2.SessionLog.START

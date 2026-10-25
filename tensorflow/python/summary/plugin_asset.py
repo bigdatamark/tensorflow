@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Defines the abstract base class for TensorBoard plugin assets plus helpers that manage them as
+# per-graph singletons. Plugin assets are stored in graph collections under a fixed prefix plus
+# the plugin name, and a separate index collection under the bare prefix lists the plugin names.
+# A summary file writer later asks each asset for its contents and writes them to disk.
+# Exposes get_plugin_asset, get_all_plugin_assets and the PluginAsset class. No import-time side
+# effects beyond defining a private prefix constant.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -34,6 +41,17 @@ _PLUGIN_ASSET_PREFIX = "__tensorboard_plugin_asset__"
 
 
 def get_plugin_asset(plugin_asset_cls, graph=None):
+  # [FUNCTION DOC]
+  # Returns the singleton instance of the given PluginAsset subclass for a graph, creating it on
+  # first use. Inputs: plugin_asset_cls, a subclass that must define a non-empty plugin_name;
+  # graph, optional graph (defaults to the current default graph).
+  # Looks up the graph collection named by the prefix plus the plugin name. If an entry exists it
+  # must be the only item and an instance of the requested class; it is returned. Otherwise a new
+  # instance is built with no arguments, added to that collection, and the plugin name is also
+  # appended to the index collection (side effects on the graph).
+  # Raises a value error if the class has no plugin name, if the collection holds other than one
+  # item, or if an existing instance is not an instance of the requested class (name collision
+  # between two classes sharing a plugin name).
   """Acquire singleton PluginAsset instance from a graph.
 
   PluginAssets are always singletons, and are stored in tf Graph collections.
@@ -76,6 +94,12 @@ def get_plugin_asset(plugin_asset_cls, graph=None):
 
 
 def get_all_plugin_assets(graph=None):
+  # [FUNCTION DOC]
+  # Returns a list of every plugin asset instance registered in a graph. Input: graph, optional
+  # (defaults to the current default graph). Iterates over the plugin names in the index
+  # collection and fetches the single instance stored for each; the order follows registration.
+  # Raises a value error if any per-plugin collection does not contain exactly one item. Does not
+  # modify the graph.
   """Retrieve all PluginAssets stored in the graph collection.
 
   Args:
@@ -104,6 +128,12 @@ def get_all_plugin_assets(graph=None):
 
 
 class PluginAsset(metaclass=abc.ABCMeta):
+  # [CLASS DOC]
+  # Abstract base class for assets that a TensorBoard plugin wants written next to the graph.
+  # Subclasses set the class attribute plugin_name (default is nothing, which makes the instance
+  # impossible to obtain through get_plugin_asset) and implement the assets method. Instances are
+  # created without arguments by get_plugin_asset, one per graph and plugin name, and are
+  # queried by the summary file writer when the graph is serialized.
   """This abstract base class allows TensorBoard to serialize assets to disk.
 
   Plugin authors are expected to extend the PluginAsset class, so that it:
@@ -125,6 +155,10 @@ class PluginAsset(metaclass=abc.ABCMeta):
 
   @abc.abstractmethod
   def assets(self):
+    # [FUNCTION DOC]
+    # Abstract method: subclasses return a mapping from asset file names to asset contents
+    # (strings). The base implementation takes no inputs and always raises a not-implemented
+    # error. Called by the summary file writer when assets are written to disk.
     """Provide all of the assets contained by the PluginAsset instance.
 
     The assets method should return a dictionary structured as

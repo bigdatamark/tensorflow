@@ -1,3 +1,15 @@
+# [MODULE DOC]
+# KNOWN ISSUE: the error messages of merge and merge_all tell users to use the contrib summary
+# package, which no longer exists in this release.
+# Version 1 summary API: functions that add summary operations to the graph (scalar, image,
+# histogram, audio, text, tensor_summary), merge them (merge, merge_all) and inspect them
+# (get_summary_description), exported under the version 1 summary namespace. Also re-exports the
+# summary, event and session-log message types and the file writer classes so they appear in the
+# same namespace. When running under TF2 behavior in eager mode with a default version 2 writer
+# and a step, the creating functions forward to the TensorBoard version 2 summary functions and
+# return an empty string tensor instead. Private helpers handle the step lookup, the decision to
+# forward and the family scoping. Imports are aliased with a leading underscore to keep the
+# public namespace clean.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -60,6 +72,18 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export(v1=['summary.scalar'])
 def scalar(name, tensor, collections=None, family=None):
+  # [FUNCTION DOC]
+  # Creates a version 1 scalar summary operation. Inputs: name (node and series name), tensor
+  # (real numeric tensor holding a single value), collections (optional list of graph collection
+  # keys, default the summaries collection), family (optional tag prefix that groups the
+  # dashboard tab). Returns a scalar string tensor holding a serialized summary message.
+  # If summaries are being skipped (e.g. in a distribution replica other than the first) it
+  # returns an empty string constant and adds nothing. If the version 2 forwarding conditions
+  # hold (eager, default writer, step available) it calls the version 2 scalar writer with the
+  # family-scoped tag and the current step, writes immediately and returns an empty bytes
+  # constant. Otherwise it adds the legacy scalar summary operation to the graph, registers it
+  # in the collections, and returns it. Raises a value error from the underlying op when the
+  # tensor has the wrong shape or type. Side effect: graph mutation or an immediate write.
   """Outputs a `Summary` protocol buffer containing a single scalar value.
 
   The generated Summary has a Tensor.proto containing the input Tensor.
@@ -140,6 +164,17 @@ def scalar(name, tensor, collections=None, family=None):
 
 @tf_export(v1=['summary.image'])
 def image(name, tensor, max_outputs=3, collections=None, family=None):
+  # [FUNCTION DOC]
+  # Creates a version 1 image summary. Inputs: name, tensor (four-dimensional unsigned 8 bit or
+  # single precision float tensor of batch, height, width, channels with one, three or four
+  # channels), max_outputs (default three, how many batch elements to render), collections
+  # (optional graph collection keys, default the summaries collection), family (optional tag
+  # prefix). Returns a scalar string tensor with the serialized summary.
+  # Skipped-summary case returns an empty string constant. Under the version 2 forwarding
+  # conditions it writes immediately through the version 2 image writer (which clips instead of
+  # normalizing and uses one tag) and returns an empty bytes constant. Otherwise it adds the
+  # legacy image summary operation to the graph, registers it in the collections and returns it.
+  # Side effect: graph mutation or an immediate write.
   """Outputs a `Summary` protocol buffer with images.
 
   The summary has up to `max_outputs` summary values containing images. The
@@ -255,6 +290,16 @@ def image(name, tensor, max_outputs=3, collections=None, family=None):
 
 @tf_export(v1=['summary.histogram'])
 def histogram(name, values, collections=None, family=None):
+  # [FUNCTION DOC]
+  # Creates a version 1 histogram summary. Inputs: name, values (real numeric tensor of any
+  # shape), collections (optional graph collection keys, default the summaries collection),
+  # family (optional tag prefix). Returns a scalar string tensor with the serialized summary.
+  # Skipped-summary case returns an empty string constant. Under the version 2 forwarding
+  # conditions it writes immediately through the version 2 histogram writer and returns an empty
+  # bytes constant. Otherwise it adds the legacy histogram operation (default scope name
+  # HistogramSummary) to the graph, registers it in the collections and returns it. The
+  # operation fails at run time with an invalid-argument error if any value is not finite.
+  # Side effect: graph mutation or an immediate write.
   # pylint: disable=line-too-long
   """Outputs a `Summary` protocol buffer with a histogram.
 
@@ -347,6 +392,18 @@ def histogram(name, values, collections=None, family=None):
 @tf_export(v1=['summary.audio'])
 def audio(name, tensor, sample_rate, max_outputs=3, collections=None,
           family=None):
+  # [FUNCTION DOC]
+  # Creates a version 1 audio summary. Inputs: name, tensor (single precision float tensor of
+  # batch, frames, channels, or two-dimensional batch, frames), sample_rate (scalar float tensor
+  # in hertz), max_outputs (default three), collections (optional graph collection keys, default
+  # the summaries collection), family (optional tag prefix). Returns a scalar string tensor with
+  # the serialized summary.
+  # Skipped-summary case returns an empty string constant. Under the version 2 forwarding
+  # conditions, a rank two input first gets a trailing channel dimension added, then it writes
+  # immediately through the version 2 audio writer and returns an empty bytes constant.
+  # Otherwise the sample rate is converted to a float tensor, the legacy audio summary operation
+  # is added to the graph, registered in the collections and returned. Side effect: graph
+  # mutation or an immediate write.
   # pylint: disable=line-too-long
   """Outputs a `Summary` protocol buffer with audio.
 
@@ -466,6 +523,17 @@ def audio(name, tensor, sample_rate, max_outputs=3, collections=None,
 
 @tf_export(v1=['summary.text'])
 def text(name, tensor, collections=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: unlike its siblings this function has no family argument, and the string-type
+  # check happens before the skip-summary check, so a non-string tensor raises even when
+  # summaries would be skipped.
+  # Creates a version 1 text summary. Inputs: name, tensor (string tensor), collections
+  # (optional graph collection keys, default the summaries collection). Returns a scalar string
+  # tensor. Raises a value error if the tensor dtype is not string.
+  # Under the version 2 forwarding conditions: returns an empty string constant if summaries are
+  # skipped, otherwise writes immediately through the version 2 text writer and returns an empty
+  # bytes constant. Otherwise builds summary metadata marking the text plugin and delegates to
+  # the generic tensor summary function, returning its operation.
   """Summarizes textual data.
 
   Text data summarized via this plugin will be visible in the Text Dashboard
@@ -560,6 +628,18 @@ def tensor_summary(name,
                    summary_metadata=None,
                    family=None,
                    display_name=None):
+  # [FUNCTION DOC]
+  # Creates a summary operation that stores a whole serialized tensor. Inputs: name; tensor (any
+  # type and shape); summary_description (optional long markdown description); collections
+  # (optional graph collection keys, default the summaries collection); summary_metadata
+  # (optional metadata message saying which plugins may use the value, a fresh empty one is
+  # used if missing); family (optional tag prefix); display_name (optional display label,
+  # otherwise the node name is used). Returns a scalar string tensor with the serialized summary.
+  # The description and display name, when given, are written into the metadata message, which
+  # is modified in place if the caller supplied it (side effect on the argument). The metadata
+  # is serialized and attached to the new operation. If summaries are being skipped an empty
+  # string constant is returned (the metadata work has already happened). Otherwise the legacy
+  # tensor summary operation is added under the scoped tag and registered in the collections.
   """Outputs a `Summary` protocol buffer with a serialized tensor.proto.
 
   Args:
@@ -610,6 +690,15 @@ def tensor_summary(name,
 
 @tf_export(v1=['summary.merge'])
 def merge(inputs, collections=None, name=None):
+  # [FUNCTION DOC]
+  # Merges several serialized summary tensors into one. Inputs: inputs (list of string tensors,
+  # each a serialized summary message), collections (optional graph collection keys; default
+  # none, so the merged result is not collected), name (optional operation name). Returns a
+  # scalar string tensor with the merged summary. Raises a runtime error in eager mode (the
+  # message points to a package that no longer exists). If summaries are being skipped returns an
+  # empty string constant. Otherwise cleans the name, adds a merge operation inside a name
+  # scope and registers it in the given collections. At run time the operation fails with an
+  # invalid-argument error if two inputs use the same tag.
   # pylint: disable=line-too-long
   """Merges summaries.
 
@@ -692,6 +781,13 @@ def merge(inputs, collections=None, name=None):
 
 @tf_export(v1=['summary.merge_all'])
 def merge_all(key=_ops.GraphKeys.SUMMARIES, scope=None, name=None):
+  # [FUNCTION DOC]
+  # Merges every summary operation collected in the default graph. Inputs: key (collection key,
+  # default the summaries collection), scope (optional regular expression used to filter
+  # operations by name from the start), name (optional operation name). Returns nothing/null if
+  # the collection (after filtering) is empty, otherwise the merged scalar string tensor
+  # produced by the merge function. Raises a runtime error in eager mode (the message points to
+  # a package that no longer exists).
   """Merges all summaries collected in the default graph.
 
   Args:
@@ -762,6 +858,14 @@ def merge_all(key=_ops.GraphKeys.SUMMARIES, scope=None, name=None):
 
 @tf_export(v1=['summary.get_summary_description'])
 def get_summary_description(node_def):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: it only accepts nodes whose operation type is the old TensorSummary, but the
+  # tensor summary function in this module creates version 2 tensor summary operations, which
+  # this function therefore rejects with a value error.
+  # Input: node_def, the graph node definition of a tensor summary operation. Reads the
+  # description attribute (a JSON text), parses it into a new summary description message and
+  # returns it. Raises a value error if the node's operation type is not the old tensor summary
+  # type. Not usable under eager execution. No side effects.
   """Given a TensorSummary node_def, retrieve its SummaryDescription.
 
   When a Summary op is instantiated, a SummaryDescription of associated
@@ -791,6 +895,10 @@ def get_summary_description(node_def):
 
 
 def _get_step_for_v2():
+  # [FUNCTION DOC]
+  # HELPER: step lookup for forwarding version 1 summaries to version 2 writers.
+  # Takes no inputs. Returns the step set through the version 2 step mechanism if there is one,
+  # otherwise the version 1 global step variable, otherwise nothing/null if neither exists.
   """Get step for v2 summary invocation in v1.
 
   In order to invoke v2 op in `tf.compat.v1.summary`, global step needs to be
@@ -808,6 +916,12 @@ def _get_step_for_v2():
 
 
 def _should_invoke_v2_op():
+  # [FUNCTION DOC]
+  # HELPER: decides whether the public version 1 summary functions forward to version 2.
+  # Takes no inputs. Returns true only if the outermost context is eager, a default version 2
+  # summary writer exists, and a step is available. Otherwise returns false; in the last two
+  # cases it also emits a user warning explaining that TF2 compatibility cannot be activated
+  # (no default writer, or no global step set). Side effect: warnings.
   """Check if v2 op can be invoked.
 
   When calling TF1 summary op in eager mode, if the following conditions are
@@ -844,6 +958,12 @@ def _should_invoke_v2_op():
 
 @contextlib.contextmanager
 def _compat_summary_scope(name, family):
+  # [FUNCTION DOC]
+  # HELPER: context manager used when forwarding to version 2 writers.
+  # Inputs: name and family (optional prefix) of the summary. Enters a summary scope to compute
+  # the full tag name (family and name scopes applied), then enters an empty root summary scope
+  # so the forwarded call does not apply the active name scopes a second time, and yields the
+  # computed tag. Side effect: temporarily changes the name scope stack.
   """Handles `family` argument for v2 op invocation in v1."""
   # Get a new summary tag name with the `family` arg.
   with _summary_op_util.summary_scope(name, family) as (tag, _):

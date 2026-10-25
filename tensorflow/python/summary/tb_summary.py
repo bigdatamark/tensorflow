@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# KNOWN ISSUE: the module docstring says it re-exports the TensorBoard summary APIs, but it actually
+# defines thin wrapper functions that import the TensorBoard implementation lazily on every call,
+# and it defines no availability flag (the version 2 test module looks for one and so is always
+# skipped).
+# Public wrappers (exported under the version 2 summary namespace only) for writing audio,
+# histogram, image, scalar and text summaries. Each wrapper imports the matching function from the
+# TensorBoard package at call time and forwards all arguments; if TensorBoard is missing it
+# raises a dedicated not-installed error. Also defines that error class. No import-time side
+# effects beyond API export registration.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,7 +32,15 @@ _TENSORBOARD_NOT_INSTALLED_ERROR = (
 
 
 class TBNotInstalledError(Exception):
+  # [CLASS DOC]
+  # Exception raised by the wrapper functions in this module when the TensorBoard package cannot
+  # be imported. Carries an error message attribute naming the missing summary API.
   def __init__(self, summary_api):
+    # [FUNCTION DOC]
+    # Constructor: input summary_api is the public name of the summary function that could not be
+    # provided. Builds a message saying TensorBoard is not installed and the implementation of
+    # that API is missing, stores it in the error message attribute and passes it to the base
+    # exception. Returns nothing.
     self.error_message = f"{_TENSORBOARD_NOT_INSTALLED_ERROR} {summary_api}"
     super().__init__(self.error_message)
 
@@ -37,6 +55,15 @@ def audio(
     encoding=None,
     description=None,
 ):
+  # [FUNCTION DOC]
+  # Public version 2 audio summary writer. Inputs: name (summary name), data (audio tensor of
+  # clips, frames, channels with values in minus one to one), sample_rate (positive integer in
+  # Hz), step (optional step, falls back to the current global step), max_outputs (optional,
+  # default three, clips beyond it are dropped), encoding (optional, only wav supported),
+  # description (optional text). Lazily imports the TensorBoard implementation and forwards all
+  # arguments to it. Returns what it returns: true if written, false if no default writer.
+  # Raises the not-installed error if TensorBoard is missing, and a value error (from the
+  # implementation) if a writer exists but no step is available. Side effect: writes a summary.
   """Write an audio summary.
 
   Arguments:
@@ -84,6 +111,13 @@ def audio(
 
 @tf_export("summary.histogram", v1=[])
 def histogram(name, data, step=None, buckets=None, description=None):
+  # [FUNCTION DOC]
+  # Public version 2 histogram summary writer. Inputs: name, data (tensor of any shape castable to
+  # double precision), step (optional, defaults to the global step), buckets (optional positive
+  # count, implementation default thirty), description (optional text). Lazily imports the
+  # TensorBoard implementation and forwards everything. Returns true if written or false if no
+  # default writer exists. Raises the not-installed error if TensorBoard is missing; value error
+  # from the implementation when no step is available. Side effect: writes a summary.
   """Write a histogram summary.
 
   See also `tf.summary.scalar`, `tf.summary.SummaryWriter`.
@@ -160,6 +194,14 @@ def histogram(name, data, step=None, buckets=None, description=None):
 
 @tf_export("summary.image", v1=[])
 def image(name, data, step=None, max_outputs=3, description=None):
+  # [FUNCTION DOC]
+  # Public version 2 image summary writer. Inputs: name, data (tensor of images, count, height,
+  # width, channels with one to four channels), step (optional, defaults to the global step),
+  # max_outputs (optional, default three; extra images dropped), description (optional text).
+  # Lazily imports the TensorBoard implementation and forwards everything. Returns true if
+  # written or false if no default writer exists. Raises the not-installed error if TensorBoard
+  # is missing; value error from the implementation when no step is available. Side effect:
+  # writes a summary.
   """Write an image summary.
 
   See also `tf.summary.scalar`, `tf.summary.SummaryWriter`.
@@ -242,6 +284,13 @@ def image(name, data, step=None, max_outputs=3, description=None):
 
 @tf_export("summary.scalar", v1=[])
 def scalar(name, data, step=None, description=None):
+  # [FUNCTION DOC]
+  # Public version 2 scalar summary writer. Inputs: name, data (real numeric scalar convertible to
+  # single precision), step (optional, defaults to the global step), description (optional text).
+  # Lazily imports the TensorBoard implementation and forwards everything. Returns true if
+  # written or false if no default writer exists. Raises the not-installed error if TensorBoard
+  # is missing; value error from the implementation when no step is available. Side effect:
+  # writes a summary.
   """Write a scalar summary.
 
   See also `tf.summary.image`, `tf.summary.histogram`,
@@ -301,6 +350,12 @@ def scalar(name, data, step=None, description=None):
 
 @tf_export("summary.text", v1=[])
 def text(name, data, step=None, description=None):
+  # [FUNCTION DOC]
+  # Public version 2 text summary writer. Inputs: name, data (string tensor, markdown allowed),
+  # step (optional, defaults to the global step), description (optional text). Lazily imports the
+  # TensorBoard implementation and forwards everything. Returns true if written or false if no
+  # default writer exists. Raises the not-installed error if TensorBoard is missing; value error
+  # from the implementation when no step is available. Side effect: writes a summary.
   r"""Write a text summary.
 
   See also `tf.summary.scalar`, `tf.summary.SummaryWriter`, `tf.summary.image`.

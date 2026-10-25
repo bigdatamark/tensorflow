@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test module for the API surface of the version 1 summary operations (scalar, image, histogram,
+# audio, text). Checks tags, operation names, family handling, name sanitization, dtype
+# acceptance and meta graph export/import; it deliberately does not verify full serialized
+# values for complex summaries (those live in kernel tests). Run as a test binary.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -34,9 +39,17 @@ from tensorflow.python.summary import summary as summary_lib
 
 
 class SummaryTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the version 1 summary-creating functions. Most tests run in graph mode with a
+  # cached session, evaluate the summary tensor, parse the resulting serialized summary message
+  # and assert on tags and values. No shared fixtures.
 
   @test_util.run_deprecated_v1
   def testScalarSummary(self):
+    # [FUNCTION DOC]
+    # Test (version 1 mode): creates a scalar summary of the constant three inside a name scope,
+    # evaluates it, and asserts one value whose tag includes the scope prefix and whose simple
+    # value is three.
     with self.cached_session() as s:
       i = constant_op.constant(3)
       with ops.name_scope('outer'):
@@ -51,6 +64,10 @@ class SummaryTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testScalarSummaryWithFamily(self):
+    # [FUNCTION DOC]
+    # Test (version 1 mode): creates two scalar summaries with the same name and a family inside a
+    # name scope. Asserts the operation names include the family and get a uniquifying suffix on
+    # the second, and that the tags are prefixed by the family, with the value seven.
     with self.cached_session() as s:
       i = constant_op.constant(7)
       with ops.name_scope('outer'):
@@ -75,6 +92,9 @@ class SummaryTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testSummarizingVariable(self):
+    # [FUNCTION DOC]
+    # Test (version 1 mode): creates a variable from a constant forty-two, initializes it,
+    # summarizes it as a scalar and asserts the tag is the plain name and the value is 42.
     with self.cached_session() as s:
       c = constant_op.constant(42.0)
       v = variables.Variable(c)
@@ -91,6 +111,10 @@ class SummaryTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testImageSummary(self):
+    # [FUNCTION DOC]
+    # Test (version 1 mode): summarizes a batch of five all-ones images with at most three
+    # outputs in a name scope, and asserts exactly three values with tags numbered zero to two
+    # under the scoped name plus an image segment.
     with self.cached_session() as s:
       i = array_ops.ones((5, 4, 4, 3))
       with ops.name_scope('outer'):
@@ -106,6 +130,9 @@ class SummaryTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testImageSummaryWithFamily(self):
+    # [FUNCTION DOC]
+    # Test (version 1 mode): as the plain image test but with a family; asserts the operation name
+    # contains the family and the three tags are prefixed by the family.
     with self.cached_session() as s:
       i = array_ops.ones((5, 2, 3, 1))
       with ops.name_scope('outer'):
@@ -123,6 +150,9 @@ class SummaryTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testHistogramSummary(self):
+    # [FUNCTION DOC]
+    # Test (version 1 mode): creates a histogram summary of an all-ones tensor in a name scope and
+    # asserts one value with the scoped tag.
     with self.cached_session() as s:
       i = array_ops.ones((5, 4, 4, 3))
       with ops.name_scope('outer'):
@@ -135,6 +165,9 @@ class SummaryTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testHistogramSummaryWithFamily(self):
+    # [FUNCTION DOC]
+    # Test (version 1 mode): histogram summary with a family; asserts the operation name includes
+    # the family and the single tag is prefixed by the family.
     with self.cached_session() as s:
       i = array_ops.ones((5, 4, 4, 3))
       with ops.name_scope('outer'):
@@ -147,6 +180,10 @@ class SummaryTest(test.TestCase):
     self.assertEqual(summary.value[0].tag, 'family/outer/family/inner')
 
   def testHistogramSummaryTypes(self):
+    # [FUNCTION DOC]
+    # Test: builds a histogram summary from a constant of each of several integer and floating
+    # point types (8, 16 and 32 bit integers, unsigned 8 bit, 32 and 64 bit floats). Passes if
+    # none raises; nothing is evaluated or asserted beyond construction succeeding.
     for dtype in (dtypes.int8, dtypes.uint8, dtypes.int16, dtypes.int32,
                   dtypes.float32, dtypes.float64):
       const = constant_op.constant(10, dtype=dtype)
@@ -154,6 +191,10 @@ class SummaryTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testAudioSummary(self):
+    # [FUNCTION DOC]
+    # Test (version 1 mode): summarizes a batch of five all-ones audio clips at sample rate 0.2
+    # with at most three outputs in a name scope; asserts three values tagged zero to two under
+    # the scoped name plus an audio segment.
     with self.cached_session() as s:
       i = array_ops.ones((5, 3, 4))
       with ops.name_scope('outer'):
@@ -169,6 +210,9 @@ class SummaryTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testAudioSummaryWithFamily(self):
+    # [FUNCTION DOC]
+    # Test (version 1 mode): audio summary with a family; asserts the operation name includes the
+    # family and the three tags are prefixed by the family.
     with self.cached_session() as s:
       i = array_ops.ones((5, 3, 4))
       with ops.name_scope('outer'):
@@ -185,12 +229,19 @@ class SummaryTest(test.TestCase):
     self.assertEqual(tags, expected)
 
   def testAudioSummaryWithInvalidSampleRate(self):
+    # [FUNCTION DOC]
+    # Test: builds and evaluates an audio summary whose sample rate is a two-element list rather
+    # than a scalar, and expects an invalid-argument error.
     with self.assertRaises(errors.InvalidArgumentError):
       invalid_sample_rate = [22000.0, 22000.0]
       self.evaluate(summary_lib.audio('', [[1.0]], invalid_sample_rate))
 
   @test_util.run_deprecated_v1
   def testTextSummary(self):
+    # [FUNCTION DOC]
+    # Test (version 1 mode): a text summary of a numeric tensor raises a value error; a text
+    # summary of a vector of strings and of a scalar string both succeed and produce a
+    # tensor-summary operation of the version 2 kind.
     with self.cached_session():
       with self.assertRaises(ValueError):
         num = array_ops.constant(1)
@@ -207,6 +258,10 @@ class SummaryTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testSummaryNameConversion(self):
+    # [FUNCTION DOC]
+    # Test (version 1 mode): scalar summaries whose names contain spaces, illegal characters or a
+    # leading slash get operation names with illegal characters replaced by underscores and the
+    # leading slash removed; asserts the exact sanitized operation names.
     c = constant_op.constant(3)
     s = summary_lib.scalar('name with spaces', c)
     self.assertEqual(s.op.name, 'name_with_spaces')
@@ -219,6 +274,11 @@ class SummaryTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testSummaryWithFamilyMetaGraphExport(self):
+    # [FUNCTION DOC]
+    # Test (version 1 mode): creates summaries with and without family inside a name scope,
+    # exports the meta graph for that scope, and imports it into a new graph under a different
+    # scope. Asserts the summary tensors exist under the new scope names but that the evaluated
+    # tags still carry the original scope and family, since tags are not renamed on import.
     with ops.name_scope('outer'):
       i = constant_op.constant(11)
       summ = summary_lib.scalar('inner', i)
