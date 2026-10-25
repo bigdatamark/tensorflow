@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# HELPER: internal utility module used mainly by optimizers and moving-average code.
+# Provides functions to create "slot" variables: non-trainable variables tied to a primary
+# variable or tensor (for example momentum accumulators), scoped under the primary's name and
+# by default placed on the same device. Public functions are create_slot (from an initial
+# value tensor), create_slot_with_initializer (from an initializer plus shape and type) and
+# create_zeros_slot (zero filled, same shape as the primary); all share the private helper
+# that builds the variable, handles partitioned primaries and optionally copies XLA sharding.
+# No import-time side effects beyond imports.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -55,6 +64,21 @@ def _create_slot_var(primary,
                      dtype,
                      *,
                      copy_xla_sharding=False):
+  # [FUNCTION DOC]
+  # HELPER: shared builder behind the public slot creation functions.
+  # Creates one non-trainable variable in the current variable scope. Inputs: primary (the
+  # variable or tensor the slot belongs to), val (initial value tensor or callable
+  # initializer), scope (name passed to the variable getter, callers pass an empty string
+  # because they already opened a scope), validate_shape (whether the initial shape is checked),
+  # shape (used only when val is callable, otherwise forced to nothing), dtype (element type,
+  # may be nothing to infer), and the keyword-only copy_xla_sharding flag. The kind of variable
+  # follows the primary: resource variable gives resource, reference variable gives reference,
+  # otherwise the scope default. Any partitioner on the current scope is temporarily removed
+  # and restored afterwards (not restored if variable creation raises). If the primary has
+  # partition save-slice information, the slot gets matching slice information truncated to its
+  # own rank, skipped for scalar slots. With copy_xla_sharding and equal known ranks, the
+  # primary's XLA sharding is copied onto the slot without a sharding op. Returns the slot
+  # variable. Errors from the variable getter propagate.
   """Helper function for creating a slot variable."""
 
   # TODO(lukaszkaiser): Consider allowing partitioners to be set in the current
@@ -109,6 +133,10 @@ def _create_slot_var(primary,
   # Copy XLA sharding attributes from the primary if the slot variable has the
   # same rank as the primary.
   def _has_same_rank(primary_shape, slot_shape):
+    # [FUNCTION DOC]
+    # HELPER: guard used when deciding whether to copy XLA sharding to a slot.
+    # Takes two shape objects and returns true only when both ranks are known and equal; returns
+    # false if either rank is unknown. No side effects.
     return (primary_shape.rank is not None and slot_shape.rank is not None and
             primary_shape.rank == slot_shape.rank)
 
@@ -123,6 +151,16 @@ def create_slot(primary,
                 colocate_with_primary=True,
                 *,
                 copy_xla_sharding=False):
+  # [FUNCTION DOC]
+  # Creates a non-trainable slot variable initialized from a tensor value. Inputs: primary
+  # (variable or tensor owning the slot), val (tensor giving the initial value, its dtype and
+  # shape define the slot; shape validation is on only if the shape is fully defined), name
+  # (slot name suffix), colocate_with_primary (default true: place on the primary's device via
+  # the current distribution strategy), and keyword-only copy_xla_sharding (default false).
+  # The slot is created under a scope named after the primary's shared name (variables) or
+  # operation name (tensors) joined with the slot name; a unique suffix is added if reused.
+  # Returns the new variable. Side effects: adds a variable to the graph and the variable
+  # scope store.
   """Create a slot initialized to the given value.
 
   The type of the slot is determined by the given value.
@@ -180,6 +218,14 @@ def create_slot_with_initializer(primary,
                                  colocate_with_primary=True,
                                  *,
                                  copy_xla_sharding=False):
+  # [FUNCTION DOC]
+  # Creates a non-trainable slot variable whose value comes from an initializer. Inputs:
+  # primary (owning variable or tensor), initializer (initializer object), shape (a shape
+  # object for the slot; must support the fully-defined query, validation happens only when it
+  # is fully defined), dtype (element type), name (slot name suffix), colocate_with_primary
+  # (default true), and keyword-only copy_xla_sharding (default false). Uses the same scoping
+  # as the value-based slot creator. Returns the new variable. Side effects: adds a variable
+  # to the graph and variable scope store.
   """Creates a slot initialized using an `Initializer`.
 
   The type of the slot is determined by the given value.
@@ -237,6 +283,16 @@ def create_zeros_slot(primary,
                       colocate_with_primary=True,
                       *,
                       copy_xla_sharding=False):
+  # [FUNCTION DOC]
+  # Creates a zero filled slot with the same shape as the primary. Inputs: primary (owning
+  # variable or tensor), name (slot name suffix), dtype (optional, defaults to the primary's
+  # type), colocate_with_primary (default true), keyword-only copy_xla_sharding (default
+  # false). If the primary's static shape is fully defined, delegates to the initializer-based
+  # creator with a zeros initializer. Otherwise it computes the shape dynamically (for a
+  # variable, conditionally from its current value if initialized or from its initial value
+  # if not; for a tensor, from the tensor), builds a zeros tensor of that shape and delegates
+  # to the value-based creator. Returns the new variable. Side effects: adds ops and a variable
+  # to the graph.
   """Create a slot initialized to 0 with same shape as the primary object.
 
   Args:

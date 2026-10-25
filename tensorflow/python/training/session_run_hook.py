@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Defines the hook API for extending monitored session run calls. Exposes SessionRunHook (base
+# class with no-op callbacks: begin, after_create_session, before_run, after_run, end),
+# SessionRunArgs (extra fetches, feeds and options a hook asks to add to a run call),
+# SessionRunContext (what hooks learn about the pending run call, plus a stop request flag) and
+# SessionRunValues (results, options and run metadata passed back after the run). The classes
+# are exported under the v1 training namespace. Only imports, decorators and class definitions
+# execute at import time. The long module docstring explains the call order of the callbacks.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -92,9 +100,18 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export(v1=["train.SessionRunHook"])
 class SessionRunHook:
+  # [CLASS DOC]
+  # Base class for observers of a monitored session's lifecycle. Holds no state. Subclasses
+  # override any of begin, after_create_session, before_run, after_run and end; the defaults
+  # do nothing (before_run returns nothing). The monitored session calls them in the order
+  # described in the module docs. Registered in the v1 training API namespace.
   """Hook to extend calls to MonitoredSession.run()."""
 
   def begin(self):
+    # [FUNCTION DOC]
+    # Default callback invoked once before the session is used, while ops can still be added to
+    # the default graph. Takes no inputs, does nothing and returns nothing. Subclasses override
+    # it to build ops; the graph is finalized afterwards.
     """Called once before using the session.
 
     When called, the default graph is the one that will be launched in the
@@ -106,6 +123,10 @@ class SessionRunHook:
     pass
 
   def after_create_session(self, session, coord):  # pylint: disable=unused-argument
+    # [FUNCTION DOC]
+    # Default callback invoked after a session is created or recovered; the graph is already
+    # finalized. Inputs: session (the new session) and coord (thread coordinator); both are
+    # ignored. Does nothing and returns nothing.
     """Called when new TensorFlow session is created.
 
     This is called to signal the hooks that a new session has been created. This
@@ -123,6 +144,10 @@ class SessionRunHook:
     pass
 
   def before_run(self, run_context):  # pylint: disable=unused-argument
+    # [FUNCTION DOC]
+    # Default callback invoked before every run call. Input: run_context (information about the
+    # pending call), ignored here. Returns nothing (null), meaning no extra fetches or feeds are
+    # added. Subclasses may return run arguments to merge into the call.
     """Called before each call to run().
 
     You can return from this call a `SessionRunArgs` object indicating ops or
@@ -148,6 +173,11 @@ class SessionRunHook:
   def after_run(self,
                 run_context,  # pylint: disable=unused-argument
                 run_values):  # pylint: disable=unused-argument
+    # [FUNCTION DOC]
+    # Default callback invoked after each successful run call. Inputs: run_context (same object
+    # given to the before-run callback; can request a stop) and run_values (results of what the
+    # hook asked for), both ignored. Does nothing and returns nothing. Not called if the run
+    # raised any exception.
     """Called after each call to run().
 
     The `run_values` argument contains results of requested ops/tensors by
@@ -165,6 +195,11 @@ class SessionRunHook:
     pass
 
   def end(self, session):  # pylint: disable=unused-argument
+    # [FUNCTION DOC]
+    # Default callback invoked when the session is about to close. Input: session (the session
+    # that will be closed, usable for final ops such as a last checkpoint), ignored here. Does
+    # nothing and returns nothing. Skipped if the run raised an error other than end-of-data
+    # (out-of-range) or stop-iteration.
     """Called at the end of session.
 
     The `session` argument can be used in case the hook wants to run final ops,
@@ -186,6 +221,10 @@ class SessionRunHook:
 class SessionRunArgs(
     collections.namedtuple("SessionRunArgs",
                            ["fetches", "feed_dict", "options"])):
+  # [CLASS DOC]
+  # Immutable record (named tuple) with fields fetches, feed_dict and options describing extra
+  # work a hook wants merged into a session run call: things to fetch, values to feed and run
+  # options. Returned from the before-run callback of a hook.
   """Represents arguments to be added to a `Session.run()` call.
 
   Args:
@@ -204,11 +243,20 @@ class SessionRunArgs(
   """
 
   def __new__(cls, fetches, feed_dict=None, options=None):
+    # [FUNCTION DOC]
+    # Constructs the record. Inputs: fetches (tensor, op, list or mapping to fetch), feed_dict
+    # (optional mapping of values to feed, defaults to nothing), options (optional run options
+    # message, defaults to nothing). Returns the new immutable instance; no validation is done
+    # and there are no side effects.
     return super(SessionRunArgs, cls).__new__(cls, fetches, feed_dict, options)
 
 
 @tf_export(v1=["train.SessionRunContext"])
 class SessionRunContext:
+  # [CLASS DOC]
+  # Read-mostly object handed to hooks describing the run call being made. Holds the original
+  # run arguments, the session, and a stop-requested flag (initially false) that hooks can set
+  # to ask the monitored session to end its loop. Created by the monitored session machinery.
   """Provides information about the `session.run()` call being made.
 
   Provides information about original request to `Session.Run()` function.
@@ -218,6 +266,9 @@ class SessionRunContext:
   """
 
   def __init__(self, original_args, session):
+    # [FUNCTION DOC]
+    # Stores the run arguments (record of the original fetches and feeds) and the session, and
+    # sets the stop-requested flag to false. Returns nothing; no validation.
     """Initializes SessionRunContext."""
     self._original_args = original_args
     self._session = session
@@ -225,6 +276,9 @@ class SessionRunContext:
 
   @property
   def original_args(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the run arguments record captured at construction,
+    # holding the fetches and feeds the user originally passed to the run call.
     """A `SessionRunArgs` object holding the original arguments of `run()`.
 
     If user called `MonitoredSession.run(fetches=a, feed_dict=b)`, then this
@@ -237,11 +291,16 @@ class SessionRunContext:
 
   @property
   def session(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the session object that will execute the run call.
     """A TensorFlow session object which will execute the `run`."""
     return self._session
 
   @property
   def stop_requested(self):
+    # [FUNCTION DOC]
+    # Read-only property returning true if any hook has called the stop request method, which
+    # tells the monitored session to stop iterating. Starts false.
     """Returns whether a stop is requested or not.
 
     If true, `MonitoredSession` stops iterations.
@@ -251,6 +310,9 @@ class SessionRunContext:
     return self._stop_requested
 
   def request_stop(self):
+    # [FUNCTION DOC]
+    # Sets the stop-requested flag to true so the monitored session ends its loop. Takes no
+    # inputs, returns nothing; the flag is never reset on this object.
     """Sets stop requested field.
 
     Hooks can use this function to request stop of iterations.
@@ -263,6 +325,10 @@ class SessionRunContext:
 class SessionRunValues(
     collections.namedtuple("SessionRunValues",
                            ["results", "options", "run_metadata"])):
+  # [CLASS DOC]
+  # Immutable record (named tuple) with fields results, options and run_metadata, handed to the
+  # after-run callback. Results mirror the structure of the fetches the hook requested. Has no
+  # custom constructor, so all three fields must be supplied by the caller.
   """Contains the results of `Session.run()`.
 
   In the future we may use this object to add more information about result of

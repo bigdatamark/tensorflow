@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# HELPER: backward-compatibility shim kept so old code importing summary writing names from the
+# training package keeps working.
+# Legacy module for reading and writing summary event files. It re-exports the summary iterator
+# function, the cache of file writers (under the name SummaryWriterCache), and defines a
+# deprecated SummaryWriter class that is only a renamed file writer. At import time it only
+# performs imports and class definition; the deprecation decorator emits a warning when the
+# constructor is later used. New code should use the summary package's file writer instead.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +31,13 @@ from tensorflow.python.util.deprecation import deprecated
 
 
 class SummaryWriter(_FileWriter):
+  # [CLASS DOC]
+  # HELPER: deprecated alias kept for backward compatibility.
+  # Deprecated subclass of the summary file writer that adds no state or behavior of its own;
+  # it only forwards construction arguments to the parent. Instances write summaries, graphs
+  # and events asynchronously to an event file in a log directory, with all methods inherited
+  # from the parent class. The deprecation decorator marks the constructor as deprecated since
+  # late 2016.
 
   @deprecated("2016-11-30",
               "Please switch to tf.summary.FileWriter. The interface and "
@@ -33,6 +48,15 @@ class SummaryWriter(_FileWriter):
                max_queue=10,
                flush_secs=120,
                graph_def=None):
+    # [FUNCTION DOC]
+    # HELPER: thin deprecated forwarding constructor for the legacy writer class.
+    # Creates the writer and its event file by passing every argument unchanged to the parent
+    # constructor. Inputs: logdir (directory path string where the event file is created),
+    # graph (optional graph to record immediately), max_queue (pending event queue size,
+    # default 10), flush_secs (seconds between flushes to disk, default 120), graph_def
+    # (deprecated older way of passing a graph description, optional). Returns nothing.
+    # Side effects: creates the directory and event file via the parent, starts its background
+    # writing, and triggers a deprecation warning through the decorator.
     """Creates a `SummaryWriter` and an event file.
 
     This class is deprecated, and should be replaced with tf.summary.FileWriter.
