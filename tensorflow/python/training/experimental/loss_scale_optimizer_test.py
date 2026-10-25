@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Unit tests for the loss scaling optimizer wrapper. Covers fixed loss scale applied through
+# minimize and through gradient computation, dynamic loss scale growth and shrinking on
+# non-finite gradients, interaction with optimizer slot variables, checkpoint save and restore of
+# the loss scale state, and rejection of a null loss scale. Most tests run both without a
+# distribution strategy and under a mirrored strategy over CPU (and GPU when available).
+# Also defines small shared helpers: a strategy factory, the parameterized test case list, a
+# gradient getter and a factory of identity functions that assert on their incoming gradient.
+# Running the file as a program starts the test runner.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -41,6 +50,10 @@ default_strategy_fn = distribute_lib.get_strategy
 
 
 def create_mirrored_strategy():
+  # [FUNCTION DOC]
+  # HELPER: strategy factory used by the parameterized test cases.
+  # Takes no inputs. Returns a mirrored distribution strategy over the CPU and, when at least one
+  # GPU is visible, also the first GPU; otherwise over the CPU alone.
   if context.num_gpus() >= 1:
     return mirrored_strategy.MirroredStrategy(['cpu:0', 'gpu:0'])
   else:
@@ -57,12 +70,24 @@ TESTCASES = ({
 
 
 def get_gradients(opt, loss, params):
+  # [FUNCTION DOC]
+  # HELPER: shared test utility returning only the gradients.
+  # Inputs: opt, an optimizer; loss, the value to minimize; params, list of variables.
+  # Calls the optimizer's gradient computation and returns a tuple holding just the gradients
+  # (dropping the variables).
   grads_and_vars = opt.compute_gradients(loss, params)
   grads, _ = zip(*grads_and_vars)
   return grads
 
 
 def create_identity_with_grad_check_fn(expected_gradient, expected_dtype=None):
+  # [FUNCTION DOC]
+  # HELPER: shared test utility that builds a gradient-checking identity function.
+  # Inputs: expected_gradient, a number or tensor the incoming gradient must equal;
+  # expected_dtype, optional dtype the gradient must have (not checked when omitted).
+  # Returns a plain (undecorated) identity function whose custom gradient asserts equality with
+  # the expected gradient through an assert operation and then passes the gradient through.
+  # The plain wrapper exists because Keras has trouble serializing decorated functions.
   """Returns a function that asserts it's gradient has a certain value.
 
   This serves as a hook to assert intermediate gradients have a certain value.
@@ -81,9 +106,20 @@ def create_identity_with_grad_check_fn(expected_gradient, expected_dtype=None):
   """
   @custom_gradient.custom_gradient
   def _identity_with_grad_check(x):
+    # [FUNCTION DOC]
+    # HELPER: custom-gradient identity used by the gradient checking factory.
+    # Input x, a tensor. Returns the identity of x paired with the gradient function defined
+    # inside it, as the custom gradient mechanism requires.
     """Function that asserts it's gradient has a certain value."""
     x = array_ops.identity(x)
     def grad(dx):
+      # [FUNCTION DOC]
+      # HELPER: gradient function of the checking identity.
+      # Input dx, the incoming gradient. If an expected dtype was given, a plain assertion fails
+      # when the dtype differs. Converts the expected gradient to a tensor of dx's dtype and adds
+      # an assert-equal operation (with a control dependency on the forward input so it does
+      # not run when the input pipeline is exhausted). Returns dx passed through an identity that
+      # depends on the assertion, so evaluating it triggers the check.
       """Gradient function that asserts the gradient has a certain value."""
       if expected_dtype:
         assert dx.dtype == expected_dtype, (
@@ -103,14 +139,25 @@ def create_identity_with_grad_check_fn(expected_gradient, expected_dtype=None):
   # Keras sometimes has trouble serializing Lambda layers with a decorated
   # function. So we define and return a non-decorated function.
   def identity_with_grad_check(x):
+    # [FUNCTION DOC]
+    # HELPER: undecorated forwarding wrapper returned by the factory.
+    # Input x, a tensor; returns the result of the decorated checking identity applied to x.
     return _identity_with_grad_check(x)
   return identity_with_grad_check
 
 
 class MixedPrecisionLossScaleOptimizerTest(test.TestCase,
                                            parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case covering the loss scaling optimizer wrapper: fixed and dynamic loss scales,
+  # slot variables, checkpointing and argument validation. Most tests are parameterized over no
+  # strategy and a mirrored strategy and run in both graph and eager modes.
 
   def _run_if_in_graph_mode(self, val):
+    # [FUNCTION DOC]
+    # HELPER: evaluation helper for the tests.
+    # Input val, an operation or tensor. In graph mode evaluates it in the test session; in eager
+    # mode does nothing because the work has already run. Returns nothing.
     # Running only in graph mode is useful, because optimizers sometimes return
     # a value that, in Graph mode, is runnable with self.evaluate. But in Eager
     # mode, the optimizer already does the computations and the return value
@@ -119,6 +166,12 @@ class MixedPrecisionLossScaleOptimizerTest(test.TestCase,
       self.evaluate(val)
 
   def _run_fn_with_grad_check(self, strategy, var, opt, expected_grad):
+    # [FUNCTION DOC]
+    # HELPER: builds the per-replica step used by the loss scale tests.
+    # Inputs: strategy (for its replica count), var (variable to train), opt (the optimizer under
+    # test), expected_grad (the gradient the scaled loss must produce at the variable).
+    # Returns a no-argument callable that minimizes a loss equal to the gradient-checking
+    # identity of the variable divided by the replica count, over the single variable.
     grad_check_fn = create_identity_with_grad_check_fn(
         expected_grad)
     loss = lambda: grad_check_fn(var) / strategy.num_replicas_in_sync
@@ -127,6 +180,11 @@ class MixedPrecisionLossScaleOptimizerTest(test.TestCase,
   @parameterized.named_parameters(*TESTCASES)
   @test_util.run_in_graph_and_eager_modes
   def testFixedLossScaleAppliedToLossWithMinimize(self, strategy_fn):
+    # [FUNCTION DOC]
+    # Scenario: wrapped gradient descent (rate 2) with a fixed loss scale of 10 on a variable
+    # starting at 5, run under each strategy. The test requires the replica count to divide the
+    # loss scale. Runs one minimize step with a gradient check expecting the scaled value divided
+    # by the replica count. Asserts the variable ends at 3 (gradient 1 after unscaling).
     with strategy_fn().scope() as strategy:
       var = variables.Variable([5.0])
       opt = gradient_descent.GradientDescentOptimizer(2.0)
@@ -148,6 +206,11 @@ class MixedPrecisionLossScaleOptimizerTest(test.TestCase,
 
   @test_util.deprecated_graph_mode_only
   def testFixedLossScaleAppliedToLossWithGetGradients(self):
+    # [FUNCTION DOC]
+    # Scenario (graph mode only, no strategy): fixed loss scale 10 around gradient descent.
+    # Builds a loss as the gradient-checking identity of a variable, requests gradients via the
+    # wrapper, initializes variables and evaluates the gradients. The embedded assertion checks
+    # the intermediate gradient equals the loss scale; the test fails if that assertion fails.
     var = variables.Variable([2.0])
     opt = gradient_descent.GradientDescentOptimizer(1.0)
     loss_scale = 10.
@@ -163,6 +226,11 @@ class MixedPrecisionLossScaleOptimizerTest(test.TestCase,
   @parameterized.named_parameters(*TESTCASES)
   @test_util.run_in_graph_and_eager_modes
   def testDynamicLossScale(self, strategy_fn):
+    # [FUNCTION DOC]
+    # Scenario: dynamic loss scale starting at 2, growing by a factor of 2 every step, around
+    # gradient descent with rate 2, under each strategy. An expected-gradient variable is used by
+    # the gradient check. After the first step asserts the variable is 3; then the expected
+    # gradient is doubled (the scale has doubled) and a second step must leave the variable at 1.
     strategy = strategy_fn()
     learning_rate = 2.
     expected_gradient = resource_variable_ops.ResourceVariable(
@@ -199,6 +267,11 @@ class MixedPrecisionLossScaleOptimizerTest(test.TestCase,
   @parameterized.named_parameters(*TESTCASES)
   @test_util.run_in_graph_and_eager_modes
   def testDynamicUpdate(self, strategy_fn):
+    # [FUNCTION DOC]
+    # Scenario: dynamic loss scale (initial 2, period 1, multiplier 2) with gradient descent rate
+    # 1 on two variables. A step with finite gradients must subtract 2 from each element and
+    # double the loss scale to 4. A step whose loss is not-a-number must leave the variable
+    # unchanged and halve the loss scale back to 2. Runs under each strategy.
     with strategy_fn().scope() as strategy:
       var = variables.Variable([1.0, 2.0])
       opt = gradient_descent.GradientDescentOptimizer(1.0)
@@ -231,6 +304,11 @@ class MixedPrecisionLossScaleOptimizerTest(test.TestCase,
   @parameterized.named_parameters(*TESTCASES)
   @test_util.run_in_graph_and_eager_modes
   def testDynamicLossScaleWithSlots(self, strategy_fn):
+    # [FUNCTION DOC]
+    # Scenario: momentum optimizer (which has slot variables) wrapped with a dynamic loss scale
+    # (initial 2, period 1, multiplier 4). Runs two steps. Asserts the variable moves by 1 and
+    # then by 2 more (momentum accumulation of the unscaled gradient) and that the loss scale
+    # grows to 8 and then 32 after the respective steps.
     with strategy_fn().scope() as strategy:
       var = variables.Variable([1.0, 2.0])
       # An SGD optimizer with momentum has slot variables.
@@ -267,6 +345,13 @@ class MixedPrecisionLossScaleOptimizerTest(test.TestCase,
   @parameterized.named_parameters(*TESTCASES)
   @test_util.run_in_graph_and_eager_modes
   def testCheckpoint(self, strategy_fn):
+    # [FUNCTION DOC]
+    # Scenario: dynamic loss scale (initial 1, period 2, multiplier 2) around a momentum
+    # optimizer. Skipped (returns early) for a mirrored strategy in graph mode, a known
+    # unsupported case. Runs a step and checks loss scale 1 and one good step; saves a
+    # checkpoint of the optimizer; runs another step and checks loss scale 2 with zero good steps;
+    # restores the checkpoint, requires all values consumed, runs restore operations and asserts
+    # the loss scale and good-step count are back to 1 and 1. Writes into the test temp dir.
     strategy = strategy_fn()
     if (isinstance(strategy, mirrored_strategy.MirroredStrategy) and
         not context.executing_eagerly()):
@@ -306,6 +391,9 @@ class MixedPrecisionLossScaleOptimizerTest(test.TestCase,
       self.assertEqual(self.evaluate(loss_scale._num_good_steps), 1)
 
   def testPassingNoneToLossScale(self):
+    # [FUNCTION DOC]
+    # Scenario: constructing the wrapper around gradient descent with a null loss scale. Asserts
+    # a value error is raised whose message says the loss scale cannot be none.
     opt = gradient_descent.GradientDescentOptimizer(1.0)
     with self.assertRaisesRegex(ValueError, r'loss_scale cannot be None'):
       loss_scale_optimizer.MixedPrecisionLossScaleOptimizer(opt, None)

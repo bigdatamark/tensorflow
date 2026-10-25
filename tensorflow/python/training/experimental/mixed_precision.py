@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# Public entry points for the mixed precision graph rewrite in the legacy session-based API.
+# Provides a function to enable the rewrite (which turns on the automatic mixed precision graph
+# optimizer and wraps an optimizer with a loss scaling wrapper), a function to disable it, and a
+# registry that lets other optimizer families (for example Keras optimizers) register their own
+# loss scale wrapper, plus an internal helper that picks the right wrapper for an optimizer.
+# The enable and disable functions are exported as version 1 endpoints (with deprecated
+# experimental aliases); the registration function is exported as an internal version 2 endpoint.
+# Import-time side effect: the module-level registry is seeded with the legacy optimizer base
+# class mapped to the loss scale optimizer class. Global flags live in the sibling global state
+# module (kept separate to avoid a circular dependency with sessions).
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -34,6 +45,14 @@ _REGISTERED_WRAPPER_OPTIMIZER_CLS = {
 
 @tf_export('__internal__.mixed_precision.register_loss_scale_wrapper', v1=[])
 def register_loss_scale_wrapper(optimizer_cls, wrapper_fn, wrapper_cls=None):
+  # [FUNCTION DOC]
+  # Registers how to wrap optimizers of a given family with a loss scale optimizer.
+  # Inputs: optimizer_cls, the base optimizer class whose instances should be wrapped;
+  # wrapper_fn, a callable taking an optimizer and a loss scale and returning a wrapped
+  # optimizer; wrapper_cls, optional class of the wrapper (defaults to wrapper_fn itself, which
+  # is then assumed to be the class).
+  # Side effect: stores the pair of wrapper_fn and wrapper_cls in the module-level registry keyed
+  # by optimizer_cls, replacing any earlier entry for that class. Returns nothing; no validation.
   """Registers a loss scale optimizer wrapper.
 
   `tf.compat.v1.mixed_precision.enable_mixed_precision_graph_rewrite`
@@ -58,6 +77,13 @@ def register_loss_scale_wrapper(optimizer_cls, wrapper_fn, wrapper_cls=None):
 
 
 def _wrap_optimizer(opt, loss_scale):
+  # [FUNCTION DOC]
+  # HELPER: internal glue for enabling the graph rewrite.
+  # Inputs: opt, an optimizer instance; loss_scale, a loss scale specification passed on to the
+  # wrapper. First checks every registered wrapper class and raises a value error if opt is
+  # already an instance of one (to avoid double wrapping). Then walks the registry in insertion
+  # order and, for the first registered optimizer class that opt is an instance of, returns the
+  # result of that entry's wrapper function. Raises a value error if no registered class matches.
   """Wraps an optimizer with a LossScaleOptimizer."""
 
   for _, wrapper_optimizer in _REGISTERED_WRAPPER_OPTIMIZER_CLS.values():
@@ -82,6 +108,16 @@ def _wrap_optimizer(opt, loss_scale):
 @tf_export(v1=['mixed_precision.enable_mixed_precision_graph_rewrite',
                'train.experimental.enable_mixed_precision_graph_rewrite'])
 def enable_mixed_precision_graph_rewrite_v1(opt, loss_scale='dynamic'):
+  # [FUNCTION DOC]
+  # Turns on the mixed precision graph rewrite and wraps an optimizer for loss scaling.
+  # Inputs: opt, a legacy or Keras optimizer (must not already be a loss scale wrapper);
+  # loss_scale, a number, the string "dynamic" (default) or a loss scale object.
+  # Raises a value error if the global Keras mixed precision policy is already in use, or if the
+  # optimizer cannot be wrapped. Logs a warning if sessions without mixed precision already exist
+  # (they are unaffected).
+  # Side effects: sets the automatic mixed precision graph optimizer option to on in the global
+  # optimizer experimental options, and records in the global state module that the rewrite is
+  # enabled. Returns the wrapped optimizer.
   """Enable mixed precision via a graph rewrite.
 
   Mixed precision is the use of both float32 and float16 data types when
@@ -218,6 +254,12 @@ def enable_mixed_precision_graph_rewrite_v1(opt, loss_scale='dynamic'):
 @tf_export(v1=['mixed_precision.disable_mixed_precision_graph_rewrite',
                'train.experimental.disable_mixed_precision_graph_rewrite'])
 def disable_mixed_precision_graph_rewrite_v1():
+  # [FUNCTION DOC]
+  # Turns the mixed precision graph rewrite off for new sessions. Takes no inputs, returns
+  # nothing. Logs a warning if the rewrite was not enabled according to the global state.
+  # Side effects: sets the automatic mixed precision graph optimizer option to off in the global
+  # optimizer experimental options and records in the global state that the rewrite is disabled.
+  # Does not unwrap optimizers and does not affect existing sessions.
   """Disables the mixed precision graph rewrite.
 
   After this is called, the mixed precision graph rewrite will no longer run for

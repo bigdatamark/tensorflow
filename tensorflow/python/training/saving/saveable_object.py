@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Base types describing how objects are saved to and restored from checkpoints: a specification
+# of one tensor (or tensor slice) to save, and an abstract base class for saveable objects that
+# group such specifications under one name. Used by the saveable utilities, savers and
+# variables in the training package. No import-time side effects.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -16,9 +21,25 @@
 
 
 class SaveSpec:
+  # [CLASS DOC]
+  # Describes one tensor (or slice of a tensor) to be saved: the tensor or a callable producing
+  # it, the slice specification, the checkpoint name, the data type and the device. Public
+  # attributes are slice spec, name, dtype and device; the tensor is exposed through a property
+  # that calls the producer when needed. Instances are created by saveable objects and consumed
+  # by the savers.
   """Class used to describe tensor slices that need to be saved."""
 
   def __init__(self, tensor, slice_spec, name, dtype=None, device=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says a null tensor means the spec is ignored, but the constructor
+    # does not handle null: it would try to read the dtype of the null value and fail with an
+    # attribute error.
+    # Constructor. Inputs: tensor, a tensor or a callable producing one; slice_spec, the slice
+    # to save; name, checkpoint name; dtype and device, optional, but both required when tensor is
+    # callable. Stores tensor privately and slice_spec and name publicly.
+    # If tensor is callable and dtype or device is missing, raises an assertion error. Otherwise
+    # for a callable stores the given dtype and device; for a plain tensor takes dtype from the
+    # tensor, and the device from the argument if given, else from the tensor.
     """Creates a `SaveSpec` object.
 
     Args:
@@ -50,13 +71,24 @@ class SaveSpec:
 
   @property
   def tensor(self):
+    # [FUNCTION DOC]
+    # Property returning the tensor to save. If a callable was supplied, calls it on every access
+    # (no caching) and returns the result; otherwise returns the stored tensor.
     return self._tensor() if callable(self._tensor) else self._tensor
 
 
 class SaveableObject:
+  # [CLASS DOC]
+  # Base class for objects that can be saved to and restored from a checkpoint. Holds the
+  # producing object, a list of save specs (all on one device) and the name to save under.
+  # Subclasses override the restore method; the base version is abstract and always fails.
   """Base class for saving and restoring saveable objects."""
 
   def __init__(self, op, specs, name):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: op, the producer object being wrapped (for example a variable);
+    # specs, list of save specs, one per tensor, all on the same device; name, the name to save
+    # under. Stores the three as attributes without validation. Returns nothing.
     """Creates a `SaveableObject` object.
 
     Args:
@@ -72,10 +104,18 @@ class SaveableObject:
 
   @property
   def device(self):
+    # [FUNCTION DOC]
+    # Property returning the device of the first save spec, taken to represent all specs. Raises an
+    # index error if the specs list is empty.
     """The device for SaveSpec Tensors."""
     return self.specs[0].device
 
   def restore(self, restored_tensors, restored_shapes):
+    # [FUNCTION DOC]
+    # Abstract hook for restoring the object from loaded tensors. Inputs: restored_tensors, the
+    # tensors read from a checkpoint; restored_shapes, shapes the object should conform to, or
+    # null. The base implementation ignores both and always raises a value error saying an
+    # abstract method was called; subclasses return an operation that restores the state.
     """Restores this object from 'restored_tensors'.
 
     Args:

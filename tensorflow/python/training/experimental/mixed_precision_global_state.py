@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# HELPER: helper module holding process-wide mixed precision flags for the rest of the package.
+# Keeps three module-level booleans (all initially false): whether the mixed precision graph
+# rewrite is enabled, whether a session was created without the rewrite, and whether the global
+# Keras policy is a mixed precision one, with simple getters and setters for each. It is split
+# from the main mixed precision module to avoid a circular dependency (that module needs sessions
+# and sessions need these flags). A few accessors are exported as internal version 2 endpoints.
+# Import has no side effects beyond defining the flags and export registrations.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -39,28 +47,46 @@ _using_mixed_precision_policy = False
 
 @tf_export('__internal__.train.is_mixed_precision_graph_rewrite_enabled', v1=[])
 def is_mixed_precision_graph_rewrite_enabled():
+  # [FUNCTION DOC]
+  # Getter: returns true if the graph rewrite has been enabled (and not since disabled).
+  # No inputs, no side effects.
   return _mixed_precision_graph_rewrite_is_enabled
 
 
 def set_mixed_precision_graph_rewrite_enabled(enabled):
+  # [FUNCTION DOC]
+  # Setter: stores the given boolean as the module-level flag saying whether the graph rewrite is
+  # enabled. Input enabled, a boolean. Returns nothing; changes global state.
   global _mixed_precision_graph_rewrite_is_enabled
   _mixed_precision_graph_rewrite_is_enabled = enabled
 
 
 def non_mixed_precision_session_created():
+  # [FUNCTION DOC]
+  # Getter: returns true if a session was created while the graph rewrite was not enabled.
+  # Used to warn when the rewrite is enabled later. No inputs, no side effects.
   return _non_mixed_precision_session_created
 
 
 def set_non_mixed_precision_session_created(created):
+  # [FUNCTION DOC]
+  # Setter: stores the given boolean as the module-level flag recording that a non mixed
+  # precision session exists. Input created, a boolean. Returns nothing; changes global state.
   global _non_mixed_precision_session_created
   _non_mixed_precision_session_created = created
 
 
 def is_using_mixed_precision_policy():
+  # [FUNCTION DOC]
+  # Getter: returns true if the global Keras policy has been set to a mixed precision policy.
+  # Used to reject enabling the graph rewrite at the same time. No inputs, no side effects.
   return _using_mixed_precision_policy
 
 
 @tf_export('__internal__.train.set_using_mixed_precision_policy', v1=[])
 def set_using_mixed_precision_policy(is_using):
+  # [FUNCTION DOC]
+  # Setter: stores the given boolean as the module-level flag saying the global Keras policy
+  # uses mixed precision. Input is_using, a boolean. Returns nothing; changes global state.
   global _using_mixed_precision_policy
   _using_mixed_precision_policy = is_using

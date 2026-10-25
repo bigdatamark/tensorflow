@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: backward-compatibility shim. The functional saver (saving and restoring variables
+# inside traced functions) moved to the checkpoint package; this module only forwards attribute
+# lookups to the new module through a module-level attribute hook created by the deprecation
+# utility, which logs a deprecation message (naming version 2.11) when a name is accessed through
+# the old path. It defines nothing itself and is meant to be deleted once imports are updated.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

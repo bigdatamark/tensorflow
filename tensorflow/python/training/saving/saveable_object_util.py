@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Utilities for creating and validating saveable objects, the units that the checkpoint savers
+# use to write and read tensors. Provides saveable classes for reference variables and resource
+# variables, a class for saveables recreated from a loaded SavedModel, and functions that convert
+# variables, tensors, lists of partitioned slices and trackable objects into saveable objects,
+# build name-to-saveable mappings, validate them, and derive saveable factories from trackables
+# (including adapters for the newer tensor serialization protocol). Mostly a helper module for
+# the saver and checkpoint code. Import-time state: two constant sets of operation type names that
+# identify variable reads; some functions are exported as public or internal API endpoints.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -55,6 +64,11 @@ _REF_VARIABLE_OPS = frozenset(["Variable", "VariableV2", "AutoReloadVariable"])
 
 
 def set_cpu0(device_string):
+  # [FUNCTION DOC]
+  # Rewrites a device string so it points at the first CPU. Input device_string, a device name
+  # string. Custom devices are returned unchanged; otherwise the string is parsed, its device
+  # type is set to CPU and index to 0 (other fields such as job and task are kept) and the new
+  # string is returned. A string already on CPU 0 comes back equivalent. No side effects.
   """Creates a new device string based on `device_string` but using /CPU:0.
 
   If the device is already on /CPU:0 or it is a custom device, this is a no-op.
@@ -73,13 +87,25 @@ def set_cpu0(device_string):
 
 
 class ReferenceVariableSaveable(saveable_object.SaveableObject):
+  # [CLASS DOC]
+  # Saveable object for graph-mode reference variables. Holds one save spec whose tensor is the
+  # variable itself. Restoring assigns the loaded value to the variable.
   """SaveableObject implementation that handles reference variables."""
 
   def __init__(self, var, slice_spec, name):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: var, a reference variable; slice_spec, slice to save (empty string for
+    # the whole variable); name, the checkpoint name. Builds one save spec using the variable's
+    # dtype and calls the base constructor with the variable as producer.
     spec = saveable_object.SaveSpec(var, slice_spec, name, dtype=var.dtype)
     super(ReferenceVariableSaveable, self).__init__(var, [spec], name)
 
   def restore(self, restored_tensors, restored_shapes):
+    # [FUNCTION DOC]
+    # Builds the operation that restores the variable. Inputs: restored_tensors, list whose first
+    # element is the loaded value; restored_shapes, list of shapes or null. If shapes are given
+    # the value is reshaped to the first shape. Returns an assign operation on the variable; shape
+    # validation is on only when no shapes were given and the variable's shape is fully defined.
     restored_tensor = restored_tensors[0]
     if restored_shapes is not None:
       restored_tensor = array_ops.reshape(restored_tensor, restored_shapes[0])
@@ -91,9 +117,22 @@ class ReferenceVariableSaveable(saveable_object.SaveableObject):
 
 
 class ResourceVariableSaveable(saveable_object.SaveableObject):
+  # [CLASS DOC]
+  # Saveable object for resource variables (or the tensor read of one in graph mode). Keeps the
+  # variable's device, shape and resource handle; its single save spec uses a callable that reads
+  # the value lazily and copies it to the CPU. Restoring assigns the value back on the variable's
+  # device, with a clearer error message on shape mismatch.
   """SaveableObject implementation that handles ResourceVariables."""
 
   def __init__(self, var, slice_spec, name):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: var, a resource variable or a tensor that reads one; slice_spec, slice
+    # to save (empty for whole); name, checkpoint name. Records the variable's device and shape.
+    # For a tensor, takes the handle from the first input of its operation and uses the tensor as
+    # is. For a resource variable, takes its handle and builds a lazy read callable (no-copy read,
+    # then identity on the CPU; in eager mode returns null for an uninitialized variable, which
+    # marks it as uninitialized). Raises a value error for any other type. Builds one save spec
+    # with the variable's dtype and device and calls the base constructor.
     self._var_device = var.device
     self._var_shape = var.shape
     if isinstance(var, tensor_lib.Tensor):
@@ -102,7 +141,15 @@ class ResourceVariableSaveable(saveable_object.SaveableObject):
     elif resource_variable_ops.is_resource_variable(var):
 
       def _read_variable_closure(v):
+        # [FUNCTION DOC]
+        # HELPER: creates the lazy reader for the save spec. Input v, a resource variable.
+        # Returns a no-argument function bound to that variable (avoids late binding issues).
         def f():
+          # [FUNCTION DOC]
+          # HELPER: lazy reader returned by the closure builder. Under the variable's device:
+          # in eager mode, returns null if the variable is uninitialized; otherwise reads the
+          # value without copying and returns an identity copy of it placed on the CPU, so
+          # variables on other devices can be checkpointed.
           with ops.device(v.device):
             if context.executing_eagerly() and not v.is_initialized():
               # A SaveSpec tensor value of `None` indicates that the variable is
@@ -128,6 +175,12 @@ class ResourceVariableSaveable(saveable_object.SaveableObject):
     super(ResourceVariableSaveable, self).__init__(var, [spec], name)
 
   def restore(self, restored_tensors, restored_shapes):
+    # [FUNCTION DOC]
+    # Restores the variable. Inputs: restored_tensors, list whose first element is the loaded
+    # value; restored_shapes, list of shapes or null (reshapes to the first when given). Copies
+    # the value to the variable's device and assigns it through the resource handle with shape
+    # checking. Returns the assign operation or result. Raises a value error naming both shapes
+    # and the saveable name when the value does not fit the variable's shape.
     """Restores tensors. Raises ValueError if incompatible shape found."""
     restored_tensor = restored_tensors[0]
     if restored_shapes is not None:
@@ -147,10 +200,30 @@ class ResourceVariableSaveable(saveable_object.SaveableObject):
 
 
 def _tensor_comes_from_variable(v):
+  # [FUNCTION DOC]
+  # HELPER: type check used when converting values to saveables. Input v, any object. Returns
+  # true only if v is a tensor produced by one of the known variable or variable-read operation
+  # types; false otherwise.
   return isinstance(v, tensor_lib.Tensor) and v.op.type in _VARIABLE_OPS
 
 
 def saveable_objects_for_op(op, name):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: in the trackable branch the loop variable reuses the name of the parameter, so
+  # the original op is overwritten by the factory result and then by each yielded saveable; it
+  # works because the iterated expression is evaluated first, but it is confusing and the yielded
+  # saveables are looked up again under their own names.
+  # Generator that converts a value into saveable objects. Inputs: op, a saveable object, a
+  # variable, a tensor, a list/tuple/partitioned variable of slices, or a trackable; name, the
+  # checkpoint name (must be a string, else raises a type error).
+  # Behavior: a saveable object is yielded as is. A sequence of slices must be variables with
+  # slice info from the same full tensor (value errors otherwise) and yields reference or resource
+  # saveables with the slice spec. A non-variable trackable is expanded through its saveable
+  # factories (names get an attribute suffix except for the value key and the tensor serialization
+  # name) and each result is converted recursively. A resource variable yields a resource
+  # saveable (graph element in graph mode). Anything else must be, in graph mode, a tensor coming
+  # from a variable (value error in eager mode, type error otherwise) and yields a reference or
+  # resource saveable.
   """Create `SaveableObject`s from an operation.
 
   Args:
@@ -240,6 +313,18 @@ def saveable_objects_for_op(op, name):
 
 
 def op_list_to_dict(op_list, convert_variable_to_tensor=True):
+  # [FUNCTION DOC]
+  # Builds a mapping from checkpoint names to the things saved under them. Inputs: op_list, a
+  # (nested) list, tuple or set of variables, saveable objects or trackables; convert_variable_to_tensor,
+  # whether plain variables are converted to tensors (default true).
+  # The list is flattened and sorted by name so graph construction is deterministic. Saveable
+  # objects and partitioned variables map under their own name; sliced variables are grouped in a
+  # list under their full name; other trackables are expanded to their saveables and handled
+  # recursively; eager resource variables map under their shared name; graph variables map under
+  # the name of their operation (read ops use the variable's name).
+  # Raises a type error if op_list is not a list, tuple or set or if an element is not a
+  # variable; raises a value error on duplicate names, mixing slices and non-slices, an eager
+  # non-resource variable, or two distinct eager variables with one shared name.
   """Create a dictionary of names to operation lists.
 
   This method is only used when the variable name matters (e.g. when saving
@@ -336,6 +421,12 @@ def op_list_to_dict(op_list, convert_variable_to_tensor=True):
 
 
 def _add_saveable(saveables, seen_ops, saveable):
+  # [FUNCTION DOC]
+  # HELPER: duplicate-checking append for validate_and_slice_inputs.
+  # Inputs: saveables, list to append to; seen_ops, identity set of producer objects already
+  # processed; saveable, the saveable object. Raises a value error if its producer was already
+  # seen (the same object would be restored under two names). Otherwise appends it and records its
+  # producer (even if null). Mutates both arguments.
   """Adds the saveable to the saveables list.
 
   Args:
@@ -355,6 +446,13 @@ def _add_saveable(saveables, seen_ops, saveable):
 
 
 def validate_and_slice_inputs(names_to_saveables):
+  # [FUNCTION DOC]
+  # Converts a mapping of names to things-to-save into a flat list of saveable objects. Input
+  # names_to_saveables, mapping from string names to variables, tensors, slices or trackables.
+  # Items are processed sorted by name (comparing only names); each is converted with the
+  # saveable conversion generator and appended with a duplicate check. Returns the list.
+  # Raises type errors for bad names or values and value errors for duplicates, as propagated
+  # from the helpers.
   """Returns the variables and names that will be used for a Saver.
 
   Args:
@@ -381,6 +479,12 @@ def validate_and_slice_inputs(names_to_saveables):
 
 
 def validate_saveables_for_saved_model(saveables, obj):
+  # [FUNCTION DOC]
+  # Filters saveables so they are compatible with SavedModel. Inputs: saveables, list of saveable
+  # objects; obj, the trackable they came from. If obj is a python state object, logs a warning
+  # that python values are stored but not restored when loading in python, and returns an empty
+  # list. If any saveable is a no-restore saveable, returns an empty list. Otherwise returns the
+  # saveables unchanged.
   """Makes sure SaveableObjects are compatible with SavedModel."""
   if isinstance(obj, python_state.PythonState):
     logging.warn(
@@ -395,9 +499,19 @@ def validate_saveables_for_saved_model(saveables, obj):
 
 
 class RestoredSaveableObject(saveable_object.SaveableObject):
+  # [CLASS DOC]
+  # Saveable object rebuilt from a loaded SavedModel. Wraps the traced save and restore functions
+  # and exposes one save spec per saved tensor. Has no producer object (null).
   """SaveableObject restored from SavedModel using the traced save/restore."""
 
   def __init__(self, names_and_slices, save_function, restore_function, name):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: names_and_slices, list of pairs of name suffix and slice string;
+    # save_function, traced function taking a name tensor and returning per-tensor information;
+    # restore_function, traced function taking the restored tensors; name, string or tensor
+    # name. Stores both functions, converts a string name to a constant (under the init scope),
+    # calls the save function once, and builds a save spec for each returned tensor paired with
+    # the names and slices (name plus suffix). Calls the base constructor with no producer.
     self.save_function = save_function
     self.restore_function = restore_function
 
@@ -414,12 +528,26 @@ class RestoredSaveableObject(saveable_object.SaveableObject):
     super(RestoredSaveableObject, self).__init__(None, specs, name)
 
   def restore(self, restored_tensors, restored_shapes):
+    # [FUNCTION DOC]
+    # Restores through the traced restore function. Inputs: restored_tensors, list with one tensor
+    # per save spec; restored_shapes, ignored. Returns whatever the restore function returns.
     del restored_shapes  # unused
     return self.restore_function(
         *[restored_tensors[i] for i in range(len(self.specs))])
 
 
 def recreate_saveable_objects(saveable_fn_by_name, temp_session):
+  # [FUNCTION DOC]
+  # Builds saveable factories from functions loaded from a SavedModel. Inputs:
+  # saveable_fn_by_name, mapping from saveable name to a pair of traced save function and restore
+  # function; temp_session, a one-element mutable list used to cache a temporary session (first
+  # element null until one is needed).
+  # Under the init scope, calls every save function once with an empty name and collects the
+  # name and slice of each returned tensor into one shared list (the same list is used for every
+  # factory). In graph mode the names and slices are evaluated in the default session, or in a
+  # temporary session created and stored in temp_session[0] if no default exists. Returns a
+  # mapping from names to partial constructors of the restored saveable class.
+  # Side effects: may create a session and store it in the passed list.
   """Returns a dict of SaveableObject factories generated from loaded fns."""
 
   names_and_slices = []
@@ -453,6 +581,15 @@ def recreate_saveable_objects(saveable_fn_by_name, temp_session):
 
 
 def create_saveable_object(name, key, factory, call_with_mapped_captures):
+  # [FUNCTION DOC]
+  # Instantiates a saveable from its factory, possibly in a different graph. Inputs: name, the
+  # factory's attribute name; key, checkpoint key passed as the saveable name; factory, the
+  # callable; call_with_mapped_captures, helper that calls a traced function with remapped
+  # captures, or null. With no helper, calls the factory with the key. For the tensor
+  # serialization name, passes the helper to the factory as well. For factories that are partial
+  # constructors of the restored saveable class, wraps the stored save and restore functions so
+  # they go through the helper and builds the object with the key. Otherwise just calls the
+  # factory with the key. Returns the new saveable.
   """Creates a SaveableObject while potentially in a different graph.
 
   When creating the frozen saver for SavedModel, the save and restore ops are
@@ -478,11 +615,18 @@ def create_saveable_object(name, key, factory, call_with_mapped_captures):
     concrete_save_fn = factory.keywords["save_function"]
 
     def save_fn(name):
+      # [FUNCTION DOC]
+      # HELPER: wrapper for the traced save function. Input name, the name tensor. Calls the
+      # original save function through the capture-mapping helper and returns its result.
       return call_with_mapped_captures(concrete_save_fn, [name])
 
     concrete_restore_fn = factory.keywords["restore_function"]
 
     def restore_fn(*restored_tensors):
+      # [FUNCTION DOC]
+      # HELPER: wrapper for the traced restore function. Inputs: the restored tensors as separate
+      # arguments. Calls the original restore function through the capture-mapping helper and
+      # returns its result.
       return call_with_mapped_captures(concrete_restore_fn, restored_tensors)
 
     return factory(save_function=save_fn, restore_function=restore_fn,
@@ -492,12 +636,26 @@ def create_saveable_object(name, key, factory, call_with_mapped_captures):
 
 
 def is_factory_for_restored_saveable_object(factory):
+  # [FUNCTION DOC]
+  # HELPER: predicate for create_saveable_object. Input factory, any object. Returns true if it is
+  # a partial application whose underlying callable is the restored saveable class, else false.
   return (isinstance(factory, functools.partial) and
           factory.func is RestoredSaveableObject)
 
 
 @tf_export("__internal__.tracking.saveable_objects_from_trackable", v1=[])
 def saveable_objects_from_trackable(obj, tf1_saver=False):
+  # [FUNCTION DOC]
+  # Returns saveable factories for a trackable object. Inputs: obj, a trackable; tf1_saver,
+  # boolean (default false) saying the caller is the legacy saver, in which case the object's
+  # legacy hook for gathering saveables is tried first and used if it returns anything.
+  # Behavior: a python state object gets a single factory (keyed by the python state key) that
+  # builds a string-state saveable using the object's serialize and deserialize methods. If the
+  # object defines the newer tensor serialization method, returns a mapping with one factory
+  # under the tensor serialization name; otherwise returns the result of the legacy gathering hook.
+  # The factory, called with a name (default empty) and optional capture-mapping helper, collects
+  # the tensor dictionary from the object, builds one save spec per slice (reusing and renaming
+  # save specs that are supplied) and wraps them in a trackable saveable.
   """Returns SaveableObject factory dict from a Trackable.
 
   Args:
@@ -528,6 +686,14 @@ def saveable_objects_from_trackable(obj, tf1_saver=False):
   if trackable_has_serialize_to_tensor(obj):
 
     def create_saveable(name="", call_with_mapped_captures=None):
+      # [FUNCTION DOC]
+      # HELPER: factory returned by the trackable conversion. Inputs: name, checkpoint name prefix
+      # (default empty); call_with_mapped_captures, optional helper for calling traced functions in
+      # another graph. Calls the object's tensor serialization method (through the helper if it is
+      # a concrete function), then for each entry builds specs: nested mappings give one spec per
+      # slice, plain values one spec with an empty slice; supplied save spec objects are mutated to
+      # take the new name and slice. Local names are collected. Returns a trackable saveable with
+      # the object, specs, name, local names and the object's saveable-compat prefix.
       save_fn = obj._serialize_to_tensors  # pylint: disable=protected-access
       if (call_with_mapped_captures and
           isinstance(save_fn, core.ConcreteFunction)):
@@ -568,10 +734,20 @@ def saveable_objects_from_trackable(obj, tf1_saver=False):
 
 
 class TrackableSaveable(saveable_object.SaveableObject):
+  # [CLASS DOC]
+  # Saveable object bridging a trackable that uses the newer tensor serialization methods to the
+  # saveable interface. Holds the trackable, the checkpoint-name prefix, the local tensor names
+  # (aligned with the specs) and an optional helper for calling traced functions with remapped
+  # captures. Restoring passes a name-to-tensor mapping to the trackable's restore method.
   """A SaveableObject that defines `Trackable` checkpointing steps."""
 
   def __init__(self, obj, specs, name, local_names, prefix,
                call_with_mapped_captures=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: obj, the trackable; specs, list of save specs; name, saveable name;
+    # local_names, list of local tensor names matching the order of the specs; prefix, string
+    # prepended to local names for proto names; call_with_mapped_captures, optional helper
+    # (default none). Stores them and calls the base constructor with the trackable as producer.
     self._prefix = prefix
     self._local_names = local_names
     self._trackable = obj
@@ -579,6 +755,12 @@ class TrackableSaveable(saveable_object.SaveableObject):
     super(TrackableSaveable, self).__init__(obj, specs, name)
 
   def restore(self, restored_tensors, restored_shapes):
+    # [FUNCTION DOC]
+    # Restores the trackable. Inputs: restored_tensors, list aligned with the local names;
+    # restored_shapes, ignored. Builds a mapping from local names to tensors. In graph mode with a
+    # reference variable among the specs, calls the trackable's restore method directly and
+    # returns its result. Otherwise calls it (through the capture-mapping helper when the method
+    # is a concrete function) and returns its result, or a no-op operation if it returned nothing.
     del restored_shapes  # Unused.
     restored_tensor_dict = {}
     for n, local_name in enumerate(self._local_names):
@@ -605,14 +787,26 @@ class TrackableSaveable(saveable_object.SaveableObject):
     return gen_control_flow_ops.no_op()
 
   def get_proto_names_and_checkpoint_keys(self):
+    # [FUNCTION DOC]
+    # Returns a list of pairs, one per spec: the prefixed local name (used in the object proto)
+    # and the spec's checkpoint key (its name). Takes no inputs; no side effects.
     return [(self._prefix + local_name, spec.name)
             for local_name, spec in zip(self._local_names, self.specs)]
 
 
 class _PythonStringStateSaveable(saveable_object.SaveableObject):
+  # [CLASS DOC]
+  # HELPER: internal saveable that stores arbitrary python state as a string tensor. Keeps a
+  # placeholder string constant on the CPU as its save tensor and a callback producing the current
+  # state string, plus a callback to restore from a string.
   """Saves Python state in a checkpoint."""
 
   def __init__(self, name, state_callback, restore_callback):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: name, checkpoint key; state_callback, no-argument function returning
+    # the state string (wrapped to run under the init scope); restore_callback, function taking a
+    # string. Creates an empty string constant on the CPU as the placeholder tensor, builds one
+    # save spec for it and calls the base constructor with the placeholder as producer.
     """Configure saving.
 
     Args:
@@ -624,6 +818,9 @@ class _PythonStringStateSaveable(saveable_object.SaveableObject):
     """
 
     def _state_callback_wrapper():
+      # [FUNCTION DOC]
+      # HELPER: runs the user's state callback under the init scope (outside any function graph)
+      # and returns the string it produces.
       with ops.init_scope():
         return state_callback()
 
@@ -637,13 +834,24 @@ class _PythonStringStateSaveable(saveable_object.SaveableObject):
                                                      name)
 
   def feed_dict_additions(self):
+    # [FUNCTION DOC]
+    # When running a graph, returns a mapping from the placeholder string tensor to the current
+    # state string (calling the state callback now), so a fresh value is fed on each save.
+    # Takes no inputs.
     """When running a graph, indicates fresh state to feed."""
     return {self._save_string: self._state_callback()}
 
   def freeze(self):
+    # [FUNCTION DOC]
+    # Creates a frozen saveable that only saves. Takes no inputs. Returns a no-restore saveable
+    # whose tensor is a lazy callable producing a string constant of the current state, with string
+    # dtype, this saveable's name and the CPU device.
     """Create a frozen `SaveableObject` which saves the current state."""
 
     def _constant_state():
+      # [FUNCTION DOC]
+      # HELPER: lazy tensor source for the frozen saveable. Calls the state callback now and
+      # returns the result as a string constant tensor.
       return constant_op.constant(self._state_callback(), dtype=dtypes.string)
 
     return trackable.NoRestoreSaveable(
@@ -654,6 +862,17 @@ class _PythonStringStateSaveable(saveable_object.SaveableObject):
 
 
 def trackable_has_serialize_to_tensor(obj):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the first check compares the object itself with the delegating mixin class using
+  # identity, which is true only if obj is that class object, never for an instance; the intended
+  # delegation case is really handled later by the loop over the class hierarchy. As written the
+  # early branch is effectively dead code.
+  # Decides whether a trackable uses the newer tensor serialization method. Input obj, a
+  # trackable. Returns true if the instance itself defines that method (restored objects), else
+  # walks the class hierarchy in order: true when a class defines the new method, false when a
+  # class defines only the legacy gathering hook or the trackable base class is reached; when a
+  # delegating mixin is met, answers for the wrapped inner trackable. Objects without a readable
+  # instance dictionary (such as proxy wrappers) skip the instance check. Returns false otherwise.
   """Returns whether obj's class has `_serialize_to_tensors` defined."""
   if obj is base_delegate.DelegatingTrackableMixin:
     # DelegatingTrackableMixin always delegates "_serialize_to_tensors"
@@ -691,10 +910,19 @@ def trackable_has_serialize_to_tensor(obj):
 
 
 def _convert_to_string(x):
+  # [FUNCTION DOC]
+  # HELPER: turns a constant string tensor (or string) into a python string. Input x, a tensor
+  # or value with a statically known constant value. Returns the text; fails if the value is not
+  # statically known.
   return compat.as_str(tensor_util.constant_value(x))
 
 
 class SaveableCompatibilityConverter(trackable.Trackable):
+  # [CLASS DOC]
+  # Adapter that lets an object whose checkpointing is defined by legacy saveable objects take
+  # part in the newer tensor serialization protocol. It keeps the original trackable and its list
+  # of saveables (restricted by slots) and implements the serialize and restore methods on top of
+  # them.
   """Converts object's `SaveableObjects` to functions used in TF2 checkpointing.
 
   A class that converts a Trackable object's `SaveableObjects` to save and
@@ -706,6 +934,9 @@ class SaveableCompatibilityConverter(trackable.Trackable):
   __slots__ = ("_obj", "_saveables")
 
   def __init__(self, obj, saveables):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: obj, the trackable being adapted; saveables, list of its saveable
+    # objects. Stores both. Returns nothing.
     """Constructor.
 
     Args:
@@ -717,18 +948,31 @@ class SaveableCompatibilityConverter(trackable.Trackable):
 
   @property
   def obj(self):
+    # [FUNCTION DOC]
+    # Property returning the original trackable object that was adapted.
     return self._obj
 
   @property
   def saveables(self):
+    # [FUNCTION DOC]
+    # Property returning the list of saveable objects generated from the trackable.
     """Returns a list of SaveableObjects generated from the Trackable object."""
     return self._saveables
 
   def _serialize_to_tensors(self):
+    # [FUNCTION DOC]
+    # Implements the tensor serialization method: returns the mapping of names (and slices) to
+    # tensors or save specs built from the saveables by the module's conversion function.
     """Returns a dict of tensors to serialize."""
     return saveable_object_to_tensor_dict(self.saveables)
 
   def _restore_from_tensors(self, restored_tensors):
+    # [FUNCTION DOC]
+    # Implements the tensor restore method. Input restored_tensors, mapping from local names to
+    # tensors (or to slice mappings). Computes the local names expected from all save specs and
+    # requires them to equal the keys given; otherwise raises a value error listing the expected
+    # and received keys. Then restores each saveable and returns a mapping from saveable names to
+    # restore operations.
     """Returns the restore ops defined in the Saveables."""
     # Map restored tensors to the corresponding SaveableObjects, then call
     # restore. There must be an exact match between restored tensors and the
@@ -748,6 +992,12 @@ class SaveableCompatibilityConverter(trackable.Trackable):
 
 
 def saveable_object_to_tensor_dict(saveables):
+  # [FUNCTION DOC]
+  # Converts saveable objects into the tensor dictionary form. Input saveables, list of saveable
+  # objects. For each spec uses its name and slice as plain strings; callable-valued specs are
+  # kept as the spec object itself (needed for uninitialized variables), others use the raw
+  # tensor. Specs with a slice go into a nested mapping keyed by slice; others map directly.
+  # Reads a private attribute of the spec. Returns the dictionary.
   """Converts a list of SaveableObjects to a tensor dictionary."""
   tensor_dict = {}
   for saveable in saveables:
@@ -765,9 +1015,19 @@ def saveable_object_to_tensor_dict(saveables):
 
 
 def saveable_object_to_restore_fn(saveables):
+  # [FUNCTION DOC]
+  # Builds a restore function from saveable objects. Input saveables, list of saveable objects.
+  # Returns a function taking a mapping of local names to tensors (or slice mappings), as the
+  # trackable restore method expects.
   """Generates `Trackable._restore_from_tensors` from SaveableObjects."""
 
   def _restore_from_tensors(restored_tensors):
+    # [FUNCTION DOC]
+    # HELPER: the restore function returned by the builder. Input restored_tensors, mapping from
+    # local names to tensors or to mappings keyed by slice. For each saveable gathers the values
+    # for its specs (using the empty slice for plain values), calls its restore with no shapes and
+    # records the result under the saveable's name. Returns the mapping of names to restore
+    # operations. Raises a key error if a needed name or slice is missing.
     restore_ops = {}
 
     for saveable in saveables:
@@ -789,6 +1049,15 @@ def saveable_object_to_restore_fn(saveables):
 
 
 def serialized_tensors_to_saveable_cache(serialized_tensors):
+  # [FUNCTION DOC]
+  # Converts serialized tensor dictionaries into a cache of saveable objects. Input
+  # serialized_tensors, mapping from trackable objects to tensor dictionaries (checkpoint key,
+  # optionally nested by slice, to tensor or save spec). Returns a weak-key identity mapping from
+  # each trackable to a mapping from a local saveable name to saveables. Objects with empty
+  # dictionaries are skipped. Compatibility converters reuse their original trackable and
+  # saveables keyed by local name. Other objects get one trackable saveable (under the tensor
+  # serialization name) built from specs for each entry, local names derived from keys and prefix,
+  # and the object name derived from the first key.
   """Converts a tensor dict to a SaveableObject cache.
 
   Args:
