@@ -1,3 +1,15 @@
+# [MODULE DOC]
+# Command-line script that prints a C++ header for selective op/kernel registration.
+# It takes a comma-separated list of model/graph files (flag graphs, required), the file
+# format (proto_fileformat: rawproto by default, or textproto, or ops_list), and a default
+# list of operator:kernel pairs (default_ops, or the word all to include everything). It
+# delegates to the selective registration header library and writes the resulting header
+# text to standard output, so users redirect it into a header file for the C++ build.
+# Import-time side effects: the library import is done with standard output redirected to
+# the null device so that stray import messages do not pollute the generated header. A
+# module-level flags holder is None until the script is run as main, when the argument parser
+# is built, flags are parsed (unknown arguments are passed on to the application runner),
+# and the main function is run.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -48,6 +60,13 @@ FLAGS = None
 
 
 def main(unused_argv):
+  # [FUNCTION DOC]
+  # Entry point run by the application runner. Ignores its argument (the leftover command-line
+  # arguments). Splits the graphs flag on commas into a list of file paths, asks the library
+  # to build the registration header text using the proto file format and default ops flags,
+  # and prints that text to standard output. Returns nothing. Relies on the module-level flags
+  # having been set by the main block; errors from the library (for example unreadable or
+  # empty files) propagate to the caller.
   graphs = FLAGS.graphs.split(',')
   print(
       selective_registration_header_lib.get_header(graphs,

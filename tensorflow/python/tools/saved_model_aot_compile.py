@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# HELPER: Helper module for the saved model command-line tool's ahead-of-time (AOT) compile feature.
+# Provides utilities to freeze a meta graph (optimize with Grappler, replace input placeholders
+# with zero constants, convert variables to constants, write frozen graph and tf2xla config
+# files) and to compile it with the XLA tfcompile wrapper into a header, object files and an
+# include makefile. Public entry points: freeze_model and aot_compile_cpu_meta_graph_def; the
+# underscore functions are internal steps. Import-time behavior: tries to import the tfcompile
+# wrapper; if unavailable, stores an import error object that is raised later at compile time
+# instead of failing on import. Also defines the sets of variable op names treated as read-only
+# or pass-through, and a makefile text template.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -59,10 +69,18 @@ _PASS_THROUGH_VARIABLE_OPS = ('Identity', 'IdentityN')
 
 
 def _shlex_quote(s):
+  # [FUNCTION DOC]
+  # HELPER: Shell-quoting utility for building paths used in makefile text and compiler outputs.
+  # Takes a string and returns it quoted so that a POSIX shell treats it as a single word.
   return shlex.quote(s)
 
 
 def _sysconfig_module():
+  # [FUNCTION DOC]
+  # HELPER: Lets the makefile generator find include paths when installed as a package.
+  # Probes the platform sysconfig module by asking for the include directory. Returns the module
+  # if that works, or nothing/null if an import error or value error occurs (the value error
+  # can come from tests that try to enable eager mode twice). No other side effects.
   """Load tf.sysconfig if available and working (i.e., inside a pip package)."""
   try:
     _ = sysconfig_lib.get_include()
@@ -74,6 +92,11 @@ def _sysconfig_module():
 
 
 def _parse_tensor_name(name):
+  # [FUNCTION DOC]
+  # HELPER: Splits tensor names for the graph pruning and config building code.
+  # Takes a tensor name string. If it contains a colon that is not the last character, returns a
+  # pair of the node name (text before the last colon) and the integer output slot after it
+  # (a non-numeric suffix raises a value error). Otherwise returns the name unchanged and a null slot.
   """Convert a tensor name like 'tensor:0' into a tuple ('tensor', 0)."""
   if ':' in name and not name.endswith(':'):
     node_name = name[:name.rfind(':')]
@@ -91,6 +114,14 @@ CXXFLAGS = {cxx_flags}
 
 
 def _xla_makefile_string(output_prefix):
+  # [FUNCTION DOC]
+  # HELPER: Produces the include makefile text written next to AOT compiled outputs.
+  # Input: output_prefix, the path prefix of the compiled outputs; its directory part becomes the
+  # library directory. Include path: from the installed package's sysconfig if available;
+  # otherwise located from the source tree (following symbolic links of this file, the test
+  # source directory, or a path relative to this file), and logs an error if the tf2xla compiled
+  # function header cannot be found there. Returns the filled template with include dir,
+  # library dir and the C++ ABI define flag from the versions module. Nothing is written to disk.
   """Returns a Makefile string with variables for using XLA binary object files.
 
   Attempts to identify the right include header paths when run from either
@@ -137,6 +168,13 @@ def _xla_makefile_string(output_prefix):
 
 
 def _get_variable_nodes_from_graph_def(graph_def):
+  # [FUNCTION DOC]
+  # HELPER: Finds variables and whether they are written, for deciding which to feed vs freeze.
+  # Input: a graph definition already optimized by Grappler (functions inlined). Collects all
+  # variable handle nodes, builds a map from each input name to consuming nodes (ignoring
+  # control dependencies), then walks consumers of each variable: identity-like ops are followed
+  # through, and any consumer that is not a known read-only op marks the variable as modified.
+  # Returns a mapping from variable name to a pair of the node and a modified flag. No mutation.
   """Get the list of Variable nodes from `graph_def`.
 
   Args:
@@ -178,6 +216,11 @@ def _get_variable_nodes_from_graph_def(graph_def):
 
 
 def _prune_removed_feed_nodes(signature_def, graph_def):
+  # [FUNCTION DOC]
+  # HELPER: Keeps the signature consistent with a graph after freezing removed some nodes.
+  # Inputs: a signature definition and a graph definition. Copies the signature, and for each
+  # input whose node name is no longer in the graph logs a warning and removes it from the
+  # copy. Returns the pruned copy; the original signature is untouched.
   """Identify the inputs in the signature no longer in graph_def, prune them.
 
   Args:
@@ -205,6 +248,21 @@ def freeze_model(checkpoint_path: str,
                  meta_graph_def: meta_graph_pb2.MetaGraphDef,
                  output_prefix: str, signature_def_key: str,
                  variables_to_feed: List[str]) -> Tuple[str, str]:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: The docstring says the default for variables_to_feed is an empty tuple, but there
+  # is no default; the parameter is required, and a null value means feed all variables (none
+  # are frozen). The docstring also lists XLA-related runtime and import errors that this function
+  # never raises. The deprecated blacklist keyword is used for the conversion call.
+  # Freezes a meta graph for tfcompile. Inputs: checkpoint_path (variables location),
+  # meta_graph_def (mutated: its graph's placeholder inputs are replaced by zero constants),
+  # output_prefix (directory created if missing), signature_def_key (which signature to use),
+  # variables_to_feed (names left as variables, or null for all). Steps: validates the signature
+  # exists and has outputs; at info log level writes the original and pre-frozen graphs; replaces
+  # placeholders; optimizes with Grappler; checks that requested feed variables exist; loads the
+  # graph in a fresh session, restores the checkpoint and converts the other variables to
+  # constants; prunes removed inputs from the signature; writes the frozen graph file and the
+  # tf2xla config text file in output_prefix. Returns the frozen graph path and config path.
+  # Raises a value error for a missing signature key, empty outputs, or unknown feed variables.
   """Freeze a `MetaGraphDef` in preparation for tfcompile`.
 
   The graph is always optimized with grappler, and optionally (by default)
@@ -314,6 +372,22 @@ def aot_compile_cpu_meta_graph_def(checkpoint_path,
                                    target_cpu,
                                    variables_to_feed=(),
                                    multithreading=False):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: The docstring mentions a freeze_graph option and a RuntimeError, but neither
+  # exists; variables not in variables_to_feed are always frozen and a stored import error object
+  # is raised instead. It also unconditionally appends an XLA flag that disables the experimental
+  # YNN fusion type to the environment, which is not documented.
+  # Compiles a meta graph into XLA AOT artifacts. Inputs: checkpoint_path, meta_graph_def,
+  # output_prefix (path prefix for outputs), signature_def_key, cpp_class (generated C++ class
+  # name), target_triple and target_cpu (LLVM target), variables_to_feed (names not frozen;
+  # default empty means freeze all), multithreading (whether compiled code uses multithreaded
+  # Eigen; default false). Raises the stored import error if the tfcompile wrapper is missing;
+  # also propagates value errors from freezing. Side effects: sets or extends the XLA_FLAGS
+  # environment variable of the process; creates a temporary directory and the output
+  # directory; freezes the model into the temporary directory; writes an include makefile at
+  # the prefix plus makefile suffix; calls the tfcompile wrapper to write the object, metadata
+  # and constants objects and the header file, using an entry point name derived from the prefix
+  # and class. Returns nothing.
   """Compile a `MetaGraphDef` to header+object files in `output_prefix`.
 
   Use XLA AOT (`tfcompile`) to convert the given meta graph and
@@ -411,6 +485,12 @@ def aot_compile_cpu_meta_graph_def(checkpoint_path,
 
 
 def _optimize_graph(meta_graph_def, signature_def):
+  # [FUNCTION DOC]
+  # HELPER: Grappler optimization step of freezing.
+  # Deep-copies the meta graph, registers all signature input and output tensors as a train op
+  # collection so Grappler treats them as fetches, clears the saver definition, and runs the
+  # Grappler optimizer with the minimum graph size check disabled. Returns the optimized graph
+  # definition. The input meta graph is not modified.
   """Optimize `meta_graph_def` using grappler.  Returns a `GraphDef`."""
   # We need to add a collection called 'train_op' so that grappler
   # knows what the outputs are.
@@ -431,6 +511,13 @@ def _optimize_graph(meta_graph_def, signature_def):
 
 
 def _replace_input_placeholders_with_default_values(graph_def, signature_def):
+  # [FUNCTION DOC]
+  # HELPER: Freezing step that turns signature inputs into constants.
+  # Mutates graph_def in place. For each distinct input tensor of the signature, finds its node;
+  # raises a runtime error if absent. Nodes that are not placeholders are skipped with an info
+  # log. Placeholders must have fully defined shapes (else a value error) and are overwritten
+  # with an all-zero constant of the input dtype; any extra nodes created while building the
+  # zeros are appended to the graph. Returns nothing.
   """Replace graphdef's `tf.placeholder` input ops with all-zero constants."""
   name_to_node_map = dict((n.name, n) for n in graph_def.node)
   processed_nodes = set([])
@@ -469,6 +556,16 @@ def _replace_input_placeholders_with_default_values(graph_def, signature_def):
 
 
 def _signature_to_tf2xla_config(signature_def, variable_nodes_to_feed):
+  # [FUNCTION DOC]
+  # HELPER: Builds the compiler configuration used by freezing.
+  # KNOWN ISSUE: The docstring says a runtime error is raised without XLA, but the code only does a
+  # late import of the config module, so an import error occurs instead. Also a tensor name
+  # without an output index yields a null index and the integer conversion fails with a type error.
+  # Inputs: a signature definition and a list of pairs of variable node and modified flag.
+  # Creates a tf2xla config message with one feed per signature input (named with a feed
+  # prefix), one fetch per output (fetch prefix) and one variable per fed variable (param
+  # prefix; read-only unless modified), replacing slashes in names with underscores.
+  # Returns the config message.
   """Convert `signature_def` to tf2xla config.  Returns a `tf2xla.Config` proto.
 
   Args:

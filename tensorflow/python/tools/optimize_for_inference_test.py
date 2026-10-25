@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# KNOWN ISSUE: The module docstring says these are tests for the client graph utilities, but the
+# tests actually exercise the optimize for inference library (removing unused nodes, folding
+# batch norms, fusing resize/pad with convolutions, converting placeholders to constants).
+# Tests for the optimize for inference library. Builds small graph definitions by hand or with
+# graph-mode ops, runs the library transformations, and asserts structural changes (nodes
+# removed or replaced) and numeric equivalence of results before and after. No import-time side
+# effects; runs through the TensorFlow test main.
 # pylint: disable=g-bad-file-header
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
@@ -37,8 +45,17 @@ from tensorflow.python.tools import optimize_for_inference_lib
 
 
 class OptimizeForInferenceTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the optimize for inference library. Provides helper methods to construct node
+  # definitions and constant nodes, a helper that builds a decomposed batch norm graph, and tests
+  # for dead node removal, placeholder conversion, batch norm folding and fusing, and resize/pad
+  # and convolution fusing.
 
   def create_node_def(self, op, name, inputs):
+    # [FUNCTION DOC]
+    # HELPER: Test utility to build graph nodes by hand.
+    # Takes an op type string, a node name and a list of input names; returns a new node
+    # definition with those fields set. No attributes are set.
     new_node = node_def_pb2.NodeDef()
     new_node.op = op
     new_node.name = name
@@ -47,21 +64,39 @@ class OptimizeForInferenceTest(test.TestCase):
     return new_node
 
   def create_constant_node_def(self, name, value, dtype, shape=None):
+    # [FUNCTION DOC]
+    # HELPER: Test utility to build constant nodes by hand.
+    # Takes a node name, a value, a data type and an optional shape (default none, meaning inferred
+    # from the value). Returns a constant node definition with its dtype and value attributes set.
     node = self.create_node_def("Const", name, [])
     self.set_attr_dtype(node, "dtype", dtype)
     self.set_attr_tensor(node, "value", value, dtype, shape)
     return node
 
   def set_attr_dtype(self, node, key, value):
+    # [FUNCTION DOC]
+    # HELPER: Test utility to set a type attribute on a node.
+    # Mutates the given node definition: its attribute under the given key becomes the data type
+    # value (converted to its enum form). Returns nothing.
     node.attr[key].CopyFrom(
         attr_value_pb2.AttrValue(type=value.as_datatype_enum))
 
   def set_attr_tensor(self, node, key, value, dtype, shape=None):
+    # [FUNCTION DOC]
+    # HELPER: Test utility to set a tensor attribute on a node.
+    # Mutates the node definition: its attribute under the key becomes a tensor message made from
+    # the value with the given data type and optional shape. Returns nothing.
     node.attr[key].CopyFrom(
         attr_value_pb2.AttrValue(tensor=tensor_util.make_tensor_proto(
             value, dtype=dtype, shape=shape)))
 
   def testOptimizeForInference(self):
+    # [FUNCTION DOC]
+    # Scenario: a hand-built graph with an unused constant, an unconnected add, two constants each
+    # guarded by a numeric check and identity node, an add of the identities, and a further add
+    # that consumes it. Runs optimize for inference with no inputs and the first add as the only
+    # output. Asserts the result equals a graph with just the two constants and the add wired
+    # directly to them (unused nodes, checks and identities removed).
     self.maxDiff = 1000
     unused_constant_name = "unused_constant"
     unconnected_add_name = "unconnected_add"
@@ -126,6 +161,10 @@ class OptimizeForInferenceTest(test.TestCase):
     self.assertProtoEquals(expected_output, output)
 
   def testConvertPlaceholderToConstant(self):
+    # [FUNCTION DOC]
+    # Scenario: a graph with a boolean placeholder feeding a relu node. Runs optimize for
+    # inference with a placeholder-to-constant request setting the placeholder to false. Asserts
+    # no placeholder nodes remain and that the node is a constant whose value is false.
     """Build the placeholder testing graph."""
     placeholder_name = "phase_train"
     relu_name = "r_relu"
@@ -157,6 +196,10 @@ class OptimizeForInferenceTest(test.TestCase):
         self.assertEqual(const_value, False)
 
   def testConvertPlaceholderToConstant2(self):
+    # [FUNCTION DOC]
+    # Scenario: same placeholder plus relu graph, but calls the convert placeholder to constant
+    # function directly with a request setting the placeholder to true. Asserts no placeholders
+    # remain and the converted node is a constant with value true.
     """Build the placeholder testing graph."""
     placeholder_name = "phase_train"
     relu_name = "r_relu"
@@ -184,6 +227,12 @@ class OptimizeForInferenceTest(test.TestCase):
         self.assertEqual(const_value, True)
 
   def testConvertPlaceholderWithDefaultToConstant(self):
+    # [FUNCTION DOC]
+    # Scenario: a constant true feeds a placeholder-with-default (named like the Keras learning
+    # phase) that feeds a relu. Calls the convert placeholder to constant function with no
+    # explicit names. Asserts no placeholder-with-default nodes remain and the learning phase
+    # node is a constant with value false (the library forces the learning phase to false,
+    # not the default of true).
     """Build the placeholder_with_default testing graph."""
     placeholder_name = "keras_learning_phase"
     a_constant_name = "a_constant"
@@ -216,6 +265,11 @@ class OptimizeForInferenceTest(test.TestCase):
         self.assertEqual(const_value, False)
 
   def testConvertPlaceholderWithDefaultToConstant2(self):
+    # [FUNCTION DOC]
+    # Scenario: same graph as the previous placeholder-with-default test, but the full optimize
+    # for inference function is run (no inputs, relu as output). Asserts no
+    # placeholder-with-default nodes remain and the learning phase node is a constant with
+    # value false.
     """Build the placeholder_with_default testing graph."""
     placeholder_name = "keras_learning_phase"
     a_constant_name = "a_constant"
@@ -248,6 +302,12 @@ class OptimizeForInferenceTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testFoldBatchNorms(self):
+    # [FUNCTION DOC]
+    # Scenario (graph mode, deprecated-v1 decorator): a convolution over constant input and
+    # weights followed by the legacy batch-norm-with-global-normalization op (producer version set
+    # to 8) with constant mean, variance, beta and gamma. Runs it to get the original result,
+    # applies fold batch norms, imports the optimized graph under a new name and runs it.
+    # Asserts the results are close and that no batch norm global normalization node remains.
     with self.cached_session() as sess:
       inputs = [1, 4, 2, 5, 3, 6, -1, -4, -2, -5, -3, -6]
       input_op = constant_op.constant(
@@ -292,6 +352,12 @@ class OptimizeForInferenceTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testFoldFusedBatchNorms(self):
+    # [FUNCTION DOC]
+    # Scenario (graph mode): for each of four combinations of data format (channels-last on CPU,
+    # channels-first on GPU) and convolution kind (regular, depthwise), builds constants, a
+    # convolution and a fused batch norm in inference mode (producer version 9), records the
+    # result, folds batch norms in the graph, imports and runs the folded graph. Asserts results
+    # are close (relative 1e-4, absolute 1e-6) and that no fused batch norm node remains.
     for data_format, use_gpu, conv2d_func in [
         ("NHWC", False, nn_ops.conv2d), ("NCHW", True, nn_ops.conv2d),
         ("NHWC", False, nn_ops.depthwise_conv2d_native),
@@ -353,6 +419,15 @@ class OptimizeForInferenceTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testFoldFusedBatchNormsV3(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: The second session block, import, comparison and node check are outside the
+    # loop, so only the last combination (channels-first, depthwise) is actually verified; the
+    # earlier three combinations are built and folded but never checked.
+    # Scenario (graph mode): same as the fused batch norm folding test but uses the version 3
+    # fused batch norm op and no explicit GPU selection. For each data format and convolution kind,
+    # builds the graph, records the original result and folds batch norms. After the loop, imports
+    # the last folded graph, runs it, asserts close results (relative 1e-4, absolute 1e-6) and
+    # that no version 3 fused batch norm node remains.
     for data_format, conv2d_func in [("NHWC", nn_ops.conv2d),
                                      ("NCHW", nn_ops.conv2d),
                                      ("NHWC", nn_ops.depthwise_conv2d_native),
@@ -413,6 +488,11 @@ class OptimizeForInferenceTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testFuseResizePadAndConv(self):
+    # [FUNCTION DOC]
+    # Scenario (graph mode): constant input, bilinear resize to 12 by 4, reflect padding, then a
+    # valid convolution named output. Runs the original, applies fuse resize and conv for the
+    # output node, imports and runs the result. Asserts results are close and that no plain
+    # convolution, mirror pad or bilinear resize nodes remain (fused into one op).
     with self.cached_session() as sess:
       inputs = [1, 4, 2, 5, 3, 6, -1, -4, -2, -5, -3, -6]
       input_op = constant_op.constant(
@@ -445,6 +525,11 @@ class OptimizeForInferenceTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testFuseResizeAndConv(self):
+    # [FUNCTION DOC]
+    # Scenario (graph mode): constant input, bilinear resize to 12 by 4, then a valid convolution
+    # named output (no padding). Applies fuse resize and conv, imports and runs the result.
+    # Asserts close results and that no plain convolution or mirror pad node remains. It does not
+    # check that the resize node is gone.
     with self.cached_session() as sess:
       inputs = [1, 4, 2, 5, 3, 6, -1, -4, -2, -5, -3, -6]
       input_op = constant_op.constant(
@@ -474,6 +559,11 @@ class OptimizeForInferenceTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testFusePadAndConv(self):
+    # [FUNCTION DOC]
+    # Scenario (graph mode): constant input, reflect padding, then a valid convolution named
+    # output (no resize). Applies the same fuse resize and conv function, imports and runs the
+    # result. Asserts close results and that no plain convolution or bilinear resize node
+    # remains.
     with self.cached_session() as sess:
       inputs = [1, 4, 2, 5, 3, 6, -1, -4, -2, -5, -3, -6]
       input_op = constant_op.constant(
@@ -502,6 +592,11 @@ class OptimizeForInferenceTest(test.TestCase):
       self.assertNotEqual("ResizeBilinear", node.op)
 
   def count_batchnorm_relavant_ops(self, graph_def):
+    # [FUNCTION DOC]
+    # HELPER: Counting utility for the decomposed batch norm fusing tests.
+    # Takes a graph definition and returns a pair: the number of fused batch norm nodes, and the
+    # number of nodes whose op is add, reciprocal square root, multiply or subtract (the
+    # primitives of a decomposed batch norm). The name misspells "relevant".
     """Return the count of FusedBatchNorm op and the count of primitive
 
     ops which may make up batchnorm computation in a given graph.
@@ -517,6 +612,19 @@ class OptimizeForInferenceTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def create_base_for_fuse_batchnorm(self, pattern_match_mode="MATCH_ALL"):
+    # [FUNCTION DOC]
+    # HELPER: Graph factory shared by the decomposed batch norm fusing tests.
+    # KNOWN ISSUE: It carries a test decorator (deprecated-v1 graph mode) although it is a helper,
+    # not a test, and the docstring says nothing about it. The channels-first branch builds
+    # six-element constants for a six-channel input, while the channels-last branch builds
+    # two-element constants.
+    # Builds, in a cached session, a convolution followed by a batch norm written out with
+    # primitive ops (add epsilon to variance, reciprocal square root, optional scale by gamma,
+    # multiply with the convolution, subtract the scaled mean from beta, add). The mode string
+    # selects variants: the default full pattern, one without gamma, one with swapped final
+    # add inputs, one with a deliberately wrong multiply operand (pattern mismatch), and one using
+    # channels-first format. Sets producer version 8. Returns a pair: the graph definition and
+    # the result of running the output node.
     """Create testing graph and compute the result from original graph.
 
     Args:
@@ -639,6 +747,11 @@ class OptimizeForInferenceTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testFuseDecomposedBatchNorm_MatchAll(self):
+    # [FUNCTION DOC]
+    # Scenario: full decomposed batch norm graph. Applies fuse decomposed batch norm and asserts
+    # exactly one fused batch norm and no primitive ops remain, and results match the original.
+    # Then folds batch norms on the fused graph, asserts no fused batch norm remains and results
+    # still match (relative 1e-4, absolute 1e-6).
     original_graph_def, original_result = self.create_base_for_fuse_batchnorm(
         "MATCH_ALL"
     )
@@ -682,6 +795,10 @@ class OptimizeForInferenceTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testFuseDecomposedBatchNorm_MatchNoGamma(self):
+    # [FUNCTION DOC]
+    # Scenario: decomposed batch norm without the gamma multiplication. Same checks as the full
+    # pattern test: fusing yields one fused batch norm and no primitives with matching results,
+    # and folding afterwards removes the fused node while keeping results close.
     original_graph_def, original_result = self.create_base_for_fuse_batchnorm(
         "MATCH_NO_GAMMA"
     )
@@ -725,6 +842,10 @@ class OptimizeForInferenceTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testFuseDecomposedBatchNorm_MatchSwitchOrder(self):
+    # [FUNCTION DOC]
+    # Scenario: decomposed batch norm whose final add has its two inputs swapped. Same checks as
+    # the full pattern test: fusing yields one fused batch norm and no primitives with matching
+    # results, and folding afterwards removes the fused node while keeping results close.
     original_graph_def, original_result = self.create_base_for_fuse_batchnorm(
         "MATCH_SWITCH_ORDER"
     )
@@ -768,6 +889,10 @@ class OptimizeForInferenceTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testFuseDecomposedBatchNorm_PatternMismatchCase(self):
+    # [FUNCTION DOC]
+    # Scenario: graph with the same primitive ops as a decomposed batch norm but wired so the
+    # pattern does not match. Applies fuse decomposed batch norm and asserts no fused batch norm
+    # appears, the primitive op count stays 7, and results still match the original.
     original_graph_def, original_result = self.create_base_for_fuse_batchnorm(
         "MISMATCH_PATTERN"
     )
@@ -793,6 +918,11 @@ class OptimizeForInferenceTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testFuseDecomposedBatchNorm_FormatUnsupportedCase(self):
+    # [FUNCTION DOC]
+    # Scenario: decomposed batch norm built with channels-first input. Skipped unless the build
+    # has MKL enabled (non-MKL CPU builds do not support that format). Otherwise applies fuse
+    # decomposed batch norm and asserts no fused batch norm appears and the primitive count
+    # stays 7. Unlike the other cases it does not run the graph to compare numeric results.
     if not test_util.IsMklEnabled():
       # Non-Mkl build doesn't support NCHW format on CPU.
       self.skipTest("Skip test for non-Mkl build.")
