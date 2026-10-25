@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Parsing and validation of the Tensor Tracer configuration. Defines the string constants for trace
+# modes, submodes, flag names and summary signature names, three absl flags (delta threshold,
+# check-filter, single-core summaries) and the TTParameters class, which reads the configuration
+# from the TENSOR_TRACER_FLAGS environment variable (a string of double-dash flags). Used by the
+# tensor tracer and its report code. Import-time side effect: registers the three absl flags.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -131,9 +137,24 @@ TT_SINGLE_CORE_SUMMARIES = flags.DEFINE_bool(
 
 
 class TTParameters(object):
+  # [CLASS DOC]
+  # Holds the parsed Tensor Tracer settings. Constructed with an optional mapping of environment
+  # variables (defaults to the process environment); on construction it validates flag names and
+  # computes attributes: trace mode, submode, trace directory, report file path, op index range,
+  # include/exclude regular-expression lists for op names and types, scalar tracing, compact
+  # trace, temp cache, inspect trace, fingerprint subdirectory, graph dump path, trace level,
+  # summary signatures, per-core summaries and flush behavior. Provides flag lookup helpers.
   """A class that handles the parameters of Tensor Tracer."""
 
   def __init__(self, env=None):
+    # [FUNCTION DOC]
+    # Builds the parameter object. Input env: optional mapping of environment variable names to
+    # values; if missing or empty the real process environment is used. Validates flag names,
+    # then reads every flag into attributes (see class doc). Logs a warning if per-core summary
+    # collection is on. If the tracer is enabled, also checks for flag errors.
+    # Raises a value error for unknown flag names, invalid modes, conflicting directory options,
+    # absolute report paths with the test outputs option, or missing trace directory in summary
+    # modes. Returns nothing.
     if env:
       self._env = env
     else:
@@ -181,12 +202,23 @@ class TTParameters(object):
       self._check_flag_errors()
 
   def _check_flag_errors(self):
+    # [FUNCTION DOC]
+    # HELPER: final validation step of the constructor.
+    # Raises a value error if the trace mode is a summary mode (summary or full tensor summary)
+    # and no trace directory was provided. Otherwise returns nothing.
     if self.trace_mode in (TRACE_MODE_SUMMARY, TRACE_MODE_FULL_TENSOR_SUMMARY):
       if not self.trace_dir:
         raise ValueError('trace_dir must be explicitly provided in '
                          'TENSOR_TRACER_FLAGS when summary mode is used.')
 
   def _get_report_filepath(self):
+    # [FUNCTION DOC]
+    # HELPER: constructor helper computing the report file path.
+    # KNOWN ISSUE: the docstring says it "sets" the path, but it only computes and returns it.
+    # Reads the report file flag. If it has a value and the test-undeclared-outputs option is on,
+    # the path must be relative and is joined onto the directory named by the environment
+    # variable for test outputs. Returns the path (or nothing/null if the flag is absent).
+    # Raises a value error if an absolute path is combined with the test outputs option.
     """Sets the path of the output report file."""
 
     found, report_file_path = self.get_flag_value(FLAG_NAME_REPORT_FILE)
@@ -200,6 +232,11 @@ class TTParameters(object):
     return report_file_path
 
   def _get_op_range(self):
+    # [FUNCTION DOC]
+    # HELPER: constructor helper parsing the op range flag.
+    # KNOWN ISSUE: the docstring says it "sets" the range, but it only computes and returns it.
+    # Parses a "start:end" pair of integers from the op range flag. Returns a pair of integers;
+    # (-1, -1) means all ops, and is returned when the flag is missing, empty or malformed.
     """Sets the index range of the Ops that we will consider tracing."""
     found, op_range = self.get_flag_value(FLAG_NAME_OP_RANGE)
     if not found or not op_range:
@@ -213,6 +250,12 @@ class TTParameters(object):
     return op_range
 
   def _get_trace_dir(self):
+    # [FUNCTION DOC]
+    # HELPER: constructor helper determining the trace output directory.
+    # Returns the directory from the trace dir flag, or, if the test-undeclared-outputs option is
+    # on, the directory from the test outputs environment variable (may be null if unset).
+    # Raises a value error if both the trace dir flag and the test outputs option are used.
+    # KNOWN ISSUE: the error message contains the typo "Cannot not use".
     found, trace_dir = self.get_flag_value(FLAG_NAME_TRACE_DIR)
     if found and trace_dir and self.use_test_undeclared_outputs_dir():
       raise ValueError(
@@ -223,6 +266,11 @@ class TTParameters(object):
     return trace_dir
 
   def _get_trace_mode(self):
+    # [FUNCTION DOC]
+    # HELPER: constructor helper reading the trace mode flag.
+    # KNOWN ISSUE: the docstring says it only "checks" validity, but it also returns the mode.
+    # Returns the trace mode string; defaults to the norm mode when the flag is missing or empty.
+    # Raises a value error if the mode is not one of the known trace modes.
     """Checks if the given trace mode is valid."""
 
     found, trace_mode = self.get_flag_value(FLAG_NAME_TRACE_MODE)
@@ -241,9 +289,18 @@ class TTParameters(object):
     return trace_mode
 
   def is_brief_mode(self):
+    # [FUNCTION DOC]
+    # Returns true when the configured submode is the brief submode, false otherwise.
     return self.submode == _SUBMODE_BRIEF
 
   def _get_submode(self):
+    # [FUNCTION DOC]
+    # HELPER: constructor helper reading the submode flag.
+    # KNOWN ISSUE: the docstring says it only "checks" validity, but it also returns the submode.
+    # KNOWN ISSUE: the early return for an empty submode is dead code, because an empty value is
+    # already replaced by the detailed default just above.
+    # Returns the submode string (detailed by default, or brief). Raises a value error for any
+    # other value.
     """Checks if the given submode is valid."""
 
     found, submode = self.get_flag_value(FLAG_NAME_SUBMODE)
@@ -260,6 +317,12 @@ class TTParameters(object):
 
   @staticmethod
   def match_next_flag(tt_flags, pos):
+    # [FUNCTION DOC]
+    # HELPER: tokenizer used by flag validation and lookup.
+    # Static method. Tries, at position pos of the flags string tt_flags, to match a flag in this
+    # order: value in double quotes, value in single quotes, unquoted value, and a bare flag with
+    # no value. Returns a pair: the regular-expression match (null if nothing matched) and a
+    # boolean saying whether the match carries a value (false for bare flags and no match).
     """Returns the match for the next TensorTracer flag.
 
     Args:
@@ -289,6 +352,11 @@ class TTParameters(object):
     return None, False
 
   def _validate_flag_names(self):
+    # [FUNCTION DOC]
+    # HELPER: constructor helper that checks every flag name in the environment variable.
+    # Scans the flags string from the tracer environment variable and compares each flag name to
+    # the list of valid names. Returns nothing; returns early if the variable is unset or empty.
+    # Raises a value error naming the first invalid flag and listing valid names.
     """Validates if the TensorTrace flags passed are valid."""
     tensor_tracer_flags = self._env.get(FLAGS_ENV_VAR)
     if not tensor_tracer_flags:
@@ -307,10 +375,19 @@ class TTParameters(object):
       pos = match.end()
 
   def _supported_signatures(self):
+    # [FUNCTION DOC]
+    # HELPER: overridable hook for summary signature support.
+    # Returns the module-level tuple of all supported summary signature names.
     """Returns a tuple of supported signatures."""
     return TT_SUMMARY_SIGNATURES
 
   def _get_summary_signatures(self):
+    # [FUNCTION DOC]
+    # HELPER: constructor helper building the signature-to-index mapping.
+    # Reads the comma separated signatures flag. Each name is accepted as is or with the tracer
+    # prefix added; unknown names only log a warning and are dropped. Returns a mapping from
+    # signature name to its position. If none is valid, returns the default of max-abs at 0 and
+    # norm at 1.
     """Verifies and returns the summary signatures.
 
     Returns:
@@ -337,6 +414,12 @@ class TTParameters(object):
       return {signature: idx for idx, signature in enumerate(tt_signatures)}
 
   def get_signature_to_agg_fn_map(self):
+    # [FUNCTION DOC]
+    # Returns a new mapping from trace mode names and summary signature names to the function
+    # used to aggregate per-core values: norm for norm, reduce-max for history, max-abs, nan-inf,
+    # max and variance, reduce-min for min, reduce-mean for mean and sparsity, reduce-sum for
+    # size, and an absolute-value-then-max function for the max-abs signature. Takes no input.
+    # Mean and sparsity aggregation is only exact if every core has the same element count.
     """Returns a map that contains the aggregate function for each signature."""
     # TODO(b/199284834): Aggregations are not accurate for mean and sparsity if
     # cores have a different number of elements. Variance uses the maximal core
@@ -358,6 +441,12 @@ class TTParameters(object):
             TT_SUMMARY_SIZE: math_ops.reduce_sum}
 
   def _flag_value_as_list(self, wanted_flag_name):
+    # [FUNCTION DOC]
+    # HELPER: flag reader for comma separated values.
+    # Input: the flag name. Returns the list of strings obtained by splitting the flag value on
+    # commas, or an empty list if the flag is absent.
+    # KNOWN ISSUE: a flag present without a value trips an assertion error instead of yielding
+    # an empty list.
     """Returns the string list of a TensorTracer flag.
 
     Args:
@@ -375,6 +464,13 @@ class TTParameters(object):
     return string_value_list
 
   def _flag_value_as_int_list(self, wanted_flag_name):
+    # [FUNCTION DOC]
+    # HELPER: flag reader for comma separated integers (currently not called in this module).
+    # KNOWN ISSUE: the docstring lists a runtime error, but none is ever raised here.
+    # KNOWN ISSUE: on a conversion failure the warning prints the (empty) result list rather than
+    # the offending flag value.
+    # Input: flag name. Returns the list of integers, or an empty list if the flag is missing,
+    # has no value, or any item is not an integer.
     """Returns the integer list of a TensorTracer flag.
 
     Args:
@@ -398,6 +494,13 @@ class TTParameters(object):
     return int_list
 
   def _get_flag_int_value(self, wanted_flag_name, default_value):
+    # [FUNCTION DOC]
+    # HELPER: flag reader for a single integer, used for the trace level.
+    # Inputs: flag name and the default returned when the flag is absent or not convertible.
+    # KNOWN ISSUE: the docstring lists a runtime error, but none is raised; also a flag given
+    # without a value passes a null to integer conversion, raising a type error that is not
+    # caught. The warning on a bad value prints the default instead of the bad value.
+    # Returns the integer value or the default.
     """Returns the int value of a TensorTracer flag.
 
     Args:
@@ -420,6 +523,12 @@ class TTParameters(object):
     return flag_int_value
 
   def get_flag_value(self, wanted_flag_name):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the trailing raise of a runtime error after the loop is unreachable, since the
+    # loop only exits by returning; the docstring's raises section is therefore never true.
+    # Looks up a flag by name in the tracer environment variable. Returns a pair: whether the flag
+    # was found, and its value (null if absent or given without a value). The first occurrence
+    # wins. Returns (false, null) if the variable is unset or empty.
     """Returns the value of a TensorTracer flags.
 
     Args:
@@ -454,6 +563,11 @@ class TTParameters(object):
                        flag_name)
 
   def _flag_value_to_re_list(self, flag_name):
+    # [FUNCTION DOC]
+    # HELPER: builds the include/exclude filters in the constructor.
+    # Splits the comma separated flag value and compiles each item as a regular expression.
+    # Returns the list of compiled patterns (empty if absent or empty). An invalid pattern
+    # raises a regular-expression error.
     """Converts list of strings to compiled RE."""
 
     re_list = []
@@ -467,6 +581,9 @@ class TTParameters(object):
     return re_list
 
   def is_flag_on(self, flag_name):
+    # [FUNCTION DOC]
+    # Input: flag name. Returns false if the flag is absent, true if present with no value, and
+    # otherwise true only when the lower-cased value is one of 1, t, true, y, yes.
     """Returns True if the given flag is on."""
 
     found, flag_value = self.get_flag_value(flag_name)
@@ -480,6 +597,9 @@ class TTParameters(object):
     return enabled
 
   def is_enabled(self):
+    # [FUNCTION DOC]
+    # Returns true when the enable flag is on. Side effect: logs a debug message with the raw
+    # flags string when enabled.
     """Returns True if TensorTracer is enabled."""
 
     if self.is_flag_on(FLAG_NAME_ENABLE):
@@ -490,6 +610,9 @@ class TTParameters(object):
       return False
 
   def use_test_undeclared_outputs_dir(self):
+    # [FUNCTION DOC]
+    # Returns true when the flag asking to write report and trace files to the test undeclared
+    # outputs directory is on. Takes no input besides the instance.
     """Decides the output directory of the report and trace files.
 
     Args:

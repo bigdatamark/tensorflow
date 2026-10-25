@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit test module for the TPU topology class: checks that a topology survives a round trip
+# through its serialized form. Runs under the standard TensorFlow test runner; no import-time
+# side effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,8 +24,16 @@ from tensorflow.python.tpu import topology
 
 
 class TopologyTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the topology class. No shared fixtures; each test builds its own
+  # topology objects.
 
   def testSerialization(self):
+    # [FUNCTION DOC]
+    # Scenario: build a topology from a mesh shape of 1,1,1,2 and two devices of one task at
+    # core coordinates 0 and 1. Action: serialize it and construct a second topology from the
+    # serialized bytes. Asserts the recovered mesh shape and device coordinates equal the
+    # original's.
     """Tests if the class is able to generate serialized strings."""
     original_topology = topology.Topology(
         mesh_shape=[1, 1, 1, 2],

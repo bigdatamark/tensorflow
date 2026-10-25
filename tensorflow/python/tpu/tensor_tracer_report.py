@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Report generation for Tensor Tracer. Provides a graph topological sort, a wrapper that gives
+# consistent operation and tensor orderings, a configuration holder, a tensor-to-cache-index
+# mapping, a context manager for the report file, a proto fingerprint helper and TTReportHandle,
+# which writes the human readable text report (sections for config, ops, tensors, trace points,
+# cache index map, reasons, graph) and builds/writes the report protocol buffer. Defines only
+# constants at import time; no registrations.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -52,6 +59,15 @@ _TT_REPORT_PROTO = 'tensor_tracer_report.report_pb'
 
 
 def topological_sort(g):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the first element is true when there is no cycle, but the
+  # code returns true when a cycle is found (leftover ops with nonzero in-degree) and false when
+  # the sort succeeded, i.e. the flag actually means "contains a cycle".
+  # Input g: a graph exposing its list of operations. Computes in-degrees (ignoring edges from
+  # loop-back next-iteration ops, which act as sinks), then repeatedly removes zero-degree ops
+  # in name order, decrementing consumers. Returns a pair: (true, set of ops left over) when a
+  # cycle prevents completion, else (false, list of ops in topological order).
+  # Raises a value error if a consumer's in-degree goes negative.
   """Performs topological sort on the given graph.
 
   Args:
@@ -64,10 +80,19 @@ def topological_sort(g):
      list of nodes or the cycle of nodes found.
   """
   def _is_loop_edge(op):
+    # [FUNCTION DOC]
+    # HELPER: edge classifier for the topological sort.
+    # Returns true if the operation's type is next-iteration, i.e. it closes a loop cycle.
     """Returns true if the op is the end of a while-loop creating a cycle."""
     return op.type in ['NextIteration']
 
   def _in_op_degree(op):
+    # [FUNCTION DOC]
+    # HELPER: in-degree computation for the topological sort.
+    # Counts the control inputs and data-input producers of the operation, skipping those that
+    # are next-iteration ops. Returns the count as an integer.
+    # KNOWN ISSUE: the loop variable reuses the name of the parameter op, shadowing it; harmless
+    # since the sequence is built before the loop starts.
     """Returns the number of incoming edges to the given op.
 
     The edge calculation skips the edges that come from 'NextIteration' ops.
@@ -118,9 +143,16 @@ def topological_sort(g):
 
 
 class TensorTracerConfig(object):
+  # [CLASS DOC]
+  # Plain holder for the run environment recorded in the report: tracer version, device type,
+  # number of replicas, replicas per host and number of hosts. Fields other than version start
+  # as null and are filled in by the tracer.
   """Tensor Tracer config object."""
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Initializes the version to the current version string and the device type, replica count,
+    # replicas per host and host count to null. Takes no inputs, returns nothing.
     self.version = _CURRENT_VERSION
     self.device_type = None
     self.num_replicas = None
@@ -129,14 +161,28 @@ class TensorTracerConfig(object):
 
 
 class TensorTraceOrder(object):
+  # [CLASS DOC]
+  # Assigns each traced tensor a consecutive cache index. Holds the graph ordering wrapper, the
+  # list of traced tensors, a mapping from tensor name to cache index and a list mapping cache
+  # index to the tensor's index in the graph ordering.
   """Class that is responsible from storing the trace-id of the tensors."""
 
   def __init__(self, graph_order, traced_tensors):
+    # [FUNCTION DOC]
+    # Inputs: graph_order, the wrapper from the sorting function, and traced_tensors, the list of
+    # tensors to trace. Stores both and builds the index maps. Raises errors as described for
+    # the map-building helper. Returns nothing.
     self.graph_order = graph_order
     self.traced_tensors = traced_tensors
     self._create_tensor_maps()
 
   def _create_tensor_maps(self):
+    # [FUNCTION DOC]
+    # HELPER: constructor helper building the cache index maps.
+    # Walks the traced tensors in order, giving each the next cache index and recording the
+    # tensor's graph-order index. Sets the name-to-cache-index mapping and the cache-index-to-
+    # tensor-index list on the instance. Raises a value error for a duplicate tensor name or a
+    # name missing from the graph ordering, and a runtime error if the two maps disagree in size.
     """Creates tensor to cache id maps."""
     self.tensorname_to_cache_idx = {}
     self.cache_idx_to_tensor_idx = []
@@ -166,6 +212,13 @@ class TensorTraceOrder(object):
 
 
 def sort_tensors_and_ops(graph):
+  # [FUNCTION DOC]
+  # Input graph: a graph with operations. Runs the topological sort; uses its order if it
+  # succeeded, otherwise the graph's native operation order. Builds name-to-index maps for ops
+  # and for output tensors. Returns a named tuple with fields: graph, operations, op_to_idx,
+  # tensors, tensor_to_idx, contains_cycle and topological_order_or_cycle.
+  # KNOWN ISSUE: the code names the first result of the sort "contains_cycle" and negates it
+  # correctly only because the sort returns true for a cycle (contrary to its docstring).
   """Returns a wrapper that has consistent tensor and op orders."""
   graph_wrapper = collections.namedtuple('GraphWrapper',
                                          ['graph', 'operations', 'op_to_idx',
@@ -191,9 +244,17 @@ def sort_tensors_and_ops(graph):
 
 
 class OpenReportFile(object):
+  # [CLASS DOC]
+  # Context manager that opens the report file for writing when a report path is configured and
+  # yields the open file (or null when no path is set). Closes the file on exit.
   """Context manager for writing report file."""
 
   def __init__(self, tt_parameters):
+    # [FUNCTION DOC]
+    # Input tt_parameters: parameters object with a report file path. If the path is empty the
+    # stored file is null; otherwise opens the file for writing (side effect: creates or
+    # truncates it). Re-raises any I/O error from opening. Returns nothing.
+    # KNOWN ISSUE: the try/except only re-raises the same error, so it has no effect.
     if not tt_parameters.report_file_path:
       self._report_file = None
       return
@@ -203,37 +264,68 @@ class OpenReportFile(object):
       raise e
 
   def __enter__(self):
+    # [FUNCTION DOC]
+    # Returns the open report file, or null when no report path was configured.
     return self._report_file
 
   def __exit__(self, unused_type, unused_value, unused_traceback):
+    # [FUNCTION DOC]
+    # Closes the report file if one is open. Exception details are ignored and never suppressed.
     if self._report_file:
       self._report_file.close()
 
 
 def proto_fingerprint(message_proto):
+  # [FUNCTION DOC]
+  # Input: a protocol buffer message. Serializes it and returns the hex digest string of its
+  # SHA-256 hash. No side effects.
   serialized_message = message_proto.SerializeToString()
   hasher = hashlib.sha256(serialized_message)
   return hasher.hexdigest()
 
 
 class TTReportHandle(object):
+  # [CLASS DOC]
+  # Collects explanations ("instrument records") for why ops or tensors were or were not traced,
+  # and produces the tracer report: a text report written to the report file (or to the log when
+  # no file is open) and a report protocol buffer. State: a mapping from names to explanation
+  # strings and the currently open report file.
   """Utility class responsible from creating a tensor tracer report."""
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Creates an empty mapping of instrument records and no open report file. Returns nothing.
     self.instrument_records = {}
     self._report_file = None
 
   def instrument(self, name, explanation):
+    # [FUNCTION DOC]
+    # Records the explanation string for the given name, replacing any earlier explanation.
+    # Mutates the instrument records. Returns nothing.
     self.instrument_records[name] = explanation
 
   def instrument_op(self, op, explanation):
+    # [FUNCTION DOC]
+    # Records the explanation under the operation's name. Returns nothing.
     self.instrument(op.name, explanation)
 
   def instrument_tensor(self, tensor, explanation):
+    # [FUNCTION DOC]
+    # Records the explanation under the tensor's name. Returns nothing.
     self.instrument(tensor.name, explanation)
 
   def create_report_proto(self, tt_config, tt_parameters, tensor_trace_order,
                           tensor_trace_points, collected_signature_types):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the text report writer for trace points iterates pairs of tensor and name,
+    # while this method treats tensor_trace_points as a mapping from tensor name to trace point
+    # name; the two callers' expectations of that argument differ.
+    # Builds the report protocol buffer. Fills the config (version, device, cores, hosts, cores
+    # per host, submode, trace mode), the signature names ordered by their index, and one
+    # definition per graph tensor (name, traced flag, cache index, trace point name, explanation
+    # looked up by tensor name then op name). Untraced tensors are skipped when the fingerprint
+    # subdirectory option is on. Then sets the fingerprint (logged) and copies the graph
+    # definition in. Returns the report proto.
     """Creates and returns a proto that stores tensor tracer configuration.
 
     Args:
@@ -293,6 +385,10 @@ class TTReportHandle(object):
     return report
 
   def report_proto_path(self, trace_dir, summary_tag_name):
+    # [FUNCTION DOC]
+    # Inputs: trace directory string and summary tag name. Returns the path inside the trace
+    # directory of the report proto file, named with the fixed report prefix plus the tag name
+    # with slashes replaced by underscores. No file access.
     """Returns the path where report proto should be written.
 
     Args:
@@ -306,6 +402,12 @@ class TTReportHandle(object):
     return os.path.join(trace_dir, filename)
 
   def write_report_proto(self, report_path, report_proto, tt_parameters):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it writes under the trace directory, but the file is written
+    # at report_path as given; only the trace directory is created.
+    # Creates the trace directory from the parameters, then writes the serialized proto bytes to
+    # report_path (binary, overwriting). Side effects: directory and file creation. Returns
+    # nothing; file system errors propagate.
     """Writes the given report proto under trace_dir."""
     gfile.MakeDirs(tt_parameters.trace_dir)
     with gfile.GFile(report_path, 'wb') as f:
@@ -313,6 +415,12 @@ class TTReportHandle(object):
 
   def create_report(self, tt_config, tt_parameters,
                     tensor_trace_order, tensor_trace_points):
+    # [FUNCTION DOC]
+    # Opens the report file per the parameters (or uses logging if none) and writes, in order,
+    # the config, op list, tensor list, trace points, cache index map, reason and graph
+    # sections. Inputs: tracer config, parameters, tensor trace order and trace points.
+    # Side effects: writes the file or logs; sets the handle's current report file. Returns
+    # nothing.
     """Creates a report file and writes the trace information."""
     with OpenReportFile(tt_parameters) as self._report_file:
       self._write_config_section(tt_config, tt_parameters)
@@ -324,6 +432,10 @@ class TTReportHandle(object):
       self._write_graph_section(tensor_trace_order.graph_order)
 
   def _write_trace_points(self, tensor_trace_points):
+    # [FUNCTION DOC]
+    # HELPER: report section writer for the create-report method.
+    # Writes the checkpoint section: begin marker, one line per (tensor, checkpoint name) pair
+    # giving tensor name and checkpoint name, end marker. Expects an iterable of pairs.
     """Writes the list of checkpoints."""
     self._write_report('%s %s\n'%(_MARKER_SECTION_BEGIN,
                                   _SECTION_NAME_TENSOR_TRACER_CHECKPOINT))
@@ -333,6 +445,10 @@ class TTReportHandle(object):
                                   _SECTION_NAME_TENSOR_TRACER_CHECKPOINT))
 
   def _write_report(self, content):
+    # [FUNCTION DOC]
+    # HELPER: low-level output for all report section writers.
+    # Prefixes content with the tracer log prefix and writes it to the open report file, or logs
+    # it at info level when no file is open. Returns nothing.
     """Writes the given content to the report."""
 
     line = '%s %s'%(_TRACER_LOG_PREFIX, content)
@@ -342,6 +458,10 @@ class TTReportHandle(object):
       logging.info(line)
 
   def _write_config_section(self, tt_config, tt_parameters):
+    # [FUNCTION DOC]
+    # HELPER: report section writer.
+    # Writes the configuration section: version, device, trace mode, submode, replica count,
+    # replicas per host and host count between begin and end markers.
     """Writes the config section of the report."""
 
     self._write_report('%s %s\n'%(_MARKER_SECTION_BEGIN, _SECTION_NAME_CONFIG))
@@ -359,6 +479,10 @@ class TTReportHandle(object):
     self._write_report('%s %s\n'%(_MARKER_SECTION_END, _SECTION_NAME_CONFIG))
 
   def _write_reason_section(self):
+    # [FUNCTION DOC]
+    # HELPER: report section writer.
+    # Writes the reason section: one line per instrument record, sorted by name, giving the quoted
+    # name and its explanation.
     """Writes the reason section of the report."""
 
     self._write_report('%s %s\n'%(_MARKER_SECTION_BEGIN, _SECTION_NAME_REASON))
@@ -367,6 +491,11 @@ class TTReportHandle(object):
     self._write_report('%s %s\n'%(_MARKER_SECTION_END, _SECTION_NAME_REASON))
 
   def _write_op_list_section(self, graph_order):
+    # [FUNCTION DOC]
+    # HELPER: report section writer.
+    # Writes the op count, then per operation its index, quoted name, type and the indices of its
+    # output tensors. Raises a value error if an output tensor is missing from the tensor index
+    # mapping.
     """Writes the Op-list section of the report."""
 
     self._write_report('%s %s\n'%(_MARKER_SECTION_BEGIN, _SECTION_NAME_OP_LIST))
@@ -387,6 +516,11 @@ class TTReportHandle(object):
     self._write_report('%s %s\n'%(_MARKER_SECTION_END, _SECTION_NAME_OP_LIST))
 
   def _write_tensor_list_section(self, graph_order):
+    # [FUNCTION DOC]
+    # HELPER: report section writer.
+    # Writes the tensor count, then per tensor its index, quoted name and the indices of its
+    # consumer ops (sorted by op name). Raises a value error if a consumer op is missing from
+    # the op index mapping.
     """Writes the tensor-list section of the report."""
 
     self._write_report('%s %s\n'%(_MARKER_SECTION_BEGIN,
@@ -411,6 +545,10 @@ class TTReportHandle(object):
                                   _SECTION_NAME_TENSOR_LIST))
 
   def _write_cache_index_map_section(self, tensor_trace_order):
+    # [FUNCTION DOC]
+    # HELPER: report section writer.
+    # Writes the number of cache indices, then one line per cache index giving the cache index
+    # and the corresponding tensor index.
     """Writes the mapping from cache index to tensor index to the report."""
     self._write_report('%s %s\n'%(_MARKER_SECTION_BEGIN,
                                   _SECTION_NAME_CACHE_INDEX_MAP))
@@ -425,6 +563,10 @@ class TTReportHandle(object):
                                   _SECTION_NAME_CACHE_INDEX_MAP))
 
   def _write_graph_section(self, graph_order):
+    # [FUNCTION DOC]
+    # HELPER: report section writer.
+    # Writes whether the topological sort succeeded (the negation of the cycle flag), then each
+    # op of the topological order (or the cycle ops) with its position and quoted name.
     """Writes the graph section of the report."""
 
     self._write_report('%s %s\n'%(_MARKER_SECTION_BEGIN, _SECTION_NAME_GRAPH))
