@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit tests for the ragged placeholder factory function: graph-mode string form of the created
+# placeholders for several dtypes, ragged ranks and value shapes, the error raised in eager
+# mode, and the absence of validation ops in the graph. Runs the test main as a script.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +30,9 @@ from tensorflow.python.platform import googletest
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedPlaceholderOpTest(test_util.TensorFlowTestCase,
                               parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for the ragged placeholder factory. Run in both graph and eager modes and
+  # parameterized for the string-form test. No shared fixtures.
 
   @parameterized.parameters([
       # dtype, ragged_rank, value_shape, name -> expected
@@ -48,6 +55,13 @@ class RaggedPlaceholderOpTest(test_util.TensorFlowTestCase,
   ])
   def testRaggedPlaceholder(self, dtype, ragged_rank, value_shape, name,
                             expected):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: in eager mode the body does nothing, so the test passes without asserting
+    # anything; the checks only run in graph mode.
+    # Parameterized by element dtype, ragged rank, shape of each flat value, optional placeholder
+    # name and the expected text. In graph mode creates a ragged placeholder, converts it to a
+    # string with unknown-dimension markers replaced by the word None, and asserts it equals the
+    # expected text (a plain tensor when ragged rank is zero, nested ragged tensors otherwise).
     if not context.executing_eagerly():
       placeholder = ragged_factory_ops.placeholder(
           dtype, ragged_rank, value_shape, name)
@@ -55,11 +69,18 @@ class RaggedPlaceholderOpTest(test_util.TensorFlowTestCase,
       self.assertEqual(result, expected)
 
   def testRaggedPlaceholderRaisesExceptionInEagerMode(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: in graph mode the body does nothing, so the test is vacuous there.
+    # In eager mode, asserts that creating a ragged placeholder raises a runtime error.
     if context.executing_eagerly():
       with self.assertRaises(RuntimeError):
         ragged_factory_ops.placeholder(dtypes.int32, 1, [])
 
   def testRaggedPlaceholderDoesNotIncludeValidationOps(self):
+    # [FUNCTION DOC]
+    # Graph mode only (returns immediately in eager mode). Creates a rank-one float ragged
+    # placeholder in a fresh graph and asserts the graph contains exactly two placeholder
+    # operations (values and row splits) and no validation operations.
     if context.executing_eagerly():
       return
     graph = ops.Graph()

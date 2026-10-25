@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# Ragged-tensor math operations: ragged range, segment aggregations (sum, prod, min, max, mean,
+# sqrt-n), axis reductions (sum, prod, min, max, mean, variance, std, all, any), matrix
+# multiplication, softmax, add_n, dropout variants, equality and not-equality, and cumulative sum.
+# Most public functions are registered as dispatch targets for the corresponding dense math
+# functions, so calling the dense API with a ragged input is routed here. Only range and cumsum-like
+# entry points are exported directly under the ragged namespace (range is exported explicitly).
+# Import-time side effects: registers dispatch handlers, registers RaggedRange as having no
+# gradient, and overwrites the documentation strings of the segment and reduce functions with text
+# generated from shared templates.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -49,6 +59,18 @@ def range(starts,
           dtype=None,
           name=None,
           row_splits_dtype=dtypes.int64):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says an empty row results when start is less than limit with a
+  # positive delta (and the mirrored case); that is backwards. Rows are empty when the range is
+  # empty, i.e. start is at or beyond limit for a positive delta.
+  # Builds a ragged tensor whose row i is the arithmetic sequence from starts[i] up to (excluding)
+  # limits[i] with step deltas[i]. Inputs: starts, limits, deltas are scalars or equal-length
+  # vectors (scalars broadcast); if limits is None, starts is treated as the limits and starts
+  # become 0; dtype optionally forces the element type, otherwise int32, int64, float32 or float64
+  # is chosen as the widest of the inputs; name is an optional op name; row_splits_dtype (int32 or
+  # int64, default int64) is the type of the result's row splits. Returns a ragged tensor with
+  # ragged rank 1. Runs the ragged range kernel; the op has no gradient. Invalid dtype or shapes
+  # surface as errors from the underlying conversion or kernel.
   """Returns a `RaggedTensor` containing the specified sequences of numbers.
 
   Each row of the returned `RaggedTensor` contains a single sequence:
@@ -116,6 +138,12 @@ def range(starts,
 
 
 def _infer_matching_dtype(tensors, dtype_hierarchy):
+  # [FUNCTION DOC]
+  # HELPER: dtype unification for the ragged range function.
+  # Picks the dtype that appears latest in the given precedence list among the input tensors and
+  # casts every tensor to it. Inputs: a list of tensors and an ordered list of allowed dtypes.
+  # Returns the list of cast tensors. Raises an assertion error if any tensor has a dtype not in the
+  # list.
   """Infers a matching dtype for tensors, and casts them to that dtype."""
   assert all(t.dtype in dtype_hierarchy for t in tensors)
   inferred_dtype = max([t.dtype for t in tensors], key=dtype_hierarchy.index)
@@ -165,6 +193,18 @@ def _ragged_segment_aggregate(unsorted_segment_op,
                               num_segments,
                               separator=None,
                               name=None):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation behind the ragged segment_* functions and the reductions.
+  # Combines rows of data that share a segment id using an unsorted-segment op. If neither data nor
+  # segment_ids is ragged, simply calls the op (passing the separator when it is given, for the
+  # string join op). Otherwise validates that segment_ids has int32 or int64 dtype, and that a
+  # ragged segment_ids has row splits equal to data's (then recurses on the flat values). Output row
+  # lengths are the maximum input row length per segment (at least zero); the function builds the
+  # output splits, maps each input value to its output position and recursively aggregates the
+  # values. Inputs: the op, data, segment_ids, num_segments, optional separator (string data only)
+  # and optional name. Returns a ragged (or dense) tensor with num_segments rows. Raises a value
+  # error for a bad segment_ids dtype or if segment_ids is ragged but data is not; a mismatch of row
+  # splits raises an invalid-argument error when the assertion runs.
   """Aggregates along segments of a RaggedTensor using `unsorted_segment_op`.
 
   Returns a RaggedTensor `output` with `num_segments` rows, where the row
@@ -269,6 +309,12 @@ def segment_sum(data: ragged_tensor.RaggedOrDense,
                 segment_ids: ragged_tensor.RaggedOrDense,
                 num_segments,
                 name=None):
+  # [FUNCTION DOC]
+  # Ragged dispatch target for the unsorted segment sum. Sums the rows of data that share a
+  # segment id (segment ids need not be sorted) into num_segments output rows; inputs are data,
+  # segment_ids (ragged or dense, int32 or int64), num_segments and an optional name that defaults
+  # to a ragged segment sum name. Returns a ragged tensor. Errors come from the shared aggregation
+  # helper. The public docstring is generated from a template at import time.
   # For docs, see: _RAGGED_SEGMENT_DOCSTRING
   return _ragged_segment_aggregate(
       math_ops.unsorted_segment_sum,
@@ -283,6 +329,10 @@ def segment_prod(data: ragged_tensor.RaggedOrDense,
                  segment_ids: ragged_tensor.RaggedOrDense,
                  num_segments,
                  name=None):
+  # [FUNCTION DOC]
+  # Ragged dispatch target for the unsorted segment product. Multiplies the rows of data that share
+  # a segment id into num_segments output rows; inputs are data, segment_ids, num_segments and an
+  # optional name. Returns a ragged tensor. Errors come from the shared aggregation helper.
   # For docs, see: _RAGGED_SEGMENT_DOCSTRING
   return _ragged_segment_aggregate(
       math_ops.unsorted_segment_prod,
@@ -297,6 +347,10 @@ def segment_min(data: ragged_tensor.RaggedOrDense,
                 segment_ids: ragged_tensor.RaggedOrDense,
                 num_segments,
                 name=None):
+  # [FUNCTION DOC]
+  # Ragged dispatch target for the unsorted segment minimum. Takes the element-wise minimum of the
+  # rows of data sharing a segment id; inputs are data, segment_ids, num_segments and an optional
+  # name. Returns a ragged tensor with num_segments rows. Errors come from the shared helper.
   # For docs, see: _RAGGED_SEGMENT_DOCSTRING
   return _ragged_segment_aggregate(
       math_ops.unsorted_segment_min,
@@ -311,6 +365,10 @@ def segment_max(data: ragged_tensor.RaggedOrDense,
                 segment_ids: ragged_tensor.RaggedOrDense,
                 num_segments,
                 name=None):
+  # [FUNCTION DOC]
+  # Ragged dispatch target for the unsorted segment maximum. Takes the element-wise maximum of the
+  # rows of data sharing a segment id; inputs are data, segment_ids, num_segments and an optional
+  # name. Returns a ragged tensor with num_segments rows. Errors come from the shared helper.
   # For docs, see: _RAGGED_SEGMENT_DOCSTRING
   return _ragged_segment_aggregate(
       math_ops.unsorted_segment_max,
@@ -325,6 +383,13 @@ def segment_mean(data: ragged_tensor.RaggedOrDense,
                  segment_ids: ragged_tensor.RaggedOrDense,
                  num_segments,
                  name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: assumes data is ragged (reads its flat values and nested row splits), so a dense
+  # data input fails with an attribute error although the dispatch signature allows dense input.
+  # Ragged dispatch target for the segment mean: computes the segment sum of data and divides by
+  # the segment sum of an all-ones tensor with the same row structure (the per-position counts).
+  # Inputs: data, segment_ids, num_segments, optional name. Returns a ragged tensor (or a dense
+  # one if the sum is dense) of means; positions with a zero count divide by zero.
   """For docs, see: _RAGGED_SEGMENT_DOCSTRING."""
   with ops.name_scope(name, 'RaggedSegmentMean',
                       [data, segment_ids, num_segments]):
@@ -345,6 +410,13 @@ def segment_sqrt_n(data: ragged_tensor.RaggedOrDense,
                    segment_ids: ragged_tensor.RaggedOrDense,
                    num_segments,
                    name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: assumes data is ragged (reads its flat values and nested row splits), so a dense
+  # data input fails although the dispatch signature allows dense input.
+  # Ragged dispatch target for the segment sum divided by the square root of the count. Computes
+  # the segment sum of data and the segment sum of an all-ones tensor of the same structure, then
+  # divides the sums by the square root of the counts. Inputs: data, segment_ids, num_segments,
+  # optional name. Returns a ragged (or dense) tensor.
   """For docs, see: _RAGGED_SEGMENT_DOCSTRING."""
   with ops.name_scope(name, 'RaggedSegmentSqrtN',
                       [data, segment_ids, num_segments]):
@@ -362,6 +434,11 @@ def segment_sqrt_n(data: ragged_tensor.RaggedOrDense,
 
 
 def _set_ragged_segment_docstring(func, combination, combined):
+  # [FUNCTION DOC]
+  # HELPER: documentation generator for the ragged segment functions.
+  # Overwrites the documentation string of func with the segment template filled in with the
+  # given verb-like word (combination) and its past participle (combined). Side effect: mutates
+  # the function object's doc attribute. Returns nothing.
   func.__doc__ = _RAGGED_SEGMENT_DOCSTRING % dict(
       combination=combination, combined=combined)
 
@@ -481,6 +558,18 @@ def ragged_reduce_aggregate(reduce_op,
                             keepdims,
                             separator=None,
                             name=None):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation behind the ragged reduce_* functions.
+  # Reduces rt_input over the given axis or axes using a dense reduce op for uniform dimensions and
+  # an unsorted segment op for ragged ones. Non-ragged input is passed straight to reduce_op. A
+  # tensor axis must have a statically known value (otherwise a value error is raised). Axis none
+  # reduces the flat values (with keepdims it re-expands one leading dimension per extra input
+  # dimension). An empty axis list returns the input unchanged; a single-element list is unwrapped;
+  # several axes are made non-negative, sorted and reduced one at a time starting from the
+  # innermost (so ops must be associative). Axis 0 aggregates by position across rows, axis 1
+  # aggregates each row, higher axes recurse into the values with axis minus one. keepdims adds a
+  # length-one dimension back; separator (string data) selects the join variants. Returns a ragged
+  # or dense tensor.
   """Aggregates across axes of a RaggedTensor using the given `Tensor` ops.
 
   Reduces `rt_input` along the dimensions given in `axis`.  The rank of the
@@ -615,6 +704,10 @@ def reduce_sum(input_tensor: ragged_tensor.Ragged,
                axis=None,
                keepdims=None,
                name=None):
+  # [FUNCTION DOC]
+  # Ragged dispatch target for reduce_sum: sums over the given axis or axes (all axes if none)
+  # using the shared reduction helper with the sum and unsorted-segment-sum ops. Inputs: ragged
+  # input tensor, axis, keepdims flag (default none), optional name. Returns the reduced tensor.
   """For docs, see: _RAGGED_REDUCE_DOCSTRING."""
 
   return ragged_reduce_aggregate(
@@ -631,6 +724,10 @@ def reduce_prod(input_tensor: ragged_tensor.Ragged,
                 axis=None,
                 keepdims=None,
                 name=None):
+  # [FUNCTION DOC]
+  # Ragged dispatch target for reduce_prod: multiplies values over the given axis or axes via the
+  # shared reduction helper with the product and unsorted-segment-product ops. Inputs: ragged
+  # input tensor, axis, keepdims flag, optional name. Returns the reduced tensor.
   """For docs, see: _RAGGED_REDUCE_DOCSTRING."""
   return ragged_reduce_aggregate(
       reduce_op=math_ops.reduce_prod,
@@ -646,6 +743,10 @@ def reduce_min(input_tensor: ragged_tensor.Ragged,
                axis=None,
                keepdims=None,
                name=None):
+  # [FUNCTION DOC]
+  # Ragged dispatch target for reduce_min: minimum over the given axis or axes via the shared
+  # reduction helper with the min and unsorted-segment-min ops. Inputs: ragged input tensor, axis,
+  # keepdims flag, optional name. Returns the reduced tensor.
   """For docs, see: _RAGGED_REDUCE_DOCSTRING."""
   return ragged_reduce_aggregate(
       reduce_op=math_ops.reduce_min,
@@ -661,6 +762,10 @@ def reduce_max(input_tensor: ragged_tensor.Ragged,
                axis=None,
                keepdims=None,
                name=None):
+  # [FUNCTION DOC]
+  # Ragged dispatch target for reduce_max: maximum over the given axis or axes via the shared
+  # reduction helper with the max and unsorted-segment-max ops. Inputs: ragged input tensor, axis,
+  # keepdims flag, optional name. Returns the reduced tensor.
   """For docs, see: _RAGGED_REDUCE_DOCSTRING."""
   return ragged_reduce_aggregate(
       reduce_op=math_ops.reduce_max,
@@ -676,6 +781,11 @@ def reduce_mean(input_tensor: ragged_tensor.Ragged,
                 axis=None,
                 keepdims=None,
                 name=None):
+  # [FUNCTION DOC]
+  # Ragged dispatch target for reduce_mean. Computes the reduce_sum over the axis divided by the
+  # reduce_sum of an all-ones tensor of the same structure (the element counts), rebuilding the
+  # ragged result from the divided flat values. Inputs: ragged input tensor, axis, keepdims flag,
+  # optional name. Returns the mean tensor; empty reductions give not-a-number values.
   """For docs, see: _RAGGED_REDUCE_DOCSTRING."""
   with ops.name_scope(name, 'RaggedReduceMean', [input_tensor, axis]):
     total = reduce_sum(input_tensor, axis, keepdims)
@@ -701,6 +811,11 @@ def reduce_variance(input_tensor: ragged_tensor.Ragged,
                     axis=None,
                     keepdims=False,
                     name=None):
+  # [FUNCTION DOC]
+  # Ragged dispatch target for reduce_variance. Computes mean of squares minus square of the mean
+  # and clips the result at zero (the formula is numerically unstable and can go negative).
+  # Inputs: ragged input tensor, axis, keepdims flag (default false), optional name. Returns the
+  # variance tensor. Raises a value error for complex dtypes.
   """For docs, see: _RAGGED_REDUCE_DOCSTRING."""
   with ops.name_scope(name, 'RaggedReduceVariance', [input_tensor, axis]):
     input_tensor = ragged_tensor.convert_to_tensor_or_ragged_tensor(
@@ -724,6 +839,10 @@ def reduce_std(input_tensor: ragged_tensor.Ragged,
                axis=None,
                keepdims=False,
                name=None):
+  # [FUNCTION DOC]
+  # Ragged dispatch target for reduce_std: the square root of the ragged reduce_variance over the
+  # given axis. Inputs: ragged input tensor, axis, keepdims flag (default false), optional name.
+  # Returns the standard deviation tensor; complex input raises a value error via the variance.
   """For docs, see: _RAGGED_REDUCE_DOCSTRING."""
   with ops.name_scope(name, 'RaggedReduceStd', [input_tensor, axis]):
     variance = reduce_variance(input_tensor, axis=axis, keepdims=keepdims)
@@ -731,6 +850,10 @@ def reduce_std(input_tensor: ragged_tensor.Ragged,
 
 
 def _cast(input_tensor, dtype):
+  # [FUNCTION DOC]
+  # HELPER: dtype conversion for the ragged all/any reductions.
+  # Casts a possibly ragged tensor to the given dtype by mapping the cast over its flat values.
+  # Returns a tensor with the same structure and the new dtype.
   return ragged_functional_ops.map_flat_values(math_ops.cast, input_tensor,
                                                dtype)
 
@@ -740,6 +863,10 @@ def reduce_all(input_tensor: ragged_tensor.Ragged,
                axis=None,
                keepdims=None,
                name=None):
+  # [FUNCTION DOC]
+  # Ragged dispatch target for reduce_all (logical and). Casts the input to int32, takes the
+  # ragged product over the axis, and casts the result back to boolean. Inputs: ragged input
+  # tensor, axis, keepdims flag, optional name. Returns a boolean tensor.
   """For docs, see: _RAGGED_REDUCE_DOCSTRING."""
   with ops.name_scope(name, 'RaggedReduceAll', [input_tensor, axis]):
     return _cast(
@@ -752,6 +879,10 @@ def reduce_any(input_tensor: ragged_tensor.Ragged,
                axis=None,
                keepdims=None,
                name=None):
+  # [FUNCTION DOC]
+  # Ragged dispatch target for reduce_any (logical or). Casts the input to int32, takes the ragged
+  # sum over the axis, and casts the result back to boolean (nonzero becomes true). Inputs: ragged
+  # input tensor, axis, keepdims flag, optional name. Returns a boolean tensor.
   """For docs, see: _RAGGED_REDUCE_DOCSTRING."""
   with ops.name_scope(name, 'RaggedReduceAny', [input_tensor, axis]):
     return _cast(
@@ -760,6 +891,12 @@ def reduce_any(input_tensor: ragged_tensor.Ragged,
 
 
 def _set_ragged_reduce_docstring(func, combination, combined, default, example):
+  # [FUNCTION DOC]
+  # HELPER: documentation generator for the ragged reduce functions.
+  # Overwrites the documentation string of func with the reduce template filled in with the
+  # operation name (combination), its past participle (combined), the text describing the value
+  # for empty reductions (default) and an example text. Side effect: mutates the function object's
+  # doc attribute. Returns nothing.
   func.__doc__ = _RAGGED_REDUCE_DOCSTRING % dict(
       combination=combination,
       combined=combined,
@@ -807,6 +944,17 @@ def matmul(
     grad_b=False,
     name=None,
 ):
+  # [FUNCTION DOC]
+  # Ragged dispatch target for matmul. If neither input is ragged, defers to the dense matmul.
+  # Otherwise requires matching dtypes and equal known ranks (at least one rank must be known and
+  # both at least 2). Rank above 3: converts dense operands to ragged, asserts the outer row
+  # splits match, and recursively multiplies the values. Rank 2: converts ragged operands to dense
+  # (checking they are actually uniform) and multiplies. Rank 3: uses batch-dimension folding when
+  # a has ragged rank 1 and b is dense and a is not transposed or adjointed; otherwise uses a map
+  # over the batch. Inputs: a, b, transpose/adjoint/sparse flags, output_type (optional), grad_a
+  # and grad_b (deleted and ignored), name. Returns a dense or ragged tensor. Raises a value error
+  # if both transpose and adjoint are set for one operand, dtypes differ, ranks differ or are
+  # unknown, or rank is below 2.
   """Multiplies matrix `a` by matrix `b`.
 
   If all transpose or adjoint attributes are `False` then:
@@ -920,6 +1068,12 @@ def matmul(
 
 
 def _matmul_2d(a, b, **kwargs):
+  # [FUNCTION DOC]
+  # HELPER: rank-2 case of the ragged matmul.
+  # Converts any ragged operand to a dense tensor, adding an assertion that no padding was needed
+  # (the matrix must be uniform), then multiplies with the dense matmul passing extra keyword
+  # arguments through. Returns a dense 2D tensor. The assertion fails with an invalid-argument
+  # error at run time when a matrix is ragged in its inner dimension.
   """Multiplies potentially ragged 2D tensors.
 
   Args:
@@ -953,6 +1107,15 @@ def _matmul_2d(a, b, **kwargs):
 
 
 def _matmul_3d_with_map_fn(a, b, **kwargs):
+  # [FUNCTION DOC]
+  # HELPER: rank-3 case of the ragged matmul (general fallback).
+  # Multiplies each batch element pair using a map over the batch with the 2D helper. The result
+  # has ragged rank 2 when b has ragged rank 2 or is transposed/adjointed, otherwise ragged rank 1.
+  # The output element type is output_type from the keyword arguments or a's dtype. Afterwards the
+  # statically known result shape is restored where possible. Returns a 3D ragged tensor. Errors
+  # come from the 2D helper's uniformity check.
+  # Nested function: multiplies one batch element (a pair of matrices) and converts the result to
+  # ragged form when the output ragged rank is 2.
   """Multiplies batches of 2D matrices using map_fn.
 
   `output[n, i, k]` = sum_j (a[n, i, j] * b[n, j, k])` (for all `n`, `i`, `k`).

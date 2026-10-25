@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: support module for ragged tensors; defines the public map_flat_values function.
+# Provides ragged.map_flat_values, which applies an operation to the flat values of ragged tensor
+# arguments and rebuilds a ragged result with the merged row partitions, plus private helpers that
+# strip ragged tensors from nested arguments and merge partitions. Import registers the public
+# symbol with the TensorFlow export and dispatch machinery.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +31,20 @@ from tensorflow.python.util.tf_export import tf_export
 @tf_export("ragged.map_flat_values")
 @dispatch.add_dispatch_support
 def map_flat_values(op, *args, **kwargs):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says ValueError is raised when args contains no RaggedTensors, but
+  # the code simply calls op on the original arguments and returns its result unchanged.
+  # Public API (ragged.map_flat_values, with dispatch support). Applies op to the flat values of
+  # all ragged tensors found in the positional and keyword arguments (looking inside lists,
+  # tuples and dicts), leaving other arguments untouched. If no ragged tensor is present, op is
+  # called directly. Otherwise the row partitions of the inputs are collected; if their flat
+  # values have statically known but different outer sizes a ValueError is raised; if the
+  # partitions have different dtypes they are cast to 64-bit integers when the config allows
+  # automatic casting, else a ValueError is raised. After calling op on the flat values, the
+  # output's static outer dimension must be compatible with the flat values' size (else
+  # ValueError). Partitions are merged (ValueError if ragged ranks differ) and the output is
+  # wrapped into a ragged tensor without validation. Inputs: op (callable), plus its arguments.
+  # Returns the ragged tensor (or op's plain result when nothing was ragged). No side effects.
   """Applies `op` to the `flat_values` of one or more RaggedTensors.
 
   Replaces any `RaggedTensor` in `args` or `kwargs` with its `flat_values`
@@ -137,6 +157,14 @@ def map_flat_values(op, *args, **kwargs):
 
 
 def _replace_ragged_with_flat_values(value, partition_lists, flat_values_nrows):
+  # [FUNCTION DOC]
+  # HELPER: internal recursive helper for map_flat_values.
+  # Walks value and returns a copy where each ragged tensor is replaced by its flat values;
+  # recurses into lists, tuples and dicts (values only), and returns anything else as is.
+  # Mutates the two output arguments: appends each ragged tensor's list of nested row partitions
+  # to partition_lists, and appends the statically known outer size of its flat values (skipped
+  # when unknown) to flat_values_nrows. Non-ragged tensor-like inputs that count as ragged are
+  # converted first. Raises nothing itself.
   """Replace RaggedTensors with their flat_values, and record their partitions.
 
   Returns a copy of `value`, with any nested `RaggedTensor`s replaced by their
@@ -166,6 +194,10 @@ def _replace_ragged_with_flat_values(value, partition_lists, flat_values_nrows):
 
   # Recursion cases
   def recurse(v):
+    # [FUNCTION DOC]
+    # HELPER: closure used for the recursion cases of _replace_ragged_with_flat_values.
+    # Applies the enclosing function to one element v, sharing the same two output accumulators,
+    # and returns the transformed element.
     return _replace_ragged_with_flat_values(v, partition_lists,
                                             flat_values_nrows)
 
@@ -180,6 +212,12 @@ def _replace_ragged_with_flat_values(value, partition_lists, flat_values_nrows):
 
 
 def _merge_partition_lists(partition_lists):
+  # [FUNCTION DOC]
+  # HELPER: internal helper for map_flat_values.
+  # Takes a non-empty list of lists of row partitions (one inner list per ragged input) and
+  # returns a single list where entry i merges the i-th partitions of all inputs by combining
+  # their precomputed encodings. Raises ValueError if the inner lists differ in length (different
+  # ragged ranks). Does not modify its input (works on a copy of the first list).
   """Merges the given list of lists of RowPartitions.
 
   Args:

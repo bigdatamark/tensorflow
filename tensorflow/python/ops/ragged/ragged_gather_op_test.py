@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Tests for ragged_gather_ops.gather. Contains one parameterized test case class checking gathered
+# values for many axis/batch_dims combinations, index range and rank errors, the gradient with
+# respect to params, and equivalence with the dense gather for all ragged ranks of the inputs.
+# Runs under googletest when executed as a script; no import-time side effects beyond imports.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,6 +40,12 @@ from tensorflow.python.platform import googletest
 
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedGatherOpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for ragged_gather_ops.gather. Covers value correctness over many axis and batch
+  # dimension combinations with ragged and dense inputs, out-of-bounds and unknown-rank errors,
+  # the gradient with respect to params, and agreement with the dense array gather. Stateless
+  # apart from a conversion helper; runs each test in both graph and eager modes and uses
+  # table-driven parameterized tests.
 
   @parameterized.named_parameters([
       # Basic gather (axis=0 and batch_dims=0)
@@ -192,7 +203,13 @@ class RaggedGatherOpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
                        batch_dims=0,
                        params_ragged_rank=None,
                        indices_ragged_rank=None):
-    params = ragged_factory_ops.constant(params, ragged_rank=params_ragged_rank)
+    # [FUNCTION DOC]
+    # Parameterized positive test. Builds ragged tensors from the nested lists params and indices
+    # (optionally forcing their ragged ranks via params_ragged_rank and indices_ragged_rank),
+    # calls gather with the optional axis (default none, meaning the batch dimension count) and
+    # batch_dims (default 0), and asserts the result equals expected after converting the
+    # expected strings to byte strings. Returns nothing.
+    params =ragged_factory_ops.constant(params, ragged_rank=params_ragged_rank)
     indices = ragged_factory_ops.constant(
         indices, ragged_rank=indices_ragged_rank)
     actual = ragged_gather_ops.gather(
@@ -200,6 +217,12 @@ class RaggedGatherOpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertAllEqual(actual, self._str_to_bytes(expected))
 
   def _str_to_bytes(self, x):
+    # [FUNCTION DOC]
+    # HELPER: converts expected values for testRaggedGather into the byte strings that string
+    # tensors produce.
+    # Recursively converts every text string inside a (nested) list to a UTF-8 encoded byte
+    # string and returns a new nested list; other values (such as numbers) are returned
+    # unchanged. Pure function, raises nothing.
     if isinstance(x, list):
       return [self._str_to_bytes(v) for v in x]
     elif isinstance(x, str) and bytes is not str:
@@ -208,6 +231,12 @@ class RaggedGatherOpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       return x
 
   def testOutOfBoundsError(self):
+    # [FUNCTION DOC]
+    # Verifies index range checking at evaluation time. Gathers with dense params and ragged
+    # indices containing an index equal to the size of params, with ragged params and dense
+    # indices, and with both ragged; each time evaluation must raise an invalid-argument error
+    # whose message names the offending index and the valid half-open range (size 3 for dense
+    # params, size 2 for the ragged params). Returns nothing.
     tensor_params = ['a', 'b', 'c']
     tensor_indices = [0, 1, 2]
     ragged_params = ragged_factory_ops.constant([['a', 'b'], ['c']])
@@ -223,6 +252,11 @@ class RaggedGatherOpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       self.evaluate(ragged_gather_ops.gather(ragged_params, ragged_indices))
 
   def testUnknownIndicesRankError(self):
+    # [FUNCTION DOC]
+    # Graph-mode only (returns immediately when executing eagerly). Gathers from an empty ragged
+    # params with indices passed through a placeholder-with-default of unknown rank, and asserts
+    # that gather raises ValueError stating the rank of indices must be known statically.
+    # Returns nothing.
     if context.executing_eagerly():
       return
     params = ragged_factory_ops.constant([], ragged_rank=1)
@@ -296,6 +330,17 @@ class RaggedGatherOpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
                    out_grad,
                    expected_grad,
                    params_ragged_rank=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the fifth parameter set is labeled as indices shape [0] but actually uses the
+    # same three indices and data as the preceding case, so it is a duplicate and the empty-indices
+    # case on 3-D ragged params is not exercised.
+    # Parameterized gradient test (graph mode only; skipped when eager; marked as a deprecated
+    # v1 test). Builds float ragged params, int indices, a feed-in gradient and the expected
+    # output and params gradient, checks gather's output, then computes gradients of the output
+    # flat values with respect to the params row splits, params flat values and indices. Asserts
+    # the splits and indices gradients are nothing/null, the flat-values gradient is a sparse
+    # indexed-slices value, and, after converting it to a dense tensor and rewrapping it with the
+    # params partitions, it is close to the expected gradient. Returns nothing.
     """Tests that ragged_gather generates the right gradient.
 
     Args:
@@ -394,6 +439,14 @@ class RaggedGatherOpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
                              indices_shape,
                              axis=None,
                              batch_dims=0):
+    # [FUNCTION DOC]
+    # Parameterized consistency test against the dense gather. Creates random integer params and
+    # in-range random indices of the given shapes (axis defaults to batch_dims), computes the
+    # expected result with the ordinary dense gather, then forms ragged versions of params and
+    # indices at every ragged rank (plus the dense originals) and runs the ragged gather on each
+    # combination with the same axis and batch_dims. Ragged results are converted to dense and
+    # asserted equal to the expected value, with a message naming the ragged ranks. Uses
+    # numpy randomness; returns nothing.
     # Build random params & indices matrics w/ the expected shapes.
     if axis is None:
       axis = batch_dims

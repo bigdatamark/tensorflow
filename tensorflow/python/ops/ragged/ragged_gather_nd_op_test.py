@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Tests for ragged_gather_ops.gather_nd. Contains one parameterized test case class that checks
+# gathering with ragged and dense params and indices (including the bad-indices policy pass-through)
+# and the static errors raised for unsupported or underspecified index shapes. Runs under
+# googletest when executed as a script; no import-time side effects beyond imports.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,6 +35,11 @@ from tensorflow.python.platform import googletest
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedGatherNdOpTest(test_util.TensorFlowTestCase,
                            parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for ragged_gather_ops.gather_nd (n-dimensional gather on ragged or dense params).
+  # Holds a class-level constant DOCSTRING_PARAMS, a three-level nested ragged list of strings
+  # used by the documentation-style cases. Runs each test in both graph and eager modes and
+  # supports table-driven parameterized tests.
 
   DOCSTRING_PARAMS = [[['000', '001'], ['010']],
                       [['100'], ['110', '111', '112'], ['120']],
@@ -204,12 +214,23 @@ class RaggedGatherNdOpTest(test_util.TensorFlowTestCase,
   def testRaggedGatherNd(
       self, descr, params, indices, expected, bad_indices_policy=''
   ):
+    # [FUNCTION DOC]
+    # Parameterized positive test. Calls gather_nd on params (ragged or dense) with indices
+    # (nested lists or ragged) and the optional bad_indices_policy (default empty string, meaning
+    # the default behavior; one case passes the ignore policy on plain dense inputs), then asserts
+    # the result equals expected. descr is only a human-readable case label. Returns nothing.
     result = ragged_gather_ops.gather_nd(
         params, indices, bad_indices_policy=bad_indices_policy
     )
     self.assertAllEqual(result, expected)
 
   def testRaggedGatherNdUnknownRankError(self):
+    # [FUNCTION DOC]
+    # Graph-mode only (returns immediately in eager mode). Uses ragged string params with two
+    # placeholder indices: one of fully unknown rank and one of rank 1 with unknown length. Asserts
+    # gather_nd raises ValueError saying the indices rank must be statically known in the first
+    # case, and that indices.shape's last dimension must be statically known in the second.
+    # Returns nothing.
     if context.executing_eagerly():
       return
     params = ragged_factory_ops.constant([['a', 'b'], ['c', 'd']])
@@ -256,6 +277,13 @@ class RaggedGatherNdOpTest(test_util.TensorFlowTestCase,
       message=None,
       error=ValueError,
   ):
+    # [FUNCTION DOC]
+    # Parameterized error test. Calls gather_nd with params, indices and bad_indices_policy and
+    # asserts it raises the expected exception type (default ValueError, or a tuple of accepted
+    # types) with a message matching the given regular expression. Cases: scalar indices on dense
+    # params, scalar indices on ragged params, ragged innermost indices dimension, and a non-default
+    # bad_indices_policy with ragged params (unsupported). Note that the first case supplies no
+    # message, so only the exception type is checked there. Returns nothing.
     with self.assertRaisesRegex(error, message):
       ragged_gather_ops.gather_nd(
           params, indices, bad_indices_policy=bad_indices_policy

@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: Aggregator module that imports every ragged submodule so their exported symbols and
+# registrations are loaded.
+# Contains no functions or classes. Importing it pulls in all ragged op modules, including
+# ragged_dispatch (registers dispatch handlers for standard TF ops) and ragged_operators
+# (overrides RaggedTensor operators). It is kept out of the package initializer to avoid
+# circular dependencies. The imports are intentionally unused beyond their side effects.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

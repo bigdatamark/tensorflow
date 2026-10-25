@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Implements Python-style indexing and slicing (the item-access operator) for ragged tensors.
+# The public entry point is the ragged item-access function, exported under the internal
+# operators namespace and registered for dispatch, which the ragged tensor class uses to
+# implement item access. Private helpers handle row indexing, row slicing, inner-dimension
+# slicing, ellipsis expansion, new-axis insertion, and building ragged tensors from
+# per-row value ranges. Indexing into a ragged inner dimension with a single index is refused.
+# Import-time side effects: only the export and dispatch registration of the public function.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -34,6 +42,15 @@ from tensorflow.python.util.tf_export import tf_export
 @tf_export("__operators__.ragged_getitem", v1=[])
 @dispatch.add_dispatch_support
 def ragged_tensor_getitem(rt_input, key):
+  # [FUNCTION DOC]
+  # Public item-access implementation for ragged tensors (indexing and slicing).
+  # Inputs: rt_input, the ragged tensor to index; key, an integer, scalar integer tensor, slice,
+  # ellipsis, new-axis marker, or a list/tuple of those (one entry per dimension).
+  # Output: a dense tensor if no ragged dimension remains, otherwise a ragged tensor.
+  # Raises a type error if rt_input is not a ragged tensor; the helpers raise value errors for
+  # unsupported keys (e.g. a single index into a ragged inner dimension) and type errors for
+  # bad slice offsets. Side effects: wraps the work in a name scope named for ragged item access
+  # whose inputs include the ragged tensor and any tensors found in the key.
   """Returns the specified piece of this RaggedTensor.
 
   Supports multidimensional indexing and slicing, with one restriction:
@@ -107,6 +124,17 @@ def ragged_tensor_getitem(rt_input, key):
 
 
 def _ragged_getitem(rt_input, key_list):
+  # [FUNCTION DOC]
+  # HELPER: recursive worker behind the public ragged item-access function.
+  # Consumes the first key (the outer-dimension key) and recurses for the rest.
+  # Inputs: rt_input, a ragged tensor; key_list, list of keys, one per dimension.
+  # Output: the selected piece (ragged or dense). An empty key list returns the input unchanged.
+  # Handles: ellipsis (expanded using the static rank), new axis (wraps the result in a single
+  # row), slice (slices rows, preserves uniform row length, then handles inner keys), and an
+  # integer or scalar tensor (extracts that row's values, then indexes with the inner keys).
+  # In eager mode an integer row index past the number of rows raises an index error so that
+  # Python iteration terminates; non-integer keys skip that check.
+  # Raises value or type errors from the helpers for unsupported keys.
   """Helper for indexing and slicing ragged tensors with __getitem__().
 
   Extracts the specified piece of the `rt_input`.  See
@@ -191,6 +219,13 @@ def _ragged_getitem(rt_input, key_list):
 
 
 def _slice_ragged_row_dimension(rt_input, row_key):
+  # [FUNCTION DOC]
+  # HELPER: row-slicing step of ragged item access.
+  # Inputs: rt_input, a ragged tensor; row_key, a slice object applied to the outer dimension.
+  # Output: a ragged tensor holding the selected rows. A fully empty slice returns the input.
+  # With no step or step one, the selected rows form a contiguous span of the values, so new
+  # row splits are built and the values are sliced. With another step, rows are gathered via
+  # the value-range builder. No exceptions of its own; no side effects.
   """Slice the outer dimension of `rt_input` according to the given `slice`.
 
   Args:
@@ -231,6 +266,19 @@ def _slice_ragged_row_dimension(rt_input, row_key):
 
 
 def _ragged_getitem_inner_dimensions(rt_input, key_list):
+  # [FUNCTION DOC]
+  # HELPER: applies the non-outermost keys of a ragged item access, keeping the outer
+  # dimension unchanged.
+  # Inputs: rt_input, a ragged tensor or dense tensor; key_list, keys for the inner dimensions.
+  # Output: the result as a ragged tensor (or dense tensor for dense input, which is indexed
+  # with a full slice prepended). Empty key list returns the input.
+  # Cases: ellipsis (expanded), new axis (each value wrapped in its own row), trivial slice
+  # (recurse on values, splits unchanged), nontrivial slice (compute per-row start and limit
+  # indices, handling negative offsets and steps, gather, fix up uniform row length, recurse),
+  # and single index (only allowed for uniform inner dimension, with bounds assertions
+  # attached as control dependencies; uses a strided slice over the values).
+  # Raises a type error if slice offsets are not integers/tensors/none; raises a value error
+  # when indexing a single column of a ragged (non-uniform) inner dimension.
   """Retrieve inner dimensions, keeping outermost dimension unchanged.
 
   Args:
@@ -347,6 +395,12 @@ def _ragged_getitem_inner_dimensions(rt_input, key_list):
 
 
 def _slice_length(value_length, slice_key):
+  # [FUNCTION DOC]
+  # HELPER: computes the length a slice of a given length would have.
+  # Inputs: value_length, scalar integer tensor; slice_key, a slice object.
+  # Output: scalar tensor (same integer type as value_length) with the element count.
+  # Implemented by slicing a temporary all-false tensor of that length and taking its size.
+  # No exceptions of its own.
   """Computes the number of elements in a slice of a value with a given length.
 
   Returns the equivalent of: `len(range(value_length)[slice_key])`
@@ -368,6 +422,16 @@ def _slice_length(value_length, slice_key):
 
 
 def _expand_ellipsis(key_list, num_remaining_dims):
+  # [FUNCTION DOC]
+  # HELPER: replaces a leading ellipsis in a key list.
+  # KNOWN ISSUE: docstring typo "he ellipsis"; its Raises section is formatted as part of
+  # Returns and the ValueError description mentions a ragged_rank attribute that the code does
+  # not use (it raises when num_remaining_dims is unknown).
+  # Inputs: key_list, list whose first entry is an ellipsis; num_remaining_dims, integer rank
+  # or nothing if unknown. New-axis markers are not counted as indices.
+  # Output: if the indices fill all remaining dimensions, the list without the ellipsis;
+  # otherwise a new list with a full slice in place of the ellipsis (one step at a time).
+  # Raises a value error if the rank is unknown, an index error if there are too many indices.
   """Expands the ellipsis at the start of `key_list`.
 
   Assumes that the first element of `key_list` is Ellipsis.  This will either
@@ -396,6 +460,11 @@ def _expand_ellipsis(key_list, num_remaining_dims):
 
 
 def _tensors_in_key_list(key_list):
+  # [FUNCTION DOC]
+  # HELPER: collects tensors from an item-access key for use as name-scope inputs.
+  # Input: key_list, a tensor, a list or tuple (searched recursively), a slice (start, stop and
+  # step searched), or anything else (ignored).
+  # Output: generator yielding each tensor found. No side effects or exceptions.
   """Generates all Tensors in the given slice spec."""
   if isinstance(key_list, tensor_lib.Tensor):
     yield key_list
@@ -413,6 +482,15 @@ def _tensors_in_key_list(key_list):
 
 
 def _build_ragged_tensor_from_value_ranges(starts, limits, step, values):
+  # [FUNCTION DOC]
+  # HELPER: builds a ragged tensor whose rows are strided ranges of a values tensor.
+  # KNOWN ISSUE: the docstring's Raises section says it raises a value error "until the
+  # prerequisite ops are checked in", which is stale; the code actually raises a type error
+  # when step is not an integer, and never raises a value error.
+  # Inputs: starts and limits, 1-D integer tensors of row start and stop indices; step, integer
+  # or none (defaults to one); values, a tensor or ragged tensor to select from.
+  # Output: ragged tensor where row i is the strided range of values. Uses a ragged range for
+  # the indices, then gathers from values (ragged gather if values is ragged).
   """Returns a `RaggedTensor` containing the specified sequences of values.
 
   Returns a RaggedTensor `output` where:
@@ -463,6 +541,12 @@ def _build_ragged_tensor_from_value_ranges(starts, limits, step, values):
 
 
 def _if_ge_zero(value, true_fn, false_fn):
+  # [FUNCTION DOC]
+  # HELPER: chooses between two callbacks depending on the sign of a value.
+  # Inputs: value, a Python number or scalar tensor; true_fn and false_fn, zero-argument
+  # callbacks. Output: result of true_fn if value is non-negative, else of false_fn.
+  # If value is a tensor with a statically known constant value it is resolved in Python;
+  # otherwise a graph conditional is built, so both callbacks are traced.
   """Returns `true_fn() if value >= 0 else false_fn()`."""
   # If `value` is statically known, then don't use a control flow op.
   if isinstance(value, tensor_lib.Tensor):

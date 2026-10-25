@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Installs Python operator overloads on the RaggedTensor class. At import time it assigns
+# indexing, equality, hashing, ordering, logical, arithmetic and boolean-conversion special
+# methods onto RaggedTensor, mostly by reusing the generic math operations (which dispatch to
+# ragged implementations) and wrapping a few of them with ragged-specific documentation.
+# It defines ragged_eq, ragged_ge, ragged_abs, ragged_and, ragged_hash and ragged_bool plus the
+# private helper that builds reflected (right-handed) operator versions.
+# Import-time side effect: mutates the RaggedTensor class globally. It is imported from the
+# ragged_ops module rather than from the package initializer to avoid circular imports.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +35,12 @@ from tensorflow.python.util import tf_decorator
 # Equality Docstring
 # =============================================================================
 def ragged_eq(self, other):  # pylint: disable=g-doc-args
+  # [FUNCTION DOC]
+  # Implements the equality operator for RaggedTensor. Delegates to the generic tensor equality
+  # routine: with value-based equality enabled it compares elementwise (with broadcasting) and
+  # returns a boolean ragged tensor; otherwise, or if shapes are not broadcast-compatible, it
+  # returns a single false value instead of raising. Inputs: self (a ragged tensor) and other
+  # (ragged tensor, tensor or convertible value). No side effects.
   """Returns result of elementwise `==` or False if not broadcast-compatible.
 
   Compares two ragged tensors elemewise for equality if they are
@@ -76,6 +91,12 @@ def ragged_eq(self, other):  # pylint: disable=g-doc-args
 # Ordering Docstring
 # =============================================================================
 def ragged_ge(self, other):  # pylint: disable=g-doc-args
+  # [FUNCTION DOC]
+  # Implements the greater-than-or-equal operator for RaggedTensor by delegating to the generic
+  # greater-or-equal math operation. Inputs: self (ragged tensor) and other (anything
+  # convertible to a ragged tensor or tensor). Returns a boolean ragged tensor with the
+  # broadcast shape. Raises an invalid-argument error when shapes are not broadcast-compatible.
+  # No side effects.
   """Elementwise `>=` comparison of two convertible-to-ragged-tensor values.
 
   Computes the elemewise `>=` comparison of two values that are convertible to
@@ -141,6 +162,11 @@ def ragged_ge(self, other):  # pylint: disable=g-doc-args
 # Arithmetic Docstring
 # =============================================================================
 def ragged_abs(self, name=None):  # pylint: disable=g-doc-args
+  # [FUNCTION DOC]
+  # Implements the absolute-value operator for RaggedTensor by delegating to the generic abs
+  # math operation. Input: self (ragged tensor of integer, float or complex values) and an
+  # optional operation name. Returns a ragged tensor of the same structure with absolute values;
+  # complex inputs yield the matching real floating type. No side effects.
   r"""Computes the absolute value of a ragged tensor.
 
   Given a ragged tensor of integer or floating-point values, this operation
@@ -179,6 +205,13 @@ def ragged_abs(self, name=None):  # pylint: disable=g-doc-args
 
 # ===========================================================================
 def ragged_and(self, y, name=None):  # pylint: disable=g-doc-args
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring describes the operands as x and y, but the first parameter is
+  # actually named self (it is the left operand of the and operator).
+  # Implements the bitwise-and operator for RaggedTensor by delegating to the generic logical
+  # and operation. Inputs: self (boolean ragged tensor), y (boolean value, tensor or ragged
+  # tensor, broadcast-compatible) and an optional operation name. Returns a boolean ragged
+  # tensor with the broadcast shape. No side effects.
   r"""Returns the truth value of elementwise `x & y`.
 
   Logical AND function.
@@ -250,11 +283,21 @@ def ragged_and(self, y, name=None):  # pylint: disable=g-doc-args
 
 # Helper Methods.
 def _right(operator):
+  # [FUNCTION DOC]
+  # HELPER: Builds reflected (right-handed) operator methods installed on RaggedTensor.
+  # Takes a binary operator function and returns a new function that calls it with the two
+  # arguments swapped, wrapped with a decorator so the original function's metadata is kept.
+  # No side effects.
   """Right-handed version of an operator: swap args x and y."""
   return tf_decorator.make_decorator(operator, lambda y, x: operator(x, y))
 
 
 def ragged_hash(self):
+  # [FUNCTION DOC]
+  # Implements the hash operator for RaggedTensor. When value-based tensor equality is enabled,
+  # eager execution is active outside functions, and the tensor is not part of a non-function
+  # graph, it raises a type error because such tensors are unhashable. Otherwise it returns
+  # the object identity as the hash. Input: self (ragged tensor); output: an integer hash.
   """The operation invoked by the `RaggedTensor.__hash__` operator."""
   g = getattr(self.row_splits, "graph", None)
   # pylint: disable=protected-access
@@ -314,6 +357,10 @@ ragged_tensor.RaggedTensor.__rtruediv__ = _right(math_ops.truediv)
 
 
 def ragged_bool(self):  # pylint: disable=g-doc-args
+  # [FUNCTION DOC]
+  # Implements boolean conversion for RaggedTensor (installed for both the Python 3 and legacy
+  # Python 2 hooks). Always raises a type error saying a ragged tensor may not be used as a
+  # boolean, to prevent accidental truth tests. Input: self; never returns normally.
   """Raises TypeError when a RaggedTensor is used as a Python bool.
 
   To prevent RaggedTensor from being used as a bool, this function always raise

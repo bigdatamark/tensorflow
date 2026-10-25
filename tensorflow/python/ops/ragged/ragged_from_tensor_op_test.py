@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Tests for RaggedTensor.from_tensor, the conversion of dense tensors into ragged tensors. Contains
+# one test case class covering documentation examples, high-rank inputs, empty dimensions, partially
+# unknown static shapes and error handling. Runs under googletest when executed as a script.
+# No import-time side effects other than imports.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,8 +35,20 @@ from tensorflow.python.platform import googletest
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedTensorFromTensorOpTest(test_util.TensorFlowTestCase,
                                    parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case covering RaggedTensor.from_tensor, which converts a dense tensor into a ragged
+  # tensor. It has no state of its own; each test builds dense tensors from constants, shapes or
+  # placeholders and compares the ragged result with expected nested lists. The class is
+  # decorated to run every test in both graph and eager modes and mixes in parameterized
+  # testing so that table-driven cases can be expanded into separate tests.
 
   def testDocStringExamples(self):
+    # [FUNCTION DOC]
+    # Re-checks the examples from the from_tensor documentation. Builds small dense integer
+    # tensors and converts them with no extra arguments, with explicit row lengths, with a
+    # padding value, and with a higher ragged rank. Asserts that each conversion yields the
+    # expected nested lists (trailing padding stripped, or rows truncated to the given lengths).
+    # Takes no inputs and returns nothing.
     # The examples from RaggedTensor.from_tensor.__doc__.
     dt = constant_op.constant([[5, 7, 0], [0, 3, 0], [6, 0, 0]])
     self.assertAllEqual(
@@ -352,6 +369,16 @@ class RaggedTensorFromTensorOpTest(test_util.TensorFlowTestCase,
                                     ragged_rank=1,
                                     use_ragged_rank=True,
                                     expected_shape=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the name is prefixed with disabled_ instead of test, so the test runner never
+    # collects or runs this parameterized test; its cases are dead code.
+    # Parameterized scenario: converts a dense tensor (tensor) into a ragged tensor with
+    # RaggedTensor.from_tensor, passing lengths and padding, and ragged_rank only when
+    # use_ragged_rank is true. Asserts the result is a ragged tensor of the requested ragged
+    # rank, that its shape is compatible with the dense shape (and equals expected_shape when
+    # given), that its values equal the expected nested lists, and that rebuilding it from
+    # its flat values and nested row splits with validation gives the same value.
+    # Returns nothing.
     dt = constant_op.constant(tensor)
     if use_ragged_rank:
       rt = RaggedTensor.from_tensor(dt, lengths, padding, ragged_rank)
@@ -369,6 +396,12 @@ class RaggedTensorFromTensorOpTest(test_util.TensorFlowTestCase,
         rt.flat_values, rt.nested_row_splits, validate=True))
 
   def testHighDimensions(self):
+    # [FUNCTION DOC]
+    # Converts a six-dimensional dense tensor whose dimension sizes are distinct primes (so that
+    # mixed-up dimensions would be detected) with each ragged rank from 1 to 3. Asserts the result
+    # is a ragged tensor with that ragged rank, a shape compatible with the dense shape, values
+    # equal to the dense tensor as nested lists, and that it round-trips through its flat values
+    # and nested row splits. Returns nothing.
     # Use distinct prime numbers for all dimension shapes in this test, so
     # we can see any errors that are caused by mixing up dimension sizes.
     dt = array_ops.reshape(
@@ -491,6 +524,12 @@ class RaggedTensorFromTensorOpTest(test_util.TensorFlowTestCase,
       },
   )
   def testEmpty(self, dt_shape, expected, lengths=None, padding=None):
+    # [FUNCTION DOC]
+    # Parameterized test for dense tensors with zero-sized dimensions. Creates a zeros tensor of
+    # shape dt_shape and, for every ragged rank from 1 up to rank minus 2, converts it with the
+    # optional lengths and padding. Asserts the result is a ragged tensor of that rank, with a
+    # shape compatible with the dense shape, values equal to expected, and that it round-trips
+    # through flat values and nested row splits. Returns nothing.
     dt = array_ops.zeros(dt_shape)
     for ragged_rank in range(1, len(dt_shape) - 1):
       rt = RaggedTensor.from_tensor(dt, lengths, padding, ragged_rank)
@@ -540,6 +579,14 @@ class RaggedTensorFromTensorOpTest(test_util.TensorFlowTestCase,
   ])
   def testPartialShapes(self, tensor, tensor_shape, shape=None,
                         expected=None):
+    # [FUNCTION DOC]
+    # Parameterized test of conversion when the static shape of the input is partly or wholly
+    # unknown. Feeds the tensor through a placeholder with default whose declared shape is
+    # tensor_shape (possibly unknown rank), converts it for each ragged rank from 1 up to rank
+    # minus 2, and asserts a ragged tensor of that rank is produced, compatible with the dense
+    # shape, with the optional expected static shape (shape) and values equal to expected
+    # (defaults to the input tensor). Does nothing in eager mode since shapes are always known there.
+    # Returns nothing.
     if expected is None:
       expected = tensor
 
@@ -639,6 +686,11 @@ class RaggedTensorFromTensorOpTest(test_util.TensorFlowTestCase,
                  padding=None,
                  ragged_rank=1,
                  error=None):
+    # [FUNCTION DOC]
+    # Parameterized error test. Builds a dense tensor and calls RaggedTensor.from_tensor with the
+    # given lengths, padding and ragged_rank (default 1). Asserts that the call raises the
+    # exception type error[0] with a message matching the regular expression error[1] (for
+    # example bad lengths, padding shape or dtype, or an invalid ragged_rank). Returns nothing.
     dt = constant_op.constant(tensor)
     self.assertRaisesRegex(error[0], error[1], RaggedTensor.from_tensor, dt,
                            lengths, padding, ragged_rank)

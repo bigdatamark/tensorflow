@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Unit tests for ragged tensor item access (indexing, slicing, ellipsis, new axis).
+# Defines example ragged tensors (rank-1 ragged 2-D, two-ragged-dimension 4-D, and a 3-D with
+# uniform row length), a slice-builder helper, and a helper that rewrites integer slice parts
+# into constant or placeholder tensors. The test class checks values, error types/messages,
+# strided slices, empty tensors, unknown shapes, new-axis behavior and uniform row lengths,
+# in both graph and eager modes. Runs the test main when executed as a script.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,12 +39,19 @@ from tensorflow.python.platform import googletest
 
 
 class _SliceBuilder:
+  # [CLASS DOC]
+  # HELPER: tiny test utility whose item-access returns the slice specification it receives
+  # unchanged, so tests can write index expressions and capture the resulting key object.
+  # Stateless; one shared instance is created at module level.
   """Helper to construct arguments for __getitem__.
 
   Usage: _SliceBuilder()[<expr>] slice_spec Python generates for <expr>.
   """
 
   def __getitem__(self, slice_spec):
+    # [FUNCTION DOC]
+    # HELPER: returns the given slice specification as is (identity), letting tests build keys.
+    # Input: slice_spec, whatever key the caller wrote. Output: the same object. No side effects.
     return slice_spec
 
 
@@ -45,6 +59,15 @@ SLICE_BUILDER = _SliceBuilder()
 
 
 def _make_tensor_slice_spec(slice_spec, use_constant=True):
+  # [FUNCTION DOC]
+  # HELPER: test utility converting integer parts of a slice spec into scalar tensors.
+  # KNOWN ISSUE: the docstring mentions a placeholder, but the code uses a placeholder with a
+  # default value (so the value is still fed), and the returned copy replaces integers inside
+  # slices and tuples only one level deep for tuples.
+  # Inputs: slice_spec, a single key or tuple of keys (integers, slices, others);
+  # use_constant, if true wraps integers as constants, otherwise as placeholders with default.
+  # Output: a copy where integers (including slice start/stop/step) became scalar tensors;
+  # non-integer pieces are returned unchanged. No side effects beyond creating tensors.
   """Wraps all integers in an extended slice spec w/ a tensor.
 
   This function is used to help test slicing when the slice spec contains
@@ -60,6 +83,11 @@ def _make_tensor_slice_spec(slice_spec, use_constant=True):
   """
 
   def make_piece_scalar(piece):
+    # [FUNCTION DOC]
+    # HELPER: converts one key piece. Integers become a constant tensor or a placeholder with
+    # that default (depending on use_constant of the enclosing function); slices are rebuilt
+    # with converted start, stop and step (none values pass through); other values are
+    # returned unchanged.
     if isinstance(piece, int):
       scalar = constant_op.constant(piece)
       if use_constant:
@@ -113,6 +141,10 @@ EXAMPLE_RAGGED_TENSOR_3D_VALUES = [1, 2, 3, 4, 5, 6, 7, 8, 9]
 
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedGetItemTest(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized tests for ragged tensor item access, run in both graph and eager modes.
+  # Uses the module's example ragged tensors as fixtures; compares results with plain nested
+  # list indexing and checks errors for out-of-range, unsupported and badly typed keys.
   longMessage = True  # Property in unittest.Testcase. pylint: disable=invalid-name
 
   #=============================================================================
@@ -120,6 +152,15 @@ class RaggedGetItemTest(test_util.TensorFlowTestCase, parameterized.TestCase):
   #=============================================================================
 
   def _TestGetItem(self, rt, slice_spec, expected, expected_shape=None):
+    # [FUNCTION DOC]
+    # HELPER: shared assertion routine for the item-access tests.
+    # KNOWN ISSUE: the docstring says the third configuration uses a v1 placeholder; the code
+    # uses a placeholder with default value, and its docstring says expected may be an
+    # exception class, but the code never handles that (it only compares values).
+    # Inputs: rt, ragged tensor; slice_spec, key; expected, nested list; expected_shape,
+    # optional shape. Indexes with the raw key, with integers as constants, and with integers
+    # as placeholders-with-default; asserts each equals expected and, if a shape is given,
+    # that each result's static shape is compatible with it.
     """Helper function for testing RaggedTensor.__getitem__.
 
     Checks that calling `rt.__getitem__(slice_spec) returns the expected value.
@@ -153,6 +194,12 @@ class RaggedGetItemTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       value3.shape.assert_is_compatible_with(expected_shape)
 
   def _TestGetItemException(self, rt, slice_spec, expected, message):
+    # [FUNCTION DOC]
+    # HELPER: shared assertion routine for error tests.
+    # Inputs: rt, ragged tensor; slice_spec, key expected to fail; expected, an exception class
+    # or tuple of them; message, regular expression the error text must match.
+    # Evaluates item access with the plain key and again with integers as constant tensors,
+    # asserting each raises the expected error matching the message.
     """Helper function for testing RaggedTensor.__getitem__ exceptions."""
     tensor_slice_spec = _make_tensor_slice_spec(slice_spec, True)
     with self.assertRaisesRegex(expected, message):
@@ -244,6 +291,11 @@ class RaggedGetItemTest(test_util.TensorFlowTestCase, parameterized.TestCase):
        [row[::-1] for row in EXAMPLE_RAGGED_TENSOR_2D[::-1]]),
   )  # pyformat: disable
   def testWithRaggedRank1(self, slice_spec, expected):
+    # [FUNCTION DOC]
+    # Parameterized over many keys (single index, open/closed/negative slices, pairs, empty key,
+    # ellipsis, new axis, inner slices, strided slices) on a 2-D ragged tensor with one ragged
+    # dimension built from row splits. Asserts the tensor equals its source list, then that
+    # item access matches the expected nested list for plain, constant and placeholder keys.
     """Test that rt.__getitem__(slice_spec) == expected."""
     # Ragged tensor
     rt = RaggedTensor.from_row_splits(EXAMPLE_RAGGED_TENSOR_2D_VALUES,
@@ -257,6 +309,10 @@ class RaggedGetItemTest(test_util.TensorFlowTestCase, parameterized.TestCase):
                              for start in [-2, -1, None, 0, 1, 2]
                              for stop in [-2, -1, None, 0, 1, 2]])
   def testWithStridedSlices(self, start, stop):
+    # [FUNCTION DOC]
+    # Parameterized over start and stop values (including none and negatives). For each step in
+    # a set of positive and negative steps, slices a ragged tensor on the outer dimension and on
+    # the inner dimension and asserts equality with the same slicing of the nested list.
     test_value = [[1, 2, 3, 4, 5], [6, 7], [8, 9, 10], [], [9],
                   [1, 2, 3, 4, 5, 6, 7, 8]]
     rt = ragged_factory_ops.constant(test_value)
@@ -308,6 +364,11 @@ class RaggedGetItemTest(test_util.TensorFlowTestCase, parameterized.TestCase):
                      0], IndexError, 'Too many indices for RaggedTensor'),
   )
   def testErrorsWithRaggedRank1(self, slice_spec, expected, message):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring is copy-pasted ("== expected"); the test actually checks errors.
+    # Parameterized error cases on the 2-D ragged example: out-of-bounds indices, single index
+    # into a ragged inner dimension, wrong key types (float, string, bad stride or offset), and
+    # too many indices after an ellipsis. Asserts the expected error type and message.
     """Test that rt.__getitem__(slice_spec) == expected."""
     # Ragged tensor
     rt = RaggedTensor.from_row_splits(EXAMPLE_RAGGED_TENSOR_2D_VALUES,
@@ -389,6 +450,11 @@ class RaggedGetItemTest(test_util.TensorFlowTestCase, parameterized.TestCase):
                                   for row in EXAMPLE_RAGGED_TENSOR_4D]),
   )  # pyformat: disable
   def testWithRaggedRank2(self, slice_spec, expected):
+    # [FUNCTION DOC]
+    # Parameterized item-access cases on a 4-D ragged tensor with two ragged dimensions built
+    # from nested row splits: index chains, mixed index and slice, ellipsis, new axis, empty key,
+    # inner slices and strided slices. Asserts the tensor equals its source list, then that
+    # item access matches the expected nested list.
     """Test that rt.__getitem__(slice_spec) == expected."""
     rt = RaggedTensor.from_nested_row_splits(
         EXAMPLE_RAGGED_TENSOR_4D_VALUES,
@@ -415,6 +481,10 @@ class RaggedGetItemTest(test_util.TensorFlowTestCase, parameterized.TestCase):
                              errors.InvalidArgumentError), '.*out of bounds.*'),
   )
   def testErrorsWithRaggedRank2(self, slice_spec, expected, message):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring is copy-pasted ("== expected"); the test actually checks errors.
+    # Error cases on the 4-D two-ragged-dimension tensor: indexing into inner ragged dimensions
+    # and out-of-bounds indices. Asserts the expected error type and message pattern.
     """Test that rt.__getitem__(slice_spec) == expected."""
     rt = RaggedTensor.from_nested_row_splits(
         EXAMPLE_RAGGED_TENSOR_4D_VALUES,
@@ -428,6 +498,9 @@ class RaggedGetItemTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       (SLICE_BUILDER[:-3], []),
   )
   def testWithEmptyTensor(self, slice_spec, expected):
+    # [FUNCTION DOC]
+    # Slices a ragged tensor with no rows (empty values, splits of a single zero) using full and
+    # out-of-range slices, expecting an empty list in each case.
     """Test that rt.__getitem__(slice_spec) == expected."""
     rt = RaggedTensor.from_row_splits([], [0])
     self._TestGetItem(rt, slice_spec, expected)
@@ -439,6 +512,10 @@ class RaggedGetItemTest(test_util.TensorFlowTestCase, parameterized.TestCase):
        '.*out of bounds.*'),
   )
   def testErrorsWithEmptyTensor(self, slice_spec, expected, message):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring is copy-pasted ("== expected"); the test actually checks errors.
+    # Indexing a row (first or last) of a tensor with no rows must raise an out-of-bounds error
+    # of an accepted type matching the message.
     """Test that rt.__getitem__(slice_spec) == expected."""
     rt = RaggedTensor.from_row_splits([], [0])
     self._TestGetItemException(rt, slice_spec, expected, message)
@@ -453,6 +530,10 @@ class RaggedGetItemTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       (SLICE_BUILDER[-3, 0], EXAMPLE_RAGGED_TENSOR_2D[-3][0]),
   )
   def testWithPlaceholderShapes(self, slice_spec, expected):
+    # [FUNCTION DOC]
+    # Builds the 2-D ragged example with row splits whose shape is unknown at graph construction
+    # time (placeholder with default and no shape), forcing the unknown-row-count code path.
+    # Asserts equality with the source list and that item access matches the expected value.
     """Test that rt.__getitem__(slice_spec) == expected."""
     # Intentionally use an unknown shape for `splits`, to force the code path
     # that deals with having nrows unknown at graph construction time.
@@ -467,6 +548,11 @@ class RaggedGetItemTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       (SLICE_BUILDER[..., 2], ValueError,
        'Ellipsis not supported for unknown shape RaggedTensors'),)
   def testErrorsWithPlaceholderShapes(self, slice_spec, expected, message):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring is copy-pasted ("== expected"); the test actually checks errors.
+    # In graph mode only (does nothing in eager mode), builds a ragged tensor whose values have
+    # unknown shape and asserts that an ellipsis key raises a value error saying ellipsis is not
+    # supported for unknown-shape ragged tensors.
     """Test that rt.__getitem__(slice_spec) == expected."""
     if not context.executing_eagerly():
       # Intentionally use an unknown shape for `values`.
@@ -475,6 +561,11 @@ class RaggedGetItemTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       self._TestGetItemException(rt, slice_spec, expected, message)
 
   def testNewAxis(self):
+    # [FUNCTION DOC]
+    # Builds a ragged tensor with two ragged dimensions over string values and inserts a new
+    # axis at each of five positions. Asserts the resulting nested values, the ragged rank
+    # (three when the axis lands before the last ragged dimension, otherwise two) and the static
+    # shapes with a size-one dimension at the inserted position.
     # rt: [[[['a', 'b'], ['c', 'd']], [], [['e', 'f']]], []]
     splits1 = [0, 3, 3]
     splits2 = [0, 2, 2, 3]
@@ -554,6 +645,11 @@ class RaggedGetItemTest(test_util.TensorFlowTestCase, parameterized.TestCase):
        [2, 3, None]),
   )  # pyformat: disable
   def testWithUniformRowLength(self, slice_spec, expected, expected_shape):
+    # [FUNCTION DOC]
+    # Uses a 3-D ragged tensor whose middle dimension has uniform row length. Parameterized over
+    # indexing and slicing (including steps) of that dimension. Asserts values and static shape
+    # via the shared helper, and when the result is still 3-D that its uniform row length is
+    # present and equals the expected second dimension size.
     """Test that rt.__getitem__(slice_spec) == expected."""
     rt = RaggedTensor.from_uniform_row_length(
         RaggedTensor.from_row_splits(EXAMPLE_RAGGED_TENSOR_3D_VALUES,
@@ -576,6 +672,10 @@ class RaggedGetItemTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       (SLICE_BUILDER[:, -10], errors.InvalidArgumentError, 'out of bounds'),
   )
   def testErrorsWithUniformRowLength(self, slice_spec, expected, message):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring is copy-pasted ("== expected"); the test actually checks errors.
+    # Indexing the uniform dimension of the 3-D example with out-of-range positive or negative
+    # indices must raise an invalid-argument error whose message mentions out of bounds.
     """Test that rt.__getitem__(slice_spec) == expected."""
     rt = RaggedTensor.from_uniform_row_length(
         RaggedTensor.from_row_splits(EXAMPLE_RAGGED_TENSOR_3D_VALUES,

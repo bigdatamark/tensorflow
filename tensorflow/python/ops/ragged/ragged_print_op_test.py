@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Unit tests for printing ragged tensors: the print operation (output written to a temporary
+# file and compared as text, including summarize handling and mixed argument types) and the
+# ragged-to-string conversion (formatting, escaping, summarize, error cases, unknown rank).
+# Ragged print support itself lives in the ragged dispatch module. Runs test main as a script.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,6 +42,9 @@ from tensorflow.python.platform import googletest
 
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedPrintV2Test(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for the print operation applied to ragged tensors, run in graph and eager modes
+  # with named parameter sets covering many value types and summarize settings.
 
   # pylint: disable=g-long-lambda
   @parameterized.named_parameters([
@@ -113,6 +121,13 @@ class RaggedPrintV2Test(test_util.TensorFlowTestCase, parameterized.TestCase):
                     '[], [], [], [], [11, 12]]\n')),
   ])
   def testRaggedPrint(self, inputs, expected, summarize=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the output file is opened and read without being closed.
+    # Parameters: inputs (list of values to print, or a callable producing it, so tensors are
+    # built inside the test), expected (exact output text) and optional summarize (number of
+    # items shown at edges; negative means all). Prints the inputs to a temporary file through
+    # the print operation, evaluates it, reads the file back and asserts the text matches the
+    # expected text exactly (compared by their printed representations).
     if callable(inputs):
       inputs = inputs()
     with tempfile.TemporaryDirectory() as tmpdirname:
@@ -127,6 +142,9 @@ class RaggedPrintV2Test(test_util.TensorFlowTestCase, parameterized.TestCase):
 
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedToStringTest(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for converting ragged tensors to strings, run in graph and eager modes. Covers
+  # formatting of several ranks and dtypes, escaping, summarize, invalid arguments and unknown rank.
 
   @parameterized.named_parameters([
       ('2d_int', [[1, 2], [], [3, 4, 5]], '[[1, 2], [], [3, 4, 5]]'),
@@ -158,6 +176,10 @@ class RaggedToStringTest(test_util.TensorFlowTestCase, parameterized.TestCase):
           expected='[[1, 2, ..., 4, 5], [], ..., [7], [8, 9]]'),
   ])
   def testRaggedToString(self, rt, expected, summarize=None, ragged_rank=None):
+    # [FUNCTION DOC]
+    # Parameters: rt (nested list of values), expected (expected string), optional summarize and
+    # optional ragged_rank used when building the ragged constant. Converts the ragged tensor to
+    # a string tensor and asserts it equals the expected text.
     rt = ragged_factory_ops.constant(rt, ragged_rank=ragged_rank)
     actual = ragged_string_ops.ragged_tensor_to_string(rt, summarize=summarize)
     self.assertAllEqual(actual, expected)
@@ -172,17 +194,28 @@ class RaggedToStringTest(test_util.TensorFlowTestCase, parameterized.TestCase):
                                error,
                                summarize=None,
                                exception=ValueError):
+    # [FUNCTION DOC]
+    # Parameters: rt (nested list), error (regular expression for the message), optional
+    # summarize (an invalid value such as a string, zero or less than minus one) and exception
+    # (expected error type, defaults to a value error). Asserts that converting the ragged
+    # tensor to a string with that summarize value raises the given error with a matching message.
     rt = ragged_factory_ops.constant(rt)
     with self.assertRaisesRegex(exception, error):
       self.evaluate(
           ragged_string_ops.ragged_tensor_to_string(rt, summarize=summarize))
 
   def testRaggedToStringUnknownRank(self):
+    # [FUNCTION DOC]
+    # Defines a compiled function whose input signature is a ragged tensor spec with unknown
+    # shape rank and which converts its argument to a string. Calling it with a concrete ragged
+    # constant must raise a value error saying the shape rank must not be unknown.
 
     @def_function.function(input_signature=[
         ragged_tensor.RaggedTensorSpec(ragged_rank=1, dtype=dtypes.int32)
     ])
     def f(rt):
+      # [FUNCTION DOC]
+      # Nested function under test: returns the string form of the ragged tensor argument rt.
       return ragged_string_ops.ragged_tensor_to_string(rt)
 
     with self.assertRaisesRegex(

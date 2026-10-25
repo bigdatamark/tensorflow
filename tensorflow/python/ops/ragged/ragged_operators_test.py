@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit tests for the operator overloads installed on RaggedTensor (equality, ordering,
+# arithmetic, logical and boolean-conversion operators). Contains a single test class run in
+# both graph and eager modes; runs the test main when executed as a script.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,8 +27,17 @@ from tensorflow.python.platform import googletest
 
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedElementwiseOpsTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering the Python operator overloads of RaggedTensor: equality, ordering,
+  # arithmetic, logical and boolean conversion. Decorated to run every test in both graph and
+  # eager modes. Holds no shared fixtures; each test builds its own ragged constants.
 
   def testEqualityOperators(self):
+    # [FUNCTION DOC]
+    # Builds two ragged constants and a scalar. When TF2 behavior and eager execution outside
+    # functions are active, asserts equality and inequality are elementwise (including
+    # broadcasting against the scalar); otherwise asserts identity-based results, namely a
+    # single false for equality and a single true for inequality between different tensors.
     a = ragged_factory_ops.constant([[1, 2], [3]])
     b = ragged_factory_ops.constant([[4, 5], [3]])
     c = 2
@@ -43,6 +56,9 @@ class RaggedElementwiseOpsTest(test_util.TensorFlowTestCase):
       self.assertAllEqual(a != b, True)
 
   def testOrderingOperators(self):
+    # [FUNCTION DOC]
+    # Compares two ragged integer constants with greater, greater-or-equal, less and
+    # less-or-equal and asserts each result equals the expected elementwise boolean ragged values.
     x = ragged_factory_ops.constant([[1, 5], [3]])
     y = ragged_factory_ops.constant([[4, 5], [1]])
     self.assertAllEqual((x > y), [[False, False], [True]])
@@ -51,6 +67,11 @@ class RaggedElementwiseOpsTest(test_util.TensorFlowTestCase):
     self.assertAllEqual((x <= y), [[True, True], [False]])
 
   def testArithmeticOperators(self):
+    # [FUNCTION DOC]
+    # Uses two ragged float constants to exercise absolute value, negation, addition,
+    # subtraction, multiplication, true division, floor division and modulo, each with
+    # ragged-ragged and scalar-on-either-side operand forms (testing reflected operators).
+    # Asserts every result equals the expected ragged values.
     x = ragged_factory_ops.constant([[1.0, -2.0], [8.0]])
     y = ragged_factory_ops.constant([[4.0, 4.0], [2.0]])
     self.assertAllEqual(abs(x), [[1.0, 2.0], [8.0]])
@@ -86,6 +107,10 @@ class RaggedElementwiseOpsTest(test_util.TensorFlowTestCase):
     self.assertAllEqual((x % 2.0), [[1.0, 0.0], [0.0]])
 
   def testLogicalOperators(self):
+    # [FUNCTION DOC]
+    # Uses two boolean ragged constants to test invert, and, or and xor, including forms with a
+    # Python boolean on either side (reflected operators). Asserts each result equals the
+    # expected boolean ragged values.
     # pylint: disable=invalid-unary-operand-type
     a = ragged_factory_ops.constant([[True, True], [False]])
     b = ragged_factory_ops.constant([[True, False], [False]])
@@ -104,6 +129,10 @@ class RaggedElementwiseOpsTest(test_util.TensorFlowTestCase):
     self.assertAllEqual((True ^ b), [[False, True], [True]])
 
   def testDummyOperators(self):
+    # [FUNCTION DOC]
+    # Asserts that converting a ragged tensor to a boolean, either explicitly or in a
+    # conditional statement, raises a type error stating that a ragged tensor may not be used
+    # as a boolean.
     a = ragged_factory_ops.constant([[True, True], [False]])
     with self.assertRaisesRegex(TypeError,
                                 'RaggedTensor may not be used as a boolean.'):

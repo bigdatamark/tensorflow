@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Gather operations for ragged tensors. Implements the ragged versions of gather (with axis and
+# batch_dims support) and gather_nd, registered through the API dispatch mechanism for the
+# version-1 and version-2 gather and gather_nd functions, plus the gradient function for the
+# RaggedGather kernel. Private helpers handle batch, axis and flattening cases. Import-time side
+# effects: registers the dispatchers and the RaggedGather gradient.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,6 +43,21 @@ def gather(params: ragged_tensor.RaggedOrDense,
            axis=None,
            batch_dims=0,
            name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says index values must be in the closed range up to
+  # params.shape[0], but valid indices are strictly less than that size (the tests expect an
+  # error for an index equal to the size). The docstring's Raises section also lists only one
+  # ValueError, while several more are raised (see below).
+  # Public API (registered as the ragged implementation of the version-2 gather). Gathers slices
+  # of params (ragged or dense tensor, rank at least 1) selected by indices (ragged or dense,
+  # integer typed) along axis, honoring batch_dims leading batch dimensions. validate_indices is
+  # deleted/ignored. axis defaults to batch_dims; negative axis and batch_dims are normalized
+  # against the ranks. name is an optional name scope. Converts both inputs to tensors or ragged
+  # tensors and unifies their row-splits dtypes. Raises ValueError when batch_dims is not smaller
+  # than rank(params), when axis is smaller than batch_dims, when batch_dims is outside 0..rank
+  # of indices, or when the rank of indices is not statically known (raised further down).
+  # Returns the gathered tensor, ragged if either input is ragged, with shape equal to
+  # params.shape[:axis] + indices.shape[batch_dims:] + params.shape[axis+1:]. No side effects.
   """Gathers ragged slices from `params` axis `0` according to `indices`.
 
   See `tf.gather` for full documentation.  (This version has the same API
@@ -110,6 +131,17 @@ def gather(params: ragged_tensor.RaggedOrDense,
 
 
 def _gather(params, indices, axis, batch_dims):
+  # [FUNCTION DOC]
+  # HELPER: internal recursive core of the ragged gather function; skips input conversion and
+  # axis normalization since the caller already did them.
+  # Dispatches on the situation: if neither input is ragged, uses the ordinary dense gather;
+  # if batch_dims is positive, delegates to the batch helper; if axis is positive, to the axis
+  # helper; if indices is ragged, gathers on its values and rewraps with its row partitions.
+  # Otherwise (axis 0, no batch dims, dense indices) it calls the ragged-gather kernel on the
+  # flat values and nested row splits of params, rebuilds the ragged result without validation
+  # and, for dense multi-dimensional indices, injects row count and uniform row length into the
+  # result's private cached fields so those dimensions are uniform. Raises ValueError when the
+  # rank of dense indices is not statically known. Returns a dense or ragged tensor.
   """Helper that implements the body for ragged gather().
 
   Assumes that `params` and `indices` have been converted to tensors or
@@ -172,6 +204,17 @@ def _gather(params, indices, axis, batch_dims):
 
 
 def _batch_gather(params, indices, axis, batch_dims):
+  # [FUNCTION DOC]
+  # HELPER: internal helper of the ragged gather implementation for batch_dims greater than 0.
+  # Statically checks that the leading batch dimensions of params and indices are compatible
+  # (ValueError otherwise); runtime equality of row splits is deliberately not checked, so
+  # incompatible inputs can silently give nonsensical results. For batch_dims above 1 it converts
+  # dense inputs to ragged (ValueError if the corresponding uniform row length is unknown) and
+  # recurses on the values with one fewer batch dimension and axis. For axis above 1 it turns the
+  # axis dimension into a batch dimension by repeating/tiling indices to match params and
+  # recurses with an extra batch dimension. For batch_dims equal to 1 it flattens the first two
+  # dimensions of params, offsets indices by each row start and calls the main gather helper.
+  # Raises ValueError if the rank of indices is unknown. Returns a dense or ragged tensor.
   """Helper that implements the body for ragged gather() when batch_dims>0.
 
   Args:
@@ -254,6 +297,15 @@ def _batch_gather(params, indices, axis, batch_dims):
 
 
 def _axis_gather(params, indices, axis):
+  # [FUNCTION DOC]
+  # HELPER: internal helper of the ragged gather implementation for axis greater than 0 with no
+  # batch dimensions.
+  # For axis above 1, converts dense params to ragged if needed and recurses on its values with
+  # axis reduced by one. For axis equal to 1, flattens the first two dimensions of params, adds
+  # per-row start offsets (broadcast with one extra dimension) to indices, and calls the main
+  # gather helper on axis 0. Indices are not range checked, so out-of-bounds values give
+  # nonsensical results. Raises ValueError if the rank of indices is unknown. Returns a dense or
+  # ragged tensor.
   """Helper that implements ragged gather when axis>0 and batch_dims==0.
 
   Args:
@@ -294,6 +346,11 @@ def _axis_gather(params, indices, axis):
 
 
 def _flatten_dims_0_and_1(t):
+  # [FUNCTION DOC]
+  # HELPER: merges the outer two dimensions of a tensor for the batch/axis gather helpers.
+  # For a ragged tensor, returns its values (the ragged outer dimension is already merged). For a
+  # dense tensor, returns a reshaped tensor whose first dimension is the product of the first two
+  # and whose remaining dimensions are unchanged.
   """Returns a copy of `t` with the outer two dimensions merged."""
   if isinstance(t, ragged_tensor.RaggedTensor):
     return t.values
@@ -303,6 +360,12 @@ def _flatten_dims_0_and_1(t):
 
 
 def _row_starts(t, dtype):
+  # [FUNCTION DOC]
+  # HELPER: computes per-row offsets into the flattened outer two dimensions for the gather
+  # helpers.
+  # For a ragged tensor, returns its row start positions cast to the given integer type. For a
+  # dense tensor, returns the first-dimension range multiplied by the second dimension size,
+  # in the given integer type.
   """Returns the start indices for the rows in `t`."""
   if isinstance(t, ragged_tensor.RaggedTensor):
     return math_ops.cast(t.row_starts(), dtype)
@@ -312,6 +375,14 @@ def _row_starts(t, dtype):
 
 
 def _increase_rank_to(t, rank):
+  # [FUNCTION DOC]
+  # HELPER: reshapes row-start adjustments so they broadcast against indices in the gather helpers.
+  # KNOWN ISSUE: the ragged branch recurses on t itself instead of on its values, so it would
+  # recurse forever (until the recursion limit); it is apparently never reached with a ragged
+  # input because the callers pass dense row starts.
+  # For a dense tensor, appends trailing size-one dimensions until its rank equals the requested
+  # rank and returns the reshaped tensor. For a ragged tensor it intends to do the same on its
+  # values and rewrap with the same row partitions.
   """Adds *trailing* size-1 dimensions to `t` until it has the given rank."""
   if isinstance(t, ragged_tensor.RaggedTensor):
     return t.with_values(_increase_rank_to(t, rank - 1))
@@ -329,6 +400,11 @@ def _ragged_gather_v1(params: ragged_tensor.RaggedOrDense,
                       name=None,
                       axis=0,
                       batch_dims=0):
+  # [FUNCTION DOC]
+  # HELPER: adapter registering the ragged gather for the version-1 gather API.
+  # The version-1 signature orders its parameters differently (name before axis, axis defaulting
+  # to 0), so this forwards all arguments to the main gather function in its own order and returns
+  # its result. validate_indices is ignored downstream.
   return gather(params, indices, validate_indices, axis, batch_dims, name)
 
 
@@ -343,6 +419,24 @@ def gather_nd(
     name=None,
     bad_indices_policy='',
 ):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring's Args section is wrong: it describes params with the shape of
+  # indices and indices with the shape of params (swapped), and the bad_indices_policy text is
+  # cut off mid-sentence. The error message for unknown rank also reads "indices.rank be
+  # statically known" (missing "must").
+  # Public API (ragged implementation of the version-2 gather_nd). Gathers slices of params
+  # (ragged or dense) addressed by the innermost dimension of indices (ragged or dense). Inputs:
+  # batch_dims must be the integer 0, name is an optional name scope, bad_indices_policy must be
+  # empty or "DEFAULT" for ragged inputs. If neither input is ragged it simply forwards to the
+  # dense gather_nd (passing the policy). Raises ValueError for non-zero or non-integer batch_dims,
+  # for a non-default policy with ragged inputs, for unknown indices rank, scalar indices, a ragged
+  # innermost indices dimension, or an unknown innermost size. For indices of rank above 2 it
+  # recurses on the flat values (converting dense indices to ragged first and converting the
+  # result back to dense when possible). Otherwise: an index size of 0 tiles the whole params;
+  # size 1 flattens the indices and uses gather; larger sizes flatten the outer dimensions of
+  # params and indices step by step using row splits, falling back to dense gather_nd when the
+  # remaining params are dense. Returns a potentially ragged tensor of shape indices outer
+  # dimensions followed by the unindexed params dimensions.
   """Gather slices from `params` using `n`-dimensional indices.
 
   This operation is similar to `gather`, but it uses the innermost dimension
@@ -499,6 +593,11 @@ def _ragged_gather_nd_v1(
     batch_dims=0,
     bad_indices_policy='',
 ):
+  # [FUNCTION DOC]
+  # HELPER: adapter registering the ragged gather_nd for the version-1 gather_nd API, whose
+  # parameter order is params, indices, name, batch_dims. Forwards to the main gather_nd with the
+  # batch_dims and name arguments in its own order plus the bad_indices_policy, and returns its
+  # result.
   return gather_nd(
       params, indices, batch_dims, name, bad_indices_policy=bad_indices_policy
   )
@@ -509,6 +608,16 @@ def _ragged_gather_nd_v1(
 # ===============================================================================
 @ops.RegisterGradient('RaggedGather')
 def _ragged_gather_grad(op, *grads):
+  # [FUNCTION DOC]
+  # HELPER: gradient function registered for the RaggedGather kernel.
+  # Inputs: the forward operation (its inputs are the params nested row splits, the params flat
+  # values, and the indices) and the incoming gradients (only the last, for the output dense
+  # values, is used). Composes the nested splits to find the span of flat values covered by each
+  # params row, then builds the list of flat-value positions that each gathered row came from. The
+  # gradient with respect to the params flat values is returned as a sparse indexed-slices value
+  # (duplicate indices accumulate when densified) with the shape of the params flat values.
+  # Returns a list with nothing/null for every row-splits input, the flat-values gradient, and
+  # nothing for the indices.
   """Gradient for RaggedGather op."""
   param_nested_splits = op.inputs[:-2]
   param_inner_values = op.inputs[-2]
