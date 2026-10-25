@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Unit tests for the ragged split operation (ragged_array_ops.split), which splits a ragged tensor
+# into a list of ragged tensors along an axis, either uniformly (an integer count) or by a list or
+# tensor of explicit sizes. Covers value correctness for many inputs, the error cases (bad sizes,
+# splitting the ragged dimension, mismatched num, wrong types), tensor-valued split sizes of
+# different integer dtypes, and behavior under compiled functions with partially or fully unknown
+# input shapes. Importing it has no side effects beyond defining the test class; running it as a
+# script starts the test runner.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,6 +40,10 @@ from tensorflow.python.platform import googletest
 
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedSplitOpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for ragged_array_ops.split. Runs every test in both graph and eager modes (class
+  # decorator). Holds no fixtures; each test builds its own ragged tensors from flat values and
+  # row lengths and compares splits against expected nested lists or ragged tensors.
 
   @parameterized.parameters([
       #=========================================================================
@@ -259,6 +271,12 @@ class RaggedSplitOpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
                 axis=0,
                 num=None,
                 name=None):
+    # [FUNCTION DOC]
+    # Parameterized test of successful splits. Inputs: a description, flat values, row lengths
+    # used to build a ragged tensor, the split count or list of sizes, the expected list of nested
+    # lists, and optional axis (default 0), num and name. Calls the split operation and asserts
+    # the number of pieces equals the expected count and each piece equals its expected value.
+    # Returns nothing; failing assertions fail the test.
     rt = ragged_tensor.RaggedTensor.from_row_lengths(pylist, row_lengths)
     result = ragged_array_ops.split(rt, num_or_size_splits, axis, num, name)
     self.assertLen(result, len(expected))
@@ -350,6 +368,13 @@ class RaggedSplitOpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
                      message,
                      axis=0,
                      num=None):
+    # [FUNCTION DOC]
+    # Parameterized test of invalid splits. Inputs: description, flat values, row lengths, split
+    # specification, the expected exception type and message, and optional axis (default 0) and
+    # num. Builds the ragged tensor, calls split and evaluates the result inside a check that some
+    # exception of the expected type is raised. Returns nothing.
+    # KNOWN ISSUE: the message parameter is accepted but never checked; only the exception type is
+    # asserted.
     rt = ragged_tensor.RaggedTensor.from_row_lengths(pylist, row_lengths)
     with self.assertRaises(exception):
       result = ragged_array_ops.split(rt, num_or_size_splits, axis, num)
@@ -359,6 +384,11 @@ class RaggedSplitOpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       ('int32', dtypes.int32),
       ('int64', dtypes.int64)])
   def testSplitTensorDtype(self, dtype):
+    # [FUNCTION DOC]
+    # Tests that split accepts a tensor of split sizes with either 32-bit or 64-bit integer dtype
+    # (the dtype argument). Splits a ragged tensor with row lengths 3 and 1 by sizes one and one
+    # and asserts the two resulting ragged tensors equal the expected first and second row.
+    # Returns nothing.
     rt = ragged_tensor.RaggedTensor.from_row_lengths([1.0, 2.0, 3.0, 4.0],
                                                      [3, 1])
     # split_lengths is a 1-D tensor
@@ -376,11 +406,18 @@ class RaggedSplitOpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       dict(rt_shape=None),
   ])
   def testUniformSplitDynamicShape(self, rt_shape):
+    # [FUNCTION DOC]
+    # Tests uniform splitting into two inside a compiled function whose input signature has the
+    # given ragged tensor shape (partially unknown, or fully unknown rank). Calls it with a
+    # two-row ragged tensor and asserts both pieces equal the expected rows. Returns nothing.
     rt = ragged_tensor.RaggedTensor.from_row_lengths([1.0, 2.0, 3.0, 4.0],
                                                      [3, 1])
     rt_spec = ragged_tensor.RaggedTensorSpec(rt_shape, ragged_rank=1)
     @def_function.function(input_signature=[rt_spec])
     def split_tensors(rt):
+      # [FUNCTION DOC]
+      # HELPER: compiled wrapper used by the uniform-split dynamic shape test.
+      # Takes a ragged tensor and returns it split uniformly into two pieces.
       return ragged_array_ops.split(rt, 2)
 
     splited_rts = split_tensors(rt)
@@ -396,10 +433,18 @@ class RaggedSplitOpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
           [(2,), (None,), None])
   ])
   def testRaggedSplitDynamicShape(self, rt_shape, lengths_shape):
+    # [FUNCTION DOC]
+    # Tests splitting by a tensor of sizes inside a compiled function for every combination of
+    # ragged tensor shape and sizes-tensor shape (known, partially unknown or unknown), with num
+    # fixed at two. Calls it with sizes of one and one and asserts the two pieces equal the
+    # expected rows. Returns nothing.
     rt_spec = ragged_tensor.RaggedTensorSpec(rt_shape, ragged_rank=1)
     lengths_spec = tensor_spec.TensorSpec(lengths_shape, dtype=dtypes.int32)
     @def_function.function(input_signature=[rt_spec, lengths_spec])
     def split_tensors(rt, split_lengths):
+      # [FUNCTION DOC]
+      # HELPER: compiled wrapper used by the ragged-split dynamic shape test.
+      # Takes a ragged tensor and a tensor of sizes and returns the split with num set to two.
       return ragged_array_ops.split(rt, split_lengths, num=2)
 
     rt = ragged_tensor.RaggedTensor.from_row_lengths([1.0, 2.0, 3.0, 4.0],
@@ -463,11 +508,21 @@ class RaggedSplitOpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
                                        message='',
                                        axis=0,
                                        num=None):
+    # [FUNCTION DOC]
+    # Parameterized test of error reporting for splits inside compiled functions with dynamic
+    # shapes. Inputs: description, ragged tensor shape, sizes tensor shape, the runtime sizes, the
+    # expected exception type (or tuple of types), optional message pattern (default empty), axis
+    # (default 0) and num. Builds the compiled function, calls it and asserts the expected
+    # exception whose text matches the message pattern. Returns nothing.
     rt_spec = ragged_tensor.RaggedTensorSpec(rt_shape, ragged_rank=1)
     split_lengths_spec = tensor_spec.TensorSpec(lengths_shape,
                                                 dtype=dtypes.int32)
     @def_function.function(input_signature=[rt_spec, split_lengths_spec])
     def split_tensors(rt, split_lengths):
+      # [FUNCTION DOC]
+      # HELPER: compiled wrapper used by the dynamic shape error test.
+      # Takes a ragged tensor and a tensor of sizes and returns the split along the enclosing
+      # test's axis using its num; errors surface when the function is traced or run.
       return ragged_array_ops.split(rt, split_lengths, axis=axis, num=num)
 
     rt = ragged_tensor.RaggedTensor.from_row_lengths([1.0, 2.0, 3.0, 4.0],

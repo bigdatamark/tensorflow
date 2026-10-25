@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Unit tests for the ragged stack operation (ragged_concat_ops.stack), which stacks a list of
+# tensors, ragged or dense, along a new axis. A large table of scenarios covers one to three
+# inputs of ranks two and three, positive and negative axes, mixes of uniform and ragged inputs,
+# and degenerate single inputs; further tests cover argument errors and passing a single tensor
+# instead of a list. Importing it only defines the test class.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +32,10 @@ from tensorflow.python.platform import googletest
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedStackOpTest(test_util.TensorFlowTestCase,
                         parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for the ragged stack operation, run in both graph and eager modes (class
+  # decorator). Stateless; each test builds ragged or dense constants from nested lists, stacks
+  # them and checks the values, and optionally the ragged rank and static shape.
 
   @parameterized.parameters(
       dict(
@@ -344,6 +354,13 @@ class RaggedStackOpTest(test_util.TensorFlowTestCase,
                       ragged_ranks=None,
                       expected_ragged_rank=None,
                       expected_shape=None):
+    # [FUNCTION DOC]
+    # Parameterized test of stacking. Inputs: description; a tuple of nested lists to stack; the
+    # axis; the expected nested result; optional per-input ragged ranks (a zero means build a
+    # dense tensor, otherwise a ragged constant with that rank, default unspecified); optional
+    # expected ragged rank and expected static shape. Builds the inputs, stacks them, checks the
+    # ragged rank and shape when given, and asserts the values equal the expected result.
+    # Returns nothing.
     if ragged_ranks is None:
       ragged_ranks = [None] * len(rt_inputs)
     rt_inputs = [
@@ -381,10 +398,19 @@ class RaggedStackOpTest(test_util.TensorFlowTestCase,
           message='axis=3 out of bounds: expected -3<=axis<3'),
   )
   def testError(self, rt_inputs, axis, error, message):
+    # [FUNCTION DOC]
+    # Parameterized test of invalid arguments. Inputs: the tensors to stack, an axis, the
+    # expected exception type and a message pattern. Asserts that stacking raises that exception
+    # with text matching the pattern: an empty input list, a non-integer axis, and axes out of
+    # bounds on either side. Returns nothing.
     self.assertRaisesRegex(error, message, ragged_concat_ops.stack, rt_inputs,
                            axis)
 
   def testSingleTensorInput(self):
+    # [FUNCTION DOC]
+    # Tests stacking when a single ragged tensor, rather than a list of tensors, is passed: the
+    # result should equal adding a new outer dimension at axis zero. Asserts the values of the
+    # stacked result for a two-by-two input. Returns nothing.
     """Tests ragged_stack with a single tensor input.
 
     Usually, we pass a list of values in for rt_inputs.  However, you can

@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Implements squeeze (removing size-1 dimensions) for ragged tensors and registers it as a
+# dispatch handler for the standard squeeze API (both the version 2 and the legacy version with the
+# deprecated squeeze_dims argument), so that calling the normal squeeze on a ragged tensor lands
+# here. Dense tensors are forwarded to the regular squeeze. Importing the module registers the two
+# dispatch handlers; it exposes the public function squeeze and one private legacy adapter.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,6 +36,22 @@ from tensorflow.python.util import dispatch
 
 @dispatch.dispatch_for_api(array_ops.squeeze_v2)
 def squeeze(input: ragged_tensor.Ragged, axis=None, name=None):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it fails when the input is ragged and axis is an empty list,
+  # but an empty list passes the type check and simply squeezes nothing (no error is raised).
+  # Removes size-1 dimensions from a ragged (or dense) tensor. Inputs: input, a ragged or dense
+  # tensor; axis, an integer or list/tuple of integers (negative values count from the end) naming
+  # the dimensions to squeeze; name, optional operation name. Dense input is passed to the regular
+  # squeeze with the same axis (axis may then be omitted). For ragged input axis is required:
+  # omitting it raises a value error, and anything other than an integer or a list/tuple of
+  # integers raises a type error. Axes are normalized to non-negative values, then split into
+  # ragged dimensions and dense (inner) dimensions. Each ragged dimension to squeeze is checked
+  # at run time with assertions that all its row lengths equal one (and, for dimension zero, that
+  # there is exactly one row); failures raise an invalid-argument error at execution. Dense
+  # dimensions are squeezed from the flat values, which errors if they are not size one. The
+  # row-splits of squeezed dimensions are dropped and the tensor is rebuilt from the remaining
+  # nested row-splits. If every ragged dimension is squeezed, the leading dimension of the
+  # result is also squeezed so the result is a dense tensor. Returns the squeezed tensor.
   """Ragged compatible squeeze.
 
   If `input` is a `tf.Tensor`, then this calls `tf.squeeze`.
@@ -128,6 +150,13 @@ def _ragged_squeeze_v1(input: ragged_tensor.Ragged,  # pylint: disable=redefined
                        axis=None,
                        name=None,
                        squeeze_dims=None):
+  # [FUNCTION DOC]
+  # HELPER: adapter registering ragged support for the legacy squeeze API.
+  # Dispatch handler for the legacy squeeze signature. Inputs: input, a ragged tensor; axis and
+  # the deprecated squeeze_dims (alternative names for the dimensions to squeeze); name, optional.
+  # Resolves which of axis or squeeze_dims was given using the deprecation helper (which logs a
+  # deprecation warning when the old name is used and raises a value error if both are given),
+  # then delegates to the ragged squeeze function. Returns its result.
   axis = deprecation.deprecated_argument_lookup('axis', axis, 'squeeze_dims',
                                                 squeeze_dims)
   return squeeze(input, axis, name)

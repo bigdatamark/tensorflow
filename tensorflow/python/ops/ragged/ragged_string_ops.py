@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# Ragged-aware string operations exported in the public strings namespace: splitting strings into
+# bytes, splitting on a separator (version 2 and the legacy version 1 signatures), decoding
+# strings into Unicode code points (with or without byte offsets), splitting strings into Unicode
+# characters, encoding code points back into strings, building n-grams, converting ragged tensors
+# to a printable string, and ragged-aware versions of string format, reduce-join and join. Most
+# functions accept dense or ragged inputs and return ragged tensors, recursing over the flat values
+# of ragged inputs. Importing the module registers the exported API names, the dispatch support
+# decorators, and dispatch handlers that route ragged inputs of the standard join, reduce-join and
+# format operations here.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -40,6 +50,15 @@ from tensorflow.python.util.tf_export import tf_export
 @tf_export("strings.bytes_split")
 @dispatch.add_dispatch_support
 def string_bytes_split(input, name=None):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # Splits each string into its individual bytes (not Unicode characters). Inputs: input, a string
+  # tensor or ragged tensor of statically known rank N; name, optional operation name. Returns a
+  # ragged tensor of rank N+1 whose new innermost dimension holds one single-byte string per byte.
+  # Ragged inputs are handled by recursing on the flat values and keeping the row structure; a
+  # scalar is stacked into a vector first and the result's first row is returned; a vector is
+  # split with the string split kernel using an empty delimiter and keeping empty strings, then
+  # rebuilt from row ids; higher rank dense inputs are first converted to ragged and recursed on.
+  # Raises a value error when the input rank is not statically known.
   """Split string elements of `input` into bytes.
 
   Examples:
@@ -92,6 +111,20 @@ def unicode_encode(input,
                    errors="replace",
                    replacement_char=65533,
                    name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the default replacement character is "U+65533"; the default
+  # 65533 is a decimal number, which is Unicode code point U+FFFD. The docstring also does not
+  # mention that a rank-0 input raises a value error.
+  # Encodes sequences of Unicode code points into strings. Inputs: input, an integer tensor or
+  # ragged tensor of rank at least 1 whose last dimension holds the code points of one string;
+  # output_encoding, the target encoding name (UTF-8, UTF-16-BE or UTF-32-BE); errors, how to treat
+  # invalid code points ("replace" by default, "ignore", or "strict" which raises); the replacement
+  # character code point (default 65533); name, optional. Returns a string tensor with the last
+  # dimension removed. Ragged inputs with multi-dimensional flat values or ragged rank above one are
+  # processed recursively keeping the outer structure; dense rank-2 input is converted to ragged;
+  # higher ranks are flattened to rank 2 and reshaped afterwards; a rank-1 input is wrapped as one
+  # row and the result is reshaped to a scalar. Raises a value error if the rank is unknown or the
+  # input is a scalar.
   r"""Encodes each sequence of Unicode code points in `input` into a string.
 
   `result[i1...iN]` is the string formed by concatenating the Unicode
@@ -192,6 +225,14 @@ def unicode_decode(input,
                    replacement_char=0xFFFD,
                    replace_control_characters=False,
                    name=None):
+  # [FUNCTION DOC]
+  # Decodes strings into Unicode code points. Inputs: input, a dense or ragged string tensor of
+  # statically known rank N; input_encoding, the encoding name; errors ("replace" default, "strict"
+  # raises on bad bytes, "ignore" skips them); replacement_char (default 0xFFFD) used for invalid
+  # input and, if replace_control_characters is true (default false), for C0 control characters;
+  # name, optional. Returns an integer code point tensor of rank N+1: a dense vector for a scalar
+  # input and a ragged tensor otherwise. Delegates to the private decoding helper inside a name
+  # scope, without offsets. Raises a value error when the rank is unknown.
   r"""Decodes each string in `input` into a sequence of Unicode code points.
 
   `result[i1...iN, j]` is the Unicode codepoint for the `j`th character in
@@ -238,6 +279,15 @@ def unicode_decode_with_offsets(input,
                                 replacement_char=0xFFFD,
                                 replace_control_characters=False,
                                 name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring refers to a decode function in the strings namespace that does not
+  # exist; the similar function is the plain decode function.
+  # Same as the decode function but also returns start byte offsets. Inputs as for decode: string
+  # tensor or ragged tensor of statically known rank N, encoding name, error mode, replacement
+  # code point, control-character replacement flag (default false) and optional name. Returns a
+  # pair of tensors of rank N+1: code points and the byte offset where each character starts
+  # (dense for scalar input, ragged otherwise). Delegates to the private helper with offsets on.
+  # Raises a value error when the rank is unknown.
   r"""Decodes each string into a sequence of code points with start offsets.
 
   This op is similar to `tf.strings.decode(...)`, but it also returns the
@@ -299,6 +349,15 @@ def unicode_split(input,
                   errors="replace",
                   replacement_char=0xFFFD,
                   name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the result is an int32 tensor, but the result is a string
+  # tensor holding each character's bytes (as its own example shows).
+  # Splits each string into Unicode characters. Inputs: input, a dense or ragged string tensor of
+  # statically known rank N; input_encoding; errors mode (default "replace"); replacement code
+  # point (default 0xFFFD); name, optional. Decodes to code points without replacing control
+  # characters, adds a trailing dimension of size one, and re-encodes each code point to a
+  # one-character string in the same encoding. Returns a string tensor of rank N+1 (dense for a
+  # scalar input, ragged otherwise). Raises a value error when the rank is unknown.
   r"""Splits each string in `input` into a sequence of Unicode code points.
 
   `result[i1...iN, j]` is the substring of `input[i1...iN]` that encodes its
@@ -347,6 +406,16 @@ def unicode_split_with_offsets(input,
                                errors="replace",
                                replacement_char=0xFFFD,
                                name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring describes the first result as an int32 code point tensor and refers
+  # to a nonexistent decode function; the first result is actually a tensor of strings (the
+  # characters), as its example shows.
+  # Splits strings into Unicode characters and also returns each character's starting byte offset.
+  # Inputs as for the plain split function: string tensor or ragged tensor of statically known rank
+  # N, encoding, error mode, replacement code point and optional name. Decodes with offsets,
+  # re-encodes each code point as a single-character string, and returns a pair: the character
+  # strings and the integer offsets, both of rank N+1 (dense for scalar input, else ragged).
+  # Raises a value error when the rank is unknown.
   r"""Splits each string into a sequence of code points with start offsets.
 
   This op is similar to `tf.strings.decode(...)`, but it also returns the
@@ -408,6 +477,16 @@ def unicode_split_with_offsets(input,
 
 def _unicode_decode(input, input_encoding, errors, replacement_char,
                     replace_control_characters, with_offsets):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation behind the public decode and split functions.
+  # Decodes strings into code points. Inputs: input (dense or ragged strings, rank statically
+  # known), the encoding name, error mode, replacement code point, control-character replacement
+  # flag, and with_offsets (whether to also return byte start offsets). Higher rank inputs are
+  # converted to ragged form so the ragged rank is rank minus one, then the flat strings are
+  # reshaped to a vector and passed to the decode kernel. The kernel output is a flat character
+  # list plus row splits, which is rebuilt into ragged tensors and re-wrapped in the input's outer
+  # structure. For a scalar input the plain dense vectors are returned. Returns code points, or a
+  # pair of code points and offsets. Raises a value error when the rank is unknown.
   """Decodes each string into a sequence of codepoints."""
   input = ragged_tensor.convert_to_tensor_or_ragged_tensor(input, name="input")
   input_ndims = input.shape.ndims
@@ -467,6 +546,16 @@ def _unicode_decode(input, input_encoding, errors, replacement_char,
 @tf_export("strings.split", v1=[])
 @dispatch.add_dispatch_support
 def string_split_v2(input, sep=None, maxsplit=-1, name=None):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says a value error is raised when sep is not a string, but this
+  # function does no such check itself; any such failure comes from the underlying kernel.
+  # Splits each string on a separator and returns a ragged tensor. Inputs: input, strings of any
+  # rank (dense or ragged, converted to string dtype; an unknown rank is treated as rank 1); sep,
+  # scalar delimiter (none or empty means split on runs of whitespace); maxsplit, maximum number of
+  # splits (negative means unlimited); name, optional. Returns a ragged tensor of rank N+1.
+  # Ragged inputs recurse on their flat values; a scalar is stacked then unstacked; a vector uses
+  # the sparse split kernel and is converted to ragged by row ids; higher ranks are first
+  # converted to ragged form and recursed on.
   """Split elements of `input` based on `sep` into a `RaggedTensor`.
 
   Let N be the size of `input` (typically N will be the batch size). Split each
@@ -533,6 +622,16 @@ def string_split_v2(input, sep=None, maxsplit=-1, name=None):  # pylint: disable
                              "delimiter")
 def string_split(source, sep=None, skip_empty=True, delimiter=None,
                  result_type="SparseTensor", name=None):  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says a value error is raised if the delimiter is not a string; the
+  # error this function raises itself is for an unknown result type. The docstring also gives the
+  # default separator as a space while the default argument is none.
+  # Legacy (version 1) string split of a vector of strings. Inputs: source, 1-D strings; sep (or
+  # the deprecated delimiter alias, which logs a deprecation warning); skip_empty, whether empty
+  # tokens are dropped (default true); result_type, either "SparseTensor" (default) or
+  # "RaggedTensor"; name, optional. Splits with the sparse string split op and returns the sparse
+  # result as is, or converts it to a rank-2 ragged tensor by row ids. Raises a value error for any
+  # other result_type.
   """Split elements of `source` based on `delimiter`.
 
   Let N be the size of `source` (typically N will be the batch size). Split each
@@ -595,6 +694,14 @@ def string_split(source, sep=None, skip_empty=True, delimiter=None,
 @dispatch.add_dispatch_support
 def strings_split_v1(input=None, sep=None, maxsplit=-1,  # pylint: disable=redefined-builtin
                      result_type="SparseTensor", source=None, name=None):
+  # [FUNCTION DOC]
+  # Version 1 flavour of the string split API with the newer separator and maxsplit arguments.
+  # Inputs: input (strings), or the deprecated alias source (the lookup helper picks whichever is
+  # given and logs a deprecation warning for the alias); sep; maxsplit; result_type, "SparseTensor"
+  # (default) or "RaggedTensor"; name, optional. A scalar input is expanded to a vector. For a
+  # sparse result a vector uses the sparse split kernel directly and higher ranks are split into
+  # ragged form and converted to sparse; for a ragged result the version 2 split is used. Raises a
+  # value error for any other result_type.
   """Split elements of `input` based on `sep`.
 
   Let N be the size of `input` (typically N will be the batch size). Split each
@@ -664,6 +771,13 @@ def reduce_join(inputs: ragged_tensor.Ragged,
                 keepdims=None,
                 separator="",
                 name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring points to a docstring constant that is not defined in this module.
+  # Dispatch handler that makes the standard reduce-join work on ragged tensors. Inputs: inputs
+  # (ragged string tensor), axis (dimension(s) to join over), keepdims, separator (string placed
+  # between joined elements, default empty), name (default operation name is used when missing).
+  # Delegates to the generic ragged reduction helper with the dense reduce-join and segment-join
+  # ops, and returns the joined tensor.
   """For docs, see: _RAGGED_REDUCE_DOCSTRING."""
   return ragged_math_ops.ragged_reduce_aggregate(
       string_ops.reduce_join, string_ops.unsorted_segment_join, inputs, axis,
@@ -679,6 +793,18 @@ def ngrams(data,
            padding_width=None,
            preserve_short_sequences=False,
            name=None):
+  # [FUNCTION DOC]
+  # Builds n-grams by joining windows of adjacent strings along the innermost axis. Inputs: data,
+  # string tensor or ragged tensor of known rank at least 1; ngram_width, a positive integer or
+  # list/tuple of them (all widths are produced, in order); separator, constant string joining
+  # elements (default space); pad_values, none, one string for both sides, or a pair of left and
+  # right strings; padding_width, number of pads per side (needs pad_values; default derives from
+  # the widths); preserve_short_sequences, whether short sequences still yield one n-gram; name.
+  # Returns a ragged tensor of n-grams, or a dense tensor with the outer shape kept when the input
+  # was dense. Rank-1 input is wrapped as one row and unwrapped; dense higher rank is converted to
+  # ragged; ragged rank above one recurses on the inner values. Raises a type error for invalid
+  # pad_values types, and a value error for padding_width below one, padding_width without
+  # pad_values, unknown or zero rank, or any width below one.
   """Create a tensor of n-grams based on `data`.
 
   Creates a tensor of n-grams based on `data`. The n-grams are created by
@@ -834,6 +960,15 @@ def string_format(
     placeholder="{}",
     summarize=3,
     name=None):
+  # [FUNCTION DOC]
+  # Dispatch handler that makes the string format op accept ragged inputs. Inputs: template, a
+  # Python string containing placeholders; inputs, one tensor (ragged or dense) or a list of them;
+  # placeholder, the marker string (default two braces); summarize, number of leading and trailing
+  # elements shown per dimension (default 3); name, optional. The template is split on the
+  # placeholder and a single tensor input is wrapped in a list. Ragged inputs are rendered with the
+  # ragged-to-string helper and dense inputs with the regular format op; the pieces are interleaved
+  # with the template parts and joined. Returns a scalar string tensor. Raises a value error when
+  # the number of placeholders differs from the number of inputs.
   """Version of tf.strings.format that handles RaggedTensors."""
   if tensor_util.is_tf_type(inputs) or ragged_tensor.is_ragged(inputs):
     inputs = [inputs]
@@ -859,6 +994,15 @@ def string_format(
 
 
 def ragged_tensor_to_string(rt, summarize=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring has no Returns section, and it says nothing about the value error
+  # for an invalid summarize or unknown rank.
+  # Renders a whole ragged tensor as one scalar string that looks like nested lists. Inputs: rt,
+  # a ragged (or dense) tensor of statically known rank; summarize, none or -1 to include all
+  # elements, otherwise a positive integer limiting each dimension to its first and last that many
+  # elements with an ellipsis between. String elements are escaped for quotes and backslashes and
+  # wrapped in single quotes; other dtypes are converted to text. Raises a value error if summarize
+  # is neither -1, none nor a positive integer, or if the rank is unknown. Returns a scalar string.
   """Returns a scalar string tensor with the contents of a RaggedTensor.
 
   Requires that `rt.shape.rank` is not `None`.
@@ -904,6 +1048,14 @@ def ragged_tensor_to_string(rt, summarize=None):
 
 
 def _ragged_tensor_to_string(string_tensor, summarize):
+  # [FUNCTION DOC]
+  # HELPER: recursive worker behind the ragged-to-string conversion.
+  # Inputs: a string tensor (ragged or dense) whose elements are already text, and summarize
+  # (none or -1 for everything, else the number of leading and trailing items kept per dimension).
+  # A rank-1 tensor's elements are the pieces; otherwise each sub-tensor is converted recursively
+  # with a mapping operation yielding a scalar string. If summarizing and there are more rows than
+  # twice the limit, keeps the first and last pieces with an ellipsis between (decided at run time).
+  # Returns a scalar string of the pieces joined by comma-space and wrapped in square brackets.
   """Returns a scalar string tensor with the contents of `string_tensor`.
 
   Args:
@@ -932,6 +1084,10 @@ def _ragged_tensor_to_string(string_tensor, summarize):
 
 
 def _nrows(tensor, out_type=dtypes.int32):
+  # [FUNCTION DOC]
+  # HELPER: row count for the ragged-to-string conversion.
+  # Returns the number of rows (outer dimension size) of a ragged or dense tensor as a scalar
+  # tensor of the integer type out_type (default 32-bit integer).
   if isinstance(tensor, ragged_tensor.RaggedTensor):
     return tensor.nrows(out_type=out_type)
   else:
@@ -942,6 +1098,13 @@ def _nrows(tensor, out_type=dtypes.int32):
 def string_join(inputs: typing.List[ragged_tensor.RaggedOrDense],
                 separator="",
                 name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the check meant to reject an empty list of inputs tests whether the length is
+  # below zero, which can never be true, so an empty list is not rejected here.
+  # Dispatch handler that makes string join accept ragged tensors. Inputs: inputs, a list of ragged
+  # or dense string tensors; separator, string placed between joined elements (default empty);
+  # name, optional. Applies the regular join op to the flat values of all inputs (so their ragged
+  # structures must be compatible) and returns a ragged or dense result with that shared structure.
   """RaggedTensor implementation for tf.strings.join."""
   if len(inputs) < 0:
     raise ValueError("tf.strings.join: expected at least one input.")
