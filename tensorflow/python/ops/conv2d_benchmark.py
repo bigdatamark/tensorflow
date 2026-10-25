@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Standalone benchmark script for the two-dimensional convolution op. Builds graphs that chain many
+# convolutions with control dependencies, runs them in a session on a GPU device across a grid of
+# data types, data formats, input channel counts, output channel counts and paddings, prints the
+# average time per convolution and reports each result through the benchmark reporting framework.
+# Import-time side effect: defines a boolean command-line flag that toggles the layout optimizer.
+# Run as a script it launches the test main entry point. Not a helper module.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -40,6 +47,18 @@ flags.DEFINE_boolean(
 
 def build_graph(device, dtype, data_format, input_shape, filter_shape, strides,
                 padding, num_iters, warmup_iters):
+  # [FUNCTION DOC]
+  # HELPER: builds the benchmark graph used by the convolution benchmark class.
+  # KNOWN ISSUE: the docstring says it returns an array of tensors, but it returns a pair of
+  # grouped operations (warmup group, timed group), not a list of tensors.
+  # Creates, on the requested device, two random-valued variables (input and filter) and two
+  # chains of convolution ops, each op control-dependent on the previous one so they run serially:
+  # a timed chain of num_iters convolutions and a warmup chain of warmup_iters convolutions.
+  # Inputs: device name (such as cpu or gpu, placed on index 0), element data type, data format
+  # string, input and filter shapes, stride list, padding string, and the two iteration counts.
+  # Returns a pair: a grouping op over the warmup chain and a grouping op over the timed chain.
+  # Side effects: adds ops and variables to the current default graph. Invalid shapes or formats
+  # are reported by the underlying convolution op at graph construction.
   """builds a graph containing a sequence of conv2d operations.
 
   Args:
@@ -89,10 +108,28 @@ def build_graph(device, dtype, data_format, input_shape, filter_shape, strides,
 
 
 class Conv2DBenchmark(test.Benchmark):
+  # [CLASS DOC]
+  # Benchmark class for the convolution op. Holds no state of its own; the benchmark method
+  # sweeps a configuration grid and delegates each configuration to a private runner that builds
+  # the graph, times it in a session and reports the result. Discovered and run by the benchmark
+  # framework through the test main entry point.
   """Benchmark conv2d!"""
 
   def _run_graph(self, device, dtype, data_format, input_shape, filter_shape,
                  strides, padding, num_iters, warmup_iters):
+    # [FUNCTION DOC]
+    # HELPER: runs and reports a single configuration for the convolution benchmark method.
+    # KNOWN ISSUE: the docstring says it returns the duration of the run, but the value is the
+    # average wall time per convolution (total timed run divided by num_iters). The padding
+    # description also contains a stray fragment about num_iters.
+    # Builds the graph, creates a session with the graph optimizer level disabled, the layout
+    # optimizer set from the command-line flag (on only if the flag is true) and the dependency
+    # optimizer off so the unused convolutions are not pruned. Initializes variables, runs the
+    # warmup group once, then times one run of the timed group. Prints a one-line summary and
+    # reports the benchmark with a name built from device, type, format, shapes, strides and
+    # padding (spaces removed), the iteration count and the average time. Inputs mirror the graph
+    # builder. Returns the average seconds per convolution. Side effects: standard output text and
+    # a benchmark report.
     """runs the graph and print its execution time.
 
     Args:
@@ -168,6 +205,14 @@ class Conv2DBenchmark(test.Benchmark):
     return duration
 
   def benchmark_conv2d(self):
+    # [FUNCTION DOC]
+    # Benchmark entry point. Prints a header, then iterates over the cross product of data types
+    # (32-bit and 16-bit float), data formats (channels-last and channels-first), input channel
+    # counts (1 to 9, 10 to 18 step 2, 20 to 32 step 4), output channel counts (4, 16, 32), one
+    # spatial stride pair and both paddings. Batch size equals the output channel count; images are
+    # 500 by 500 with 3 by 3 filters, 80 timed and 2 warmup iterations, always on the GPU device.
+    # Builds input shape and stride layout per data format. Raises a value error for an unknown
+    # data format (cannot happen with the fixed list). Returns nothing; needs a GPU to succeed.
     print("conv2d benchmark:")
 
     data_types = [dtypes.float32, dtypes.float16]

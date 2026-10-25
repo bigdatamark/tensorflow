@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Implements the integer-indexed switch/case control flow operation and a device-dependent variant.
+# Exposes the public switch-case function, an internal function that picks a callable by the
+# device the op runs on, and two private helpers that validate branch specifications and dispatch
+# either to eager Python execution or to the version 2 indexed case graph op. Relies on the cond v2
+# module for graph construction. Import-time side effect: registration of the exported functions
+# through the export decorator.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,6 +34,17 @@ from tensorflow.python.util.tf_export import tf_export
 
 def _indexed_case_verify_and_canonicalize_args(branch_fns, default,
                                                branch_index):
+  # [FUNCTION DOC]
+  # HELPER: argument validation and normalization for the indexed case implementation.
+  # KNOWN ISSUE: the docstring calls branch_index optional, but it is required and must be a tensor
+  # of integer type, otherwise a type error is raised. It also documents only type errors, while a
+  # value error is raised for empty branch_fns or for keys that are not a contiguous range from zero.
+  # Validates the branch index (tensor with integer dtype), requires a non-empty list, tuple or
+  # mapping of branches, converts a mapping to its key/callable pairs, and converts a plain
+  # sequence of callables into pairs keyed by position. Each pair must be a two-element tuple with
+  # an integer key and a callable. Keys must be unique and form the contiguous range from zero.
+  # Returns a list of callables ordered by key, with the default callable (if given) appended last.
+  # Does not check that default is callable. No side effects.
   """Verifies input arguments for the case function.
 
   Args:
@@ -92,6 +110,19 @@ def _indexed_case_helper(branch_fns,
                          branch_index,
                          name,
                          lower_using_switch_merge=None):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation behind the public switch-case and the device-based dispatch.
+  # KNOWN ISSUE: the docstring describes branch_fns as pairs with a boolean scalar tensor; they are
+  # actually pairs keyed by integers (or plain callables), and branch_index is required, not
+  # optional. The default callable is appended as the last branch, so out-of-range or negative
+  # indices run the last branch.
+  # Canonicalizes the branches via the validation helper, then opens a name scope (name, default
+  # "case"). When executing eagerly and the index is a plain eager value without a graph, it clamps
+  # out-of-range indices (below zero or at/above the branch count) to the last branch, converts the
+  # index to a Python integer and directly calls the chosen callable, returning its result.
+  # Otherwise it builds a graph-level indexed case op via the cond v2 module, forwarding the
+  # optional flag that controls lowering to switch/merge ops. Raises type or value errors from
+  # validation.
   """Implementation of case that emits the n-way indexed Case op.
 
   Args:
@@ -131,6 +162,16 @@ def _indexed_case_helper(branch_fns,
 
 @tf_export("__internal__.execute_fn_for_device", v1=[])
 def execute_fn_for_device(device_branch_fns, default_fn, name="execute_fn"):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring example calls it as a top-level function, but it is exported only
+  # under the internal namespace and not for version 1.
+  # Chooses, at run time, among callables keyed by device type name. Inputs: mapping from device
+  # type names (case-insensitive, upper-cased internally) to callables, a fallback callable, and an
+  # optional operation name. If the current default graph or its parents are in an XLA context, it
+  # simply calls and returns the fallback result. Otherwise it creates a device-index op for the
+  # listed device names and dispatches through the indexed case helper with the fallback as the
+  # default branch and lowering to switch/merge disabled. Returns the structure of tensors from the
+  # selected callable. Adds ops to the default graph.
   """Executes one of the provided callables based on the device placement.
 
   This API is used when the implementations for high level function depend on
@@ -180,6 +221,15 @@ def execute_fn_for_device(device_branch_fns, default_fn, name="execute_fn"):
 
 @tf_export("switch_case")
 def switch_case(branch_index, branch_fns, default=None, name="switch_case"):
+  # [FUNCTION DOC]
+  # Public integer-indexed conditional. Inputs: an integer scalar tensor selecting the branch; the
+  # branches as a mapping from integer to callable, a list of integer/callable pairs, or a list of
+  # callables (index is the key); an optional fallback callable; an optional operation name.
+  # Delegates to the shared indexed case helper. Returns the tensors (nested structure) from the
+  # selected callable; indices outside the key range run the fallback if given, otherwise the
+  # highest-keyed branch. Raises type errors for a non-tensor or non-integer index or malformed
+  # branches, and a value error for empty branches or non-contiguous keys. In graph mode adds a
+  # functional case op to the default graph.
   """Create a switch/case operation, i.e.
 
   an integer-indexed conditional.

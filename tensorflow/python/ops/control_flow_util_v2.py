@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# Utilities shared by the version 2 (functional) control flow implementations of cond, case and
+# while loops. Provides predicates for detecting function graphs and while-loop graphs, naming and
+# registering control flow functions, setting lowering and XLA attributes on If/While ops, tracing
+# resource handles back to function inputs, a context manager that clears control inputs while
+# keeping the control flow context, the logic and the public setter for the experimental
+# "output all intermediates" option, rebuilding function graphs from stored definitions, and
+# wrapping op creation in a function so higher-order tape gradients work. Import-time state: two
+# private module globals (the intermediates override, initially unset, and a lowering-disable flag,
+# initially false) and aliases for the cond/while function graph classes. HELPER: internal glue
+# module for cond_v2, while_v2 and related gradient code.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -41,6 +52,11 @@ WhileBodyFuncGraph = control_flow_v2_func_graphs.WhileBodyFuncGraph
 
 
 def in_defun():
+  # [FUNCTION DOC]
+  # Tells whether graph construction is currently happening inside a function graph. Takes no
+  # arguments. Returns false when executing eagerly. Otherwise starts at the default graph, skips
+  # outward through cond-branch, while-body and while-condition graphs, and returns true if the
+  # graph reached is a function graph. No side effects.
   """Returns if the current graph is, or is nested in, a defun."""
   if context.executing_eagerly(): return False
 
@@ -53,6 +69,9 @@ def in_defun():
 
 
 def in_while_loop_defun(graph):
+  # [FUNCTION DOC]
+  # Tells whether the given graph is a while-loop condition or body function graph. Input: a graph.
+  # Returns false when executing eagerly, otherwise a boolean from the type check. No side effects.
   """Returns if the graph is a while loop FuncGraph."""
   if context.executing_eagerly(): return False
   return (isinstance(graph, WhileCondFuncGraph) or
@@ -60,6 +79,12 @@ def in_while_loop_defun(graph):
 
 
 def create_new_tf_function(func_graph):
+  # [FUNCTION DOC]
+  # Converts a function graph into a runtime function and registers it with its outer graph.
+  # Input: a function graph. Applies registered graph transforms to it in place, builds an atomic
+  # function from it (with no extra attributes), and adds that function, recursively with its
+  # dependencies, to the outer graph. Returns the function graph's name as a string. Side effects:
+  # mutates the function graph via transforms and the outer graph's function library.
   """Converts func_graph to a TF_Function and adds it to the current graph.
 
   Args:
@@ -76,6 +101,12 @@ def create_new_tf_function(func_graph):
 
 
 def unique_fn_name(scope, name):
+  # [FUNCTION DOC]
+  # HELPER: naming utility for functions created by cond and while loop builders.
+  # Builds a unique function name from a name scope string, a short identifier such as the branch
+  # or body label, and a fresh process-wide unique integer. Slashes in the result are replaced by
+  # underscores. Returns the string. Side effect: consumes one value from the global unique id
+  # counter.
   """Returns a unique name to use for a control flow function.
 
   Args:
@@ -89,10 +120,21 @@ def unique_fn_name(scope, name):
 
 
 def unique_grad_fn_name(forward_name):
+  # [FUNCTION DOC]
+  # HELPER: naming utility for gradient functions of control flow ops.
+  # Input: the forward function's name. Returns that name with a gradient marker and a fresh
+  # unique integer appended. Side effect: consumes one value from the global unique id counter.
   return "%s_grad_%s" % (forward_name, ops.uid())
 
 
 def maybe_set_lowering_attr(op, lower_using_switch_merge=None):
+  # [FUNCTION DOC]
+  # Marks an If or While op so that, at runtime, it may be lowered to low-level switch/merge
+  # primitives. Inputs: the op, and an optional explicit boolean. If the boolean is given, the
+  # lowering attribute on the op is set to exactly that value. Otherwise the attribute is set to
+  # true only when the module-wide disable flag is off, neither the op's graph nor its parents are
+  # in an XLA context, and the current function executor type is not the single-threaded executor;
+  # in all other cases nothing is set. Returns nothing; mutates the op's attributes.
   """Sets the flag to enable lowering on `op` if necessary.
 
   Lowering allows cond_v2 and while_v2 to avoid some of the limitations of
@@ -129,6 +171,10 @@ def maybe_set_lowering_attr(op, lower_using_switch_merge=None):
 
 
 def maybe_propagate_compile_time_consts_in_xla(op):
+  # [FUNCTION DOC]
+  # If the op's graph (or an outer graph) is in an XLA context, sets an attribute on the While op
+  # telling XLA to propagate compile-time constants into the loop body. Input: a While op. Does
+  # nothing outside XLA. Returns nothing; mutates the op's attributes.
   """Tells XLA whether to propagate compile-time consts in the loop body.
 
   This is needed to make compile time constants available to ops, for example
@@ -147,6 +193,18 @@ def maybe_propagate_compile_time_consts_in_xla(op):
 
 
 def resource_input_index(tensor_name, input_names, node_defs, functions):
+  # [FUNCTION DOC]
+  # Traces a resource tensor back to the function input it came from. Inputs: the tensor name
+  # (graph style with an output index, function-definition style, or a bare name meaning output
+  # zero), the list of function input names, a mapping from node name to node definition for the
+  # function, and a mapping from function name to atomic function. Repeatedly follows the producer:
+  # identity and while ops forward the input at the same index as the output; function-call ops
+  # recurse into the called function's definition; if/stateless-if ops recurse into both branches
+  # and require them to agree. Returns the index into the input names list.
+  # Raises an assertion error if the two branches of a cond map the resource to different inputs,
+  # and a value error if any other op type produced the resource (creating a resource inside a
+  # loop body is unsupported). Also fails with a key error if a node or function name is missing.
+  # Recursive; no side effects.
   """Returns the index of the input corresponding to `tensor_name`.
 
   This method is used to find the corresponding index of an arbitrary resource
@@ -189,6 +247,13 @@ def resource_input_index(tensor_name, input_names, node_defs, functions):
     node_def = node_defs[op_name]
 
     def _extract_input_index(function_attribute_name):
+      # [FUNCTION DOC]
+      # HELPER: recursion step for resolving resource inputs through nested function calls.
+      # Input: the name of the function-valued attribute on the current node (call target, then
+      # branch, or else branch). Looks up that function's stored definition, takes its output
+      # argument at the current output index, finds the tensor returned for it, and recursively
+      # resolves that tensor to an input index of the nested function. Returns that integer index.
+      # Uses the enclosing call's node definition, output index and function mapping.
       func_name = node_def.attr[function_attribute_name].func.name
       fdef = functions[func_name].cached_definition
       output_arg_name = fdef.signature.output_arg[output_idx].name
@@ -231,6 +296,12 @@ def resource_input_index(tensor_name, input_names, node_defs, functions):
 
 @tf_contextlib.contextmanager
 def clear_control_inputs():
+  # [FUNCTION DOC]
+  # Context manager that suppresses automatic control dependencies for ops created in its body
+  # while keeping the current control flow context (needed for XLA gradient accumulators in the
+  # while loop code). Saves the default graph's control flow context, clears control dependencies,
+  # restores the saved context into the graph, and yields. Takes no arguments, yields nothing.
+  # Side effects: temporarily changes the default graph's control dependency stack and context.
   """Clears the control inputs but preserves the ControlFlowContext.
 
   This is needed to preserve the XLAControlFlowControl when clearing
@@ -250,11 +321,20 @@ def clear_control_inputs():
 
 
 def _is_tpu_strategy(strategy):
+  # [FUNCTION DOC]
+  # HELPER: distribution strategy check (appears unused within this module).
+  # Input: a distribution strategy object or null. Returns true if it is not null and its class
+  # name starts with the TPU strategy prefix. No side effects.
   return (strategy is not None and
           strategy.__class__.__name__.startswith("TPUStrategy"))
 
 
 def _is_building_keras_layer():
+  # [FUNCTION DOC]
+  # HELPER: lets output_all_intermediates detect a Keras layer under construction.
+  # Asks the Keras dependency hook for its call-context accessor; if available, returns true when
+  # the current call context has a layer, otherwise false. No arguments, no side effects. Marked
+  # for removal once sessions with Keras are no longer supported.
   # TODO(srbs): Remove this function when we no long support session with Keras.
   keras_call_context_function = keras_deps.get_call_context_function()
   if keras_call_context_function:
@@ -264,6 +344,12 @@ def _is_building_keras_layer():
 
 
 def output_all_intermediates():
+  # [FUNCTION DOC]
+  # Decides whether a functional control flow op should output all its intermediate tensors.
+  # No arguments. Returns the user override if one was set. Otherwise returns false when inside a
+  # function graph (other than cond/while graphs), when the graph or a parent is in an XLA context,
+  # or when the single-threaded function executor is configured; else returns whether a Keras
+  # layer is currently being built. No side effects.
   """Whether to output all intermediates of a functional control flow op.
 
   The default behavior is to output intermediates only when building a Keras
@@ -296,6 +382,15 @@ def output_all_intermediates():
 
 
 def get_func_graph(op, input_shapes, func_name):
+  # [FUNCTION DOC]
+  # Rebuilds a function graph for a named function referenced by an op, used when computing
+  # gradients. Inputs: the op, the input shapes to use, and the function name. Searches the op's
+  # graph and then its chain of outer graphs for the function; raises a key error if not found.
+  # Converts its stored definition into a function graph with the op's graph as the outer graph.
+  # For each nested partitioned-call op in the result, tries to attach the gradient function of the
+  # corresponding concrete function; if that function has no graph it is silently skipped.
+  # Returns the new function graph. Side effects: sets private gradient function attributes on ops
+  # of the new graph.
   """Generates and returns a FuncGraph for the given op and input_shapes."""
   fdef = None
   graph = op.graph
@@ -347,6 +442,12 @@ def get_func_graph(op, input_shapes, func_name):
 
 
 def get_op_and_outputs(op_or_outputs):
+  # [FUNCTION DOC]
+  # HELPER: normalizes the result of an op-building callable for the control flow builders.
+  # Input: either an operation, or a list of output tensors (possibly empty). Returns a pair of
+  # the operation and the list of outputs: an operation yields the operation and an empty list; an
+  # empty list yields null and an empty list; a non-empty list yields the first tensor's producing
+  # operation and the list itself. No side effects.
   if isinstance(op_or_outputs, ops.Operation):
     return op_or_outputs, []
   elif not op_or_outputs:  # Empty list.
@@ -356,6 +457,10 @@ def get_op_and_outputs(op_or_outputs):
 
 
 def graph_wrapped_for_higher_order_tape_gradients(graph):
+  # [FUNCTION DOC]
+  # Checks whether the graph, or any outer graph, was created by the tape-gradient wrapping helper
+  # (recognized by its name containing the wrapper marker). Input: a graph or null. Returns a
+  # boolean. No side effects.
   """Check if `graph` is wrapped by `run_as_function_for_tape_gradients`."""
   while graph is not None:
     if "cflow_gradient_wrapper" in getattr(graph, "name", ""):
@@ -365,6 +470,15 @@ def graph_wrapped_for_higher_order_tape_gradients(graph):
 
 
 def run_as_function_for_tape_gradients(make_op, inputs):
+  # [FUNCTION DOC]
+  # Makes control flow ops work with higher-order gradient tapes by optionally building them inside
+  # an extra wrapper function. Inputs: a callable taking a list of tensors and returning output
+  # tensors, and the list of input tensors to inspect (should include everything the callable
+  # uses). If the inputs may be watched by higher-order tapes and the current graph is not already
+  # inside a wrapper function, traces the callable into a function (named with the wrapper marker,
+  # without autograph) and calls it with the inputs as captures, returning its results. Otherwise
+  # simply calls the callable and returns its result. Side effects: may trace and register a new
+  # function in the current graph.
   """Fix higher-order tape gradients by wrapping `make_op` in a function.
 
   Args:
@@ -403,6 +517,12 @@ def run_as_function_for_tape_gradients(make_op, inputs):
 
 @tf_export(v1=["experimental.output_all_intermediates"])
 def set_output_all_intermediates(state):  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # Public (version 1 only) setter for the experimental override that forces functional control
+  # flow ops to output, or not output, all intermediates. Input: true, false, or null; null
+  # restores the default automatic behavior. Returns nothing. Side effect: assigns the module-level
+  # override variable, affecting subsequently built control flow ops process-wide. No validation is
+  # performed on the value.
   """Whether to output all intermediates from functional control flow ops.
 
   The "default" behavior to is to output all intermediates when using v2 control

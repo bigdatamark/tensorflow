@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test module for the control flow v2 toggles. Despite the name, it exercises the setter for the
+# experimental "output all intermediates" override in the control flow v2 utilities module and its
+# private override variable. Exposes one test class and runs the googletest main entry point when
+# executed as a script. Not a helper module.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,8 +25,16 @@ from tensorflow.python.platform import test
 
 
 class ControlFlowV2TogglesTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the global override of the experimental output-all-intermediates behavior of
+  # control flow v2. No shared fixtures; relies on the override starting out unset.
 
   def testOutputAllIntermediates(self):
+    # [FUNCTION DOC]
+    # Checks the override starts as nothing, then sets it to true, to false and back to nothing via
+    # the public setter, asserting after each call that the private module variable holds exactly
+    # the value passed. Mutates global module state and leaves it reset to nothing at the end
+    # (if an assertion fails midway, the state is left modified). Returns nothing.
     self.assertIsNone(
         control_flow_util_v2._EXPERIMENTAL_OUTPUT_ALL_INTERMEDIATES_OVERRIDE)
     control_flow_util_v2.set_output_all_intermediates(True)

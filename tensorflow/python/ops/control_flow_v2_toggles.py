@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Public (v1 only) API for switching version 2 control flow on and off and for querying the current
+# state. Exposes three exported functions: enable, disable and is-enabled. The enable and disable
+# functions update a usage gauge and the module-level flag in the control flow utilities module.
+# No import-time side effects other than export registration through the export decorator.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +28,11 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export(v1=["enable_control_flow_v2"])
 def enable_control_flow_v2():  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # Opts in to version 2 control flow globally. Takes no arguments and returns nothing. Side
+  # effects: writes a verbose-level log message, sets the control flow API usage gauge to true, and
+  # sets the module-level control flow v2 flag in the control flow utilities module to true. Never
+  # raises. Graph code always uses v2 inside functions regardless of this flag.
   """Use control flow v2.
 
   control flow v2 (cfv2) is an improved version of control flow in TensorFlow
@@ -46,6 +56,11 @@ def enable_control_flow_v2():  # pylint: disable=invalid-name
 
 @tf_export(v1=["disable_control_flow_v2"])
 def disable_control_flow_v2():  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # Opts out of version 2 control flow globally. Takes no arguments and returns nothing. Side
+  # effects: writes a verbose-level log message, sets the control flow API usage gauge to false,
+  # and sets the module-level control flow v2 flag in the control flow utilities module to false.
+  # Has no effect on code built inside functions, which always uses v2. Never raises.
   """Opts out of control flow v2.
 
   Note: v2 control flow is always enabled inside of tf.function. Calling this
@@ -62,6 +77,11 @@ def disable_control_flow_v2():  # pylint: disable=invalid-name
 
 @tf_export(v1=["control_flow_v2_enabled"])
 def control_flow_v2_enabled():  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # Reports whether version 2 control flow is in effect for the current default graph. Takes no
+  # arguments; returns a boolean obtained by asking the control flow utilities whether v2 is
+  # enabled for the default graph (true inside function graphs or when the global flag is on).
+  # No side effects.
   """Returns `True` if v2 control flow is enabled.
 
   Note: v2 control flow is always enabled inside of tf.function.

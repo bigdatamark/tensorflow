@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test module checking that requesting TF2 behavior through the environment turns control flow v2
+# on by default. Sets the TF2 behavior environment variable at import time, before importing the
+# TensorFlow modules that read it. Exposes a single test class and runs the googletest main entry
+# point when executed as a script. Not a helper module.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,8 +29,15 @@ from tensorflow.python.platform import test
 
 
 class ControlFlowV2EnableTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the effect of the TF2 behavior environment variable on the control flow v2
+  # switch. Has no shared fixtures or state.
 
   def testIsEnabled(self):
+    # [FUNCTION DOC]
+    # Asserts that the TF2 module reports TF2 behavior as enabled and that the module-level control
+    # flow v2 flag in the control flow utilities is true. Takes no inputs, returns nothing, fails
+    # the test on mismatch, no side effects.
     self.assertTrue(tf2.enabled())
     self.assertTrue(control_flow_util.ENABLE_CONTROL_FLOW_V2)
 
