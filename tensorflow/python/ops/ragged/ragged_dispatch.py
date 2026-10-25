@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Dispatch support that lets standard elementwise TensorFlow ops accept ragged tensors, plus a
+# generator of documentation text listing ops that support ragged tensors. Import-time side
+# effect: registers a unary elementwise dispatcher for ragged tensors with the dispatch
+# framework. Also keeps a deprecated binary elementwise handler and private helpers for
+# formatting op signatures used by the op-list generator.
+
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,6 +34,11 @@ from tensorflow.python.util import tf_inspect
 
 @dispatch.dispatch_for_unary_elementwise_apis(ragged_tensor.Ragged)
 def ragged_unary_elementwise_op(op, x):
+  # [FUNCTION DOC]
+  # Dispatch handler applying a unary elementwise op to a ragged tensor. Inputs: op (the
+  # original unary op) and x (ragged tensor or convertible value). Converts x to a tensor or
+  # ragged tensor, applies the op to its values, and returns a ragged tensor of the same
+  # structure with the mapped values. Registered at import time via the dispatch decorator.
   """Unary elementwise api handler for RaggedTensors."""
   x = ragged_tensor.convert_to_tensor_or_ragged_tensor(x)
   return x.with_values(op(x.values))
@@ -34,6 +46,16 @@ def ragged_unary_elementwise_op(op, x):
 
 # TODO(martinz): This is deprecated. Delete.
 def ragged_binary_elementwise_op(op, x, y):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: marked deprecated by a TODO (to be deleted) but still present.
+  # Applies a binary elementwise op where either or both operands may be ragged. Inputs: op
+  # (callable on two tensors) and x, y (ragged tensors or values convertible to tensors; each
+  # converts using the other's dtype as a preferred dtype). If both are ragged their row-splits
+  # dtypes are matched. When broadcasting is needed (both ragged, or the ragged one's flat
+  # values rank does not exceed the other's rank) both are broadcast to a common dynamic shape
+  # without broadcasting inner dimensions. The op is applied to flat values; if it returns a
+  # plain boolean (the tensor equality special case) that is returned directly, otherwise the
+  # result is wrapped with the ragged structure of x (or y if x is not ragged).
   """Binary elementwise api handler for RaggedTensors."""
   x_is_ragged = ragged_tensor.is_ragged(x)
   y_is_ragged = ragged_tensor.is_ragged(y)
@@ -103,6 +125,13 @@ _V2_OPS_THAT_ARE_DELEGATED_TO_FROM_V1_OPS = [
 
 
 def _ragged_op_signature(op, ragged_args, ragged_varargs=False):
+  # [FUNCTION DOC]
+  # HELPER: formatting helper for ragged_op_list documentation output.
+  # Builds a markdown bullet describing an op's public signature. Inputs: op (callable),
+  # ragged_args (collection of positional indices whose arguments accept ragged tensors, shown
+  # in bold) and ragged_varargs (whether the variable positional argument also accepts ragged
+  # tensors, default false). Appends defaults, variable positional and keyword arguments.
+  # Returns the formatted string using the op's canonical exported name.
   """Returns a signature for the given op, marking ragged args in bold."""
   op_name = tf_export.get_canonical_name_for_symbol(op)
   argspec = tf_inspect.getfullargspec(op)
@@ -130,6 +159,12 @@ def _ragged_op_signature(op, ragged_args, ragged_varargs=False):
 
 
 def _op_is_in_tf_version(op, version):
+  # [FUNCTION DOC]
+  # HELPER: filter for ragged_op_list. Checks whether an op is exported in a TensorFlow API
+  # version. Inputs: op (callable) and version (1 or 2). For version 1 returns truthy if the
+  # unwrapped op has version-1 export names or is in the list of version-2 ops that version-1
+  # ops delegate to; for version 2 returns truthy if it has version-2 export names. Raises a
+  # value error for any other version.
   if version == 1:
     return (tf_export.get_v1_names(tf_decorator.unwrap(op)[1]) or
             op in _V2_OPS_THAT_ARE_DELEGATED_TO_FROM_V1_OPS)
@@ -140,6 +175,15 @@ def _op_is_in_tf_version(op, version):
 
 
 def ragged_op_list(tf_version=2):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the returned string ends with a literal letter n (missing backslash) rather
+  # than a newline; the docstring also misspells dispatchers.
+  # Produces markdown documentation of ops that dispatch on ragged tensors. Input: tf_version
+  # (1 or 2, default 2) selecting which exported API names are included. Collects the
+  # type-based dispatch signatures registered for ragged tensors, marks ragged argument
+  # positions, keeps ops exported in the chosen version, and adds the print op with ragged
+  # varargs. Returns a header plus the sorted bullet lines. Raises a value error for other
+  # version numbers.
   """Returns a string listing operations that have dispathers registered."""
   lines = []
   api_signatures = dispatch.type_based_dispatch_signatures_for(

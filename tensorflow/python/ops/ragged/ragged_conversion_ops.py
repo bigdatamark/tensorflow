@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Conversion helpers between ragged tensors and dense or sparse tensors, plus gradient
+# registrations for the ragged-to-dense and ragged-to-variant/from-variant kernels.
+# Exposes thin wrappers (from_tensor, to_tensor, ragged_to_dense, to_sparse, from_sparse) that
+# delegate to RaggedTensor methods, passing through inputs that are already of the target kind
+# where applicable. Import-time side effect: registers gradient functions for the
+# RaggedTensorToTensor, RaggedTensorFromVariant and RaggedTensorToVariant ops.
+
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +37,13 @@ def from_tensor(tensor,
                 ragged_rank=1,
                 row_splits_dtype=dtypes.int64,
                 name=None):
+  # [FUNCTION DOC]
+  # Converts a dense tensor into a ragged tensor. Inputs: tensor (dense or already ragged),
+  # lengths (optional per-row lengths), padding (optional padding value to strip), ragged_rank
+  # (number of ragged dimensions, default 1), row_splits_dtype (integer type for row splits,
+  # default 64-bit integer) and name (optional op name). If the input is already ragged it is
+  # returned unchanged and the other arguments are ignored; otherwise returns the ragged tensor
+  # built by the RaggedTensor from-tensor constructor. No other side effects.
   if ragged_tensor.is_ragged(tensor):
     return tensor
   else:
@@ -42,6 +57,11 @@ def from_tensor(tensor,
 
 
 def to_tensor(rt_input, default_value=None, name=None):
+  # [FUNCTION DOC]
+  # Converts a ragged tensor to a dense tensor. Inputs: rt_input (ragged or already dense
+  # tensor), default_value (optional value used to pad short rows) and name (optional op
+  # name). If the input is ragged, returns its dense form padded with the default; if it is
+  # already dense it is returned unchanged and the other arguments are ignored.
   if ragged_tensor.is_ragged(rt_input):
     return rt_input.to_tensor(default_value, name)
   else:
@@ -49,12 +69,27 @@ def to_tensor(rt_input, default_value=None, name=None):
 
 
 def ragged_to_dense(rt_input, default_value=None, shape=None):
+  # [FUNCTION DOC]
+  # Converts a ragged tensor to a dense one by calling its to-tensor method. Inputs: rt_input
+  # (must be a ragged tensor; a dense input would fail since no ragged check is made),
+  # default_value (optional padding value) and shape (optional target dense shape used to pad
+  # or truncate). Returns the dense tensor.
   """Create a dense tensor from a ragged tensor."""
   return rt_input.to_tensor(default_value=default_value, shape=shape)
 
 
 @ops.RegisterGradient("RaggedTensorToTensor")
 def _ragged_tensor_to_tensor_grad(op, grad):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient function for the RaggedTensorToTensor op (graph autodiff glue).
+  # Inputs: op (the forward operation, whose inputs hold the flat values, default value and
+  # row partition tensors, and whose attribute lists the partition types) and grad (gradient
+  # of the dense output). It maps each output position back to the index of the flat value
+  # that produced it (or -1 for the default), builds a mask of positions that came from flat
+  # values, and returns a sparse-slices gradient for the flat values. Positions that came
+  # from the default are summed over any dimensions the default was broadcast across, then
+  # reshaped to the default's shape. Returns a list: nothing for the shape input, the flat
+  # values gradient, the default value gradient, and nothing for each row partition tensor.
   """Gradient for RaggedToTensor op."""
   # Extract inputs from the op.
   flat_values = op.inputs[1]
@@ -104,6 +139,12 @@ def _ragged_tensor_to_tensor_grad(op, grad):
 
 
 def _rank_ignoring_leading_dims_with_size_1(value):
+  # [FUNCTION DOC]
+  # HELPER: used by the RaggedTensorToTensor gradient to reduce broadcast default values.
+  # Computes the rank of a tensor after discarding leading dimensions of size one. Input:
+  # value, a tensor. Uses static shape when fully informative up to the first non-one
+  # dimension (returns a Python integer); otherwise computes it dynamically from the runtime
+  # shape (leading ones counted via a cumulative product) and returns a scalar tensor.
   """Returns `rank(value)`, ignoring any leading dimensions with size 1."""
   # Compute the result using static shape, if possible.
   if value.shape.rank is not None:
@@ -134,15 +175,30 @@ def _rank_ignoring_leading_dims_with_size_1(value):
 
 
 def to_sparse(rt_input, name=None):
+  # [FUNCTION DOC]
+  # Converts a ragged tensor to a sparse tensor by calling its to-sparse method. Inputs:
+  # rt_input (a ragged tensor; dense input is not accepted) and name (optional op name).
+  # Returns the sparse tensor.
   return rt_input.to_sparse(name)
 
 
 def from_sparse(st_input, name=None):
+  # [FUNCTION DOC]
+  # Converts a two-dimensional sparse tensor to a ragged tensor via the RaggedTensor
+  # from-sparse constructor. Inputs: st_input (sparse tensor) and name (optional op name).
+  # Returns the ragged tensor; invalid sparse inputs raise errors from the constructor.
   return ragged_tensor.RaggedTensor.from_sparse(st_input, name)
 
 
 @ops.RegisterGradient("RaggedTensorFromVariant")
 def _ragged_tensor_from_variant_grad(op, *grads):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient function for the RaggedTensorFromVariant op.
+  # Inputs: op (the forward operation; the rank of its variant input and its output ragged
+  # rank attribute decide whether the encoding was batched) and grads (gradients of the
+  # outputs; only the last, the flat values gradient, is used). Re-encodes the gradient as a
+  # variant using the ragged-to-variant kernel with the op's row splits outputs. Returns a
+  # one-element list. Raises a value error when the variant input has rank above one.
   """Gradient for RaggedTensorFromVariant op."""
 
   variant_rank = op.inputs[0].shape.rank
@@ -167,6 +223,12 @@ def _ragged_tensor_from_variant_grad(op, *grads):
 
 @ops.RegisterGradient("RaggedTensorToVariant")
 def _ragged_tensor_to_variant_grad(op, encoded_ragged_grad):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient function for the RaggedTensorToVariant op.
+  # Inputs: op (the forward operation; its last input is the dense flat values and the earlier
+  # inputs are row splits) and encoded_ragged_grad (the variant-encoded gradient). Decodes it
+  # with the variant-gradient kernel into a gradient for the flat values. Returns a list with
+  # nothing for each row splits input followed by the flat values gradient.
   """Gradient for RaggedTensorToVariant op."""
   dense_values = op.inputs[-1]
   ragged_rank = len(op.inputs) - 1

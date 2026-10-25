@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Unit tests for the ragged cross and hashed cross ops, which build feature crosses from lists
+# of ragged, sparse and dense two-dimensional inputs. Defines small constructors for test
+# inputs (ragged value, dense array, sparse value) and one test class covering expected
+# outputs, equivalence with the sparse cross ops, large batches, static and runtime error
+# handling, and malformed raw kernel inputs. No import-time side effects besides aliases.
+
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -38,6 +45,13 @@ dense_const = np.array
 
 
 def sparse_const(matrix):
+  # [FUNCTION DOC]
+  # HELPER: test input builder for the ragged cross tests.
+  # Builds a sparse tensor value from a list of rows. Input: matrix, a list of lists of
+  # values (rows may differ in length). Records an index pair and value for every element, with
+  # dense shape equal to the row count by the longest row length (zero by zero for an empty
+  # matrix). If there are no values at all, uses empty 64-bit integer indices and values.
+  # Returns the sparse tensor value; no side effects.
   indices = []
   values = []
   for i, row in enumerate(matrix):
@@ -53,6 +67,11 @@ def sparse_const(matrix):
 
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedCrossOpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for the ragged cross and cross_hashed ops in the ragged array ops module. Runs in
+  # graph and eager modes. Uses module-level constructors to build ragged, dense and sparse
+  # inputs, and covers valid crosses, hashing with bucket counts and keys, error conditions,
+  # and invalid raw kernel arguments.
 
   @parameterized.named_parameters([
       dict(
@@ -299,6 +318,15 @@ class RaggedCrossOpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
                       expected=None,
                       expected_hashed=None,
                       matches_sparse_cross=True):
+    # [FUNCTION DOC]
+    # Test: computes both the plain cross and the hashed cross of the given inputs and checks
+    # them. Inputs: inputs (list of ragged, dense or sparse tensors), num_buckets (hash bucket
+    # count, 0 means no modulo), hash_key (optional hash seed), expected (expected plain cross
+    # of strings), expected_hashed (expected hashed cross) and matches_sparse_cross (whether
+    # results should also equal the sparse cross ops; false when sparse does not preserve
+    # input order or treats a zero key as unset). Asserts equality with each expectation that
+    # is given and, when allowed, that the ragged results equal the sparse cross results
+    # converted to ragged form. Returns nothing.
     ragged_cross = ragged_array_ops.cross(inputs)
     ragged_cross_hashed = ragged_array_ops.cross_hashed(inputs, num_buckets,
                                                         hash_key)
@@ -324,6 +352,11 @@ class RaggedCrossOpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
           ragged_tensor.RaggedTensor.from_sparse(sparse_cross_hashed))
 
   def testRaggedCrossLargeBatch(self):
+    # [FUNCTION DOC]
+    # Test: crosses a ragged integer input, a ragged bytes input, a dense input and a sparse
+    # input, each repeated for a batch of 5000 rows. Expects every row to contain the six
+    # string combinations in order. Compares plain lists (not the framework assertion) to avoid
+    # a very slow failure message builder. Returns nothing.
     batch_size = 5000
     inputs = [
         ragged_const([[1, 2, 3]] * batch_size),
@@ -377,6 +410,12 @@ class RaggedCrossOpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       ),
   ])
   def testStaticError(self, inputs, exception=ValueError, message=None):
+    # [FUNCTION DOC]
+    # Test: expects the ragged cross op to reject invalid inputs at construction time. Inputs:
+    # inputs (list of tensors: unsupported float dtype, mismatched static batch sizes, or
+    # dense tensors of rank other than two), exception (expected error type or tuple of types,
+    # default value error) and message (regular expression the error text must match).
+    # Returns nothing.
     with self.assertRaisesRegex(exception, message):
       ragged_array_ops.cross(inputs)
 
@@ -413,14 +452,28 @@ class RaggedCrossOpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
                        exception=errors.InvalidArgumentError,
                        message=None,
                        signature=None):
+    # [FUNCTION DOC]
+    # Test: wraps the ragged cross op in a compiled function (optionally with an input
+    # signature of unknown-shape integer tensors) and expects an error when it runs with
+    # inputs of the wrong rank. Inputs: inputs (list of tensors), exception (expected error
+    # type or tuple, default invalid-argument error), message (regular expression to match) and
+    # signature (optional input signature list). Returns nothing.
     @def_function.function(input_signature=signature)
     def fn(x):
+      # [FUNCTION DOC]
+      # Nested function under test: applies the ragged cross op to the list of inputs x and
+      # returns the resulting ragged tensor of strings.
       return ragged_array_ops.cross(x)
 
     with self.assertRaisesRegex(exception, message):
       self.evaluate(fn(inputs))
 
   def _ragged_to_sparse(self, t):
+    # [FUNCTION DOC]
+    # HELPER: test helper that converts a cross input to a form the sparse cross op accepts.
+    # Input: t, a ragged tensor, sparse tensor value or dense value. Ragged inputs are
+    # converted to sparse tensors, sparse values become sparse tensors, and anything else is
+    # converted to a dense tensor. Returns the converted tensor.
     if ragged_tensor.is_ragged(t):
       return ragged_tensor.convert_to_tensor_or_ragged_tensor(t).to_sparse()
     elif sparse_tensor.is_sparse(t):
@@ -429,6 +482,10 @@ class RaggedCrossOpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       return ops.convert_to_tensor(t)
 
   def testSparseValuesAndIndicesMustMatch(self):
+    # [FUNCTION DOC]
+    # Test: calls the raw ragged cross kernel with one sparse index but no sparse values and
+    # expects an error saying sparse indices and values must have the same length (value or
+    # invalid-argument error). Returns nothing.
     with self.assertRaisesRegex(
         (ValueError, errors.InvalidArgumentError),
         'sparse indices and values must have the same length'):
@@ -447,6 +504,10 @@ class RaggedCrossOpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
           out_row_splits_type=dtypes.int64))
 
   def testRaggedValuesAndSplitsMustMatch(self):
+    # [FUNCTION DOC]
+    # Test: calls the raw ragged cross kernel with one ragged values input but no row splits
+    # and expects an error saying ragged values and splits must have the same length (value or
+    # invalid-argument error). Returns nothing.
     with self.assertRaisesRegex(
         (ValueError, errors.InvalidArgumentError),
         'ragged values and splits must have the same length'):
@@ -473,6 +534,11 @@ class RaggedCrossOpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       dict(testcase_name='UnsortedSplits', ragged_splits=[0, 2, 2, 1]),
   ])
   def testRaggedCrossInvalidRaggedSplits(self, ragged_splits):
+    # [FUNCTION DOC]
+    # Test (regression for a reported GitHub issue): feeds the raw ragged cross kernel three
+    # string values with invalid row splits (empty, negative, beyond the value count, or
+    # unsorted) and expects an error mentioning invalid ragged splits. Input: ragged_splits,
+    # the list of split offsets. Returns nothing.
     # Test case in GitHub isseu 59114.
     with self.assertRaisesRegex(
         (ValueError, errors.InvalidArgumentError), 'Invalid ragged splits'

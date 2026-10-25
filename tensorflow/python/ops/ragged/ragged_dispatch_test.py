@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Unit tests for operator dispatch of standard TensorFlow ops onto ragged tensors. Verifies
+# that unary, binary and list-valued elementwise ops, assert ops, array, math, string and
+# shape ops produce results consistent with running the op on dense flat values, that
+# broadcasting and row-splits dtypes behave, that errors are raised for invalid combinations,
+# and that the generated list of ragged-supported ops (ragged_op_list) contains expected
+# entries. Provides a single test class that runs in graph and eager modes.
+
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -52,8 +60,19 @@ from tensorflow.python.util import nest
 
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedDispatchTest(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for ragged tensor dispatch of ops. Runs in graph and eager modes. Most tests
+  # are parameterized over many ops and input shapes, and compare the result of running an op
+  # on ragged inputs against running it on the dense flat values. Includes a custom assertion
+  # for matching (ragged) shapes and one for comparing dynamic ragged shapes.
 
   def assertSameShape(self, x, y):
+    # [FUNCTION DOC]
+    # HELPER: custom assertion used by the elementwise tests.
+    # Checks that x and y have the same shape. If x is ragged, y must be ragged with the same
+    # ragged rank, equal nested row splits, and equal flat values shapes. Otherwise y must be
+    # a dense tensor with the same shape as x. Fails the test through assertions; returns
+    # nothing.
     """Checks that x and y have the same shape (including ragged shapes)."""
     if ragged_tensor.is_ragged(x):
       self.assertTrue(ragged_tensor.is_ragged(y))
@@ -222,6 +241,14 @@ class RaggedDispatchTest(test_util.TensorFlowTestCase, parameterized.TestCase):
                              op=math_ops.abs,
                              expected_dtype=None,
                              **extra_args):
+    # [FUNCTION DOC]
+    # Test: applies a unary elementwise op to a (possibly ragged) input. Inputs: x (scalar,
+    # nested list, or ragged value), op (default absolute value), expected_dtype (optional)
+    # and extra keyword arguments forwarded to the op (such as clip bounds, dtype, patterns,
+    # seeds or rates). Sets the global random seed before each call so random ops are
+    # repeatable. Runs the op on the ragged input and on its dense flat values, then asserts
+    # that the result has the same shape as the input, that flattened values are equal, and
+    # that the result dtype matches expected_dtype when given. Returns nothing.
     x = ragged_tensor.convert_to_tensor_or_ragged_tensor(x)
     random_seed.set_random_seed(1234)
     result = op(x, **extra_args)
@@ -356,9 +383,22 @@ class RaggedDispatchTest(test_util.TensorFlowTestCase, parameterized.TestCase):
            'use_kwargs': {'x': 'labels', 'y': 'logits'}},
       ])  # pyformat: disable
   def testBinaryElementwiseOp(self, x, y, op=math_ops.add, **extra_args):
+    # [FUNCTION DOC]
+    # Test: applies a binary elementwise op (default addition) to two inputs that may be
+    # scalars, lists or ragged values, with and without broadcasting and with positional or
+    # keyword arguments. Inputs: x, y, op and extra keyword arguments; an optional
+    # use_kwargs mapping (removed from the extra arguments) names the keyword under which x
+    # and/or y are passed. Compares the flattened result with the op applied to dense flat
+    # values and asserts the result has the same shape as y. Returns nothing.
     use_kwargs = extra_args.pop('use_kwargs', {})
 
     def compute(x, y):
+      # [FUNCTION DOC]
+      # HELPER: invokes the op under test with the arguments passed positionally or by keyword
+      # according to the use_kwargs mapping. Inputs: x and y, the operands. Side effect: stores
+      # the operands into the enclosing extra arguments mapping when keywords are used.
+      # Asserts (raises an assertion error) if only x is requested by keyword. Returns the op
+      # result.
       if 'x' in use_kwargs and 'y' in use_kwargs:
         extra_args[use_kwargs['x']] = x
         extra_args[use_kwargs['y']] = y
@@ -486,9 +526,19 @@ class RaggedDispatchTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       ])  # pyformat: disable
   def testBinaryAssertOp(self, x, y, op=check_ops.assert_equal_v2,
                          **extra_args):
+    # [FUNCTION DOC]
+    # Test: checks that binary assertion ops (equal, none-equal, comparisons) give the same
+    # pass or fail outcome on ragged inputs as on the corresponding dense flat values.
+    # Inputs: x, y (ragged or dense values), op (default assert-equal) and unused extra
+    # arguments. Returns nothing; asserts the two outcomes are equal.
     """Test the binary assert functions for ragged tensors."""
 
     def check_binary_assert_pass(assert_op, x, y):
+      # [FUNCTION DOC]
+      # HELPER: runs an assertion op and reports whether it passed. Inputs: assert_op, x, y.
+      # In graph mode evaluates a tensor under a control dependency on the assertion result so
+      # the check actually executes. Catches value errors and invalid-argument errors as a
+      # failed assertion. Returns true if no such error occurred, otherwise false.
       assert_passed = True
       try:
         result = assert_op(x, y)
@@ -550,6 +600,13 @@ class RaggedDispatchTest(test_util.TensorFlowTestCase, parameterized.TestCase):
                                   inputs,
                                   op=math_ops.add_n,
                                   **extra_args):
+    # [FUNCTION DOC]
+    # Test: applies an op that takes a list of tensors (default add-n; also string join) to a
+    # tuple of scalars, lists or ragged values. Inputs: inputs (tuple of operands), op, extra
+    # keyword arguments, and an optional use_kwargs flag (removed from extra arguments) to pass
+    # the list by keyword. Compares the flattened result with the op applied to the dense flat
+    # values of each input and asserts the result has the same shape as the first input.
+    # Returns nothing.
     use_kwargs = extra_args.pop('use_kwargs', False)
     if use_kwargs:
       result = op(inputs=inputs, **extra_args)
@@ -574,6 +631,11 @@ class RaggedDispatchTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertAllEqual(expected_flat_values, result_flat_values)
 
   def testAllElementwiseOpsAreIncludedInRaggedTensorTestOps(self):
+    # [FUNCTION DOC]
+    # Test (coverage guard): collects all registered unary and binary elementwise dispatch
+    # APIs and subtracts those listed in the shared test-op lists and in a local list of ops
+    # with bespoke tests. Asserts the remaining set is empty, with a message telling developers
+    # to add new ops to the shared test ops module or this file. Returns nothing.
     other_tested_ops = [
         # Elementwise ops that have explicit/bespoke test cases in this file.
         string_ops.string_to_hash_bucket,
@@ -623,6 +685,10 @@ class RaggedDispatchTest(test_util.TensorFlowTestCase, parameterized.TestCase):
         ' add them to ragged_tensor_test_ops.py or ragged_dispatch_test.py')
 
   def testElementwiseOpUnknownRankError(self):
+    # [FUNCTION DOC]
+    # Test: in graph mode only (returns immediately when executing eagerly), adds a ragged
+    # tensor to a ragged tensor whose values have unknown rank and expects a value error
+    # saying it is unable to broadcast because of unknown rank. Returns nothing.
     if context.executing_eagerly():
       return
     x = ragged_factory_ops.constant([[1, 2], [3]])
@@ -649,6 +715,10 @@ class RaggedDispatchTest(test_util.TensorFlowTestCase, parameterized.TestCase):
           expected=[[[2]]]),
   ])
   def testElementwiseOpBroadcast(self, x, y, expected):
+    # [FUNCTION DOC]
+    # Test: adds two operands that need broadcasting (ragged with dense, ragged with ragged
+    # of different ragged ranks). Inputs: x, y (converted to 32-bit integer tensors or ragged
+    # tensors) and expected (nested list). Asserts the sum equals expected. Returns nothing.
     x = ragged_tensor.convert_to_tensor_or_ragged_tensor(x, dtype=dtypes.int32)
     y = ragged_tensor.convert_to_tensor_or_ragged_tensor(y, dtype=dtypes.int32)
     result = x + y
@@ -682,6 +752,11 @@ class RaggedDispatchTest(test_util.TensorFlowTestCase, parameterized.TestCase):
   ])
   def testElementwiseOpBroadcastTensorAndRaggedTensor(
       self, x, y, expected, expected_row_splits_dtype):
+    # [FUNCTION DOC]
+    # Test: adds a dense one-element list to a ragged tensor (either operand order) whose row
+    # splits use 32-bit or 64-bit integers. Inputs: x, y, expected (nested list) and
+    # expected_row_splits_dtype. Asserts the sum equals expected and the result keeps the
+    # ragged operand's row splits dtype. Returns nothing.
     x = ragged_tensor.convert_to_tensor_or_ragged_tensor(x, dtype=dtypes.int32)
     y = ragged_tensor.convert_to_tensor_or_ragged_tensor(y, dtype=dtypes.int32)
     result = x + y
@@ -689,12 +764,18 @@ class RaggedDispatchTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqual(result.row_splits.dtype, expected_row_splits_dtype)
 
   def testElementwiseOpShapeMismatch(self):
+    # [FUNCTION DOC]
+    # Test: adds two ragged tensors with the same number of rows but different row lengths
+    # and expects a value error or invalid-argument error when evaluated. Returns nothing.
     x = ragged_factory_ops.constant([[1, 2, 3], [4, 5]])
     y = ragged_factory_ops.constant([[1, 2, 3], [4, 5, 6]])
     with self.assertRaises((ValueError, errors.InvalidArgumentError)):
       self.evaluate(math_ops.add(x, y))
 
   def testBinaryOpSparseAndRagged(self):
+    # [FUNCTION DOC]
+    # Test: mixing a ragged tensor with a sparse tensor in addition, and in add-n, must raise a
+    # type error or value error. Returns nothing.
     x = ragged_factory_ops.constant([[1, 2, 3], [4, 5]])
     y = sparse_tensor.SparseTensor([[0, 0], [0, 1], [2, 0]], [1, 2, 3], [3, 2])
     with self.assertRaises((TypeError, ValueError)):
@@ -1143,6 +1224,14 @@ class RaggedDispatchTest(test_util.TensorFlowTestCase, parameterized.TestCase):
                          result_is_list=False,
                          rtol=None,
                          kwargs=None):
+    # [FUNCTION DOC]
+    # Test: calls a wide range of non-elementwise ops (array, math, string, reduction, shape
+    # and segment ops) with ragged arguments and compares the result to an expected value.
+    # Inputs: op, expected, args (positional arguments), kwargs (keyword arguments),
+    # result_is_list (expect a list of results compared pairwise) and rtol (relative tolerance;
+    # if given uses approximate comparison). Arguments, keywords and expected values may be
+    # given as callables that are invoked late because they create tensors. If expected is a
+    # dynamic ragged shape, compares using the shape-specific assertion. Returns nothing.
     # For some tests, the inputs/outputs to the function need to be
     # constructed late, because they contain tensors.
     if callable(kwargs):
@@ -1169,6 +1258,11 @@ class RaggedDispatchTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       assert_fn(result, expected)
 
   def testTensorEquals(self):
+    # [FUNCTION DOC]
+    # Test: checks equality operators on ragged tensors. When version-2 behavior and eager
+    # execution outside functions are enabled, expects value-based elementwise equality and
+    # inequality (including broadcasting against a scalar) and false and true respectively for
+    # shapes that cannot broadcast. Otherwise expects identity-based equality. Returns nothing.
     a = ragged_factory_ops.constant([[1, 2], [3]])
     b = ragged_factory_ops.constant([[4, 5], [3]])
     c = 2
@@ -1197,6 +1291,10 @@ class RaggedDispatchTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       self.assertAllEqual(math_ops.tensor_not_equals(a, b), True)
 
   def testUnaryElementwiseOpsPreserveUniformRowLength(self):
+    # [FUNCTION DOC]
+    # Test: builds a ragged tensor with uniform row length and checks that a unary elementwise
+    # op (zeros-like) and a list-valued op (add-n) keep the same uniform row length value.
+    # Returns nothing.
     # Unary elementwise op
     rt = ragged_tensor.RaggedTensor.from_uniform_row_length(
         ragged_factory_ops.constant([[1, 2], [3]]), uniform_row_length=2)
@@ -1210,6 +1308,11 @@ class RaggedDispatchTest(test_util.TensorFlowTestCase, parameterized.TestCase):
                         math_ops.add_n([rt, rt]).uniform_row_length)
 
   def test_ragged_op_list(self):
+    # [FUNCTION DOC]
+    # Test: verifies the generated op list. Calls the op list generator for version 1 and
+    # version 2 and asserts that ops supported in both versions appear in both outputs, that
+    # the batch-gather op appears only in version 1, and that the softmax op appears only in
+    # version 2. Returns nothing.
     # Ops that should be listed as supported in both v1 and v2.
     supported_ops = [
         'bitcast', 'bitwise.bitwise_and', 'bitwise.bitwise_or',
@@ -1275,6 +1378,9 @@ class RaggedDispatchTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       self.assertNotIn('`tf.' + element + '`', v2_ragged_ops)
 
   def testDispatchWithVariable(self):
+    # [FUNCTION DOC]
+    # Test: adds a ragged tensor and a scalar variable (initializing variables first in graph
+    # mode) and asserts the elementwise sum with the variable's value of ten. Returns nothing.
     x = ragged_factory_ops.constant([[1, 2], [3, 4, 5]])
     v = variables.Variable(10)
     if not context.executing_eagerly():
@@ -1282,6 +1388,10 @@ class RaggedDispatchTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertAllEqual(math_ops.add(x, v), [[11, 12], [13, 14, 15]])
 
   def testAssertType(self):
+    # [FUNCTION DOC]
+    # Test: runs the type assertion op on a float ragged tensor under a control dependency and
+    # asserts the identity of the tensor equals the original, i.e. the check passes. Returns
+    # nothing.
     x = ragged_factory_ops.constant([[1., 2.], [3.]])
     with ops.control_dependencies(
         [check_ops.assert_type(x, dtypes.float32)]):
@@ -1289,6 +1399,11 @@ class RaggedDispatchTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertAllEqual(x, y)
 
   def assertDynamicRaggedShapeEqual(self, expected, result):
+    # [FUNCTION DOC]
+    # HELPER: custom assertion for the dispatch tests. Inputs: expected and result, dynamic
+    # ragged shapes. Asserts the result is a dynamic ragged shape, its type spec is compatible
+    # with the expected one, and the flattened component tensors of both are pairwise equal.
+    # Returns nothing.
     self.assertIsInstance(result, DynamicRaggedShape)
     self.assertTrue(expected._type_spec.is_compatible_with(result))
     for (e, r) in zip(

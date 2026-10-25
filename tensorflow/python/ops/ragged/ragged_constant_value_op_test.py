@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Unit tests for the ragged factory function that builds ragged tensor values (numpy-backed
+# ragged values rather than graph tensors) from nested Python lists and numpy arrays.
+# Exposes one parameterized test class covering successful conversions (shape, dtype,
+# ragged_rank and inner_shape handling, empty lists, numpy array elements) and error cases,
+# plus a private helper that normalizes nested numpy arrays into plain lists for comparison.
+# No import-time side effects other than decorating the test class; run via googletest main.
+
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,6 +35,11 @@ from tensorflow.python.platform import googletest
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedConstantValueOpTest(test_util.TensorFlowTestCase,
                                 parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case for the constant_value factory in the ragged factory ops module.
+  # Runs in both graph and eager modes (via the class decorator). Each test receives a nested
+  # Python list or numpy array plus optional dtype, ragged_rank and inner_shape settings, and
+  # checks the resulting value's shape, dtype, ragged rank, and list round trip, or the error.
   @parameterized.parameters(
       #=========================================================================
       # 0-dimensional tensors.
@@ -187,6 +200,14 @@ class RaggedConstantValueOpTest(test_util.TensorFlowTestCase,
                        inner_shape=None,
                        expected_shape=None,
                        expected_dtype=None):
+    # [FUNCTION DOC]
+    # Test: builds a ragged value from the given nested list/array using the optional dtype,
+    # ragged_rank and inner_shape, then verifies it. Inputs: pylist (nested list, numpy array
+    # or scalar), dtype, ragged_rank, inner_shape, expected_shape (tuple with None for ragged
+    # dims) and expected_dtype, all optional. Asserts the dtype (expected_dtype if given, else
+    # dtype), the ragged rank (zero if the result is a plain array), the inner shape of the
+    # flat values, the overall shape, and that converting back to a list equals the normalized
+    # input (scalars are compared directly). Returns nothing; fails via assertions.
     """Tests that `ragged_value(pylist).to_list() == pylist`."""
     rt = ragged_factory_ops.constant_value(
         pylist, dtype=dtype, ragged_rank=ragged_rank, inner_shape=inner_shape)
@@ -306,6 +327,12 @@ class RaggedConstantValueOpTest(test_util.TensorFlowTestCase,
                             inner_shape=None,
                             exception=None,
                             message=None):
+    # [FUNCTION DOC]
+    # Test: calls the ragged constant_value factory with invalid arguments and expects an
+    # exception. Inputs: pylist (invalid nested list or scalar), optional dtype, ragged_rank,
+    # inner_shape, the expected exception type and a regular expression the error message must
+    # match (cases cover incompatible ragged_rank or inner_shape, negative ragged_rank,
+    # inconsistent nesting depth and inconsistent inner shapes). Returns nothing.
     """Tests that `constant_value()` raises an expected exception."""
     self.assertRaisesRegex(
         exception,
@@ -318,6 +345,14 @@ class RaggedConstantValueOpTest(test_util.TensorFlowTestCase,
 
 
 def _normalize_pylist(item):
+  # [FUNCTION DOC]
+  # HELPER: test helper for the constant_value tests, to compare against to_list results.
+  # KNOWN ISSUE: the inner conditional in the final comprehension tests the container item
+  # rather than each element, so it is always true for list/array input; it only works because
+  # the recursive call returns non-list elements unchanged.
+  # Recursively converts numpy arrays inside a nested structure into plain lists. Input: item,
+  # any value. Returns the item unchanged if it is neither a list nor a numpy array; otherwise
+  # returns a new list with each element normalized recursively. No side effects.
   """Convert all (possibly nested) np.arrays contained in item to list."""
   # convert np.arrays in current level to list
   if not isinstance(item, (list, np.ndarray)):
