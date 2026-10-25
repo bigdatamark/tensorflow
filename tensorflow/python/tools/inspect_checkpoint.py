@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Command-line tool for inspecting checkpoint files: lists tensor names, shapes and types, prints
+# the values of one or all tensors, and reports the total parameter count (optionally excluding
+# tensors whose names match a pattern). Exposes the printing function and a parser for numpy
+# print options. Keeps a module-level flags holder that is filled only when run as a script.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,6 +33,13 @@ FLAGS = None
 
 
 def _count_total_params(reader, count_exclude_pattern=""):
+  # [FUNCTION DOC]
+  # HELPER: computes the parameter total reported by the checkpoint printing function.
+  # Inputs: reader, a checkpoint reader object; count_exclude_pattern, optional regular expression
+  # string (default empty, meaning no exclusion). Gets the variable-name to shape mapping; if a
+  # pattern is given, tensors whose names match are dropped and a line reporting how many tensors
+  # and parameters were excluded is printed. Returns the sum of element counts (product of each
+  # shape) of the remaining tensors as an integer. Raises a regex error for an invalid pattern.
   """Count total number of variables."""
   var_to_shape_map = reader.get_variable_to_shape_map()
 
@@ -54,6 +66,20 @@ def _count_total_params(reader, count_exclude_pattern=""):
 def print_tensors_in_checkpoint_file(file_name, tensor_name, all_tensors,
                                      all_tensor_names=False,
                                      count_exclude_pattern=""):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the whole body is wrapped in a catch-all handler that prints the error text
+  # instead of raising, so failures (missing file, corrupted data) never propagate to callers.
+  # KNOWN ISSUE: in the data-loss handler, the loop variable of the generator shadows the caught
+  # exception name; harmless here but confusing.
+  # Opens the checkpoint at file_name. If all_tensors or all_tensor_names is true, prints every
+  # tensor's name, type and shape in sorted order, plus its value when all_tensors is true
+  # (values that cannot convert to a numpy type print a placeholder message). Else if tensor_name
+  # is empty, prints the reader's debug string. Else prints the single named tensor's name, type,
+  # shape and value, or a not-found message and returns early (without the parameter count).
+  # Afterwards prints the total parameter count, honoring count_exclude_pattern (regex string,
+  # default empty). Any exception is printed; hints are added for compressed-block errors and, for
+  # data-loss errors on names ending in index/meta/data, a suggestion to use the V2 filename
+  # prefix. Returns nothing.
   """Prints tensors in a checkpoint file.
 
   If no `tensor_name` is provided, prints the tensor names and shapes
@@ -113,6 +139,16 @@ inspect checkpoint --file_name = {}"""
 
 
 def parse_numpy_printoption(kv_str):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the value-conversion error handler reads a message attribute of the exception,
+  # which does not exist in Python 3, so a bad value raises an attribute error instead of the
+  # intended argument-type error.
+  # Argument type converter for the printoptions flag. Splits the text at the first equals sign
+  # into an option name and value string, looks the option up in numpy's current print options,
+  # converts the value to that option's type (booleans use the flags boolean parser), and applies
+  # it globally with the numpy print-options setter. Raises an argument-type error if the text is
+  # not in key=value form, the key is unknown, or the option's current type is the null type
+  # (unsupported). Returns nothing; mutates global numpy print settings.
   """Sets a single numpy printoption from a string of the form 'x=y'.
 
   See documentation on numpy.set_printoptions() for details about what values
@@ -146,6 +182,11 @@ def parse_numpy_printoption(kv_str):
 
 
 def main(unused_argv):
+  # [FUNCTION DOC]
+  # Application main; the argument is ignored. If the file_name flag is empty, prints a usage
+  # message and exits with status 1. Otherwise calls the checkpoint printing function with the
+  # file name, tensor name, all-tensors and all-tensor-names flags and the count exclusion pattern.
+  # Relies on the module-level flags holder being set by the script block.
   if not FLAGS.file_name:
     print(
         "Usage: inspect_checkpoint --file_name=checkpoint_file_name "

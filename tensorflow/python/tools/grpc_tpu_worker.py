@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Executable script that starts a blocking TensorFlow GRPC server on a Cloud TPU worker host.
+# It reads instance metadata from the Google Cloud metadata service, sets the TPU-related
+# environment variables (before TensorFlow is imported by the app runner), builds a server
+# definition for a single local task and joins the server forever. No import-time side effects
+# beyond imports; the work happens in the run entry point when executed as a script.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,6 +43,12 @@ from tensorflow.python.training import server_lib
 
 
 def get_metadata(key):
+  # [FUNCTION DOC]
+  # HELPER: reads Google Cloud instance attributes for the TPU environment setup.
+  # Performs an HTTP request to the metadata server for the instance attribute with the given
+  # name (a string), sending the required vendor header, and returns the response body as text.
+  # Raises whatever the HTTP library raises on connection failure; no status check is made, so an
+  # error page would be returned as text.
   return requests.get(
       'http://metadata.google.internal/computeMetadata'
       '/v1/instance/attributes/{}'.format(key),
@@ -46,6 +58,10 @@ def get_metadata(key):
 
 
 def get_host_ip():
+  # [FUNCTION DOC]
+  # HELPER: looks up this host's address for the TPU hostname override.
+  # Takes no inputs. Queries the metadata server for the internal IP of the first network
+  # interface and returns it as text. Raises on connection failure; the status is not checked.
   return requests.get(
       'http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/ip',
       headers={
@@ -54,6 +70,15 @@ def get_host_ip():
 
 
 def setup_env_vars():
+  # [FUNCTION DOC]
+  # HELPER: prepares process environment variables required by the TPU runtime.
+  # Takes no inputs and returns nothing. Reads the worker number, accelerator type and worker
+  # network endpoints from instance metadata, then sets environment variables for log level, task
+  # id, device locking, mesh controller address (taken from the first endpoint's address plus port
+  # 8476) and port. For accelerator types other than the v4 and v5 families, it also sets the
+  # chips-per-host bounds and host bounds from a fixed table of v2/v3 slice sizes; an unknown type
+  # in that case raises a key error. Finally sets the hostname override to the host IP.
+  # Mutates os.environ and makes network calls.
   """Set environment variables."""
   worker_id = get_metadata('agent-worker-number')
   accelerator_type = get_metadata('accelerator-type')
@@ -98,6 +123,12 @@ def setup_env_vars():
 
 
 def main(unused_args):
+  # [FUNCTION DOC]
+  # Application main for the worker. The argument (remaining command-line args) is ignored.
+  # Builds a server definition using the grpc protocol with one job named tpu_worker containing a
+  # single task at localhost on the port from the TPU_TASK_PORT environment variable (default
+  # 8470 when unset or empty), creates a TensorFlow server with a default configuration and blocks
+  # forever in its join call. Does not return normally.
   # Create Protobuf ServerDef.
   server_def = tensorflow_server_pb2.ServerDef(protocol='grpc')
   job_def = server_def.cluster.job.add()
@@ -119,6 +150,12 @@ def main(unused_args):
 
 
 def run():
+  # [FUNCTION DOC]
+  # Script entry point. Parses known command-line arguments (none are defined; the rest are kept),
+  # sets up TPU environment variables first (they must exist before TensorFlow's app runner is
+  # imported), then imports the platform app module lazily and runs main with the program name
+  # plus the unparsed arguments. Returns nothing; side effects are environment changes and the
+  # blocking server.
   parser = argparse.ArgumentParser()
 
   _, unparsed = parser.parse_known_args()

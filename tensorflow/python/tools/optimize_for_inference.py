@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Command-line front end for graph optimization for inference. Loads a binary (frozen) or text
+# GraphDef, calls the optimization routine from the optimize_for_inference_lib module with the
+# input/output node names, placeholder types, toco-compatibility flag and placeholder-to-constant
+# list, and writes the result to the output path. Exposes main, a parser for flags and a helper
+# to parse placeholder types; the flags holder is filled only when run as a script.
 # pylint: disable=g-bad-file-header
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
@@ -72,6 +78,17 @@ FLAGS = None
 
 
 def main(unused_args):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: in the frozen-graph branch the output file is opened and written but never
+  # closed explicitly, so data may not be flushed until the object is garbage collected.
+  # KNOWN ISSUE: returns -1 when the input is missing, but the app runner does not use main's
+  # return value as an exit code the way a plain script would imply.
+  # Application main; the argument is ignored. Reads the file named by the input flag (printing a
+  # message and returning -1 if it does not exist), parsing it as a binary GraphDef when the
+  # frozen-graph flag is set, else as text. Runs the optimizer with comma-split input names and
+  # output names, parsed placeholder type(s), the toco-compatible flag and the comma-split
+  # placeholder-to-constant names. Writes the serialized result to the output flag path (frozen
+  # case) or writes a graph file via the graph writer (text case). Returns 0 on success.
   if not gfile.Exists(FLAGS.input):
     print("Input graph file '" + FLAGS.input + "' does not exist!")
     return -1
@@ -104,12 +121,23 @@ def main(unused_args):
 
 
 def _parse_placeholder_types(values):
+  # [FUNCTION DOC]
+  # HELPER: converts the placeholder type flag for the optimization call.
+  # Takes a comma-separated string of integer type enum values. Returns a single integer if only
+  # one value is present, otherwise a list of integers. Raises a value error for non-integer text.
   """Extracts placeholder types from a comma separate list."""
   values = [int(value) for value in values.split(",")]
   return values if len(values) > 1 else values[0]
 
 
 def parse_args():
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the toco_compatible flag uses the plain bool converter, so any non-empty text
+  # (including the word false) on the command line becomes true.
+  # Builds the argument parser defining the input, output, input_names, output_names, frozen_graph
+  # (default true), placeholder_type_enum (default float32 enum), toco_compatible (default false)
+  # and placeholder_to_const_names flags, and parses the process arguments. Returns a pair of the
+  # parsed namespace and the list of unrecognized arguments. May exit on parse errors.
   """Parses command line arguments."""
   parser = argparse.ArgumentParser()
   parser.register("type", "bool", lambda v: v.lower() == "true")

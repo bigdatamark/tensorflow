@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Library of graph transformations that prepare a frozen GraphDef for inference: converting
+# selected placeholders to constants, stripping unused nodes, removing training-only nodes, fusing
+# decomposed batch normalization into a fused op, folding batch normalization into convolution
+# weights, and fusing resize/mirror-pad into convolutions. The main entry point is the
+# optimize_for_inference function; the rest are individual passes and graph helpers (node name
+# parsing, node lookup, constant extraction). Module-level tables describe batch-norm input
+# order, epsilon attribute names and default placeholder names to convert. Used by the
+# optimize_for_inference command-line tool. Import-time: binds the flags module and flag holder.
 # pylint: disable=g-bad-file-header
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
@@ -106,6 +115,17 @@ def optimize_for_inference(
     toco_compatible: bool = False,
     placeholder_to_const_names=None,
 ) -> graph_pb2.GraphDef:
+  # [FUNCTION DOC]
+  # Main entry point. Validates the input graph, then applies in order: conversion of selected
+  # placeholders to constants, removal of nodes not needed between the given inputs and outputs
+  # (with the given placeholder type enum), removal of training-only nodes, fusion of decomposed
+  # batch norm into fused batch norm, folding of batch norm into convolutions, and (only when
+  # toco_compatible is false) fusion of resize/mirror-pad into convolutions; then validates again.
+  # Inputs: input_graph_def (graph definition message), input_node_names and output_node_names
+  # (sequences of node name strings), placeholder_type_enum (integer type enum or list of them),
+  # toco_compatible (boolean, default false), placeholder_to_const_names (optional list of
+  # "name=value" strings). Returns the optimized graph definition. Raises a value error if either
+  # the input or the final graph is inconsistent, or a pass finds duplicate node names.
   """Applies a series of inference optimizations on the input graph.
 
   Args:
@@ -149,6 +169,13 @@ def optimize_for_inference(
 
 
 def strtobool(val_str):
+  # [FUNCTION DOC]
+  # HELPER: interprets the default values used by the placeholder-to-constant conversion.
+  # KNOWN ISSUE: the docstring says it returns the boolean equivalent, but unrecognized text
+  # silently returns false after a warning; the warning call also passes the offending value as a
+  # separate argument to a message without a formatting slot, so the logger formatting may fail.
+  # Returns true for the strings True/true, false for False/false, and false (with a warning) for
+  # anything else.
   """Return boolean value of it's equivalent string representation"""
   if val_str in ("True", "true"):
     return True
@@ -164,6 +191,12 @@ def strtobool(val_str):
 
 
 def parse_entry(entry):
+  # [FUNCTION DOC]
+  # HELPER: parses one placeholder-to-constant entry.
+  # KNOWN ISSUE: splits on every equals sign and uses only the second piece, so a value containing
+  # an equals sign is truncated; the value is not stripped of blanks, unlike the key.
+  # Takes a string such as name=value. Returns a pair of key (blank-stripped) and value, or a pair
+  # of null values if there is no equals sign.
   """Parse a "key=value" pair separated by '='
 
   eg: var_name=False
@@ -178,6 +211,10 @@ def parse_entry(entry):
 
 
 def parse_nodes_dict(nodes):
+  # [FUNCTION DOC]
+  # HELPER: builds the placeholder-to-constant mapping.
+  # Takes a list of name=value strings (or null/empty) and returns a mapping from names to value
+  # strings; entries without an equals sign are ignored, later duplicates overwrite earlier ones.
   """Parse a series of key-value pairs and return a dictionary"""
   d = {}
 
@@ -190,6 +227,11 @@ def parse_nodes_dict(nodes):
 
 
 def ensure_graph_is_valid(graph_def: graph_pb2.GraphDef) -> None:
+  # [FUNCTION DOC]
+  # HELPER: validation guard run before and after optimization.
+  # Builds a name-to-node mapping of the graph definition and checks that all names are unique and
+  # that every input reference (after stripping control and port decorations) names an existing
+  # node. Raises a value error on a duplicate name or a missing input node. Returns nothing.
   """Makes sure that the graph is internally consistent.
 
   Checks basic properties of the graph def and raises an exception if there are
@@ -215,6 +257,10 @@ def ensure_graph_is_valid(graph_def: graph_pb2.GraphDef) -> None:
 
 
 def node_name_from_input(node_name: str) -> str:
+  # [FUNCTION DOC]
+  # HELPER: normalizes graph input references used throughout the passes.
+  # Takes an input string, removes a leading control-dependency caret and a trailing colon plus
+  # output index, and returns the plain node name. Pure function.
   """Strips off ports and other decorations to get the underlying node name."""
   if node_name.startswith("^"):
     node_name = node_name[1:]
@@ -227,6 +273,11 @@ def node_name_from_input(node_name: str) -> str:
 def node_from_map(
     node_map: Mapping[str, node_def_pb2.NodeDef], name: str
 ) -> node_def_pb2.NodeDef:
+  # [FUNCTION DOC]
+  # HELPER: node lookup used by the graph passes.
+  # Takes a mapping from node names to node definitions and a name (possibly with port or control
+  # decoration), strips the decoration and returns the matching node definition. Raises a value
+  # error if the node is missing, so it never returns the null value.
   """Pulls a node def from a dictionary for a given name.
 
   Args:
@@ -246,6 +297,10 @@ def node_from_map(
 
 
 def values_from_const(node_def: node_def_pb2.NodeDef) -> np.ndarray:
+  # [FUNCTION DOC]
+  # HELPER: reads constant data for the graph passes.
+  # Takes a node definition that must be a constant op and returns its value attribute converted
+  # to a numpy array. Raises a value error (including the node text) if the op is not a constant.
   """Extracts the values from a const NodeDef as a numpy ndarray.
 
   Args:
@@ -269,12 +324,29 @@ def values_from_const(node_def: node_def_pb2.NodeDef) -> np.ndarray:
 
 # Whether to scale by gamma after normalization.
 def scale_after_normalization(node: node_def_pb2.NodeDef) -> bool:
+  # [FUNCTION DOC]
+  # HELPER: batch-norm folding support.
+  # Returns the scale-after-normalization attribute of a global-normalization batch norm node;
+  # for any other batch norm op type (fused variants) always returns true.
   if node.op == "BatchNormWithGlobalNormalization":
     return node.attr["scale_after_normalization"].b
   return True
 
 
 def fold_batch_norms(input_graph_def: graph_pb2.GraphDef) -> graph_pb2.GraphDef:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the rewiring step replaces the weights input of the original convolution node in
+  # place, which mutates a node of the caller's input graph definition, not only the copy.
+  # Folds batch normalization nodes (global-normalization, fused, fused V3) into the preceding
+  # convolution. For each batch norm node, finds its convolution input (Conv2D or depthwise),
+  # optionally looking through a bias-add/add whose bias constant is merged into the mean. Requires
+  # constant weights, mean, variance, beta and gamma with per-channel shape; otherwise logs a
+  # warning and skips that node. Computes the per-channel scale (using gamma only when the
+  # scale-after-normalization rule says so) and offset, builds scaled weight constants, a copy of
+  # the convolution and an offset constant, and replaces the batch norm with a bias-add of the
+  # convolution and offset. Skipped original nodes are dropped and control inputs pointing at them
+  # removed; new nodes are appended at the end; the version info is copied. Input: a graph
+  # definition. Returns a new graph definition. Raises a value error on duplicate node names.
   """Removes batch normalization ops by folding them into convolutions.
 
   Batch normalization during training has multiple dynamic parameters that are
@@ -525,6 +597,18 @@ def fold_batch_norms(input_graph_def: graph_pb2.GraphDef) -> graph_pb2.GraphDef:
 def fuse_resize_and_conv(
     input_graph_def: graph_pb2.GraphDef, output_node_names: Sequence[str]
 ) -> graph_pb2.GraphDef:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says padding is extended "to that zero edge pixels"; also only a
+  # bilinear resize is recognized, and the reference-count bookkeeping removes the old resize and
+  # pad nodes only if nothing else uses them.
+  # Rewrites each Conv2D whose input is a bilinear resize and/or a mirror pad into a single fused
+  # resize-and-pad convolution (or pad-only convolution when there is no resize). Counts how many
+  # times each node is referenced (output node names count as one reference); the replaced
+  # convolution is zeroed and its pad/resize inputs decremented. When no mirror pad exists, a dummy
+  # all-zero paddings constant with reflect mode is created. Copies type, strides and padding
+  # attributes, plus align-corners for the resize case. Nodes with fewer than one remaining
+  # reference are dropped; new nodes are appended. Inputs: graph definition and list of output node
+  # names. Returns a new graph definition. Raises a value error on duplicate node names.
   """Merges preceding resize and mirror pad ops into a specialized convolution.
 
   There's a common pattern of enlarging the input to a convolution using a
@@ -650,6 +734,19 @@ def fuse_resize_and_conv(
 
 
 def convert_placeholder_to_const(input_graph_def, nodes_to_convert=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the check that skips names is written so that it only skips empty names that are
+  # also absent from the graph; names not present in the graph are therefore still treated as
+  # found, so the "nothing found" warning is effectively unreachable (the default list is never
+  # empty). Nodes are matched by substring of their names, and the unsupported-dtype warning has a
+  # message with no formatting slot for its extra argument.
+  # Converts placeholder or placeholder-with-default nodes to boolean constants. Starts from the
+  # default mapping (the keras learning phase set to false), updated by the parsed
+  # name=value entries in nodes_to_convert (optional list of strings). Each placeholder node whose
+  # name contains one of the keys and whose dtype is boolean becomes a scalar boolean constant
+  # with the mapped value; other dtypes are left unchanged with a warning. Returns a new graph
+  # definition (or the input itself if no candidate names exist). Raises a value error on duplicate
+  # node names.
   """Rename the PlaceHolderWithDefault node to constant
 
   In a frozen graph, PlaceholderWithDefault nodes can be converted to
@@ -734,6 +831,10 @@ def convert_placeholder_to_const(input_graph_def, nodes_to_convert=None):
 
 
 def get_const_dim_count(node_def):
+  # [FUNCTION DOC]
+  # HELPER: shape check used by the decomposed batch norm fusion.
+  # Takes a constant node definition and returns the number of dimensions of its value. Raises a
+  # value error if the node is not a constant.
   """Get the number of dimensions for a Const node.
 
   Args:
@@ -747,6 +848,18 @@ def get_const_dim_count(node_def):
 
 
 def fuse_decomposed_batch_norm(input_graph_def):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the lookup helper never returns the null value (it raises instead), so the check
+  # for a missing node in the input-scanning loop is dead code.
+  # Detects batch normalization expressed as separate add, multiply, subtract and reverse-square-root
+  # ops (with or without a gamma scale) and replaces each match by one fused batch norm node in
+  # inference mode. A match requires: an add of a multiply and a subtract; the multiply's data
+  # input coming from (or directly being) a Conv2D or depthwise convolution in NHWC format; a
+  # shared scale node; and constant one-dimensional gamma (when present), beta, mean, variance and
+  # a scalar epsilon. If gamma is absent a constant of ones with beta's shape is created. Matched
+  # intermediate nodes are dropped, control inputs to them removed, new nodes appended, and the
+  # version info copied. Input: graph definition. Returns a new graph definition. Raises a value
+  # error on duplicate node names.
   """Fuse individual ops in batch normalization to FusedBatchNorm.
 
   In some models, the batch normalization is performed via a group of individual

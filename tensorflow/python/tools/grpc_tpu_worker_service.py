@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Executable script that installs the TPU GRPC worker as a per-user systemd service. At import
+# time it computes the current user name and the Python search path and builds the text of a
+# systemd unit file (module constants) that launches the start_grpc_tpu_worker command. When run
+# as a script it writes the unit file, moves it to the user's systemd directory, then reloads,
+# enables and starts the service via systemctl. Exits with status 1 if the unit already exists.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,10 +33,17 @@ from pathlib import Path
 
 
 def get_sys_path():
+  # [FUNCTION DOC]
+  # HELPER: supplies the Python path for the generated service file.
+  # Returns the interpreter's module search path entries joined into one colon-separated string.
   return ":".join(sys.path)
 
 
 def get_username():
+  # [FUNCTION DOC]
+  # HELPER: supplies the user name for the generated service file.
+  # Returns the value of the USER environment variable, or the null value if it is not set (in
+  # which case the generated path would contain the text for null).
   return os.environ.get("USER")
 
 
@@ -59,12 +72,23 @@ SERVICE_NAME = "grpc_tpu_worker.service"
 
 
 def create_systemd_service_file(service_content, service_name):
+  # [FUNCTION DOC]
+  # HELPER: first step of the service installation.
+  # Writes the given text content to a file named service_name in the current working directory
+  # (overwriting any existing file) and prints a confirmation. Returns nothing; raises an OS error
+  # if the file cannot be written.
   with open(service_name, "w") as file:
     file.write(service_content)
   print(f"Service file {service_name} created")
 
 
 def move_file_to_systemd(service_name):
+  # [FUNCTION DOC]
+  # HELPER: second step of the service installation.
+  # Ensures the per-user systemd directory under the home config folder exists (creating parents
+  # and printing a message if it had to be created), then moves the file named service_name from
+  # the current directory into it and prints the destination. Returns nothing; may raise OS or
+  # file-move errors.
   user_systemd_dir = Path.home() / ".config" / "systemd" / "user"
   if not user_systemd_dir.exists():
     user_systemd_dir.mkdir(parents=True, exist_ok=True)
@@ -77,6 +101,11 @@ def move_file_to_systemd(service_name):
 
 
 def enable_start_service(service_name):
+  # [FUNCTION DOC]
+  # HELPER: final step of the service installation.
+  # Runs, in order, the user-level systemctl commands to import the environment, reload the
+  # daemon, enable the named service and start it, printing each executed command. A failing
+  # command raises a called-process error (checking is enabled), stopping the sequence.
   commands = [
       ["systemctl", "--user", "import-environment"],
       ["systemctl", "--user", "daemon-reload"],
@@ -89,6 +118,11 @@ def enable_start_service(service_name):
 
 
 def run():
+  # [FUNCTION DOC]
+  # Script entry point. If the user-level unit file for the worker service already exists, prints
+  # a message and exits the process with status 1. Otherwise creates the unit file from the
+  # module-level content, moves it into the user systemd directory and enables and starts it.
+  # Takes no inputs and returns nothing.
   service_file_path = (
       Path.home() / ".config" / "systemd" / "user" / SERVICE_NAME
   )

@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Script that generates two small SavedModels (a small and a large matrix multiplication) used by
+# ahead-of-time compilation tests. Import-time side effect: defines the required out_dir command
+# line flag. When run as a script it marks that flag required and runs main, which writes the
+# models under the output directory.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,6 +40,12 @@ FLAGS = flags.FLAGS
 
 
 def create_large_matmul_savedmodel(out_dir):
+  # [FUNCTION DOC]
+  # Builds a trackable root object holding a compiled function that multiplies two float32
+  # matrices of fixed shapes 3000x5000 and 5000x4000, calls it once with zero inputs so it is
+  # traced, and saves it under a subdirectory named x_matmul_y_large inside out_dir (a directory
+  # path string) with that function as the serving signature. Also creates an empty variables index
+  # file in the saved model so the build rule has the expected output. Returns nothing.
   """Create a SavedModel that performs a large matmul."""
   root = autotrackable.AutoTrackable()
   root.f = def_function.function(
@@ -52,6 +63,10 @@ def create_large_matmul_savedmodel(out_dir):
 
 
 def create_small_matmul_savedmodel(out_dir):
+  # [FUNCTION DOC]
+  # Same as the large variant but with float32 shapes 3x5 and 5x4: saves a matmul function as a
+  # SavedModel in the x_matmul_y_small subdirectory of out_dir and creates an empty variables
+  # index file there. Returns nothing; writes files.
   """Create a SavedModel that performs a small matmul."""
   root = autotrackable.AutoTrackable()
   root.f = def_function.function(
@@ -69,6 +84,9 @@ def create_small_matmul_savedmodel(out_dir):
 
 
 def main(unused_args):
+  # [FUNCTION DOC]
+  # Application main; the argument is ignored. Creates the small and then the large matmul
+  # SavedModels in the directory given by the out_dir flag. Returns nothing; writes files.
   create_small_matmul_savedmodel(FLAGS.out_dir)
   create_large_matmul_savedmodel(FLAGS.out_dir)
 

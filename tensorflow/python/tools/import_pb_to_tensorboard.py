@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Command-line tool that loads a SavedModel's graph and writes it as a TensorBoard graph summary
+# so it can be visualized. Exposes the import function; when run as a script it parses the model
+# directory, log directory and tag set flags and runs the app. Import-time side effect: tries to
+# import the TensorRT engine op library so such ops can be resolved, ignoring import failure.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -38,6 +43,12 @@ except ImportError:
 
 
 def import_to_tensorboard(model_dir, log_dir, tag_set):
+  # [FUNCTION DOC]
+  # Loads the graph definition of the meta graph matching tag_set (a comma-separated string of
+  # tags; all tags of a multi-tag set must be given) from the SavedModel directory model_dir,
+  # imports it into a fresh graph inside a session, and writes that graph to a summary file writer
+  # at log_dir. Prints a message telling the user how to launch TensorBoard. Returns nothing.
+  # Raises errors from the loader if the directory or tag set is not found. Writes event files.
   """View an SavedModel as a graph in Tensorboard.
 
   Args:
@@ -62,6 +73,12 @@ def import_to_tensorboard(model_dir, log_dir, tag_set):
 
 
 def main(_):
+  # [FUNCTION DOC]
+  # Application main; the argument (remaining args) is ignored. Calls the import function with the
+  # model directory, log directory and tag set flag values.
+  # KNOWN ISSUE: FLAGS is not a module-level name unless the module is run as a script (it is
+  # assigned only in the script block), so calling main from an importing module would fail with
+  # a name error.
   import_to_tensorboard(FLAGS.model_dir, FLAGS.log_dir, FLAGS.tag_set)
 
 

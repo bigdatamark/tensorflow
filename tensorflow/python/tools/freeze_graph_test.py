@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Unit tests for the graph freezing tool (freeze_graph). They build small graphs containing a
+# variable, save checkpoints, graph definitions, meta graphs or saved models into the test temp
+# directory, run the freezing routine, and verify that variables became constants and that the
+# frozen graph still computes the expected values. Not a helper module; run as a test binary.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -46,8 +51,19 @@ from tensorflow.python.training import saver as saver_lib
 
 
 class FreezeGraphTest(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case covering freeze_graph: freezing from a graph definition plus checkpoint (saver
+  # versions V1 and V2), from a meta graph, from a saved model (with and without tags), and the
+  # failure mode for partitioned variables. Uses the per-test temporary directory for files.
 
   def _testFreezeGraph(self, saver_write_version):
+    # [FUNCTION DOC]
+    # HELPER: shared body for the V1 and V2 saver freeze-graph tests.
+    # Builds a graph with one variable (value 1.0) multiplied by 2.0, saves a checkpoint using the
+    # given saver write version and writes the graph definition to disk, then freezes it with the
+    # checkpoint version passed through. Loads the frozen graph and asserts it has four nodes, no
+    # variable ops, and that running the output node yields 2.0. Input saver_write_version is the
+    # checkpoint format constant. Returns nothing; writes files in the temp directory.
 
     checkpoint_prefix = os.path.join(self.get_temp_dir(), "saved_checkpoint")
     checkpoint_state_name = "checkpoint_state"
@@ -117,6 +133,10 @@ class FreezeGraphTest(test_util.TensorFlowTestCase, parameterized.TestCase):
         self.assertNear(2.0, output, 0.00001)
 
   def _createTFExampleString(self, feature_name, feature_value):
+    # [FUNCTION DOC]
+    # HELPER: builds test input for the saved-model freezing test.
+    # Creates an example record holding a single float feature under the given name with the given
+    # value and returns its serialized byte string. No side effects.
     """Create a serialized tensorflow example."""
     example = example_pb2.Example()
     example.features.feature[feature_name].float_list.value.extend([
@@ -124,6 +144,14 @@ class FreezeGraphTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     return example.SerializeToString()
 
   def _writeDummySavedModel(self, path, feature_name, tags):
+    # [FUNCTION DOC]
+    # HELPER: creates the saved model used by the saved-model freezing test.
+    # KNOWN ISSUE: the docstring says the classifier has two input features, but the code defines
+    # only one float feature (the given feature_name).
+    # In a fresh graph, builds a string placeholder named input_node, parses it into the single
+    # fixed-length float feature, multiplies it by a variable (value 1.0) to produce output_node,
+    # builds a classification signature, and saves the graph and variables as a text saved model
+    # at path using the given list of tags. Returns nothing; writes files under path.
     """Writes a classifier with two input features to the given path."""
     with ops.Graph().as_default():
       examples = array_ops.placeholder(dtypes.string, name="input_node")
@@ -160,13 +188,23 @@ class FreezeGraphTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testFreezeGraphV1(self):
+    # [FUNCTION DOC]
+    # Test (graph mode only): runs the shared freeze-graph scenario with the V1 checkpoint format
+    # and expects the frozen graph to contain constants instead of variables and output 2.0.
     self._testFreezeGraph(saver_pb2.SaverDef.V1)
 
   @test_util.run_v1_only("b/120545219")
   def testFreezeGraphV2(self):
+    # [FUNCTION DOC]
+    # Test (graph mode only): same as the V1 test but with the V2 checkpoint format.
     self._testFreezeGraph(saver_pb2.SaverDef.V2)
 
   def testFreezeMetaGraph(self):
+    # [FUNCTION DOC]
+    # Test: saves a checkpoint (which also writes a meta graph file) of a graph that multiplies a
+    # variable by 2.0, then freezes using the meta graph instead of a graph definition file with a
+    # binary-input flag. Asserts the frozen graph has four nodes, no variable ops, and evaluates
+    # the output node to 2.0. Writes files in the temp directory.
     tmp_dir = self.get_temp_dir()
     checkpoint_prefix = os.path.join(tmp_dir, "meta_graph_checkpoint")
     checkpoint_state_name = "checkpoint_state"
@@ -222,6 +260,12 @@ class FreezeGraphTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       ("empty_tags_set", "", []),
       ("default_tags_set", tag_constants.SERVING, [tag_constants.SERVING]))
   def testFreezeSavedModel(self, tags_string, tags_list):
+    # [FUNCTION DOC]
+    # Parameterized test (empty tag set, and the default serving tag): writes a dummy saved model
+    # with the given tag list, freezes it by passing the saved model directory and the tag string,
+    # and checks the frozen graph: node count is 10 if a ParseExampleV2 node exists, else 8; no
+    # variable ops; and feeding a serialized example with value 2.0 returns 2.0 from output_node.
+    # Inputs: tags_string (comma-separated tags for freezing) and tags_list (tags for saving).
     tmp_dir = self.get_temp_dir()
     saved_model_dir = os.path.join(tmp_dir, "saved_model_dir")
     feature_name = "feature"
@@ -273,6 +317,11 @@ class FreezeGraphTest(test_util.TensorFlowTestCase, parameterized.TestCase):
         self.assertNear(feature_value, output, 0.00001)
 
   def testSinglePartitionedVariable(self):
+    # [FUNCTION DOC]
+    # Test: builds a convolution graph whose filter variable is created with a single-partition
+    # fixed-size partitioner, saves a checkpoint and graph, asserts the graph really contains
+    # partitioned-variable tensor names, then expects freezing via the graph-definition entry point
+    # to raise a value error (partitioned variables are rejected cleanly rather than crashing).
     """Ensures partitioned variables fail cleanly with freeze graph."""
     checkpoint_prefix = os.path.join(self.get_temp_dir(), "saved_checkpoint")
     checkpoint_state_name = "checkpoint_state"
