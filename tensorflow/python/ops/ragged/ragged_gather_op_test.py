@@ -209,7 +209,7 @@ class RaggedGatherOpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     # calls gather with the optional axis (default none, meaning the batch dimension count) and
     # batch_dims (default 0), and asserts the result equals expected after converting the
     # expected strings to byte strings. Returns nothing.
-    params =ragged_factory_ops.constant(params, ragged_rank=params_ragged_rank)
+    params = ragged_factory_ops.constant(params, ragged_rank=params_ragged_rank)
     indices = ragged_factory_ops.constant(
         indices, ragged_rank=indices_ragged_rank)
     actual = ragged_gather_ops.gather(
