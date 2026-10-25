@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Tests for the embedding operations module. Checks that looking up a variable that was created
+# uninitialized uses a sparse gather (no dense variable read) and that gradients of the lookup
+# with respect to a resource variable have a statically known shape. All tests run in both graph
+# and eager modes and are launched through the test main.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,17 +34,31 @@ from tensorflow.python.platform import googletest
 
 @test_util.run_all_in_graph_and_eager_modes
 class EmbeddingLookupTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case for the embedding lookup function, run in graph and eager modes. No shared state.
 
   def testEmbeddingLookupOnUninitializedVariableDoesSparseRead(self):
+    # [FUNCTION DOC]
+    # Creates an uninitialized 3 by 3 float variable, initializes it to zeros via a compiled
+    # function, then looks up row zero in another compiled function. Asserts the init result is
+    # zeros and the lookup gives a row of zeros. Inspects the graph and its function library:
+    # expects exactly one resource gather node and no variable read node, proving a sparse read
+    # rather than a dense read of the whole variable.
     x = resource_variable_ops.UninitializedVariable(
         trainable=True, shape=[3, 3], dtype=dtypes.float32)
 
     @def_function.function(input_signature=[])
     def _init():
+      # [FUNCTION DOC]
+      # HELPER: compiled initializer for the test. Assigns a 3 by 3 zeros array to the variable
+      # and returns the assignment result.
       return x.assign(np.zeros([3, 3]))
 
     @def_function.function(input_signature=[])
     def _call():
+      # [FUNCTION DOC]
+      # HELPER: compiled function that looks up row zero of the variable using the version 2
+      # embedding lookup and returns it.
       return embedding_ops.embedding_lookup_v2(x, [0])
 
     self.assertAllClose(self.evaluate(_init()), np.zeros([3, 3]))
@@ -68,6 +87,11 @@ class EmbeddingLookupTest(test_util.TensorFlowTestCase):
     self.assertLen(read_var_node, 0)
 
   def testEmbeddingLookupGradientsHaveKnownShape(self):
+    # [FUNCTION DOC]
+    # Creates a 3 by 3 zero-initialized float resource variable and a compiled function that
+    # looks up row zero, sums it and takes the gradient with respect to the variable. Inside the
+    # function it asserts the gradient shape is 3 by 3; outside it asserts the init result is
+    # zeros and the evaluated gradient has ones in row zero and zeros elsewhere.
     x = resource_variable_ops.ResourceVariable(
         initial_value=np.zeros([3, 3]),
         trainable=True,
@@ -76,10 +100,17 @@ class EmbeddingLookupTest(test_util.TensorFlowTestCase):
 
     @def_function.function(input_signature=[])
     def _init():
+      # [FUNCTION DOC]
+      # HELPER: compiled initializer for the test. Assigns zeros to the variable and returns the
+      # assignment result.
       return x.assign(np.zeros([3, 3]))
 
     @def_function.function(input_signature=[])
     def _call():
+      # [FUNCTION DOC]
+      # HELPER: compiled function that computes the gradient of the summed lookup of row zero
+      # with respect to the variable under a gradient tape, asserts its static shape is 3 by 3,
+      # and returns it converted to a dense tensor.
       with gradients.GradientTape() as tape:
         y = embedding_ops.embedding_lookup_v2(x, [0])
         loss = math_ops.reduce_sum(y)

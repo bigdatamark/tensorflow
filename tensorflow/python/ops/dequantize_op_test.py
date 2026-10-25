@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Tests for the dequantize operation in array_ops. Covers the minimum-combined and scaled modes,
+# narrow range, quantized 8-bit types, and per-axis dequantization with positive and negative
+# axes, comparing results against a numpy reference computation. Runs through the test main.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,12 +27,28 @@ from tensorflow.python.platform import test
 
 
 class DequantizeOpTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the dequantize op: per-tensor modes, narrow range and per-axis scaling.
+  # Holds no state; the shared helper compares op output with a numpy reference.
 
   def __init__(self, method_name="runTest"):
+    # [FUNCTION DOC]
+    # Constructor; forwards the test method name (default is the run-test method) to the base
+    # test case. Adds no extra state.
     super(DequantizeOpTest, self).__init__(method_name)
 
   def _testDequantizeOp(self, inputs, min_range, max_range, dtype,
                         mode="MIN_COMBINED", narrow_range=False):
+    # [FUNCTION DOC]
+    # HELPER: shared checker for the dequantize tests.
+    # Builds a constant from inputs (numpy integer array) with the given quantized dtype,
+    # dequantizes it with min_range, max_range, mode (default minimum-combined) and narrow_range
+    # (default false), and evaluates it in a cached session. Then computes the expected values
+    # with numpy: in minimum-combined mode, shift by half the type range for signed types, scale
+    # to the float range and add the minimum; in scaled mode multiply by the larger of the
+    # min and max scale ratios (minimum bumped by one when narrow range). Asserts that the dtype
+    # is supported (quint8, qint8, quint16, qint16), the range lies within the type limits, and
+    # results are close (tolerance 1e-5). Returns nothing.
     with self.cached_session():
       input_op = constant_op.constant(inputs, shape=[len(inputs)], dtype=dtype)
       dequantized = array_ops.dequantize(input_op, min_range, max_range,
@@ -65,17 +85,26 @@ class DequantizeOpTest(test.TestCase):
     self.assertAllClose(tf_ans, np_ans, rtol=1e-5, atol=1e-5)
 
   def testBasicQuint8(self):
+    # [FUNCTION DOC]
+    # Runs the shared check in default minimum-combined mode for unsigned 8-bit values with
+    # several ranges (0 to 6, 0 to 123.456, 5 to 200.2); expects results to match numpy.
     self._testDequantizeOp(np.array([0, 128, 255]), 0.0, 6.0, dtypes.quint8)
     self._testDequantizeOp(np.array([0, 128, 255]), 0.0, 123.456, dtypes.quint8)
     self._testDequantizeOp(
         np.array([0, 4, 42, 108, 243]), 5.0, 200.2, dtypes.quint8)
 
   def testBasicQint8(self):
+    # [FUNCTION DOC]
+    # Runs the shared check in default minimum-combined mode for signed 8-bit values with
+    # several ranges including negative ones; expects results to match numpy.
     self._testDequantizeOp(np.array([-128, 0, 127]), -1.0, 2.0, dtypes.qint8)
     self._testDequantizeOp(np.array([-2, 4, -17]), -5.0, -3.0, dtypes.qint8)
     self._testDequantizeOp(np.array([0, -4, 42, -108]), 5.0, 40.0, dtypes.qint8)
 
   def testScaledMode(self):
+    # [FUNCTION DOC]
+    # Runs the shared check in scaled mode for signed 8-bit values over three ranges; expects
+    # the output to equal the inputs times the scale factor computed by numpy.
     self._testDequantizeOp(np.array([-128, 0, 127]), -1.0, 2.0, dtypes.qint8,
                            mode="SCALED")
     self._testDequantizeOp(np.array([-2, 4, -17]), -5.0, -3.0, dtypes.qint8,
@@ -84,6 +113,9 @@ class DequantizeOpTest(test.TestCase):
                            mode="SCALED")
 
   def testNarrowRange(self):
+    # [FUNCTION DOC]
+    # Same as the scaled-mode test but with narrow range enabled, so the minimum quantized value
+    # is treated as one higher when computing the scale; expects results to match numpy.
     self._testDequantizeOp(np.array([-128, 0, 127]), -1.0, 2.0, dtypes.qint8,
                            mode="SCALED", narrow_range=True)
     self._testDequantizeOp(np.array([-2, 4, -17]), -5.0, -3.0, dtypes.qint8,
@@ -92,9 +124,20 @@ class DequantizeOpTest(test.TestCase):
                            mode="SCALED", narrow_range=True)
 
   def testAxis(self):
+    # [FUNCTION DOC]
+    # Tests per-axis dequantization in scaled mode on a four-dimensional shape (2, 3, 4, 5).
+    # For no axis and each axis 0 to 3 it builds quantized signed 8-bit inputs, per-slice
+    # minimum and maximum ranges (scaled by slice index plus one), and expected float values,
+    # then asserts exact equality of the op output. For explicit axes it repeats the call with
+    # the equivalent negative axis and asserts close equality. Returns nothing.
     # Generates a tensor of the specified `shape` using values from `values`
     # scaled by (slice_idx + 1) along `axis` dimension.
     def scale_per_slice(shape, axis, values):
+      # [FUNCTION DOC]
+      # HELPER: builds test data for the per-axis test.
+      # Returns a numpy array of the given shape filled by cycling through values, and, when axis
+      # is not nothing, multiplied along that axis by one, two, three and so on per slice.
+      # Mutates only its local result.
       # Note: repeats the values if the shape is larger than values.
       out = np.take(values, np.remainder(np.arange(np.prod(shape)),
                                          len(values))).reshape(shape)

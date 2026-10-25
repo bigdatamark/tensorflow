@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Operations for embeddings. Provides dense embedding lookup (with partitioned parameters under
+# a modulo or division strategy, optional norm clipping and optional per-partition transform),
+# sparse embedding lookup with weights and a combiner (mean, square-root-n or sum), and "safe"
+# sparse lookup that prunes invalid ids and fills empty rows. Public functions are exported to
+# the neural-network namespace in both the v1 and v2 APIs and support dispatch. Importing it
+# also imports the data-flow gradient definitions so that gradients are registered.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -38,6 +45,14 @@ from tensorflow.python.util.tf_export import tf_export
 
 
 def _clip(params, ids, max_norm):
+  # [FUNCTION DOC]
+  # HELPER: norm clipping step for the embedding lookup functions.
+  # Returns params unchanged when max_norm is nothing; otherwise clips each embedding vector so
+  # its l2-norm is at most max_norm. Inputs: params, gathered embeddings; ids, the ids that were
+  # used for the gather (only their rank matters); max_norm, optional float limit. The clipping
+  # axes are all dimensions of params beyond the rank of ids; they are Python values when both
+  # ranks are statically known, otherwise a computed range tensor. Output: tensor with the same
+  # type as params. No side effects other than adding ops.
   """Helper function for _embedding_lookup_and_transform.
 
   This function optionally clips embeddings to an l2-norm of max_norm.
@@ -53,6 +68,11 @@ def _clip(params, ids, max_norm):
   """
 
   def _rank(x):
+    # [FUNCTION DOC]
+    # HELPER: rank lookup for the clipping helper.
+    # Converts x to a tensor and returns a pair: the rank and a flag saying whether the rank is
+    # statically known. If the static rank is known and nonzero, returns it with true; otherwise
+    # (unknown or zero rank) returns a dynamic rank tensor with false.
     """Helper function to retrieve the rank of a tensor.
 
     Args:
@@ -81,6 +101,12 @@ def _clip(params, ids, max_norm):
 
 
 def _colocate_with(param):
+  # [FUNCTION DOC]
+  # HELPER: device-colocation context for embedding lookups.
+  # Returns a context manager that places ops on the same device as param. Inside a function
+  # graph with a variable-like param (one having a handle), it colocates with the captured
+  # handle tensor so no hard-coded device string is baked in (which would break serving);
+  # otherwise it colocates directly with param.
   if ops.inside_function() and hasattr(param, "handle"):
     # The `ops.colocate_with` will hard-code a device string if `param.device`
     # is known, which will then break serving. We capture it here so that it
@@ -96,6 +122,21 @@ def _embedding_lookup_and_transform(params,
                                     name=None,
                                     max_norm=None,
                                     transform_fn=None):
+  # [FUNCTION DOC]
+  # HELPER: shared core of the dense embedding lookup and sampled-logits computation.
+  # Looks up ids in params (a tensor, list of tensors, or partitioned variable), optionally
+  # clipping norms and applying transform_fn per retrieved block. Inputs: params; ids (integer
+  # tensor-like); partition_strategy ("mod" default, or "div"); name; max_norm; transform_fn
+  # (callable mapping a tensor to a tensor with the same first dimension, or nothing).
+  # Single-partition case (and no transform or 1-D ids): gather, clip, transform, then identity
+  # to drop colocation. Otherwise ids are flattened, each id assigned to a partition and a local
+  # id (modulo or division with remainder handling, using the summed first dimensions), split with
+  # dynamic partition, gathered per partition under that params colocation with device cleared,
+  # clipped/transformed, stitched back together and reshaped to the ids shape plus the element
+  # shape (static where possible), with the static shape set explicitly.
+  # Returns a tensor shaped like ids followed by the element shape. Raises a value error if
+  # params is nothing, an empty list or tuple, or if the partition strategy is unrecognized.
+  # Adds graph ops; no other side effects.
   """Helper function for embedding_lookup and _compute_sampled_logits.
 
   This function is a generalization of embedding_lookup that optionally
@@ -273,6 +314,19 @@ def embedding_lookup(
     name=None,
     validate_indices=True,  # pylint: disable=unused-argument
     max_norm=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the function body contains a second, unattached string literal after the real
+  # docstring (describing CPU versus GPU out-of-bounds behavior and a usage example). It is a
+  # no-op expression, not part of the docstring, so that text never appears in generated docs.
+  # KNOWN ISSUE: the validate_indices argument is accepted but ignored (deprecated).
+  # KNOWN ISSUE: the docstring mentions ragged ids, but the code just forwards to the shared
+  # lookup helper without any ragged-specific handling.
+  # Version 1 public embedding lookup. Looks up rows of params for each id in ids and returns a
+  # tensor shaped like ids followed by the trailing dimensions of params. Inputs: params (tensor,
+  # list of sharded tensors, or partitioned variable); ids (integer tensor); partition_strategy
+  # ("mod" default, or "div"); name; validate_indices (ignored); max_norm (optional clipping
+  # limit on each embedding's l2-norm). Raises a value error if params is empty.
+  # Delegates to the shared helper with no transform. Adds graph ops.
   """Looks up embeddings for the given `ids` from a list of tensors.
 
   This function is used to perform parallel lookups on the list of tensors in
@@ -375,6 +429,12 @@ def embedding_lookup(
 @tf_export("nn.embedding_lookup", v1=[])
 @dispatch.add_dispatch_support
 def embedding_lookup_v2(params, ids, max_norm=None, name=None):
+  # [FUNCTION DOC]
+  # Version 2 public embedding lookup. Same as the version 1 function but fixes the partition
+  # strategy to division and drops the deprecated arguments. Inputs: params (tensor or list of
+  # tensors sharded under division), ids (integer tensor), max_norm (optional l2-norm clipping
+  # limit), name. Returns a tensor shaped like ids followed by params trailing dimensions.
+  # Raises a value error if params is empty (via the delegate). Adds graph ops.
   """Looks up embeddings for the given `ids` from a list of tensors.
 
   This function is used to perform parallel lookups on the list of tensors in
@@ -450,6 +510,22 @@ def embedding_lookup_sparse(
     max_norm=None,
     allow_fast_lookup=False,
 ):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says ragged tensors are accepted and that a type error is raised
+  # only for non-sparse/ragged input, but the code accepts only sparse tensors for both sp_ids
+  # and sp_weights and raises a type error for anything else (including ragged tensors).
+  # KNOWN ISSUE: the docstring names the weights argument sparse_weights while the real
+  # parameter is sp_weights.
+  # Version 1 sparse embedding lookup: gathers embeddings for the ids in a rank-2 sparse tensor,
+  # multiplies by optional weights and combines per row. Inputs: params (tensor, list or
+  # partitioned variable); sp_ids (sparse tensor of integer ids); sp_weights (sparse tensor of
+  # the same shape, or nothing for unit weights); partition_strategy ("mod" default or "div");
+  # name; combiner (mean by default, or sqrtn or sum); max_norm (optional clipping limit);
+  # allow_fast_lookup (boolean, permits the simplified gather path). Output: dense tensor with one
+  # row per row of sp_ids. Raises a value error for an unsupported combiner and a type error for
+  # wrong sp_ids or sp_weights types. Checks that values, indices and dense shape of the weights
+  # are shape-compatible with the ids. Extracts row indices as segment ids and delegates to the
+  # shared implementation function. Adds graph ops.
   """Looks up embeddings for the given ids and weights from a list of tensors.
 
   This op assumes that there is at least one id for each row in the dense tensor
@@ -587,6 +663,16 @@ def embedding_lookup_sparse_v2(
     name=None,
     allow_fast_lookup=False,
 ):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says ragged tensors are accepted and calls the weights argument
+  # sparse_weights, but the code only accepts sparse tensors (it delegates to the version 1
+  # function, which raises a type error otherwise) and the parameter is named sp_weights.
+  # Version 2 sparse embedding lookup. Same as the version 1 function with the partition
+  # strategy fixed to division. Inputs: params, sp_ids (sparse tensor of integer ids),
+  # sp_weights (sparse tensor of the same shape or nothing), combiner (mean default, sqrtn or
+  # sum), max_norm, name, allow_fast_lookup (boolean, default false). Returns a dense tensor
+  # with one combined embedding per row of sp_ids. Raises a type error for wrong id or weight
+  # types and a value error for an invalid combiner. Adds graph ops.
   """Looks up embeddings for the given ids and weights from a list of tensors.
 
   `params` is a dense tensor or a list of dense tensors, and `sp_ids` is a 2D
@@ -747,6 +833,16 @@ def safe_embedding_lookup_sparse_v2(
     name=None,
     allow_fast_lookup=False,
 ):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says ragged tensors are accepted, but the underlying code path
+  # reshapes and prunes the ids as sparse tensors only.
+  # Version 2 safe sparse embedding lookup. Same as the version 1 function but fixes the
+  # partition strategy to division. Inputs: embedding_weights (tensor or list of tensors),
+  # sparse_ids (sparse tensor of integer ids), sparse_weights (optional matching sparse tensor),
+  # combiner (default mean), default_id (id used for rows without features, else zero vector),
+  # max_norm, name, allow_fast_lookup. Returns a dense tensor whose shape is the id shape without
+  # its last dimension followed by the embedding dimensions. Raises a value error when the weights
+  # are missing or empty. Adds graph ops.
   """Lookup embedding results, accounting for invalid IDs and empty features.
 
   The partitioned embedding in `embedding_weights` must all be the same shape
@@ -864,6 +960,23 @@ def safe_embedding_lookup_sparse(
     max_norm=None,
     allow_fast_lookup=False,
 ):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says ragged tensors are accepted, but the code treats the ids as
+  # a sparse tensor (reshape, prune, fill empty rows).
+  # KNOWN ISSUE: the fill value is chosen with a logical-or fallback, so an explicit default_id
+  # of zero behaves the same as nothing for filling; yet only a default_id of nothing triggers
+  # the zeroing of empty rows, so an explicit zero default returns row zero of the embeddings
+  # (not necessarily the zero vector) for empty rows.
+  # Version 1 safe sparse embedding lookup. Flattens higher-rank sparse ids (and weights) to
+  # two dimensions, prunes ids below zero (and, unless the combiner is sum, entries with
+  # non-positive weight), fills empty rows with the default id (weights filled with one), runs
+  # the sparse lookup, zeroes rows that had no features when default_id is nothing, and reshapes
+  # back to the original leading dimensions plus the embedding dimensions (setting a partial
+  # static shape). Inputs: embedding_weights (tensor, list or partitioned variable); sparse_ids;
+  # sparse_weights (optional); combiner (default mean); default_id; name; partition_strategy
+  # ("div" default); max_norm; allow_fast_lookup. Raises a value error if embedding_weights is
+  # nothing or an empty list. Weights are converted to tensors using the dtype of sparse_weights,
+  # keeping resource variables as they are. Adds graph ops.
   """Lookup embedding results, accounting for invalid IDs and empty features.
 
   The partitioned embedding in `embedding_weights` must all be the same shape
@@ -1046,6 +1159,23 @@ def embedding_lookup_sparse_impl(
     partition_strategy,
     name,
 ):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation behind the sparse embedding lookup functions.
+  # Aggregates embeddings per segment. Inputs: params (list of embedding tensors or variables);
+  # segment_ids (row index of each id); sp_weights (sparse weights, used when weights are not
+  # ignored); ids (flat id values); combiner (mean, sqrtn or sum); ignore_weights (boolean);
+  # max_norm; allow_fast_lookup; partition_strategy; name.
+  # Fast path: a single non-composite params on the same device as the segment ids, without
+  # max_norm, when fast lookup is allowed or weights are ignored (and a forward-compatibility
+  # date check passes): uses ids directly, reads variables without copy, and requests a sparse
+  # segment gradient only when fast lookup was not explicitly allowed. Otherwise deduplicates the
+  # ids and does a regular embedding lookup.
+  # With weights: gathers per id, casts half-precision embeddings to float32 for the computation,
+  # casts weights to match, reshapes weights for broadcasting, multiplies, then applies segment
+  # sum (sum), sum divided by weight sum with safe division (mean), or divided by the square root
+  # of the sum of squared weights (sqrtn), casting back to the original dtype.
+  # Without weights: uses sparse segment sum, mean or square-root-n ops.
+  # An unknown combiner triggers an assertion failure. Returns the combined embeddings tensor.
   """Implementation of sparse embedding aggregation."""
   need_sparse_segment_gradient = False
   # Ensure we can query the devices below.
@@ -1166,6 +1296,13 @@ def embedding_lookup_sparse_impl(
 
 
 def _prune_invalid_ids(sparse_ids, sparse_weights):
+  # [FUNCTION DOC]
+  # HELPER: id pruning step of the safe sparse embedding lookup.
+  # KNOWN ISSUE: the weights branch combines the validity mask with a tensor of all true values,
+  # so it has no effect; only the ids are actually tested (ids >= 0).
+  # Keeps only entries whose id is non-negative, retaining the same entries in the weights when
+  # present. Inputs: sparse_ids (sparse tensor), sparse_weights (sparse tensor or nothing).
+  # Returns a pair of the pruned ids and pruned weights (nothing if no weights given).
   """Prune invalid IDs (< 0) from the input ids and weights."""
   is_id_valid = math_ops.greater_equal(sparse_ids.values, 0)
   if sparse_weights is not None:
@@ -1179,6 +1316,12 @@ def _prune_invalid_ids(sparse_ids, sparse_weights):
 
 
 def _prune_invalid_weights(sparse_ids, sparse_weights):
+  # [FUNCTION DOC]
+  # HELPER: weight pruning step of the safe sparse embedding lookup.
+  # KNOWN ISSUE: the docstring says it prunes weights below zero, but the code keeps only
+  # strictly positive weights, so zero weights are also removed.
+  # When sparse_weights is not nothing, keeps only entries with weight greater than zero in both
+  # the ids and the weights. Returns a pair of ids and weights (unchanged if no weights).
   """Prune invalid weights (< 0) from the input ids and weights."""
   if sparse_weights is not None:
     is_weights_valid = math_ops.greater(sparse_weights.values, 0)
