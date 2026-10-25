@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Configuration entry point for TF NumPy behavior. Exposes enable_numpy_behavior (exported publicly
+# as the experimental numpy behavior switch), which turns on NumPy-style type promotion, NumPy-style
+# slicing and NumPy methods on tensors, and sets whether Python floats default to float32. Imports
+# the weak tensor ops module only for its side effects, plus np_math_ops and np_dtypes. Importing the
+# module has no behavioral side effects until the function is called.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +32,15 @@ from tensorflow.python.util import tf_export
     "experimental.numpy.experimental_enable_numpy_behavior", v1=[]
 )
 def enable_numpy_behavior(prefer_float32=False, dtype_conversion_mode="legacy"):
+  # [FUNCTION DOC]
+  # Globally enables NumPy behavior on tensors. Inputs: prefer_float32 (boolean, default false) chooses
+  # float32 instead of float64 as the default type for Python floats; dtype_conversion_mode (string,
+  # default legacy) names the promotion mode and may be off, legacy, safe or all. Returns nothing.
+  # If the mode is safe or all, logs a warning that this must be done at program start before any
+  # TensorFlow API is used. Side effects, in order: sets the global dtype conversion mode, enables
+  # NumPy-style slicing/indexing on tensors, attaches NumPy methods (such as transpose, reshape and
+  # ravel) to the tensor class, and stores the prefer-float32 flag in np_dtypes. An invalid mode is
+  # rejected by the underlying setter, not checked here.
   """Enable NumPy behavior on Tensors.
 
   Enabling NumPy behavior has three effects:

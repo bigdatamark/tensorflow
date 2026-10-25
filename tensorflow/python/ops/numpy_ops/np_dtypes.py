@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Dtype aliases and dtype utilities for TF NumPy. Defines module-level names (bool_, int32, float64,
+# complex128, string_, and so on) that are NumPy scalar types rather than TensorFlow dtypes, so users
+# can combine them with NumPy facilities, and exports each of them under the experimental numpy
+# namespace. Also exports iinfo and issubdtype. Holds two global switches, prefer-float32 and
+# allow-float64, with getters and setters, plus helpers to canonicalize dtypes, compute the result
+# type of mixed arrays, and cache NumPy dtypes for TensorFlow dtypes. Import-time side effects are
+# the public API export registrations. Used by np_arrays, np_config and the other numpy_ops modules.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -149,24 +157,44 @@ _allow_float64 = True
 
 
 def is_prefer_float32():
+  # [FUNCTION DOC]
+  # Returns the current value of the global prefer-float32 switch. Takes no inputs. When true, Python
+  # floats and complex values are treated as 32-bit when inferring result types. No side effects.
   return _prefer_float32
 
 
 def set_prefer_float32(b):
+  # [FUNCTION DOC]
+  # Sets the global prefer-float32 switch. Input b is a boolean (any truthy or falsy value is stored
+  # as given, not validated). Returns nothing. Side effect: replaces the module-level flag read by
+  # is_prefer_float32 and default_float_type.
   global _prefer_float32
   _prefer_float32 = b
 
 
 def is_allow_float64():
+  # [FUNCTION DOC]
+  # Returns the current value of the global allow-float64 switch. Takes no inputs. When false, 64-bit
+  # float and complex dtypes are canonicalized down to 32-bit and 64-bit-complex respectively. No
+  # side effects.
   return _allow_float64
 
 
 def set_allow_float64(b):
+  # [FUNCTION DOC]
+  # Sets the global allow-float64 switch. Input b is a boolean stored as given without validation.
+  # Returns nothing. Side effect: replaces the module-level flag read by is_allow_float64,
+  # canonicalize_dtype and default_float_type.
   global _allow_float64
   _allow_float64 = b
 
 
 def canonicalize_dtype(dtype):
+  # [FUNCTION DOC]
+  # Maps a dtype to its canonical form given the allow-float64 switch. Input dtype is a NumPy dtype.
+  # If float64 is disallowed and the dtype is float64 or complex128, returns float32 or complex64
+  # respectively; any other dtype, or any dtype when float64 is allowed, is returned unchanged.
+  # Does not raise for unknown dtypes (a lookup failure is swallowed). No side effects.
   if not _allow_float64:
     try:
       return _to_float32[dtype]
@@ -176,9 +204,21 @@ def canonicalize_dtype(dtype):
 
 
 def _result_type(*arrays_and_dtypes):
+  # [FUNCTION DOC]
+  # HELPER: computes result dtypes for the TF NumPy type-promotion logic.
+  # Returns the TensorFlow dtype that NumPy promotion rules give for a variable number of arrays,
+  # scalars or dtypes. Python floats and complex numbers are first narrowed to 32-bit/64-bit-complex
+  # when the prefer-float32 switch is on; then NumPy computes the common type, the result is
+  # canonicalized according to allow-float64, and converted to a TensorFlow dtype. Raises whatever
+  # NumPy or the dtype conversion raises for incompatible inputs. No side effects.
   """Returns the resulting type given a set of arrays."""
 
   def preprocess_float(x):
+    # [FUNCTION DOC]
+    # HELPER: nested helper of _result_type that narrows Python floats.
+    # Input x is any value. If prefer-float32 is on, a Python float becomes a 32-bit float and a
+    # Python complex becomes a 64-bit complex; everything else, and all values when the switch is
+    # off, is returned unchanged.
     if is_prefer_float32():
       if isinstance(x, float):
         return np.float32(x)
@@ -192,6 +232,12 @@ def _result_type(*arrays_and_dtypes):
 
 
 def _get_cached_dtype(dtype):
+  # [FUNCTION DOC]
+  # HELPER: caching utility for converting TensorFlow dtypes to NumPy dtype objects.
+  # KNOWN ISSUE: the global statement inside is unnecessary since the cache is only mutated, never rebound.
+  # Input dtype is a TensorFlow dtype. Returns the corresponding NumPy dtype object, building it from
+  # the dtype's NumPy type on first use and storing it in the module-level cache for later calls.
+  # Side effect: grows the module-level cache.
   """Returns an np.dtype for the TensorFlow DType."""
   global _cached_np_dtypes
   try:
@@ -204,6 +250,9 @@ def _get_cached_dtype(dtype):
 
 
 def default_float_type():
+  # [FUNCTION DOC]
+  # Returns the default floating point type as a NumPy scalar type. Takes no inputs. Returns float64
+  # when prefer-float32 is off and allow-float64 is on; otherwise returns float32. No side effects.
   """Gets the default float type.
 
   Returns:

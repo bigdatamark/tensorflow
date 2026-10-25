@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Defines the ndarray type used by TF NumPy and a safer tensor-conversion wrapper.
+# In this version the ndarray name is simply an alias of the regular tensor class, so TF NumPy
+# functions return and accept ordinary tensors. The module also exposes convert_to_tensor, which
+# works around a conversion bug for very large Python integers and picks the configured default
+# float type for plain Python floats. Imports the dtype helper module np_dtypes. No import-time
+# side effects other than creating the alias.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +30,17 @@ from tensorflow.python.ops.numpy_ops import np_dtypes
 
 
 def convert_to_tensor(value, dtype=None, dtype_hint=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the module docstring says "ndarray class" but no class is defined here; ndarray is just
+  # KNOWN ISSUE: an alias of the tensor class defined at the bottom of the file.
+  # Converts a value to a tensor, wrapping the generic tensor-conversion API with two special cases.
+  # Inputs: value is anything convertible to a tensor; dtype is an optional explicit element type;
+  # dtype_hint is an optional soft preference for the type. If no dtype is given and value is a Python
+  # integer of at least 2 to the power 63, the dtype is forced to unsigned 64-bit integer. If neither
+  # dtype nor dtype_hint is given and value is a Python float, the dtype becomes the default float type
+  # from np_dtypes (float64 unless float32 is preferred or float64 is disallowed). Otherwise the
+  # arguments pass through unchanged. Returns the resulting tensor. Errors from the underlying
+  # conversion (for example incompatible values) propagate. No side effects.
   """Wrapper over `tf.convert_to_tensor`.
 
   Args:
