@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# HELPER: helper module providing TPU device-name utilities. Currently exposes a single function
+# that builds the device name of a virtual core in a replicated TPU computation (exported for v1).
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,6 +23,10 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export(v1=["tpu.core"])
 def core(num: int) -> Text:
+  # [FUNCTION DOC]
+  # Builds the device name string of the replicated TPU core with the given virtual core number
+  # (an integer within each replica). Returns the name, suitable for a device scope. No
+  # validation of num and no side effects.
   """Returns the device name for a core in a replicated TPU computation.
 
   Args:

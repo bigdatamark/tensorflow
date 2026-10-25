@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Defines CrossShardOptimizer (exported for the v1 API), an optimizer wrapper for TPU training
+# that sums gradients across replicas (shards) before delegating to the wrapped optimizer, and
+# scales the loss beforehand when averaging is requested. Depends on the TPU shard context and the
+# TPU cross-replica-sum operation. No import-time side effects other than the export.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,6 +32,12 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export(v1=["tpu.CrossShardOptimizer"])
 class CrossShardOptimizer(optimizer.Optimizer):
+  # [CLASS DOC]
+  # Wraps an existing training optimizer so that gradients are summed over TPU replicas (optionally
+  # within subgroups of replicas). In mean mode the loss is scaled down by the shard (or subgroup)
+  # count in gradient computation so the sum acts as an average. Holds the wrapped optimizer, the
+  # reduction mode and the optional group assignment. Slot access and variable listing are
+  # forwarded to the wrapped optimizer. Only works with legacy training optimizers.
   """An optimizer that averages gradients across TPU shards."""
 
   def __init__(self,
@@ -34,6 +45,14 @@ class CrossShardOptimizer(optimizer.Optimizer):
                reduction=losses.Reduction.MEAN,
                name="CrossShardOptimizer",
                group_assignment=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring lists only a value error, but a type error is also raised when
+    # the wrapped optimizer is not a legacy training optimizer (for example a Keras optimizer).
+    # Constructor. Inputs: opt, the optimizer to wrap; reduction, sum or mean (default mean);
+    # name, op-name prefix (default "CrossShardOptimizer"); group_assignment, optional list of
+    # lists of replica ids defining subgroups. Raises a value error for an unsupported reduction
+    # and a type error for a non-legacy optimizer. Initialises the base optimizer with locking
+    # disabled and stores the arguments.
     """Construct a new cross-shard optimizer.
 
     Args:
@@ -68,6 +87,12 @@ class CrossShardOptimizer(optimizer.Optimizer):
     self._group_assignment = group_assignment
 
   def _verify_and_get_subgroup_size(self, group_assignment, num_shards):
+    # [FUNCTION DOC]
+    # HELPER: validates the replica group assignment for compute_gradients.
+    # Inputs: group_assignment, list of lists of replica ids (or empty/null); num_shards, total
+    # replica count. Returns null when no assignment is given, otherwise the common group size.
+    # Raises a value error if it is not a list of lists, if the ids are not exactly the numbers
+    # from zero to num_shards minus one, or if the groups differ in size.
     """Verify group_assignment and get the subgroup size".
 
     Args:
@@ -107,6 +132,15 @@ class CrossShardOptimizer(optimizer.Optimizer):
                        f"be equal. Received: {group_assignment}")
 
   def compute_gradients(self, loss, var_list=None, **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says a value error is raised when called outside a TPU shard
+    # context, but the code only logs a warning and assumes a single shard.
+    # Computes gradients with the wrapped optimizer. Inputs: loss, tensor to minimise; var_list,
+    # optional variables (default: trainable variables); extra keyword arguments are forwarded.
+    # Reads the shard count from the TPU context (1 if unset, with a warning). In mean mode with
+    # more than one shard the loss is multiplied by one over the subgroup size (if a group
+    # assignment is set) or one over the shard count. Returns the list of gradient/variable pairs.
+    # Raises a value error if the group assignment is invalid.
     """Compute gradients of "loss" for the variables in "var_list".
 
     This simply wraps `compute_gradients()` from the real optimizer. The
@@ -159,6 +193,12 @@ class CrossShardOptimizer(optimizer.Optimizer):
     return self._opt.compute_gradients(loss, var_list=var_list, **kwargs)
 
   def apply_gradients(self, grads_and_vars, global_step=None, name=None):
+    # [FUNCTION DOC]
+    # Sums each non-null gradient across replicas (colocated with the gradient, honouring the
+    # group assignment) and passes the summed pairs to the wrapped optimizer. Null gradients pass
+    # through unchanged. Inputs: grads_and_vars, list of gradient/variable pairs; global_step,
+    # optional step variable to increment; name, optional name for the returned op. Returns the
+    # operation that applies the update. Malformed pairs surface as unpacking errors.
     """Apply gradients to variables.
 
     Calls tpu_ops.cross_replica_sum() to sum gradient contributions across
@@ -190,6 +230,9 @@ class CrossShardOptimizer(optimizer.Optimizer):
     return self._opt.apply_gradients(summed_grads_and_vars, global_step, name)
 
   def get_slot(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Forwards all arguments to the wrapped optimizer's slot lookup and returns the slot variable,
+    # or null if it was never created.
     """Return a slot named "name" created for "var" by the Optimizer.
 
     This simply wraps the get_slot() from the actual optimizer.
@@ -204,6 +247,8 @@ class CrossShardOptimizer(optimizer.Optimizer):
     return self._opt.get_slot(*args, **kwargs)
 
   def get_slot_names(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Forwards all arguments to the wrapped optimizer and returns its list of slot name strings.
     """Return a list of the names of slots created by the `Optimizer`.
 
     This simply wraps the get_slot_names() from the actual optimizer.
@@ -218,5 +263,7 @@ class CrossShardOptimizer(optimizer.Optimizer):
     return self._opt.get_slot_names(*args, **kwargs)
 
   def variables(self):
+    # [FUNCTION DOC]
+    # Returns the variables of the wrapped optimizer (this wrapper holds none of its own).
     """Forwarding the variables from the underlying optimizer."""
     return self._opt.variables()

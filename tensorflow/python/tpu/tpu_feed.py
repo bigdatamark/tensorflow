@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Helper library for moving data between host machines and TPU cores through infeed queues.
+# It provides InfeedQueue, which records the types, shapes and sharding of a tuple of tensors,
+# and builds the host-side enqueue operations and the device-side dequeue operation that must
+# agree on that configuration. It also provides a partitioned variant (private) that splits each
+# input tensor across the logical cores of a replica, and utility functions for partitioning or
+# replicating tensors on the host and tagging dequeued tensors with XLA sharding attributes.
+# There are no import-time side effects beyond imports. Used by the TPU training/compile code.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,6 +41,16 @@ from tensorflow.python.util import nest
 
 
 def partition_or_replicate_on_host(tensor, dims):
+  # [FUNCTION DOC]
+  # Splits a tensor on the host into per-core pieces according to a partition spec, or repeats it.
+  # Inputs: tensor, a tensor with a fully known static shape; dims, a list of integers giving the
+  # number of pieces per axis, or nothing/null.
+  # Output: if dims is null, an endless iterator that yields the same tensor again and again
+  # (replication). Otherwise a flat list of tensor pieces, ordered by successive axis splits.
+  # Axes whose count is 1 or less are left alone. When an axis size is not divisible, pieces are
+  # sized greedily with the rounded-up ratio, and trailing pieces get the remainder or zero size,
+  # matching XLA's assumption. Adds split operations to the current graph; raises whatever the
+  # underlying split or shape queries raise when the shape is not fully defined.
   """Partitions or replicates the input tensor.
 
     The ops inside this function are placed on the host side.
@@ -79,6 +97,13 @@ def partition_or_replicate_on_host(tensor, dims):
 
 
 def _tag_sharding_attribute_for_dequeued_tensor(tensor, dims):
+  # [FUNCTION DOC]
+  # HELPER: used by tag_sharding_attribute_for_dequeued_tensors for each single tensor.
+  # Annotates one dequeued tensor with an XLA sharding attribute (tuple sharding form).
+  # Inputs: tensor, the dequeued tensor; dims, a list of integers describing the partitioning, or
+  # nothing/null. Null means the tensor is replicated; a product of 1 means it is assigned to
+  # device 0; otherwise a tiled assignment of device ids shaped like dims is attached.
+  # Returns the tensor carrying the sharding attribute. No exceptions raised directly.
   """Tags appropriate XLA sharding attribute to the dequeued tensor.
 
   The sharding attribute of the dequeued tensor will be a tuple.
@@ -103,6 +128,12 @@ def _tag_sharding_attribute_for_dequeued_tensor(tensor, dims):
 
 
 def tag_sharding_attribute_for_dequeued_tensors(dequeues, dims):
+  # [FUNCTION DOC]
+  # Applies XLA sharding attributes to every tensor in a nested structure of dequeued tensors.
+  # Inputs: dequeues, a (possibly nested) structure of dequeued tensors; dims, a structure whose
+  # shape is a prefix of dequeues, holding the partition list for each corresponding entry.
+  # Returns a structure like dequeues with each tensor tagged. Raises a value or type error if
+  # dims is not a shallow structure of dequeues.
   """Tags appropriate XLA sharding attribute to the dequeued tensors.
 
   Args:
@@ -118,6 +149,13 @@ def tag_sharding_attribute_for_dequeued_tensors(dequeues, dims):
 
 
 class InfeedQueue(object):
+  # [CLASS DOC]
+  # Describes a TPU infeed queue: a fixed-length tuple of tensors passed from host to device.
+  # State: per-element dtypes and shapes, one sharding policy per tuple element, a name, the
+  # number of partitions, a frozen flag, and flags recording whether enqueue and dequeue ops were
+  # already generated. Configuration can be set incrementally or inferred from input tensors,
+  # then is frozen when ops are generated so host enqueue and device dequeue stay consistent.
+  # Subclassed by the private partitioned queue.
   """A helper object to build a device infeed queue.
 
   The InfeedQueue builds the host-side and device-side Ops to enqueue and
@@ -132,6 +170,13 @@ class InfeedQueue(object):
                shard_dimensions=None,
                number_of_partitions=None,
                name=None):
+    # [FUNCTION DOC]
+    # Constructor. Builds one empty sharding policy per tuple element and optionally sets types,
+    # shapes and shard dimensions. The element count is taken from number_of_tuple_elements or,
+    # if missing, inferred from the length of tuple_types, tuple_shapes or shard_dimensions (in
+    # that order). number_of_partitions defaults to 1; name defaults to a generic queue name.
+    # Raises a value error if the count cannot be inferred or is not positive, plus any errors
+    # from the setters. Validates consistency at the end; the queue starts unfrozen.
     """Creates a new InfeedQueue with the given configuration.
 
     The configuration need not be fully specified at creation since it
@@ -204,6 +249,10 @@ class InfeedQueue(object):
     self._validate()
 
   def _validate(self):
+    # [FUNCTION DOC]
+    # HELPER: internal consistency check called after configuration changes.
+    # If shapes are set, asks each element's sharding policy to compute the sharded shape,
+    # which raises a value error when the policy cannot be applied to the shape. Returns nothing.
     """Checks that the configuration is self-consistent.
 
     Raises:
@@ -216,15 +265,24 @@ class InfeedQueue(object):
 
   @property
   def number_of_tuple_elements(self):
+    # [FUNCTION DOC]
+    # Read-only property: number of tensors in each queue element (one policy per element).
     """Returns the number of InfeedQueue tuple elements."""
     return len(self._sharding_policies)
 
   @property
   def tuple_types(self):
+    # [FUNCTION DOC]
+    # Read-only property: list of element dtypes, or nothing/null if not yet set.
     """Returns the types of the InfeedQueue tuple elements."""
     return self._tuple_types
 
   def set_tuple_types(self, tuple_types):
+    # [FUNCTION DOC]
+    # Sets the dtype of each queue element from a list of dtype-like values.
+    # Raises a value error if the list length differs from the element count, or, when frozen, if
+    # any type differs from the frozen one; raises a type error if an entry cannot be converted
+    # to a dtype. When frozen it only verifies and changes nothing. Returns nothing.
     """Sets the type of each element of the queue.
 
     tuple_types must be a list of length
@@ -262,10 +320,18 @@ class InfeedQueue(object):
 
   @property
   def tuple_shapes(self):
+    # [FUNCTION DOC]
+    # Read-only property: list of element tensor shapes, or nothing/null if not yet set.
     """Returns the shapes of the InfeedQueue tuple elements."""
     return self._tuple_shapes
 
   def set_tuple_shapes(self, tuple_shapes):
+    # [FUNCTION DOC]
+    # Sets the shape of each queue element from a list of shape-like values.
+    # Raises a value error if the list length differs from the element count; raises a type error
+    # if an entry cannot be converted to a tensor shape; when frozen, raises a value error if a
+    # shape differs from the frozen one (and changes nothing). Otherwise stores the shapes and
+    # re-validates against the sharding policies. Returns nothing.
     """Sets the shape of each element of the queue.
 
     tuple_shapes must be a list of length
@@ -308,11 +374,16 @@ class InfeedQueue(object):
 
   @property
   def sharding_policies(self):
+    # [FUNCTION DOC]
+    # Read-only property: the list of sharding policy objects, one per tuple element.
     """Returns the sharding policies of the InfeedQueue tuple elements."""
     return self._sharding_policies
 
   @property
   def shard_dimensions(self):
+    # [FUNCTION DOC]
+    # Read-only property: list with the shard dimension of each tuple element, with null entries
+    # for elements whose shard dimension has not been set.
     """Gets the shard dimension of each tuple element.
 
     Returns:
@@ -324,6 +395,10 @@ class InfeedQueue(object):
     return [policy.shard_dimension for policy in self._sharding_policies]
 
   def set_shard_dimensions(self, shard_dimensions):
+    # [FUNCTION DOC]
+    # Sets the dimension along which each element is sharded, from a list of dimension-like values.
+    # Raises a value error if the list length differs from the element count or if a policy
+    # rejects a dimension; then re-validates against the shapes. Returns nothing.
     """Sets the shard_dimension of each element of the queue.
 
     shard_dimensions must be a list of length
@@ -349,6 +424,9 @@ class InfeedQueue(object):
 
   @property
   def number_of_shards(self):
+    # [FUNCTION DOC]
+    # Read-only property: number of shards, read from the first policy since all policies share
+    # it; null if not yet set.
     """Gets the number of shards to use for the InfeedQueue.
 
     Returns:
@@ -358,6 +436,10 @@ class InfeedQueue(object):
     return self._sharding_policies[0].number_of_shards
 
   def set_number_of_shards(self, number_of_shards):
+    # [FUNCTION DOC]
+    # Sets the shard count on every sharding policy and also passes each policy the queue's
+    # number of partitions, then re-validates. Raises a value error (from the policies) if the
+    # count is not positive or conflicts with a frozen policy. Returns nothing.
     """Sets the number of shards to use for the InfeedQueue.
 
     Args:
@@ -374,6 +456,10 @@ class InfeedQueue(object):
     self._validate()
 
   def set_configuration_from_input_tensors(self, input_tensors):
+    # [FUNCTION DOC]
+    # Configures shapes and dtypes from a list of example tensors (one per tuple element).
+    # Raises a value error if the list length differs from the element count; otherwise calls
+    # the shape and type setters (which may raise if frozen and incompatible). Returns nothing.
     """Sets the shapes and types of the queue tuple elements.
 
     input_tensors is a list of Tensors whose types and shapes are used
@@ -394,6 +480,14 @@ class InfeedQueue(object):
     self.set_tuple_types([t.dtype for t in input_tensors])
 
   def set_configuration_from_sharded_input_tensors(self, input_tensors):
+    # [FUNCTION DOC]
+    # Configures the queue from per-shard inputs: a list (one per shard) of lists of tensors (one
+    # per tuple element). The outer length becomes the number of shards; per-element shard shapes
+    # are combined by each policy into the unsharded shape, and dtypes are taken from the first
+    # shard after checking all shards agree.
+    # Raises a value error if an inner list has the wrong length or shapes do not combine; raises
+    # a type error if dtypes differ between shards. Clears the stored shapes first if not frozen.
+    # Returns nothing.
     """Sets the shapes and types of the queue tuple elements.
 
     input_tensors is a list of lists of Tensors whose types and shapes are used
@@ -445,6 +539,12 @@ class InfeedQueue(object):
     self.set_tuple_types([t.dtype for t in input_tensors[0]])
 
   def freeze(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the frozen flag is set to true before the checks run, so a failed freeze
+    # (types or shapes missing) leaves the queue marked frozen even though an error is raised.
+    # Marks the queue as frozen so its configuration can no longer change, then requires all
+    # types and shapes (with known rank) to be set and freezes every sharding policy and
+    # re-validates. Raises a value error if types or shapes are missing. Returns nothing.
     """Freezes the InfeedQueue so it can no longer be modified.
 
     The configuration is implicitly frozen before any host-side or
@@ -471,6 +571,15 @@ class InfeedQueue(object):
     self._validate()
 
   def generate_dequeue_op(self, tpu_device=0):
+    # [FUNCTION DOC]
+    # Creates the device-side infeed-dequeue-tuple operation for one shard.
+    # Input: tpu_device, the TPU core ordinal to place the op on (default 0); if null no device
+    # scope is applied and the caller must already be in a TPU device scope.
+    # Freezes the queue first, and marks that a dequeue op was generated. The per-replica shapes
+    # are the sharded shapes converted to unpartitioned shapes. If the queue has more than one
+    # partition, the result is tagged with XLA sharding attributes derived from partitions.
+    # Returns the list of dequeued tensors. Raises a value error if shapes/types are unset, or if
+    # a dequeue op was already generated outside a function.
     """Generates the device-side Op to dequeue a tuple from the queue.
 
     Implicitly freezes the queue configuration if it is not already
@@ -522,6 +631,13 @@ class InfeedQueue(object):
                            index,
                            device=None,
                            tpu_ordinal=-1):
+    # [FUNCTION DOC]
+    # HELPER: builds the enqueue op for one shard on behalf of the public enqueue generators.
+    # Inputs: inputs, list of tensors for this shard; name_prefix and index, used to build a
+    # unique op name; device, a device string for the op or null to colocate with the first
+    # input; tpu_ordinal, target TPU ordinal (-1 when the device is itself a TPU).
+    # Returns the infeed-enqueue-tuple op. Raises a value error if device is null and the inputs
+    # are not all on the same device.
     """Generate a host-side Op to enqueue a tuple to the queue.
 
     If device is None the inputs are all required to have the same
@@ -573,6 +689,15 @@ class InfeedQueue(object):
                            sharded_inputs,
                            tpu_ordinal_function=None,
                            placement_function=None):
+    # [FUNCTION DOC]
+    # Builds host-side enqueue ops, one per shard, from already sharded inputs.
+    # Inputs: sharded_inputs, list (per shard) of lists of tensors; tpu_ordinal_function,
+    # optional callback from shard index to TPU ordinal (defaults to -1 for every shard);
+    # placement_function, optional callback from shard index to host device (default: colocate
+    # with the shard's inputs).
+    # Configures and freezes the queue from the inputs and marks enqueue ops as generated.
+    # Returns a list of ops. Raises a value error if enqueue ops were already generated outside a
+    # function or the shapes/devices are inconsistent; raises a type error on dtype mismatch.
     """Generates the host-side Ops to enqueue the shards of a tuple.
 
     sharded_inputs is a list, one for each shard, of lists of
@@ -635,9 +760,17 @@ class InfeedQueue(object):
   # have 8 devices per host, and figure out what to do with
   # model-parallelism.
   def _default_placement_function(self, index):
+    # [FUNCTION DOC]
+    # HELPER: default shard-to-host mapping for split_inputs_and_generate_enqueue_ops.
+    # KNOWN ISSUE: assumes exactly 8 devices per host (see the TODO above); the true division
+    # result is formatted as an integer, which truncates. Returns the CPU device string of the
+    # task index divided by 8 for the given shard index.
     return "/task:%d/device:CPU:0" % (index / 8)
 
   def _default_ordinal_function(self, index):
+    # [FUNCTION DOC]
+    # HELPER: default shard-to-TPU-ordinal mapping; assumes 8 TPU cores per host (see the TODO
+    # above). Returns the shard index modulo 8.
     return index % 8
 
   # TODO(b/36470756) remove this from tutorials once we have a better story
@@ -647,6 +780,17 @@ class InfeedQueue(object):
                                             device_assignment=None,
                                             placement_function=None,
                                             tpu_ordinal_function=None):
+    # [FUNCTION DOC]
+    # Takes whole (unsharded) inputs on one host, splits each along its shard dimension into the
+    # configured number of shards, and builds one enqueue op per shard. Slow on multi-host
+    # systems; intended for simple examples.
+    # Inputs: inputs, list of tensors (one per tuple element); device_assignment, optional TPU
+    # device assignment used to derive host device and ordinal per replica; placement_function
+    # and tpu_ordinal_function, optional callbacks from shard index to device string / ordinal.
+    # Missing callbacks default to the device assignment if given, else to the round-robin
+    # defaults assuming 8 cores per host. Configures and freezes the queue and marks enqueue ops
+    # as generated. Returns a list of enqueue ops, one per shard. Raises a value error if enqueue
+    # ops were already generated outside a function or the frozen configuration is incompatible.
     """POORLY-PERFORMING ON MULTI-HOST SYSTEMS.
 
     Generates the host-side Ops to enqueue a tuple.
@@ -704,9 +848,15 @@ class InfeedQueue(object):
     else:
 
       def _placement_function_from_map(index):
+        # [FUNCTION DOC]
+        # HELPER: placement callback; returns the host device of the replica given by index,
+        # according to the device assignment of the enclosing call.
         return device_assignment.host_device(replica=index)
 
       def _ordinal_function_from_map(index):
+        # [FUNCTION DOC]
+        # HELPER: ordinal callback; returns the TPU ordinal of the replica given by index,
+        # according to the device assignment of the enclosing call.
         return device_assignment.tpu_ordinal(replica=index)
 
       if placement_function is None:
@@ -724,6 +874,9 @@ class InfeedQueue(object):
     else:
 
       def split_fn(inp, num_shards, axis, name):
+        # [FUNCTION DOC]
+        # HELPER: splits one input tensor into num_shards equal pieces along axis, with the
+        # split op colocated with the input. Returns the list of pieces; name names the op.
         with ops.colocate_with(inp):
           return array_ops.split(inp, num_shards, axis=axis, name=name)
 
@@ -752,6 +905,11 @@ class InfeedQueue(object):
 
 
 class _PartitionedInfeedQueue(InfeedQueue):
+  # [CLASS DOC]
+  # HELPER: private infeed queue used when each replica's inputs are partitioned across several
+  # logical cores. Adds the device assignment, the id of the host, and per-input partition
+  # dimensions. Overrides dequeue and enqueue generation so each partition is fed to its own
+  # logical core, and adds validation of the partition dimensions.
   """A helper object to build a device infeed queue with input partition.
 
   Args:
@@ -775,6 +933,12 @@ class _PartitionedInfeedQueue(InfeedQueue):
                tuple_types=None,
                tuple_shapes=None,
                name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the tuple_shapes argument is accepted but ignored; shapes of None are always
+    # passed to the base constructor, so shapes must be set later from the input tensors.
+    # Constructor. Initialises the base queue with the element count, optional types and a default
+    # name, then stores input_partition_dims (nested lists of integers per input), the host id
+    # and the TPU device assignment. Raises what the base constructor raises.
     super(_PartitionedInfeedQueue, self).__init__(
         number_of_tuple_elements=number_of_tuple_elements,
         tuple_types=tuple_types,
@@ -786,6 +950,13 @@ class _PartitionedInfeedQueue(InfeedQueue):
     self._device_assignment = device_assignment
 
   def generate_dequeue_op(self, tpu_device=0):
+    # [FUNCTION DOC]
+    # Creates the device-side dequeue op for one partition on the TPU core given by tpu_device
+    # (ordinal, default 0; always applied as a device scope, unlike the base class). Freezes the
+    # queue and marks dequeue as generated. Uses the sharded shapes and then tags the result with
+    # sharding attributes from the input partition dims. Returns the list of dequeued tensors.
+    # Raises a value error if shapes/types are unset or dequeue was already generated outside a
+    # function.
     """Generate TPU dequeue ops.
 
     Args:
@@ -816,6 +987,16 @@ class _PartitionedInfeedQueue(InfeedQueue):
         values, self._input_partition_dims)
 
   def generate_enqueue_ops(self, sharded_inputs):  # pytype: disable=signature-mismatch  # overriding-parameter-count-checks
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the signature differs from the base class (no ordinal or placement callbacks),
+    # hence the type-checker suppression. The length check on partition dims is a bare assertion.
+    # Builds host-side enqueue ops for partitioned inputs: for each replica, every input is
+    # partitioned (or replicated) on the host and the pieces are fed to successive logical cores,
+    # each on the host device and TPU ordinal given by the device assignment. Inputs:
+    # sharded_inputs, list (per replica) of lists of tensors. Configures the queue from them.
+    # Returns a flat list of enqueue ops. Raises a value error for inconsistent shapes or invalid
+    # partition dims, a type error for dtype mismatches, and an assertion error if the partition
+    # dims length differs from the element count.
     """Generates the host-side Ops to enqueue the partitioned inputs.
 
     sharded_inputs is a list, one for each replica, of lists of
@@ -903,6 +1084,11 @@ class _PartitionedInfeedQueue(InfeedQueue):
     return enqueue_ops
 
   def _check_input_partition_dims(self, tensor, dims):
+    # [FUNCTION DOC]
+    # HELPER: validates partition dims for one input tensor. Null dims or a product of 1 pass
+    # without further checks. Otherwise raises a value error if any dim is below 1, if the product
+    # differs from cores per replica, or if the number of dims differs from the tensor rank, and
+    # requires the tensor shape to be fully defined. Returns nothing.
     """Checks that input partition dims are valid for the `Tensor`.
 
     Args:
@@ -941,6 +1127,10 @@ class _PartitionedInfeedQueue(InfeedQueue):
     tensor.shape.assert_is_fully_defined()
 
   def _check_dims_and_partition_or_replicate_on_host(self, tensor, dims):
+    # [FUNCTION DOC]
+    # HELPER: validates the partition dims, then partitions or replicates the tensor on the host.
+    # Returns an iterator (endless when dims is null) or list of pieces. Raises a value error on
+    # invalid dims.
     """Checks dims and partitions or replicates the input tensor.
 
       The ops inside this function are placed on the host side.

@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit tests for the TPU infeed queue configuration object: constructor argument handling,
+# modification of types, shapes, shard counts and shard dimensions, and freezing. Runs without
+# TPU hardware, since only configuration (not ops execution) is exercised.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,8 +27,16 @@ from tensorflow.python.tpu import tpu_feed
 
 
 class InfeedTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the InfeedQueue configuration API. Tests build queues directly and use
+  # small constant tensors; no shared fixtures.
 
   def testConstructor(self):
+    # [FUNCTION DOC]
+    # Constructs queues from only the element count, only types, only shapes, or only shard
+    # dimensions and asserts the element count is inferred and unset properties are null; the
+    # shard dimensions reach the policies. Then asserts a value error when nothing is given or
+    # when the lengths of the supplied lists disagree.
     """Tests that the constructor can be called with different arguments."""
     i = tpu_feed.InfeedQueue(number_of_tuple_elements=2)
     self.assertEqual(i.number_of_tuple_elements, 2)
@@ -62,6 +74,11 @@ class InfeedTest(test.TestCase):
       i = tpu_feed.InfeedQueue(tuple_shapes=[[1], [2, 3]], shard_dimensions=[1])
 
   def testModification(self):
+    # [FUNCTION DOC]
+    # Modifies an unfrozen queue: sets and resets types, shapes and shard counts, asserting the
+    # new values and value errors for wrong lengths. Then configures it from plain and sharded
+    # input tensors, asserting the combined shapes and types, and checks that changing the shard
+    # dimensions allows 3 shards while 4 shards raises a value error.
     """Tests modification of the queue post-construction."""
     i = tpu_feed.InfeedQueue(number_of_tuple_elements=2)
     i.set_tuple_types([dtypes.float32, dtypes.int32])
@@ -95,6 +112,10 @@ class InfeedTest(test.TestCase):
       i.set_number_of_shards(4)
 
   def testFreezing(self):
+    # [FUNCTION DOC]
+    # Configures a queue from sharded tensors, freezes it, and asserts that re-setting identical
+    # values is accepted while setting different shard counts, shapes, types or shard dimensions
+    # raises a value error and leaves the configuration unchanged.
     """Tests freezing the queue."""
     i = tpu_feed.InfeedQueue(number_of_tuple_elements=2)
     t1 = constant_op.constant(1, dtypes.int32, shape=[2])
