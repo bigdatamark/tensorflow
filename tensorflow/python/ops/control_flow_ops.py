@@ -1,3 +1,15 @@
+# [MODULE DOC]
+# Core control flow operations for TensorFlow graph construction: low-level frame primitives
+# (identity, next-iteration, enter, exit, switch, merge), the control flow context classes that
+# track which ops belong to a conditional, while loop or XLA scope (base ControlFlowContext,
+# CondContext, WhileContext, XLAControlFlowContext) together with their protocol-buffer
+# (de)serialization, and user-facing helpers for control dependencies (with_dependencies, group,
+# tuple, and the v2 tuple). It also re-exports every generated raw control flow op via a wildcard
+# import of the generated ops module, and keeps the builtin tuple type under a private alias
+# because this module redefines the name tuple. Import-time side effects: registers the exported
+# public API symbols (group, tuple, an internal enclosing-XLA-context getter) through the export
+# decorators and the dispatch machinery. Many functions here are internal building blocks used by
+# the cond and while_loop implementations in sibling modules.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -57,6 +69,13 @@ _basetuple = tuple
 
 
 def _Identity(tensor, name=None):
+  # [FUNCTION DOC]
+  # HELPER: internal building block for control flow (loop variables and switch outputs).
+  # Returns an identity of the given tensor. Inputs: tensor (a tensor or composite tensor; variables
+  # are first converted to tensors) and an optional op name. Reference-typed tensors go through the
+  # reference identity op, normal tensors through the ordinary identity op, and composite tensors
+  # are handled recursively component by component. Raises a type error for any other input.
+  # Creates identity ops in the current graph.
   """Return a tensor with the same shape and contents as the input tensor.
 
   Args:
@@ -83,6 +102,12 @@ def _Identity(tensor, name=None):
 
 
 def _NextIteration(tensor, name=None):
+  # [FUNCTION DOC]
+  # HELPER: internal building block for while loops (builds the back edge source).
+  # Inputs: tensor (a tensor or composite tensor) and an optional op name. Returns the output of a
+  # next-iteration op (the reference variant for reference-typed tensors); composite tensors are
+  # mapped recursively over their components. Raises a type error for any other input type.
+  # Adds next-iteration ops to the current graph.
   tensor = ops.internal_convert_to_tensor_or_composite(tensor, as_ref=True)
   if isinstance(tensor, tensor_lib.Tensor):
     if tensor.dtype._is_ref_dtype:  # pylint: disable=protected-access
@@ -103,6 +128,17 @@ def _Enter(tensor,
            use_ref=True,
            use_input_shape=True,
            name=None):
+  # [FUNCTION DOC]
+  # HELPER: internal building block that moves values into a loop frame.
+  # KNOWN ISSUE: the docstring's Raises section describes a value error about a shape invariant,
+  # but this function has no shape invariant parameter and never raises a value error itself; the
+  # only error it raises is a type error when the input is neither a tensor nor a composite tensor.
+  # Creates or finds a child frame and makes the tensor available inside it. Inputs: tensor (tensor
+  # or composite tensor), frame_name (unique frame name), is_constant (whether the value is constant
+  # in the frame, default false), parallel_iterations (max parallel iterations, default 10), use_ref
+  # (use the reference enter op for reference-typed tensors, default true), use_input_shape (copy the
+  # input static shape onto the result, default true), and an optional op name. Returns the entered
+  # tensor, or a structure of entered components for composite tensors. Adds enter ops to the graph.
   """Creates or finds a child frame, and makes `tensor` available to it.
 
   The unique `frame_name` is used by the `Executor` to identify frames. If
@@ -140,6 +176,9 @@ def _Enter(tensor,
   elif isinstance(tensor, composite_tensor.CompositeTensor):
 
     def enter_component(t):
+      # [FUNCTION DOC]
+      # HELPER: per-component callback used when entering a composite tensor. Takes one component
+      # tensor and returns it entered into the same frame with the same settings as the outer call.
       return _Enter(t, frame_name, is_constant, parallel_iterations, use_ref,
                     use_input_shape)
 
@@ -150,6 +189,11 @@ def _Enter(tensor,
 
 
 def exit(tensor, name=None):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # Exits the current frame to its parent frame, making the tensor available there. Inputs: tensor
+  # (tensor or composite tensor) and an optional op name. Returns the exit op output (reference exit
+  # for reference-typed tensors), or a structure of exited components for composite tensors. Raises a
+  # type error for any other input type. Adds exit ops to the current graph. Shadows the builtin name.
   """Exits the current frame to its parent frame.
 
   Exit makes its input `tensor` available to the parent frame.
@@ -175,6 +219,13 @@ def exit(tensor, name=None):  # pylint: disable=redefined-builtin
 
 
 def switch(data, pred, dtype=None, name=None):
+  # [FUNCTION DOC]
+  # Routes data to one of two outputs depending on a boolean predicate. Inputs: data (tensor or
+  # composite tensor), pred (scalar boolean, converted to a tensor), dtype (optional element type
+  # used when converting data), name (optional op name scope). Returns a pair (false output, true
+  # output); for composite tensors each component is switched separately and the pair is repacked
+  # into the original structure. Raises a type error if data is neither a tensor nor composite tensor.
+  # Adds switch ops to the graph.
   """Forwards `data` to an output determined by `pred`.
 
   If `pred` is false, the `data` input is forwarded to the first output.
@@ -212,6 +263,14 @@ def switch(data, pred, dtype=None, name=None):
 
 
 def _SwitchRefOrTensor(data, pred, name="Switch"):
+  # [FUNCTION DOC]
+  # HELPER: internal switch wrapper used by cond and while loop construction.
+  # Like the public switch but picks the reference-switch op for reference-typed tensors. Inputs:
+  # data (tensor or composite tensor), pred (scalar boolean), name (op name, default Switch).
+  # Returns the (false output, true output) pair. The ops are created with colocation constraints
+  # ignoring any existing colocation stack, so the switch is placed with the data and not with a
+  # variable being updated in an enclosing colocation scope. Raises a type error via switch for
+  # unsupported input types.
   """Forwards `data` to an output determined by `pred`.
 
   If `pred` is false, the `data` input is forwarded to the first output.
@@ -256,6 +315,16 @@ def _SwitchRefOrTensor(data, pred, name="Switch"):
 
 
 def merge(inputs, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says value errors come from indexed slices lacking a dense shape,
+  # but this function does not check that itself and also raises type errors that are undocumented.
+  # Returns the one available element among the inputs together with its index. Inputs: inputs (a
+  # list of tensors or composite tensors, at most one of which is available at run time) and an
+  # optional op name. Returns a pair (chosen value, index). Mixed tensors and indexed slices are
+  # all converted to indexed slices; all-reference inputs use the reference merge op; other
+  # composites are merged component by component and repacked, requiring identical structures.
+  # Raises a value error if any input is nothing/null, a type error if an input is not a tensor or
+  # composite tensor, and a structure-mismatch error from the structure check.
   """Returns the value of an available element of `inputs`.
 
   This op tests each of the tensors in `inputs` in turn to determine if any of
@@ -320,6 +389,9 @@ def merge(inputs, name=None):
 
 
 def _convert_tensorarray_to_flow(tensor_or_tensor_array):
+  # [FUNCTION DOC]
+  # HELPER: lets loop machinery treat tensor arrays as plain tensors. If the argument is a tensor
+  # array, returns its flow scalar tensor; otherwise returns the argument unchanged.
   if isinstance(tensor_or_tensor_array, tensor_array_ops.TensorArray):
     return tensor_or_tensor_array.flow
   else:
@@ -327,6 +399,10 @@ def _convert_tensorarray_to_flow(tensor_or_tensor_array):
 
 
 def _convert_flow_to_tensorarray(tensor_or_tensor_array, tensor_or_flow):
+  # [FUNCTION DOC]
+  # HELPER: inverse of the tensor-array-to-flow conversion. If the first argument is a tensor array,
+  # returns a new tensor array built from it with the given flow tensor; otherwise returns the second
+  # argument (the flow/tensor) unchanged.
   if isinstance(tensor_or_tensor_array, tensor_array_ops.TensorArray):
     return tensor_array_ops.build_ta_with_new_flow(tensor_or_tensor_array,
                                                    tensor_or_flow)
@@ -335,6 +411,9 @@ def _convert_flow_to_tensorarray(tensor_or_tensor_array, tensor_or_flow):
 
 
 def _convert_to_tensor_or_composite_or_tensorarray(var):
+  # [FUNCTION DOC]
+  # HELPER: converts a loop variable to a tensor form. Tensor arrays are returned unchanged; any
+  # other value is converted to a tensor or composite tensor (conversion errors propagate).
   if isinstance(var, tensor_array_ops.TensorArray):
     return var
   return ops.convert_to_tensor_or_composite(var)
@@ -342,6 +421,11 @@ def _convert_to_tensor_or_composite_or_tensorarray(var):
 
 # TODO(xjun): replace this with is_subtype_of after it is landed.
 def _ShapeLessThanOrEqual(shape1, shape2):
+  # [FUNCTION DOC]
+  # HELPER: shape comparison for loop shape invariants. Returns true if shape1 is at least as
+  # specific as shape2: always true when shape2 has unknown rank; false if ranks differ; otherwise
+  # every dimension known in shape2 must equal the matching dimension in shape1. Inputs are two
+  # tensor shapes; returns a boolean; no side effects.
   if shape2.dims is None:
     return True
   if shape1.ndims != shape2.ndims:
@@ -353,6 +437,14 @@ def _ShapeLessThanOrEqual(shape1, shape2):
 
 
 def _shape_invariant_to_type_spec(var, shape=None):
+  # [FUNCTION DOC]
+  # HELPER: normalizes a user supplied shape invariant for loop variables into a type spec.
+  # Inputs: var (tensor, tensor array or composite tensor; tensor arrays are first replaced by their
+  # flow) and shape (nothing/null, a type spec, or a tensor shape). With no shape, returns the type
+  # spec derived from var; a type spec is returned as is after checking compatibility with var; a
+  # tensor shape yields a tensor spec for plain tensors, or is delegated to the composite tensor's
+  # own method. Raises a type error for an incompatible type spec, an unsupported shape type, or a
+  # composite tensor that cannot be described by a tensor shape.
   """Converts a shape invariant to a TypeSpec.
 
   If `var` is a TensorArray, it will first be converted to its flow.
@@ -396,6 +488,13 @@ def _shape_invariant_to_type_spec(var, shape=None):
 
 
 def _EnforceShapeInvariant(merge_var, next_var):
+  # [FUNCTION DOC]
+  # HELPER: validates loop variable shape invariants during while loop construction.
+  # Inputs: merge_var (the merge output holding the initial loop value) and next_var (the value after
+  # one iteration). Compares static shapes and raises a value error with advice about the shape
+  # invariants argument when the new shape is less specific than the entering shape. Raises a type
+  # error if merge_var is not a plain tensor (this is not documented in the docstring). Asserts that
+  # the merge input comes from a loop enter op. Returns nothing.
   """Check if the shapes of the loops variables are invariants.
 
   Args:
@@ -426,6 +525,15 @@ def _EnforceShapeInvariant(merge_var, next_var):
 
 
 def _AddNextAndBackEdge(m, v, enforce_shape_invariant=True):
+  # [FUNCTION DOC]
+  # HELPER: closes a while loop by connecting the loop body result back to the merge node.
+  # KNOWN ISSUE: for composite tensors it returns the result of mapping an update callback that
+  # returns nothing, so the return value is a structure of null values rather than the new value,
+  # inconsistent with the plain tensor case. Raises a type error for other input types.
+  # Inputs: m (merge output, tensor or composite tensor), v (new value), enforce_shape_invariant
+  # (check shapes first, default true; applies to plain tensors only). Wraps v in a next-iteration op
+  # and rewires the second input of the merge op(s) to it. Returns the next-iteration value for plain
+  # tensors.
   """Add NextIteration and back edge from v to m."""
   if isinstance(m, tensor_lib.Tensor):
     v = ops.convert_to_tensor(v)
@@ -440,6 +548,9 @@ def _AddNextAndBackEdge(m, v, enforce_shape_invariant=True):
   elif isinstance(m, composite_tensor.CompositeTensor):
     # pylint: disable=protected-access
     def update_component(m_component, v_component):
+      # [FUNCTION DOC]
+      # HELPER: per-component callback. Rewires the second input of the merge op of the given
+      # component to the matching new component. Returns nothing (mutates the graph).
       m_component.op._update_input(1, v_component)
 
     if isinstance(m, indexed_slices.IndexedSlices):
@@ -454,6 +565,15 @@ def _AddNextAndBackEdge(m, v, enforce_shape_invariant=True):
 
 
 class ControlFlowContext(metaclass=abc.ABCMeta):
+  # [CLASS DOC]
+  # Abstract base class for control flow contexts (conditional, while loop, XLA), used during graph
+  # construction to record which values and ops belong to a scope. State: the list of nested
+  # contexts, the enclosing (outer) context captured from the default graph at creation (and this
+  # context registers itself as nested in it), a stack of previously active contexts used by enter
+  # and exit, the set of tensor names seen in the context, and a mapping from external tensor names
+  # to the tensors this context uses in their place. Subclasses must supply the name, gradient
+  # state, back-prop flag and serialization; the base class provides entering/exiting the context
+  # on the default graph, protocol-buffer value (de)serialization and default no-op hooks.
   """The base class for control flow context.
 
   The usage pattern is a sequence of (Enter, Exit) followed by a final
@@ -472,6 +592,12 @@ class ControlFlowContext(metaclass=abc.ABCMeta):
   """
 
   def __init__(self, values_def=None, import_scope=None):
+    # [FUNCTION DOC]
+    # Creates the base context state. Inputs: values_def (optional serialized values definition) and
+    # import_scope (optional name scope prefix, used only when restoring from values_def). Reads the
+    # current context of the default graph as the outer context and, if one exists, appends this
+    # context to its nested contexts (side effect on the outer context). With values_def the seen and
+    # external value sets are rebuilt from it; otherwise they start empty.
     self._nested_contexts = []
     self._outer_context = ops.get_default_graph()._get_control_flow_context()
     if self._outer_context:
@@ -488,6 +614,12 @@ class ControlFlowContext(metaclass=abc.ABCMeta):
       self._external_values = {}
 
   def _init_values_from_proto(self, values_def, import_scope=None):
+    # [FUNCTION DOC]
+    # HELPER: deserialization step for the base context. Restores the set of seen tensor names and
+    # the mapping of external tensors from a values definition, prepending the import scope to every
+    # name and resolving them in the default graph. Also sets this context as the control flow
+    # context of every internal op named in the values. Asserts the argument has the right message
+    # type. Returns nothing.
     """Initializes values and external_values from `ValuesDef` protocol buffer.
 
     Args:
@@ -515,23 +647,40 @@ class ControlFlowContext(metaclass=abc.ABCMeta):
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the base class never sets the name attribute; it relies on subclasses to assign it
+    # in their constructors, so accessing it on a bare base instance raises an attribute error.
+    # Property returning the unique name of this context.
     return self._name
 
   @property
   def outer_context(self):
+    # [FUNCTION DOC]
+    # Property returning the context that was active in the graph when this one was created, or
+    # nothing/null if this is outermost.
     """Return the context containing this context."""
     return self._outer_context
 
   @property
   def grad_state(self):
+    # [FUNCTION DOC]
+    # Abstract property: the gradient loop state. Always raises a not-implemented error here;
+    # subclasses override it.
     raise NotImplementedError("Abstract method")
 
   @property
   def back_prop(self):
+    # [FUNCTION DOC]
+    # Abstract property: whether backpropagation is enabled. Always raises a not-implemented error
+    # here; subclasses override it.
     raise NotImplementedError("Abstract method")
 
   @abc.abstractmethod
   def to_control_flow_context_def(self, context_def, export_scope=None):
+    # [FUNCTION DOC]
+    # Abstract method: serializes this context into the given context definition message. Inputs:
+    # context_def (message to fill) and export_scope (optional name scope to strip). Raises a
+    # not-implemented error in the base class; subclasses override it.
     """Serializes this into `context_def`.
 
     Args:
@@ -541,6 +690,10 @@ class ControlFlowContext(metaclass=abc.ABCMeta):
     raise NotImplementedError("Abstract method")
 
   def _to_values_def(self, export_scope=None):
+    # [FUNCTION DOC]
+    # HELPER: serialization helper for subclasses. Builds a values definition message holding the
+    # sorted names of seen tensors and the external-value mapping, stripping the export scope from
+    # all names. Input: export_scope (optional). Returns the message.
     """Converts the values to a `ValuesDef` protocol buffer.
 
     Args:
@@ -558,46 +711,76 @@ class ControlFlowContext(metaclass=abc.ABCMeta):
     return values_def
 
   def AddName(self, name):
+    # [FUNCTION DOC]
+    # Records a tensor name as seen in this context (adds it to the set of values). Returns nothing.
     self._values.add(name)
 
   # pylint: disable=protected-access
   def Enter(self):
+    # [FUNCTION DOC]
+    # Makes this the active control flow context of the default graph, pushing the previously active
+    # context onto this context's stack. Side effect on the graph; returns nothing.
     """Enter this control flow context."""
     graph = ops.get_default_graph()
     self._context_stack.append(graph._get_control_flow_context())
     graph._set_control_flow_context(self)
 
   def Exit(self):
+    # [FUNCTION DOC]
+    # Leaves this context: pops the previously saved context from the stack and makes it the active
+    # context of the default graph. Must be paired with a prior enter, otherwise popping an empty
+    # stack raises an error. Returns nothing.
     """Exit this control flow context."""
     graph = ops.get_default_graph()
     last_context = self._context_stack.pop()
     graph._set_control_flow_context(last_context)
 
   def EnterGradientColocation(self, op: ops.Operation, gradient_uid):
+    # [FUNCTION DOC]
+    # Hook called when gradient construction starts colocated with an op. Inputs: op and the
+    # gradient unique id. The base behavior forwards the call to the outer context if there is one;
+    # otherwise does nothing. Subclasses may override. Returns nothing.
     """Start building a gradient colocated with an op."""
     if self._outer_context:
       self._outer_context.EnterGradientColocation(op, gradient_uid)
 
   def ExitGradientColocation(self, op: ops.Operation, gradient_uid):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring is copied from the enter variant and says "Start building" although
+    # this method is the exit counterpart.
+    # Hook called when gradient construction colocated with an op ends. Inputs: op and the gradient
+    # unique id. Forwards to the outer context if any; otherwise does nothing. Returns nothing.
     """Start building a gradient colocated with an op."""
     if self._outer_context:
       self._outer_context.ExitGradientColocation(op, gradient_uid)
 
   def ExitResult(self, result):
+    # [FUNCTION DOC]
+    # Makes result tensors known to the outer context. Input: result, a (possibly nested) structure
+    # of tensors. If an outer context exists, every tensor name is added to its seen-values set.
+    # Returns nothing.
     """Make a list of tensors available in the outer context."""
     if self._outer_context:
       def fn(x):
+        # [FUNCTION DOC]
+        # HELPER: callback applied to each tensor; registers its name in the outer context and
+        # returns the tensor unchanged.
         self._outer_context.AddName(x.name)
         return x
       nest.map_structure(fn, result, expand_composites=True)
 
   def GetWhileContext(self):
+    # [FUNCTION DOC]
+    # Returns the nearest enclosing while-loop context (searching outward through outer contexts),
+    # or nothing/null if there is none.
     """Return the while context containing this context."""
     if self._outer_context:
       return self._outer_context.GetWhileContext()
     return None
 
   def _RemoveExternalControlEdges(self, op: ops.Operation):
+    # [FUNCTION DOC]
+    # HELPER: control dependency cleanup used when adding ops to a context. Input: op. If there is no\
     """Remove any external control dependency on this op."""
     while_ctxt = self.GetWhileContext()
     # A control input of `op` is internal if it is in the same while
@@ -621,28 +804,48 @@ class ControlFlowContext(metaclass=abc.ABCMeta):
   # pylint: enable=protected-access
 
   def AddInnerOp(self, op: ops.Operation):
+    # [FUNCTION DOC]
+    # Notifies this context that an op was added in a nested scope; the base behavior propagates the
+    # notification outward to the outer context if present. Input: op. Returns nothing.
     """Notifies a scope about an operator added to an inner scope."""
     if self._outer_context:
       self._outer_context.AddInnerOp(op)
 
   def GetControlPivot(self):
+    # [FUNCTION DOC]
+    # Returns the pivot op/tensor used to gate ops in this context; the base class has none and
+    # returns nothing/null.
     """Returns the pivot node for this context, or None."""
     return None
 
   def IsWhileContext(self):
+    # [FUNCTION DOC]
+    # Returns false; overridden by while contexts to return true.
     return False
 
   def IsCondContext(self):
+    # [FUNCTION DOC]
+    # Returns false; overridden by conditional contexts to return true.
     return False
 
   def IsXLAContext(self):
+    # [FUNCTION DOC]
+    # Returns false; overridden by XLA contexts to return true.
     return False
 
   def __str__(self):
+    # [FUNCTION DOC]
+    # String form of the context: simply its name.
     return self.name
 
 
 class CondContext(ControlFlowContext):
+  # [CLASS DOC]
+  # Control flow context for one branch of a conditional (cond) in a v1 graph. Holds the predicate
+  # tensor, the pivot tensor for this branch (the predicate switched to this branch), and the branch
+  # index (0 for false, 1 for true). Values from outside the branch that are used inside are routed
+  # through switch ops, ops without inputs get a control edge from the pivot, and branch outputs are
+  # built through switches. It can be serialized to and restored from a protocol buffer.
   """The context for the conditional construct."""
 
   def __init__(self,
@@ -652,6 +855,15 @@ class CondContext(ControlFlowContext):
                name="cond_text",
                context_def=None,
                import_scope=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: pred and pivot default to nothing/null, but without a context definition both are
+    # dereferenced to read names, so omitting them raises an attribute error.
+    # Creates a conditional context. Inputs: pred (boolean predicate tensor), pivot (predicate
+    # tensor in this branch), branch (0 or 1), name (base name made unique in the default graph,
+    # default cond_text), context_def (optional serialized definition to restore from) and
+    # import_scope (optional name scope, only used when restoring). Without context_def, registers
+    # the predicate as an external value, the pivot as a seen value, and sets this context on the
+    # pivot op.
     """Creates a `CondContext`.
 
     Args:
@@ -683,6 +895,11 @@ class CondContext(ControlFlowContext):
       pivot.op._set_control_flow_context(self)  # pylint: disable=protected-access
 
   def _init_from_proto(self, context_def, import_scope=None):
+    # [FUNCTION DOC]
+    # HELPER: restores state from a conditional context definition. Inputs: context_def and
+    # optional import_scope. Sets name, predicate, pivot and branch by resolving the named graph
+    # elements (with scope prefixed), then runs the base initialization with the saved values.
+    # Asserts the message type. Returns nothing.
     """Creates a new `CondContext` from protocol buffer.
 
     Args:
@@ -703,32 +920,52 @@ class CondContext(ControlFlowContext):
 
   @property
   def pred(self):
+    # [FUNCTION DOC]
+    # Property: the boolean predicate tensor of the conditional.
     return self._pred
 
   @property
   def pivot(self):
+    # [FUNCTION DOC]
+    # Property: the predicate tensor switched to this branch, used as the control pivot.
     return self._pivot
 
   @property
   def branch(self):
+    # [FUNCTION DOC]
+    # Property: which branch this context represents (0 for false, 1 for true).
     return self._branch
 
   @property
   def grad_state(self):
+    # [FUNCTION DOC]
+    # Property: the gradient loop state of the enclosing while context, or nothing/null if this
+    # conditional is not inside a while loop.
     if self.GetWhileContext():
       return self.GetWhileContext().grad_state
     return None
 
   @property
   def back_prop(self):
+    # [FUNCTION DOC]
+    # Property: the back-prop setting of the enclosing while context, or false when not inside one.
     if self.GetWhileContext():
       return self.GetWhileContext().back_prop
     return False
 
   def GetControlPivot(self):
+    # [FUNCTION DOC]
+    # Returns the pivot tensor for this branch (overrides the base version that returns nothing).
     return self._pivot
 
   def to_proto(self, export_scope=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: nested contexts are serialized without passing the export scope along, so nested
+    # names are not stripped.
+    # Serializes this context into a conditional context definition message. Input: export_scope
+    # (optional; only contexts whose name starts with it are exported, and the scope is stripped from
+    # names). Records name, predicate, pivot, branch, values and nested contexts. Returns the
+    # message, or nothing/null if the name does not match the export scope.
     """Converts a `CondContext` to a `CondContextDef` protocol buffer.
 
     Args:
@@ -757,6 +994,10 @@ class CondContext(ControlFlowContext):
 
   @staticmethod
   def from_proto(context_def, import_scope=None):
+    # [FUNCTION DOC]
+    # Static factory. Inputs: context_def (conditional context definition) and optional
+    # import_scope. Builds the context, enters it while recreating nested contexts from their
+    # definitions, exits it, and returns the new context.
     """Returns a `CondContext` object created from `context_def`."""
     ret = CondContext(context_def=context_def, import_scope=import_scope)
 
@@ -767,9 +1008,21 @@ class CondContext(ControlFlowContext):
     return ret
 
   def to_control_flow_context_def(self, context_def, export_scope=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: if serialization returns nothing/null (name outside export scope), copying that
+    # into the message fails instead of being skipped.
+    # Fills the conditional-context field of the given generic context definition with this context
+    # serialized (export_scope optional). Returns nothing.
     context_def.cond_ctxt.CopyFrom(self.to_proto(export_scope=export_scope))
 
   def AddValue(self, val):
+    # [FUNCTION DOC]
+    # Makes an outside tensor usable in this branch. Input: val (tensor). If already seen, returns
+    # its recorded external replacement (or val itself). Otherwise records it, recursively asks the
+    # outer context, then creates a switch on the predicate (without inheriting control
+    # dependencies) and takes the output for this branch, marks the switch op as non-fetchable and
+    # as belonging to this context, adds names to all enclosing contexts and remembers the mapping.
+    # Returns the tensor to use inside the branch.
     """Add `val` to the current context and its outer context recursively."""
     if val.name in self._values:
       # Use the real value if it comes from outer context. This is needed in
@@ -806,9 +1059,19 @@ class CondContext(ControlFlowContext):
     return result
 
   def AddOp(self, op: ops.Operation):
+    # [FUNCTION DOC]
+    # Registers an op in this context; simply delegates to the internal adder. Input: op.
     self._AddOpInternal(op)
 
   def _AddOpInternal(self, op: ops.Operation):
+    # [FUNCTION DOC]
+    # HELPER: core of adding an op to a conditional branch. Input: op. Ops without inputs lose
+    # external control edges and, unless a control input is already in this context, get a control
+    # edge from the pivot. For ops with inputs, each input is routed through the value-adding logic
+    # (with an exception for merge inputs coming from next-iteration ops) and rewired if replaced;
+    # function-call and symbolic-gradient ops also get a control edge from the pivot. Marks output
+    # names as seen here and in all outer contexts, prevents fetching of the op (except an outermost
+    # loop exit) and notifies the outer context. Mutates the op and graph; returns nothing.
     """Add `op` to the current context."""
     if not op.inputs:
       # If we're in a while loop, remove any control inputs from outside the
@@ -866,6 +1129,11 @@ class CondContext(ControlFlowContext):
       self._outer_context.AddInnerOp(op)
 
   def _ProcessOutputTensor(self, val):
+    # [FUNCTION DOC]
+    # HELPER: handles a tensor returned from a branch function. Input: val. If val was not created
+    # in this context (for example a function returning its argument), it is registered, routed
+    # through the outer context and then through a switch for this branch. Otherwise returns its
+    # external replacement if one exists. Returns the tensor to use as the branch output.
     """Process an output tensor of a conditional branch."""
     real_val = val
     if val.name not in self._values:
@@ -884,6 +1152,11 @@ class CondContext(ControlFlowContext):
     return real_val
 
   def _BuildCondTensor(self, v):
+    # [FUNCTION DOC]
+    # HELPER: converts one branch result into an output tensor. Input: v, an operation or a value.
+    # Operations are represented by the pivot with a control dependency on the op. Other values have
+    # tensor arrays replaced by their flow, are converted to a tensor and processed as branch
+    # outputs. Returns the resulting tensor.
     if isinstance(v, ops.Operation):
       # Use pivot as the proxy for this op.
       return with_dependencies([v], self._pivot)
@@ -893,6 +1166,14 @@ class CondContext(ControlFlowContext):
       return self._ProcessOutputTensor(ops.convert_to_tensor(v))
 
   def BuildCondBranch(self, fn):
+    # [FUNCTION DOC]
+    # Builds the subgraph for this branch. Input: fn, a callable with no arguments returning
+    # tensors, structures of tensors, an operation, or nothing. Summary ops created by fn are removed
+    # from the summary collection and attached as control dependencies of the result (a bare no-op
+    # when fn returned nothing). Variables are converted to tensors and every leaf is converted via
+    # the branch tensor builder. Returns a pair: the original result and the list of branch output
+    # tensors (the result is wrapped in a list if it is not a list or tuple); both are nothing/null
+    # when fn returns nothing and no summaries were added.
     """Add the subgraph defined by fn() to the graph."""
     pre_summaries = ops.get_collection(ops.GraphKeys._SUMMARY_COLLECTION)  # pylint: disable=protected-access
     original_result = fn()
@@ -921,6 +1202,8 @@ class CondContext(ControlFlowContext):
     return original_result, result
 
   def IsCondContext(self):
+    # [FUNCTION DOC]
+    # Returns true; marks this as a conditional context.
     return True
 
 
@@ -929,6 +1212,11 @@ class CondContext(ControlFlowContext):
 
 
 def _resource_safe_shape(t):
+  # [FUNCTION DOC]
+  # HELPER: shape lookup for loop accumulators. Input: t, a tensor. For resource tensors, follows
+  # the first-input chain back to the originating op and returns the static shape stored in its
+  # shape attribute (the shape of the variable pointed to); for other tensors returns a dynamic
+  # shape tensor created without optimization.
   """Returns the shape of t or the variable it points to."""
   if t.dtype == dtypes.resource:
     while t.op.inputs:
@@ -941,6 +1229,13 @@ def _resource_safe_shape(t):
 # not only conditionals and loops but also control dependency and
 # subgraphs.
 class WhileContext(ControlFlowContext):
+  # [CLASS DOC]
+  # Control flow context for a v1 while loop. Holds the maximum iterations, parallel iterations,
+  # back-prop and swap-memory settings, the gradient loop state, the pivot (loop termination
+  # condition), separate pivots for the predicate and body functions (used to control constants
+  # created there), and lists of enter and exit tensors for loop variables. Provides building of the
+  # loop (enter, merge, switch, next-iteration, exit), loop counters and gradient accumulators,
+  # and protocol buffer serialization.
   """The context for the loop construct."""
 
   def __init__(self,
@@ -952,6 +1247,14 @@ class WhileContext(ControlFlowContext):
                grad_state=None,
                context_def=None,
                import_scope=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring begins with four quote characters, so its text starts with a stray
+    # quote mark.
+    # Creates a while context. Inputs: maximum_iterations (optional loop bound tensor),
+    # parallel_iterations (positive integer, default 10), back_prop (default true), swap_memory
+    # (default false), name (base name, default while_context), grad_state (gradient loop state),
+    # context_def (optional serialized definition to restore from) and import_scope. Initializes
+    # from either the definition or the arguments and stores the gradient state.
     """"Creates a `WhileContext`.
 
     Args:
@@ -977,6 +1280,10 @@ class WhileContext(ControlFlowContext):
 
   def _init_from_args(self, maximum_iterations, parallel_iterations, back_prop,
                       swap_memory, name):
+    # [FUNCTION DOC]
+    # HELPER: argument initialization. Inputs as for the constructor (without definition or grad
+    # state). Raises a value error if parallel_iterations is not a positive integer. Sets the unique
+    # name, settings, empty enter/exit lists, no pivots, and remembers the default graph.
     """Creates a new `WhileContext` from arguments.
 
     Args:
@@ -1011,6 +1318,11 @@ class WhileContext(ControlFlowContext):
     self._graph = ops.get_default_graph()
 
   def _init_from_proto(self, context_def, import_scope=None):
+    # [FUNCTION DOC]
+    # HELPER: restores a while context from a definition. Inputs: context_def and optional
+    # import_scope. Resolves the maximum iterations, pivots, and enter/exit tensors by name in the
+    # default graph, runs base initialization, and when an import scope is used rewrites the frame
+    # name attribute of every loop-enter op to the new name. Asserts the message type. Returns nothing.
     """Creates a new `WhileContext` from protocol buffer.
 
     Args:
@@ -1066,45 +1378,67 @@ class WhileContext(ControlFlowContext):
 
   @property
   def maximum_iterations(self):
+    # [FUNCTION DOC]
+    # Property: the maximum number of iterations (tensor) or nothing/null if unbounded.
     """The maximum number of iterations that will be executed."""
     return self._maximum_iterations
 
   @property
   def parallel_iterations(self):
+    # [FUNCTION DOC]
+    # Property: number of loop iterations allowed to run in parallel.
     """The number of iterations allowed to run in parallel."""
     return self._parallel_iterations
 
   @property
   def back_prop(self):
+    # [FUNCTION DOC]
+    # Property: whether backpropagation is enabled for this loop.
     """True iff backprop is enabled for this while loop."""
     return self._back_prop
 
   @property
   def swap_memory(self):
+    # [FUNCTION DOC]
+    # Property: whether GPU-to-CPU memory swapping is enabled for this loop.
     """True iff GPU-CPU memory swap is enabled for this while loop."""
     return self._swap_memory
 
   @property
   def pivot(self):
+    # [FUNCTION DOC]
+    # Property: boolean tensor representing the loop termination condition (unset until built).
     """The boolean tensor representing the loop termination condition."""
     return self._pivot
 
   @property
   def loop_enters(self):
+    # [FUNCTION DOC]
+    # Property: list of enter tensors for the loop variables.
     """The list of enter tensors for loop variables."""
     return self._loop_enters
 
   @property
   def loop_exits(self):
+    # [FUNCTION DOC]
+    # Property: list of exit tensors for the loop variables.
     """The list of exit tensors for loop variables."""
     return self._loop_exits
 
   @property
   def grad_state(self):
+    # [FUNCTION DOC]
+    # Property: the gradient loop state given at construction (nothing/null for forward loops).
     """The gradient loop state."""
     return self._grad_state
 
   def to_proto(self, export_scope=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: nested contexts are serialized without the export scope being passed along.
+    # Serializes this loop into a while context definition. Input: export_scope (optional; only
+    # contexts whose name starts with it are exported, scope stripped from names). Records name,
+    # settings, optional maximum iterations, pivots, enter/exit names, values and nested contexts.
+    # Returns the message, or nothing/null if the name is outside the export scope.
     """Converts a `WhileContext` to a `WhileContextDef` protocol buffer.
 
     Args:
@@ -1145,10 +1479,18 @@ class WhileContext(ControlFlowContext):
       return None
 
   def to_control_flow_context_def(self, context_def, export_scope=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: if serialization yields nothing/null (name outside the export scope) the copy
+    # fails instead of being skipped.
+    # Fills the while-context field of the given generic context definition with this context
+    # serialized (export_scope optional). Returns nothing.
     context_def.while_ctxt.CopyFrom(self.to_proto(export_scope=export_scope))
 
   @staticmethod
   def from_proto(context_def, import_scope=None):
+    # [FUNCTION DOC]
+    # Static factory. Inputs: context_def (while context definition), import_scope (optional).
+    # Builds the context, enters it while recreating nested contexts, exits it and returns it.
     """Returns a `WhileContext` object created from `context_def`.
 
     Args:
@@ -1166,14 +1508,25 @@ class WhileContext(ControlFlowContext):
     return ret
 
   def GetWhileContext(self):
+    # [FUNCTION DOC]
+    # Returns this context itself (the nearest enclosing while context).
     return self
 
   def GetControlPivot(self):
+    # [FUNCTION DOC]
+    # Returns the body pivot if set, otherwise the predicate pivot (which may also be unset).
     if self._pivot_for_body is not None:
       return self._pivot_for_body
     return self._pivot_for_pred
 
   def AddValue(self, val):
+    # [FUNCTION DOC]
+    # Makes an outside tensor available inside the loop. Input: val (tensor). If new to this
+    # context (and not produced by it), it is recorded; when building a gradient loop and val comes
+    # from the forward loop, the forward history value is returned instead. Otherwise the value is
+    # first obtained from the outer context, then a constant enter op is created (no inherited
+    # control dependencies, feeding disabled), fixed up, recorded as an external value and returned.
+    # Already known values return their recorded replacement. Returns the tensor to use in the loop.
     """Add `val` to the current context and its outer context recursively."""
     result = val
     new_value = val.name not in self._values
@@ -1230,6 +1583,10 @@ class WhileContext(ControlFlowContext):
     return result
 
   def AddOp(self, op: ops.Operation):
+    # [FUNCTION DOC]
+    # Registers an op in the loop. Input: op. Shape, size and rank ops in a gradient loop whose
+    # input comes from the forward loop (and not in an XLA context) are moved into the input's own
+    # context to save memory; all others go to the internal adder.
     """Add `op` to the current context."""
     # For a reduction op, if op is in a grad context and its input is from
     # its forward context, moving op to the forward context means we would
@@ -1256,6 +1613,14 @@ class WhileContext(ControlFlowContext):
 
   #  pylint: disable=g-doc-args
   def _AddOpInternal(self, op: ops.Operation):
+    # [FUNCTION DOC]
+    # HELPER: core of adding an op to the loop. Input: op. Partitioned-call ops get a control edge
+    # from the control pivot. Ops with no inputs lose external control edges and, if no internal
+    # control inputs remain, get a control edge from the pivot; their outputs are recorded. Ops with
+    # inputs have each input routed through the value-adding logic and rewired, then get a loop-invariant
+    # control dependency guard. External control inputs are replaced by identity ops created inside the
+    # loop. Output names are recorded, fetching/feeding blocked and the outer context notified.
+    # Mutates graph and context; returns nothing.
     """Add `op` to the current context.
 
     We move any external control dependencies of the op to the loop pivot, to
@@ -1309,9 +1674,18 @@ class WhileContext(ControlFlowContext):
       self._outer_context.AddInnerOp(op)
 
   def _MaybeAddControlDependency(self, op: ops.Operation):
+    # [FUNCTION DOC]
+    # HELPER: guards ops that depend only on loop invariants. Input: op. If the op has no control
+    # inputs and either is a function call / symbolic gradient op or all its inputs come from
+    # constant (loop-invariant) enter ops, adds a control edge from the control pivot so the op runs
+    # only when the loop iterates. Mutates the op; returns nothing.
     """Add a control input to the op if it only depends on loop invariants."""
 
     def _IsOpFree(op):
+      # [FUNCTION DOC]
+      # HELPER: predicate for the guard above. Input: op. Returns false if it already has control
+      # inputs; true if it is a function-call or symbolic-gradient op; otherwise true only when every
+      # input is produced by a loop-constant enter op.
       """Determines if `op` needs a control dependency."""
       if op.control_inputs:
         return False
@@ -1330,6 +1704,14 @@ class WhileContext(ControlFlowContext):
       # pylint: enable=protected-access
 
   def AddForwardLoopCounter(self, outer_grad_state):
+    # [FUNCTION DOC]
+    # Adds a counting loop to the forward loop, used when starting to build the gradient loop; must
+    # be called in the outer context of this forward context. Input: outer_grad_state (the outer
+    # gradient state, or nothing/null if not nested). Creates a zero-initialized counter (ordered
+    # after the outer index add op when nested), enters it into this loop, increments it on every
+    # iteration using the loop pivot, and exits the final count. Registers the new enter and exit
+    # tensors in the loop lists. Returns a pair: the total iteration count tensor and the
+    # next-iteration tensor of the counter.
     """Adds a loop that counts the number of iterations.
 
     This is added to the forward loop at the time when we start to
@@ -1379,6 +1761,14 @@ class WhileContext(ControlFlowContext):
     return total_iterations, next_n
 
   def AddBackpropLoopCounter(self, count, outer_grad_state):
+    # [FUNCTION DOC]
+    # Adds the counter loop that controls termination of the backprop loop. Inputs: count (number
+    # of iterations to run backward) and outer_grad_state (outer gradient state or nothing/null).
+    # If the count lives in another graph it is brought in via an identity. Builds enter/merge,
+    # a greater-or-equal-one test as the loop condition (sets both the predicate pivot and the
+    # pivot), switch, subtraction (set as the body pivot), next-iteration and exit ops, records the
+    # enter and exit tensors, and, when nested, adds the exit as a control input of the outer
+    # gradient sync op. Returns the next-iteration tensor of the counter (the loop index).
     """Add the backprop loop that controls the iterations.
 
     This is added to the backprop loop. It is used to control the loop
@@ -1445,6 +1835,15 @@ class WhileContext(ControlFlowContext):
     return next_count
 
   def AddBackpropAccumulator(self, op: ops.Operation, grad):
+    # [FUNCTION DOC]
+    # Adds an accumulation loop that sums the per-iteration partial gradient of a loop invariant.
+    # Called while in the gradient while context. Inputs: op (the enter op of the loop invariant) and
+    # grad (partial gradient tensor of one iteration). Temporarily leaves this context and builds a
+    # zero accumulator in the outer context, with the shape taken statically from grad when fully
+    # known, else computed dynamically from the forward value (using forward history when nested
+    # in another gradient loop). Re-enters, then builds enter, merge, switch, add, next-iteration and
+    # exit ops. Registers enter/exit tensors and exposes the exit through the outer context.
+    # Returns the accumulated gradient tensor.
     """Add an accumulation loop for every loop invariant.
 
     This is added to the backprop loop. It is used to accumulate partial
@@ -1527,6 +1926,15 @@ class WhileContext(ControlFlowContext):
     return result_acc
 
   def AddBackpropIndexedSlicesAccumulator(self, op: ops.Operation, grad):
+    # [FUNCTION DOC]
+    # Variant of the accumulator for gradients that are indexed slices (efficient for embedding
+    # updates). Inputs: op (the enter op of the loop invariant) and grad (indexed slices with values,
+    # indices and optional dense shape). Leaves this context to build initial accumulators in the
+    # outer context (one row of zeros for values, a single zero index, and a zero dense shape when
+    # present), re-enters, and builds per-component enter/merge/switch loops that concatenate new
+    # indices and values each iteration, and keep the elementwise maximum for the dense shape. The
+    # enters do not copy input shapes since accumulators grow. Registers enter/exit tensors.
+    # Returns indexed slices made from the exit tensors (dense shape omitted if the gradient had none).
     """This is used for accumulating gradients that are IndexedSlices.
 
     This is essentially the equivalent of AddBackpropAccumulator but optimized
@@ -1630,6 +2038,10 @@ class WhileContext(ControlFlowContext):
         dense_shape=exit_acc[2] if shape_acc is not None else None)
 
   def _InitializeValues(self, values):
+    # [FUNCTION DOC]
+    # HELPER: resets the set of names seen in this context to the names of the given tensors.
+    # Input: values (list of tensors). Raises a type error if any element is not a tensor. Replaces
+    # the previous contents of the seen-values set. Returns nothing.
     """Makes the values known to this context."""
     self._values = set()
     for x in values:
@@ -1641,6 +2053,20 @@ class WhileContext(ControlFlowContext):
 
   def _BuildLoop(self, pred, body, flat_orig_loop_vars, flat_loop_vars,
                  loop_vars_signature):
+    # [FUNCTION DOC]
+    # HELPER: core of loop construction (called with this context already entered). Inputs: pred
+    # (callable producing the continue condition from loop variables), body (callable producing new
+    # loop variables), flat_orig_loop_vars (flat original variables, used to detect tensor arrays),
+    # flat_loop_vars (flat tensors, tensor arrays replaced by flow), and loop_vars_signature
+    # (structure of type specs carrying shape invariants). Makes variables known to outer contexts,
+    # creates enter ops (checking each initial shape against its invariant), fixes control inputs,
+    # builds merge, the loop condition from pred, switches, and the body on identities of the true
+    # outputs; summaries created in the body are attached as control dependencies; checks that body
+    # output structure matches the inputs; closes the loop via next-iteration/back edges; adds exit
+    # ops and exposes them to the outer context. Raises a value error if a shape invariant is
+    # incompatible with the initial shape or if the body returns a different number of values, and
+    # structure errors on mismatches. Returns a pair: the original body result structure and the
+    # list of exit tensors. Mutates graph, context lists and pivots.
     """Core: Add the loop termination condition and body to the graph."""
     flat_shape_invariants = nest.map_structure(
         lambda spec: spec.shape,
@@ -1736,6 +2162,10 @@ class WhileContext(ControlFlowContext):
       with ops.control_dependencies(new_summaries):
 
         def map_fn(x):
+          # [FUNCTION DOC]
+          # HELPER: callback applied to each body result when summaries were created. Tensor arrays
+          # pass through unchanged; every other value is replaced by an identity so the summary
+          # control dependencies apply to it.
           # TODO(apassos) figure out how to trigger with tensor arrays as well
           if isinstance(x, tensor_array_ops.TensorArray):
             return x
@@ -1781,6 +2211,15 @@ class WhileContext(ControlFlowContext):
 
   def BuildLoop(self, pred, body, loop_vars, shape_invariants,
                 return_same_structure):
+    # [FUNCTION DOC]
+    # Public entry for building the loop. Inputs: pred (condition callable), body (body callable),
+    # loop_vars (structure of tensors, composite tensors or tensor arrays), shape_invariants
+    # (optional structure matching loop_vars with shapes or type specs), and return_same_structure
+    # (keep the loop_vars structure even for a single variable). Converts variables (tensor arrays to
+    # flow tensors), derives type specs for shape invariants, enters this context, builds the loop
+    # while holding the graph mutation lock, always exits the context, and converts flow outputs back
+    # to tensor arrays. Returns the exit values packed like the body result; when not preserving
+    # structure and there is a single variable, returns just that element.
     """Add the loop termination condition and body to the graph."""
 
     # Keep flat_orig_loop_vars to identify which are TensorArrays
@@ -1829,6 +2268,12 @@ class WhileContext(ControlFlowContext):
       return packed_exit_vars[0] if len(exit_vars) == 1 else packed_exit_vars
 
   def _FixControlInputsAndContext(self, enters):
+    # [FUNCTION DOC]
+    # HELPER: post-processes enter ops created for loop variables. Input: enters (list of tensors,
+    # otherwise a type error is raised). For each, sets the control flow context to this loop and
+    # adds only those control dependencies of the original input that belong to an ancestor context
+    # inside the outer while context; other control inputs are dropped. Records the op as seen by the
+    # graph's control dependency tracking. Mutates ops; returns nothing.
     graph = ops.get_default_graph()
     # pylint: disable=protected-access
     for e in enters:
@@ -1862,6 +2307,8 @@ class WhileContext(ControlFlowContext):
     # pylint: enable=protected-access
 
   def IsWhileContext(self):
+    # [FUNCTION DOC]
+    # Returns true; marks this as a while loop context.
     return True
 
 
@@ -1869,6 +2316,13 @@ class WhileContext(ControlFlowContext):
 
 
 def _AsTensorList(x, p):
+  # [FUNCTION DOC]
+  # HELPER: normalizes the outputs of cond-like branches to a list of tensors. Inputs: x (a tensor,
+  # KNOWN ISSUE: for indexed slices only values and indices are copied, so any dense shape is
+  # dropped from the result.
+  # indexed slices, operation, or list/tuple of them) and p (tensor used as the stand-in for
+  # operations). Operations become an identity of p with a dependency on the operation; every entry
+  # is converted and wrapped in an identity. Returns a list.
   """Return x as a list of Tensors or IndexedSlices.
 
   For entries of `x` that are Operations, this returns an Identity of `p`
@@ -1899,6 +2353,10 @@ def _AsTensorList(x, p):
 
 
 def _CheckResults(a, b):
+  # [FUNCTION DOC]
+  # HELPER: sanity check for two branch result lists. Inputs: a and b, lists of tensors. Asserts
+  # equal length and equal dtypes pairwise. Raises an assertion error with a message on mismatch
+  # (not a regular value error, and skipped if assertions are disabled). Returns nothing.
   assert len(a) == len(b), (
       "Values returned by a() and b() must have the same length.")
   for x, y in zip(a, b):
@@ -1908,6 +2366,15 @@ def _CheckResults(a, b):
 
 
 def with_dependencies(dependencies, output_tensor, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says a type error is raised for other inputs, but arbitrary values
+  # are converted to tensors instead and a type error arises only from the identity helper for
+  # unsupported types.
+  # Returns the content of output_tensor so that it is available only after the dependencies have
+  # run. Inputs: dependencies (iterable of operations), output_tensor (tensor or indexed slices) and
+  # optional name. In eager mode returns output_tensor unchanged. In graph mode, creates identity
+  # ops under the control dependencies, colocated with the tensor; for indexed slices only the
+  # values pass through the identity and indices and dense shape are reused.
   """Produces the content of `output_tensor` only after `dependencies`.
 
   In some cases, a user may want the output of an operation to be
@@ -1946,6 +2413,10 @@ def with_dependencies(dependencies, output_tensor, name=None):
 
 
 def _GroupControlDeps(dev, deps, name=None):
+  # [FUNCTION DOC]
+  # HELPER for the group function. Inputs: dev (device string or nothing/null), deps (operations or
+  # tensors to depend on) and optional name. Creates a no-op that has control dependencies on all
+  # deps, placed on the device when one is given. Returns the no-op operation.
   with ops.control_dependencies(deps):
     if dev is None:
       return no_op(name=name)
@@ -1957,6 +2428,16 @@ def _GroupControlDeps(dev, deps, name=None):
 # TODO(touts): Accept "inputs" as a list.
 @tf_export("group")
 def group(*inputs, **kwargs):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: in eager mode it returns early before checking keyword arguments, so unknown
+  # keywords are silently accepted there; also the docstring says it returns an operation but eager
+  # mode returns nothing.
+  # Creates an operation that finishes only when all given inputs have finished (no output). Inputs:
+  # any number of tensors/operations (nested structures are flattened) and the optional keyword
+  # name; any other keyword raises a value error. Inputs lacking a device attribute raise a type
+  # error. Returns nothing/null in eager mode; with no inputs returns a no-op; with inputs on a
+  # single device returns one no-op depending on them; across several devices builds one grouped
+  # no-op per device (sorted by device name) and a root no-op depending on those.
   """Create an op that groups multiple operations.
 
   When this op finishes, all ops in `inputs` have finished. This op has no
@@ -2024,6 +2505,9 @@ def group(*inputs, **kwargs):
     deps = []
 
     def device_key(dev):
+      # [FUNCTION DOC]
+      # HELPER: sort key for device names; maps a missing device (nothing/null) to the empty
+      # string so that it can be compared with strings.
       """A sort key that allows None to be compared to strings."""
       return "" if dev is None else dev
 
@@ -2037,6 +2521,11 @@ def group(*inputs, **kwargs):
 @tf_export("tuple", v1=[])
 @dispatch.add_dispatch_support
 def tuple_v2(tensors, control_inputs=None, name=None):
+  # [FUNCTION DOC]
+  # Public v2 wrapper of the tuple function (exported as tuple). Inputs: tensors (list of tensors,
+  # indexed slices, or null entries), control_inputs (optional additional operations to finish
+  # first) and name. Simply forwards to the module's v1 tuple implementation with the arguments
+  # reordered and returns its result; errors propagate from there.
   """Groups tensors together.
 
   The returned tensors have the same value as the input tensors, but they
@@ -2106,6 +2595,16 @@ def tuple_v2(tensors, control_inputs=None, name=None):
 @tf_export(v1=["tuple"])
 @dispatch.add_dispatch_support
 def tuple(tensors, name=None, control_inputs=None):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # Returns tensors with the same values as the inputs, but each available only after all inputs and
+  # extra control inputs have been computed (a join point). Inputs: tensors (list of tensors,
+  # indexed slices, operations or null entries), name, control_inputs (additional operations or
+  # tensors that must finish). Eager mode returns the input unchanged. In graph mode, non-tensor
+  # values are converted, the underlying operations are collected and de-duplicated in creation order,
+  # grouped into one gate, and each tensor is re-emitted with a dependency on the gate (operations
+  # are regrouped under the gate, null entries stay null). Raises a type error for control inputs that
+  # are neither tensors nor operations and a value error if there is nothing to gate. Returns a list.
+  # Shadows the builtin tuple type in this module.
   """Group tensors together.
 
   This creates a tuple of tensors with the same values as the `tensors`
@@ -2178,28 +2677,48 @@ def tuple(tensors, name=None, control_inputs=None):  # pylint: disable=redefined
 
 
 class XLAControlFlowContext(ControlFlowContext):
+  # [CLASS DOC]
+  # Base class for XLA and TPU control flow contexts. It marks a region compiled by XLA: it reports
+  # that it is an XLA context, performs no per-op or per-value bookkeeping, and is looked up by
+  # the enclosing-XLA-context getter. Its name is fixed.
   """Base class for XLA and TPU control flow contexts."""
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Creates the context via the base constructor (registering with any current outer context)
+    # and sets the name to a fixed string. No arguments.
     super(XLAControlFlowContext, self).__init__()
     self._name = "XLAControlFlowContext"
 
   def to_control_flow_context_def(self, context_def, export_scope=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the base version always raises a not-implemented error, so serializing an XLA
+    # context always fails; inputs are the context definition message and optional export scope.
     # pylint: disable=useless-super-delegation
     # NOTE(slebedev): the method is required by `ControlFlowContext`.
+    # Required override that just delegates to the base class.
     super(XLAControlFlowContext,
           self).to_control_flow_context_def(context_def, export_scope)
 
   def IsXLAContext(self):
+    # [FUNCTION DOC]
+    # Returns true; identifies this as an XLA context.
     return True
 
   def AddOp(self, _):
+    # [FUNCTION DOC]
+    # Does nothing: XLA contexts do not track ops. The op argument is ignored.
     pass
 
   def AddValue(self, x):
+    # [FUNCTION DOC]
+    # Returns the given value unchanged: no switching or entering is done in XLA contexts.
     return x
 
   def RequiresUniqueFunctionRetracing(self):
+    # [FUNCTION DOC]
+    # Returns false: a function does not need retracing when this context changes. Subclasses may
+    # override.
     """Returns whether the tf.function should be retraced if the context changes.
     """
     return False
@@ -2207,6 +2726,11 @@ class XLAControlFlowContext(ControlFlowContext):
 
 @tf_export("__internal__.get_enclosing_xla_context", v1=[])
 def get_enclosing_xla_context():
+  # [FUNCTION DOC]
+  # Finds the XLA control flow context that encloses the current default graph. Walks the current
+  # control flow context and its outer contexts; if none is an XLA context, moves to the outer
+  # graph (for function graphs and v2 control flow) and repeats. Returns the XLA context, or
+  # nothing/null if there is none. Exported as an internal API. No side effects.
   """Recursively find and return the XLAControlFlowContext."""
   graph = ops.get_default_graph()
   while graph is not None:
@@ -2224,6 +2748,11 @@ def get_enclosing_xla_context():
 
 
 def from_control_flow_context_def(context_def, import_scope=None):
+  # [FUNCTION DOC]
+  # Deserializes a generic control flow context definition into the right context object. Inputs:
+  # context_def (message with either a conditional or a while field set) and optional import_scope.
+  # Returns a new conditional or while context (recreating nested contexts). Raises a
+  # not-implemented error if neither field is set.
   """Deserializes `context_def` into the appropriate ControlFlowContext.
 
   Args:
