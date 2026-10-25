@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Unit tests and micro-benchmarks for the image operations exposed through the image_ops module
+# (color-space conversions, gamma/hue/saturation/contrast/brightness adjustment, flips, rotation,
+# transposition, cropping, padding, resizing, bounding-box sampling, decoding/encoding of image
+# files, non-max suppression, SSIM/PSNR, total variation, and related helpers). Each test class
+# covers one family of ops and typically compares op output against a NumPy reference or
+# hand-computed values, in both eager and graph modes. Benchmark classes time ops on CPU/GPU and
+# report results through the benchmark framework. Importing the module has no side effects other
+# than defining the test classes; the main entry point runs the TensorFlow test runner.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -58,8 +67,15 @@ from tensorflow.python.platform import test
 
 
 class RGBToHSVTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering rgb_to_hsv and hsv_to_rgb: batch-vs-individual consistency, round trips
+  # and supported floating point dtypes. No shared fixtures; each test builds its own inputs.
 
   def testBatch(self):
+    # [FUNCTION DOC]
+    # Seeds NumPy, builds a random batch of five 2x7 RGB images in float32 and float64, converts
+    # to HSV and back both as a whole batch and image by image (unstack, map, stack). Asserts
+    # the batched and per-image results agree and that the round trip recovers the input.
     # Build an arbitrary RGB image
     np.random.seed(7)
     batch_size = 5
@@ -87,6 +103,9 @@ class RGBToHSVTest(test_util.TensorFlowTestCase):
       self.assertAllClose(batch2, inp)
 
   def testRGBToHSVRoundTrip(self):
+    # [FUNCTION DOC]
+    # Converts a fixed 2x2 RGB image (scaled to 0-1) to HSV and back for float32 and float64 in
+    # a cached session, and asserts the recovered RGB values are close to the original.
     data = [0, 5, 13, 54, 135, 226, 37, 8, 234, 90, 255, 1]
     for nptype in [np.float32, np.float64]:
       rgb_np = np.array(data, dtype=nptype).reshape([2, 2, 3]) / 255.
@@ -97,6 +116,10 @@ class RGBToHSVTest(test_util.TensorFlowTestCase):
       self.assertAllClose(rgb_tf, rgb_np)
 
   def testRGBToHSVDataTypes(self):
+    # [FUNCTION DOC]
+    # Regression test for GitHub issue 54855. Casts a fixed RGB image to float32, float64,
+    # float16 and bfloat16, runs rgb_to_hsv then hsv_to_rgb on CPU, and asserts the result is
+    # close to the cast input within a loose absolute tolerance of 0.01.
     # Test case for GitHub issue 54855.
     data = [0, 5, 13, 54, 135, 226, 37, 8, 234, 90, 255, 1]
     for dtype in [
@@ -112,10 +135,17 @@ class RGBToHSVTest(test_util.TensorFlowTestCase):
 
 
 class RGBToYIQTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering rgb_to_yiq and yiq_to_rgb. Matmul-based, so TensorFloat-32 is disabled
+  # for the test via a decorator.
 
   @test_util.run_without_tensor_float_32(
       "Calls rgb_to_yiq and yiq_to_rgb, which use matmul")
   def testBatch(self):
+    # [FUNCTION DOC]
+    # Builds a random batch of RGB images (float32 and float64), converts to YIQ and back as a
+    # batch and image by image, and asserts both paths agree and round-trip to the input within
+    # tolerance 1e-4 (relative and absolute).
     # Build an arbitrary RGB image
     np.random.seed(7)
     batch_size = 5
@@ -144,10 +174,17 @@ class RGBToYIQTest(test_util.TensorFlowTestCase):
 
 
 class RGBToYUVTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering rgb_to_yuv and yuv_to_rgb. Matmul-based, so TensorFloat-32 is disabled
+  # for the test via a decorator.
 
   @test_util.run_without_tensor_float_32(
       "Calls rgb_to_yuv and yuv_to_rgb, which use matmul")
   def testBatch(self):
+    # [FUNCTION DOC]
+    # Builds a random batch of RGB images (float32 and float64), converts to YUV and back as a
+    # batch and image by image, and asserts both paths agree and round-trip to the input within
+    # tolerance 1e-4 (relative and absolute).
     # Build an arbitrary RGB image
     np.random.seed(7)
     batch_size = 5
@@ -176,8 +213,17 @@ class RGBToYUVTest(test_util.TensorFlowTestCase):
 
 
 class GrayscaleToRGBTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering rgb_to_grayscale and grayscale_to_rgb, including input validation and
+  # static shape inference. Provides a NumPy reference grayscale conversion as a helper.
 
   def _RGBToGrayscale(self, images):
+    # [FUNCTION DOC]
+    # HELPER: NumPy reference implementation for the grayscale conversion tests.
+    # Takes a uint8 array of RGB images, either 3-D (height, width, 3) or 4-D with a leading
+    # batch dimension. Computes luma with weights 0.2989, 0.5870 and 0.1140 per pixel,
+    # truncates to an integer and returns a uint8 array with a trailing channel of size 1
+    # (batch dimension removed again if the input had none). No side effects.
     is_batch = True
     if len(images.shape) == 3:
       is_batch = False
@@ -197,6 +243,10 @@ class GrayscaleToRGBTest(test_util.TensorFlowTestCase):
     return out
 
   def _TestRGBToGrayscale(self, x_np):
+    # [FUNCTION DOC]
+    # HELPER: shared assertion routine for the RGB-to-grayscale test.
+    # Takes a uint8 RGB image array (3-D or 4-D), computes the expected grayscale via the NumPy
+    # reference, runs rgb_to_grayscale in a cached session and asserts exact equality.
     y_np = self._RGBToGrayscale(x_np)
 
     with self.cached_session():
@@ -206,6 +256,9 @@ class GrayscaleToRGBTest(test_util.TensorFlowTestCase):
       self.assertAllEqual(y_tf, y_np)
 
   def testBasicRGBToGrayscale(self):
+    # [FUNCTION DOC]
+    # Runs the grayscale helper on a tiny 4-D batched input and on a 3-D unbatched input,
+    # each holding two RGB pixels.
     # 4-D input with batch dimension.
     x_np = np.array(
         [[1, 2, 3], [4, 10, 1]], dtype=np.uint8).reshape([1, 1, 2, 3])
@@ -216,6 +269,9 @@ class GrayscaleToRGBTest(test_util.TensorFlowTestCase):
     self._TestRGBToGrayscale(x_np)
 
   def testBasicGrayscaleToRGB(self):
+    # [FUNCTION DOC]
+    # Converts a two-pixel grayscale image to RGB, both with a batch dimension (4-D) and
+    # without (3-D), and asserts each gray value is replicated across the three channels.
     # 4-D input with batch dimension.
     x_np = np.array([[1, 2]], dtype=np.uint8).reshape([1, 1, 2, 1])
     y_np = np.array(
@@ -238,6 +294,10 @@ class GrayscaleToRGBTest(test_util.TensorFlowTestCase):
       self.assertAllEqual(y_tf, y_np)
 
   def testGrayscaleToRGBInputValidation(self):
+    # [FUNCTION DOC]
+    # Verifies grayscale_to_rgb rejects bad inputs: a 3-D tensor whose last dimension is not 1
+    # must raise a value error saying the last dimension should be size 1, and a 1-D tensor
+    # must raise a value error saying the input must be at least two-dimensional.
     # tests whether the grayscale_to_rgb function raises
     # an exception if the input images' last dimension is
     # not of size 1, i.e. the images have shape
@@ -270,6 +330,10 @@ class GrayscaleToRGBTest(test_util.TensorFlowTestCase):
         image_ops.grayscale_to_rgb(x_tf)
 
   def testShapeInference(self):
+    # [FUNCTION DOC]
+    # In a fresh graph with placeholders, checks static shape inference: a partially known RGB
+    # shape maps to the same shape with a final dimension of 1 for rgb_to_grayscale and vice
+    # versa for grayscale_to_rgb, and fully unknown input shapes yield unknown output shapes.
     # Shape function requires placeholders and a graph.
     with ops.Graph().as_default():
       # Shape inference works and produces expected output where possible
@@ -298,8 +362,17 @@ class GrayscaleToRGBTest(test_util.TensorFlowTestCase):
 
 
 class AdjustGamma(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering adjust_gamma: rejection of negative gamma and comparison against NumPy
+  # power-law references for uint8 and float32 images at several gamma values. Uses two private
+  # helpers that implement the comparison for each dtype.
 
   def test_adjust_gamma_less_zero_float32(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring claims a white image is returned for gamma equal to zero, but
+    # the test actually passes gamma of -1 and expects an error.
+    # Builds a random float32 image and calls adjust_gamma with gamma -1; expects a value error
+    # or invalid-argument error whose message says gamma should be a non-negative real number.
     """White image should be returned for gamma equal to zero"""
     with self.cached_session():
       x_data = np.random.uniform(0, 1.0, (8, 8))
@@ -313,6 +386,11 @@ class AdjustGamma(test_util.TensorFlowTestCase):
         image_ops.adjust_gamma(x, gamma=-1)
 
   def test_adjust_gamma_less_zero_uint8(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring claims a white image is returned for gamma equal to zero, but
+    # the test actually passes gamma of -1 and expects an error.
+    # Same as the float32 variant but with a random uint8 image: adjust_gamma with gamma -1
+    # must raise a value error or invalid-argument error about a non-negative gamma.
     """White image should be returned for gamma equal to zero"""
     with self.cached_session():
       x_data = np.random.uniform(0, 255, (8, 8))
@@ -326,6 +404,12 @@ class AdjustGamma(test_util.TensorFlowTestCase):
         image_ops.adjust_gamma(x, gamma=-1)
 
   def test_adjust_gamma_less_zero_tensor(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring claims a white image is returned for gamma equal to zero, but
+    # the test actually passes a tensor gamma of -1.0 and expects an error.
+    # Gamma is supplied as a float32 constant tensor; the call and its evaluation must raise a
+    # value error or invalid-argument error about a non-negative gamma (the check may fire at
+    # run time because gamma is a tensor).
     """White image should be returned for gamma equal to zero"""
     with self.cached_session():
       x_data = np.random.uniform(0, 1.0, (8, 8))
@@ -341,6 +425,11 @@ class AdjustGamma(test_util.TensorFlowTestCase):
         self.evaluate(image)
 
   def _test_adjust_gamma_uint8(self, gamma):
+    # [FUNCTION DOC]
+    # HELPER: shared check for the uint8 gamma tests.
+    # Takes a gamma value, applies adjust_gamma to a random 8x8 uint8 image, truncates the
+    # result, and compares with a NumPy reference (scale to 0-1, raise to gamma, multiply by
+    # 255.5, clip to 0-255, truncate) within tolerance 1e-6.
     """Verifying the output with expected results for gamma
 
     correction for uint8 images
@@ -361,6 +450,10 @@ class AdjustGamma(test_util.TensorFlowTestCase):
       self.assertAllClose(y_tf, y_np, 1e-6)
 
   def _test_adjust_gamma_float32(self, gamma):
+    # [FUNCTION DOC]
+    # HELPER: shared check for the float32 gamma tests.
+    # Takes a gamma value, applies adjust_gamma to a random 8x8 image in 0-1, and compares with
+    # a NumPy reference (power then clip to 0-1) within tolerance 1e-6.
     """Verifying the output with expected results for gamma
 
     correction for float32 images
@@ -376,13 +469,19 @@ class AdjustGamma(test_util.TensorFlowTestCase):
       self.assertAllClose(y_tf, y_np, 1e-6)
 
   def test_adjust_gamma_one_float32(self):
+    # [FUNCTION DOC]
+    # Runs the float32 helper with gamma 1.0 (identity transform expected).
     """Same image should be returned for gamma equal to one"""
     self._test_adjust_gamma_float32(1.0)
 
   def test_adjust_gamma_one_uint8(self):
+    # [FUNCTION DOC]
+    # Runs the uint8 helper with gamma 1.0 (identity transform expected).
     self._test_adjust_gamma_uint8(1.0)
 
   def test_adjust_gamma_zero_uint8(self):
+    # [FUNCTION DOC]
+    # Runs the uint8 helper with gamma 0.0; every pixel should map to the maximum value.
     """White image should be returned for gamma equal
 
     to zero for uint8 images
@@ -390,6 +489,8 @@ class AdjustGamma(test_util.TensorFlowTestCase):
     self._test_adjust_gamma_uint8(gamma=0.0)
 
   def test_adjust_gamma_less_one_uint8(self):
+    # [FUNCTION DOC]
+    # Runs the uint8 helper with gamma 0.5 (brightening) and checks against the reference.
     """Verifying the output with expected results for gamma
 
     correction with gamma equal to half for uint8 images
@@ -397,6 +498,9 @@ class AdjustGamma(test_util.TensorFlowTestCase):
     self._test_adjust_gamma_uint8(gamma=0.5)
 
   def test_adjust_gamma_greater_one_uint8(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: despite the name "greater_one", the test uses gamma 1.0, not a value above 1.
+    # Runs the uint8 helper with gamma 1.0 and checks against the reference.
     """Verifying the output with expected results for gamma
 
     correction for uint8 images
@@ -404,6 +508,8 @@ class AdjustGamma(test_util.TensorFlowTestCase):
     self._test_adjust_gamma_uint8(gamma=1.0)
 
   def test_adjust_gamma_less_one_float32(self):
+    # [FUNCTION DOC]
+    # Runs the float32 helper with gamma 0.5 and checks against the reference.
     """Verifying the output with expected results for gamma
 
     correction with gamma equal to half for float32 images
@@ -411,6 +517,10 @@ class AdjustGamma(test_util.TensorFlowTestCase):
     self._test_adjust_gamma_float32(0.5)
 
   def test_adjust_gamma_greater_one_float32(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says gamma equal to two, but the code passes gamma 1.0, so the
+    # name and docstring do not match the exercised value.
+    # Runs the float32 helper with gamma 1.0 and checks against the reference.
     """Verifying the output with expected results for gamma
 
     correction with gamma equal to two for float32 images
@@ -418,6 +528,8 @@ class AdjustGamma(test_util.TensorFlowTestCase):
     self._test_adjust_gamma_float32(1.0)
 
   def test_adjust_gamma_zero_float32(self):
+    # [FUNCTION DOC]
+    # Runs the float32 helper with gamma 0.0; every pixel should map to 1.0.
     """White image should be returned for gamma equal
 
     to zero for float32 images
@@ -426,8 +538,15 @@ class AdjustGamma(test_util.TensorFlowTestCase):
 
 
 class AdjustHueTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering adjust_hue: fixed-value positive/negative shifts, batched input, a
+  # randomized comparison against a colorsys-based NumPy reference, shape validation and delta
+  # range validation.
 
   def testAdjustNegativeHue(self):
+    # [FUNCTION DOC]
+    # Applies a hue shift of -0.25 to a fixed 2x2 uint8 RGB image and asserts the output equals
+    # the precomputed expected pixel values exactly.
     x_shape = [2, 2, 3]
     x_data = [0, 5, 13, 54, 135, 226, 37, 8, 234, 90, 255, 1]
     x_np = np.array(x_data, dtype=np.uint8).reshape(x_shape)
@@ -443,6 +562,9 @@ class AdjustHueTest(test_util.TensorFlowTestCase):
       self.assertAllEqual(y_tf, y_np)
 
   def testAdjustPositiveHue(self):
+    # [FUNCTION DOC]
+    # Applies a hue shift of +0.25 to a fixed 2x2 uint8 RGB image and asserts the output equals
+    # the precomputed expected pixel values exactly.
     x_shape = [2, 2, 3]
     x_data = [0, 5, 13, 54, 135, 226, 37, 8, 234, 90, 255, 1]
     x_np = np.array(x_data, dtype=np.uint8).reshape(x_shape)
@@ -458,6 +580,9 @@ class AdjustHueTest(test_util.TensorFlowTestCase):
       self.assertAllEqual(y_tf, y_np)
 
   def testBatchAdjustHue(self):
+    # [FUNCTION DOC]
+    # Same data as the positive-shift test but shaped as a batch of two 1x2 images; adjusts hue
+    # by +0.25 and asserts the exact expected values, confirming batch support.
     x_shape = [2, 1, 2, 3]
     x_data = [0, 5, 13, 54, 135, 226, 37, 8, 234, 90, 255, 1]
     x_np = np.array(x_data, dtype=np.uint8).reshape(x_shape)
@@ -473,6 +598,11 @@ class AdjustHueTest(test_util.TensorFlowTestCase):
       self.assertAllEqual(y_tf, y_np)
 
   def _adjustHueNp(self, x_np, delta_h):
+    # [FUNCTION DOC]
+    # HELPER: NumPy reference for hue adjustment tests.
+    # Takes an array whose last dimension is 3 (RGB) and a hue shift; for every pixel converts
+    # to HSV with colorsys, adds the shift, wraps the hue into 0-1 using a modulus, converts
+    # back and returns an array shaped like the input. Asserts the last dimension is 3.
     self.assertEqual(x_np.shape[-1], 3)
     x_v = x_np.reshape([-1, 3])
     y_v = np.ndarray(x_v.shape, dtype=x_v.dtype)
@@ -491,6 +621,10 @@ class AdjustHueTest(test_util.TensorFlowTestCase):
     return y_v.reshape(x_np.shape)
 
   def _adjustHueTf(self, x_np, delta_h):
+    # [FUNCTION DOC]
+    # HELPER: runs the TensorFlow adjust_hue op for hue tests.
+    # Takes an RGB array and a hue shift, evaluates adjust_hue in a cached session and returns
+    # the result as a NumPy array.
     with self.cached_session():
       x = constant_op.constant(x_np)
       y = image_ops.adjust_hue(x, delta_h)
@@ -498,6 +632,12 @@ class AdjustHueTest(test_util.TensorFlowTestCase):
     return y_tf
 
   def testAdjustRandomHue(self):
+    # [FUNCTION DOC]
+    # For several image shapes (including 1000 pixels) and five channel-equality styles (all
+    # random, and red=green, red=blue, green=blue or all equal), generates random 0-255 RGB
+    # data and a random hue shift in -1..1, and asserts the TensorFlow op matches the NumPy
+    # colorsys reference within rtol 2e-5 and atol 1e-5. Raises an assertion error for an
+    # unknown style (cannot happen with the fixed list).
     x_shapes = [
         [2, 2, 3],
         [4, 2, 3],
@@ -534,6 +674,12 @@ class AdjustHueTest(test_util.TensorFlowTestCase):
         self.assertAllClose(y_tf, y_np, rtol=2e-5, atol=1e-5)
 
   def testInvalidShapes(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the test is effectively dead code. A local flag is set to false and the
+    # function returns immediately, so the assertions below (rank below 3 and a last dimension
+    # that is not 3 should fail) never run.
+    # Intended behavior: adjust_hue on a rank-2 input must raise a value error about rank at
+    # least 3, and on a 4x2x4 input must raise an op error about needing 3 channels.
     fused = False
     if not fused:
       # The tests are known to pass with the fused adjust_hue. We will enable
@@ -550,6 +696,11 @@ class AdjustHueTest(test_util.TensorFlowTestCase):
       self._adjustHueTf(x_np, delta_h)
 
   def testInvalidDeltaValue(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring misspells "interval" as "inetrval".
+    # Eager-mode only (skipped otherwise). Calls adjust_hue with delta 1.5 on a small uint8
+    # image and expects a value error or invalid-argument error saying delta must be in the
+    # interval from -1 to 1.
     """Delta value must be in the inetrval of [-1,1]."""
     if not context.executing_eagerly():
       self.skipTest("Eager mode only")
@@ -568,8 +719,20 @@ class AdjustHueTest(test_util.TensorFlowTestCase):
 
 
 class FlipImageBenchmark(test.Benchmark):
+  # [CLASS DOC]
+  # Benchmark class timing flip_left_right, random_flip_left_right and the batched random flip
+  # on a 299x299x3 (or 16-image batch) float32 variable. Private helpers take a device and CPU
+  # thread count; public benchmark methods bind them to CPU with one thread, all CPU threads
+  # and the default GPU. Results are printed and reported via the benchmark framework.
 
   def _benchmarkFlipLeftRight(self, device, cpu_count):
+    # [FUNCTION DOC]
+    # HELPER: shared benchmark body for flip_left_right.
+    # Takes a device string and a CPU thread count (or nothing for default). Builds a session
+    # with a config limiting intra-op threads when a count is given, creates a random float32
+    # image variable on the device, runs 100 warm-up and 1000 timed iterations of the flip op,
+    # prints the average step time in microseconds and reports the benchmark. Creates its own
+    # graph and session.
     image_shape = [299, 299, 3]
     warmup_rounds = 100
     benchmark_rounds = 1000
@@ -600,6 +763,10 @@ class FlipImageBenchmark(test.Benchmark):
         wall_time=step_time)
 
   def _benchmarkRandomFlipLeftRight(self, device, cpu_count):
+    # [FUNCTION DOC]
+    # HELPER: shared benchmark body for random_flip_left_right on a single 299x299x3 image.
+    # Same procedure as the plain flip benchmark helper (warm-up, timed loop, print and report)
+    # with the given device and CPU thread count.
     image_shape = [299, 299, 3]
     warmup_rounds = 100
     benchmark_rounds = 1000
@@ -630,6 +797,10 @@ class FlipImageBenchmark(test.Benchmark):
         wall_time=step_time)
 
   def _benchmarkBatchedRandomFlipLeftRight(self, device, cpu_count):
+    # [FUNCTION DOC]
+    # HELPER: shared benchmark body for random_flip_left_right on a batch of sixteen
+    # 299x299x3 images. Same warm-up, timing, print and report procedure as the single-image
+    # helpers.
     image_shape = [16, 299, 299, 3]
     warmup_rounds = 100
     benchmark_rounds = 1000
@@ -661,36 +832,62 @@ class FlipImageBenchmark(test.Benchmark):
         wall_time=step_time)
 
   def benchmarkFlipLeftRightCpu1(self):
+    # [FUNCTION DOC]
+    # Benchmarks flip_left_right on CPU limited to one thread.
     self._benchmarkFlipLeftRight("/cpu:0", 1)
 
   def benchmarkFlipLeftRightCpuAll(self):
+    # [FUNCTION DOC]
+    # Benchmarks flip_left_right on CPU with the default thread configuration.
     self._benchmarkFlipLeftRight("/cpu:0", None)
 
   def benchmarkFlipLeftRightGpu(self):
+    # [FUNCTION DOC]
+    # Benchmarks flip_left_right on the default GPU device name reported by the test library.
     self._benchmarkFlipLeftRight(test.gpu_device_name(), None)
 
   def benchmarkRandomFlipLeftRightCpu1(self):
+    # [FUNCTION DOC]
+    # Benchmarks random_flip_left_right on CPU limited to one thread.
     self._benchmarkRandomFlipLeftRight("/cpu:0", 1)
 
   def benchmarkRandomFlipLeftRightCpuAll(self):
+    # [FUNCTION DOC]
+    # Benchmarks random_flip_left_right on CPU with the default thread configuration.
     self._benchmarkRandomFlipLeftRight("/cpu:0", None)
 
   def benchmarkRandomFlipLeftRightGpu(self):
+    # [FUNCTION DOC]
+    # Benchmarks random_flip_left_right on the default GPU device.
     self._benchmarkRandomFlipLeftRight(test.gpu_device_name(), None)
 
   def benchmarkBatchedRandomFlipLeftRightCpu1(self):
+    # [FUNCTION DOC]
+    # Benchmarks batched random_flip_left_right on CPU limited to one thread.
     self._benchmarkBatchedRandomFlipLeftRight("/cpu:0", 1)
 
   def benchmarkBatchedRandomFlipLeftRightCpuAll(self):
+    # [FUNCTION DOC]
+    # Benchmarks batched random_flip_left_right on CPU with the default thread configuration.
     self._benchmarkBatchedRandomFlipLeftRight("/cpu:0", None)
 
   def benchmarkBatchedRandomFlipLeftRightGpu(self):
+    # [FUNCTION DOC]
+    # Benchmarks batched random_flip_left_right on the default GPU device.
     self._benchmarkBatchedRandomFlipLeftRight(test.gpu_device_name(), None)
 
 
 class AdjustHueBenchmark(test.Benchmark):
+  # [CLASS DOC]
+  # Benchmark class timing adjust_hue on a 299x299x3 float32 variable with a constant delta,
+  # on one CPU thread, all CPU threads and the default GPU.
 
   def _benchmarkAdjustHue(self, device, cpu_count):
+    # [FUNCTION DOC]
+    # HELPER: shared benchmark body for adjust_hue.
+    # Takes a device string and a CPU thread count (or nothing). Opens a benchmark session with
+    # the matching config, adjusts hue by 0.1, runs 100 warm-up plus 1000 timed iterations in
+    # one loop, prints the average step time in microseconds and reports the benchmark.
     image_shape = [299, 299, 3]
     warmup_rounds = 100
     benchmark_rounds = 1000
@@ -722,18 +919,32 @@ class AdjustHueBenchmark(test.Benchmark):
         wall_time=step_time)
 
   def benchmarkAdjustHueCpu1(self):
+    # [FUNCTION DOC]
+    # Benchmarks adjust_hue on CPU limited to one thread.
     self._benchmarkAdjustHue("/cpu:0", 1)
 
   def benchmarkAdjustHueCpuAll(self):
+    # [FUNCTION DOC]
+    # Benchmarks adjust_hue on CPU with the default thread configuration.
     self._benchmarkAdjustHue("/cpu:0", None)
 
   def benchmarkAdjustHueGpu(self):
+    # [FUNCTION DOC]
+    # Benchmarks adjust_hue on the default GPU device.
     self._benchmarkAdjustHue(test.gpu_device_name(), None)
 
 
 class AdjustSaturationBenchmark(test.Benchmark):
+  # [CLASS DOC]
+  # Benchmark class timing adjust_saturation on a 299x299x3 float32 variable on one CPU thread,
+  # all CPU threads and the default GPU.
 
   def _benchmarkAdjustSaturation(self, device, cpu_count):
+    # [FUNCTION DOC]
+    # HELPER: shared benchmark body for adjust_saturation.
+    # Takes a device string and a CPU thread count (or nothing). Opens a benchmark session,
+    # applies adjust_saturation with factor 0.1, runs 100 untimed warm-up iterations then 1000
+    # timed iterations, prints the average step time in microseconds and reports the benchmark.
     image_shape = [299, 299, 3]
     warmup_rounds = 100
     benchmark_rounds = 1000
@@ -766,18 +977,33 @@ class AdjustSaturationBenchmark(test.Benchmark):
         wall_time=step_time)
 
   def benchmarkAdjustSaturationCpu1(self):
+    # [FUNCTION DOC]
+    # Benchmarks adjust_saturation on CPU limited to one thread.
     self._benchmarkAdjustSaturation("/cpu:0", 1)
 
   def benchmarkAdjustSaturationCpuAll(self):
+    # [FUNCTION DOC]
+    # Benchmarks adjust_saturation on CPU with the default thread configuration.
     self._benchmarkAdjustSaturation("/cpu:0", None)
 
   def benchmarkAdjustSaturationGpu(self):
+    # [FUNCTION DOC]
+    # Benchmarks adjust_saturation on the default GPU device.
     self._benchmarkAdjustSaturation(test.gpu_device_name(), None)
 
 
 class ResizeBilinearBenchmark(test.Benchmark):
+  # [CLASS DOC]
+  # Benchmark class timing resize_bilinear to 299x299 for several source sizes (similar size,
+  # scale up, scale down) with 1 or 3 channels.
 
   def _benchmarkResize(self, image_size, num_channels):
+    # [FUNCTION DOC]
+    # HELPER: shared benchmark body for bilinear resizing.
+    # Takes the source (height, width) pair and a channel count. Creates a random normal image
+    # variable, chains 1000 resize_bilinear ops to 299x299 (align_corners off) through control
+    # dependencies, runs them through the op benchmark runner and prints the per-image time in
+    # milliseconds. Initializes variables first.
     batch_size = 1
     num_ops = 1000
     img = variables.Variable(
@@ -805,27 +1031,47 @@ class ResizeBilinearBenchmark(test.Benchmark):
              1000 * results["wall_time"] / (batch_size * num_ops)))
 
   def benchmarkSimilar3Channel(self):
+    # [FUNCTION DOC]
+    # Benchmarks resizing a 183x229 three-channel image (close to the target size).
     self._benchmarkResize((183, 229), 3)
 
   def benchmarkScaleUp3Channel(self):
+    # [FUNCTION DOC]
+    # Benchmarks upscaling a 141x186 three-channel image.
     self._benchmarkResize((141, 186), 3)
 
   def benchmarkScaleDown3Channel(self):
+    # [FUNCTION DOC]
+    # Benchmarks downscaling a 749x603 three-channel image.
     self._benchmarkResize((749, 603), 3)
 
   def benchmarkSimilar1Channel(self):
+    # [FUNCTION DOC]
+    # Benchmarks resizing a 183x229 single-channel image.
     self._benchmarkResize((183, 229), 1)
 
   def benchmarkScaleUp1Channel(self):
+    # [FUNCTION DOC]
+    # Benchmarks upscaling a 141x186 single-channel image.
     self._benchmarkResize((141, 186), 1)
 
   def benchmarkScaleDown1Channel(self):
+    # [FUNCTION DOC]
+    # Benchmarks downscaling a 749x603 single-channel image.
     self._benchmarkResize((749, 603), 1)
 
 
 class ResizeBicubicBenchmark(test.Benchmark):
+  # [CLASS DOC]
+  # Benchmark class timing resize_bicubic to 299x299 for several source sizes with 1, 3 or 4
+  # channels.
 
   def _benchmarkResize(self, image_size, num_channels):
+    # [FUNCTION DOC]
+    # HELPER: shared benchmark body for bicubic resizing.
+    # Takes the source (height, width) pair and a channel count. Chains 1000 resize_bicubic ops
+    # to 299x299 via control dependencies and runs them through the op benchmark runner with a
+    # minimum of 20 iterations, printing the per-image time in milliseconds.
     batch_size = 1
     num_ops = 1000
     img = variables.Variable(
@@ -854,36 +1100,61 @@ class ResizeBicubicBenchmark(test.Benchmark):
              1000 * results["wall_time"] / (batch_size * num_ops)))
 
   def benchmarkSimilar3Channel(self):
+    # [FUNCTION DOC]
+    # Benchmarks bicubic resizing of a 183x229 three-channel image.
     self._benchmarkResize((183, 229), 3)
 
   def benchmarkScaleUp3Channel(self):
+    # [FUNCTION DOC]
+    # Benchmarks bicubic upscaling of a 141x186 three-channel image.
     self._benchmarkResize((141, 186), 3)
 
   def benchmarkScaleDown3Channel(self):
+    # [FUNCTION DOC]
+    # Benchmarks bicubic downscaling of a 749x603 three-channel image.
     self._benchmarkResize((749, 603), 3)
 
   def benchmarkSimilar1Channel(self):
+    # [FUNCTION DOC]
+    # Benchmarks bicubic resizing of a 183x229 single-channel image.
     self._benchmarkResize((183, 229), 1)
 
   def benchmarkScaleUp1Channel(self):
+    # [FUNCTION DOC]
+    # Benchmarks bicubic upscaling of a 141x186 single-channel image.
     self._benchmarkResize((141, 186), 1)
 
   def benchmarkScaleDown1Channel(self):
+    # [FUNCTION DOC]
+    # Benchmarks bicubic downscaling of a 749x603 single-channel image.
     self._benchmarkResize((749, 603), 1)
 
   def benchmarkSimilar4Channel(self):
+    # [FUNCTION DOC]
+    # Benchmarks bicubic resizing of a 183x229 four-channel image.
     self._benchmarkResize((183, 229), 4)
 
   def benchmarkScaleUp4Channel(self):
+    # [FUNCTION DOC]
+    # Benchmarks bicubic upscaling of a 141x186 four-channel image.
     self._benchmarkResize((141, 186), 4)
 
   def benchmarkScaleDown4Channel(self):
+    # [FUNCTION DOC]
+    # Benchmarks bicubic downscaling of a 749x603 four-channel image.
     self._benchmarkResize((749, 603), 4)
 
 
 class ResizeAreaBenchmark(test.Benchmark):
+  # [CLASS DOC]
+  # Benchmark class timing resize_area to 299x299 for several source sizes with 1 or 3 channels.
 
   def _benchmarkResize(self, image_size, num_channels):
+    # [FUNCTION DOC]
+    # HELPER: shared benchmark body for area resizing.
+    # Takes the source (height, width) pair and a channel count. Chains 1000 resize_area ops to
+    # 299x299 via control dependencies, runs them through the op benchmark runner and prints
+    # the per-image time in milliseconds.
     batch_size = 1
     num_ops = 1000
     img = variables.Variable(
@@ -910,27 +1181,45 @@ class ResizeAreaBenchmark(test.Benchmark):
              1000 * results["wall_time"] / (batch_size * num_ops)))
 
   def benchmarkSimilar3Channel(self):
+    # [FUNCTION DOC]
+    # Benchmarks area resizing of a 183x229 three-channel image.
     self._benchmarkResize((183, 229), 3)
 
   def benchmarkScaleUp3Channel(self):
+    # [FUNCTION DOC]
+    # Benchmarks area resizing of an upscaled 141x186 three-channel image.
     self._benchmarkResize((141, 186), 3)
 
   def benchmarkScaleDown3Channel(self):
+    # [FUNCTION DOC]
+    # Benchmarks area downscaling of a 749x603 three-channel image.
     self._benchmarkResize((749, 603), 3)
 
   def benchmarkSimilar1Channel(self):
+    # [FUNCTION DOC]
+    # Benchmarks area resizing of a 183x229 single-channel image.
     self._benchmarkResize((183, 229), 1)
 
   def benchmarkScaleUp1Channel(self):
+    # [FUNCTION DOC]
+    # Benchmarks area resizing of an upscaled 141x186 single-channel image.
     self._benchmarkResize((141, 186), 1)
 
   def benchmarkScaleDown1Channel(self):
+    # [FUNCTION DOC]
+    # Benchmarks area downscaling of a 749x603 single-channel image.
     self._benchmarkResize((749, 603), 1)
 
 
 class AdjustSaturationTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering adjust_saturation: fixed-value half/double saturation, batched input and
+  # a randomized comparison against a colorsys-based NumPy reference.
 
   def testHalfSaturation(self):
+    # [FUNCTION DOC]
+    # Scales the saturation of a fixed 2x2 uint8 RGB image by 0.5 and asserts the exact
+    # precomputed output pixels.
     x_shape = [2, 2, 3]
     x_data = [0, 5, 13, 54, 135, 226, 37, 8, 234, 90, 255, 1]
     x_np = np.array(x_data, dtype=np.uint8).reshape(x_shape)
@@ -946,6 +1235,9 @@ class AdjustSaturationTest(test_util.TensorFlowTestCase):
       self.assertAllEqual(y_tf, y_np)
 
   def testTwiceSaturation(self):
+    # [FUNCTION DOC]
+    # Scales the saturation of a fixed 2x2 uint8 RGB image by 2.0 (values saturate/clip) and
+    # asserts the exact precomputed output pixels.
     x_shape = [2, 2, 3]
     x_data = [0, 5, 13, 54, 135, 226, 37, 8, 234, 90, 255, 1]
     x_np = np.array(x_data, dtype=np.uint8).reshape(x_shape)
@@ -961,6 +1253,9 @@ class AdjustSaturationTest(test_util.TensorFlowTestCase):
       self.assertAllEqual(y_tf, y_np)
 
   def testBatchSaturation(self):
+    # [FUNCTION DOC]
+    # Same data as the half-saturation test shaped as a batch of two 1x2 images; asserts the
+    # same exact output, confirming batch support.
     x_shape = [2, 1, 2, 3]
     x_data = [0, 5, 13, 54, 135, 226, 37, 8, 234, 90, 255, 1]
     x_np = np.array(x_data, dtype=np.uint8).reshape(x_shape)
@@ -976,6 +1271,11 @@ class AdjustSaturationTest(test_util.TensorFlowTestCase):
       self.assertAllEqual(y_tf, y_np)
 
   def _adjustSaturationNp(self, x_np, scale):
+    # [FUNCTION DOC]
+    # HELPER: NumPy reference for saturation adjustment tests.
+    # Takes an array whose last dimension is 3 and a scale factor; per pixel converts RGB to
+    # HSV with colorsys, multiplies saturation by the scale, clamps it to 0-1, converts back
+    # and returns an array shaped like the input. Asserts the last dimension is 3.
     self.assertEqual(x_np.shape[-1], 3)
     x_v = x_np.reshape([-1, 3])
     y_v = np.ndarray(x_v.shape, dtype=x_v.dtype)
@@ -994,6 +1294,11 @@ class AdjustSaturationTest(test_util.TensorFlowTestCase):
     return y_v.reshape(x_np.shape)
 
   def testAdjustRandomSaturation(self):
+    # [FUNCTION DOC]
+    # For several image shapes and five channel-equality styles, generates random 0-255 RGB
+    # data and a random scale in 0-1, and asserts adjust_saturation matches the NumPy
+    # reference within rtol 2e-5 and atol 1e-5. Raises an assertion error on an unknown style
+    # (cannot happen with the fixed list).
     x_shapes = [
         [2, 2, 3],
         [4, 2, 3],
@@ -1033,8 +1338,15 @@ class AdjustSaturationTest(test_util.TensorFlowTestCase):
 
 class FlipTransposeRotateTest(test_util.TensorFlowTestCase,
                               parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case covering flip_left_right, flip_up_down, their random and stateless
+  # random variants, transpose, rot90 and static shape handling. Uses tiny uint8 images and
+  # checks involution (applying twice restores the input), exact flipped output, randomness
+  # statistics with fixed seeds, and determinism of stateless ops.
 
   def testInvolutionLeftRight(self):
+    # [FUNCTION DOC]
+    # Flips a 2x3x1 uint8 image left-right twice and asserts the original is recovered.
     x_np = np.array([[1, 2, 3], [1, 2, 3]], dtype=np.uint8).reshape([2, 3, 1])
     with self.cached_session():
       x_tf = constant_op.constant(x_np, shape=x_np.shape)
@@ -1043,6 +1355,8 @@ class FlipTransposeRotateTest(test_util.TensorFlowTestCase,
       self.assertAllEqual(y_tf, x_np)
 
   def testInvolutionLeftRightWithBatch(self):
+    # [FUNCTION DOC]
+    # Same involution check for a batch of two 2x3x1 images (4-D input).
     x_np = np.array(
         [[[1, 2, 3], [1, 2, 3]], [[1, 2, 3], [1, 2, 3]]],
         dtype=np.uint8).reshape([2, 2, 3, 1])
@@ -1053,6 +1367,8 @@ class FlipTransposeRotateTest(test_util.TensorFlowTestCase,
       self.assertAllEqual(y_tf, x_np)
 
   def testLeftRight(self):
+    # [FUNCTION DOC]
+    # Flips a 2x3x1 image left-right and asserts each row is reversed.
     x_np = np.array([[1, 2, 3], [1, 2, 3]], dtype=np.uint8).reshape([2, 3, 1])
     y_np = np.array([[3, 2, 1], [3, 2, 1]], dtype=np.uint8).reshape([2, 3, 1])
 
@@ -1063,6 +1379,8 @@ class FlipTransposeRotateTest(test_util.TensorFlowTestCase,
       self.assertAllEqual(y_tf, y_np)
 
   def testLeftRightWithBatch(self):
+    # [FUNCTION DOC]
+    # Flips a batch of two identical images left-right and asserts every image has reversed rows.
     x_np = np.array(
         [[[1, 2, 3], [1, 2, 3]], [[1, 2, 3], [1, 2, 3]]],
         dtype=np.uint8).reshape([2, 2, 3, 1])
@@ -1077,6 +1395,11 @@ class FlipTransposeRotateTest(test_util.TensorFlowTestCase,
       self.assertAllEqual(y_tf, y_np)
 
   def testRandomFlipLeftRightStateful(self):
+    # [FUNCTION DOC]
+    # In a fresh graph, builds a single random_flip_left_right op with seed 42, checks the op
+    # name starts with the expected prefix, and runs it 100 times. Each output must equal either
+    # the input or the flipped image; asserts at least 20 flipped and 20 unflipped results
+    # (a six-sigma bound for a fair coin).
     # Test random flip with single seed (stateful).
     with ops.Graph().as_default():
       x_np = np.array([[1, 2, 3], [1, 2, 3]], dtype=np.uint8).reshape([2, 3, 1])
@@ -1107,6 +1430,10 @@ class FlipTransposeRotateTest(test_util.TensorFlowTestCase,
         self.assertGreaterEqual(count_unflipped, 20)
 
   def testRandomFlipLeftRight(self):
+    # [FUNCTION DOC]
+    # Applies random_flip_left_right with seeds 0 through 99 to a small image; each output must
+    # be the input or its flip. Asserts the exact counts of 45 flipped and 55 unflipped, which
+    # are fixed by the seeded implementation (changing the RNG algorithm breaks this test).
     x_np = np.array([[1, 2, 3], [1, 2, 3]], dtype=np.uint8).reshape([2, 3, 1])
     y_np = np.array([[3, 2, 1], [3, 2, 1]], dtype=np.uint8).reshape([2, 3, 1])
 
@@ -1134,6 +1461,12 @@ class FlipTransposeRotateTest(test_util.TensorFlowTestCase,
       ("_RandomFlipUpDown", image_ops.stateless_random_flip_up_down),
   )
   def testRandomFlipStateless(self, func):
+    # [FUNCTION DOC]
+    # Parameterized by the stateless op under test (random left-right or up-down flip). On the
+    # GPU-preferred device, splits a fixed seed pair into 10 seeds and applies the op to a 2x3x1
+    # image for each seed; the expected flipped image depends on whether the test id names the
+    # up-down variant. Each output must be the input or the flip. Repeats the whole pass twice
+    # and asserts the flip counts and the flip sequences are identical (determinism).
     with test_util.use_gpu():
       x_np = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.uint8).reshape([2, 3, 1])
       y_np = np.array([[3, 2, 1], [6, 5, 4]], dtype=np.uint8).reshape([2, 3, 1])
@@ -1181,6 +1514,11 @@ class FlipTransposeRotateTest(test_util.TensorFlowTestCase,
       ("_RandomFlipUpDown", image_ops.stateless_random_flip_up_down)
   )
   def testRandomFlipStatelessWithBatch(self, func):
+    # [FUNCTION DOC]
+    # Parameterized by the stateless flip op (left-right or up-down). Builds a batch of 16
+    # copies of a 2x3x1 image, applies the op for each of 10 split seeds, and checks every
+    # batch element is either unchanged or flipped as expected. Runs two passes and asserts the
+    # flip counts and sequences are identical, verifying determinism.
     with test_util.use_gpu():
       batch_size = 16
 
@@ -1230,6 +1568,12 @@ class FlipTransposeRotateTest(test_util.TensorFlowTestCase,
         self.assertAllEqual(flip_sequences[0], flip_sequences[i])
 
   def testRandomFlipLeftRightWithBatch(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the local seed variable assigned at the top is unused because the loop
+    # variable shadows it.
+    # Applies random_flip_left_right to a batch of 16 identical images with seeds 0 through 99,
+    # checking each batch element is unchanged or flipped, and asserts the exact totals of 772
+    # flipped and 828 unflipped elements (out of 1600), tied to the seeded RNG.
     batch_size = 16
     seed = 42
 
@@ -1265,6 +1609,8 @@ class FlipTransposeRotateTest(test_util.TensorFlowTestCase,
       self.assertEqual(count_unflipped, 828)
 
   def testInvolutionUpDown(self):
+    # [FUNCTION DOC]
+    # Flips a 2x3x1 image up-down twice and asserts the original is recovered.
     x_np = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.uint8).reshape([2, 3, 1])
 
     with self.cached_session():
@@ -1274,6 +1620,8 @@ class FlipTransposeRotateTest(test_util.TensorFlowTestCase,
       self.assertAllEqual(y_tf, x_np)
 
   def testInvolutionUpDownWithBatch(self):
+    # [FUNCTION DOC]
+    # Same up-down involution check for a batch of two images.
     x_np = np.array(
         [[[1, 2, 3], [4, 5, 6]], [[7, 8, 9], [10, 11, 12]]],
         dtype=np.uint8).reshape([2, 2, 3, 1])
@@ -1285,6 +1633,8 @@ class FlipTransposeRotateTest(test_util.TensorFlowTestCase,
       self.assertAllEqual(y_tf, x_np)
 
   def testUpDown(self):
+    # [FUNCTION DOC]
+    # Flips a 2x3x1 image up-down and asserts the two rows are swapped.
     x_np = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.uint8).reshape([2, 3, 1])
     y_np = np.array([[4, 5, 6], [1, 2, 3]], dtype=np.uint8).reshape([2, 3, 1])
 
@@ -1295,6 +1645,8 @@ class FlipTransposeRotateTest(test_util.TensorFlowTestCase,
       self.assertAllEqual(y_tf, y_np)
 
   def testUpDownWithBatch(self):
+    # [FUNCTION DOC]
+    # Flips a batch of two images up-down and asserts rows are swapped in each image.
     x_np = np.array(
         [[[1, 2, 3], [4, 5, 6]], [[7, 8, 9], [10, 11, 12]]],
         dtype=np.uint8).reshape([2, 2, 3, 1])
@@ -1309,6 +1661,10 @@ class FlipTransposeRotateTest(test_util.TensorFlowTestCase,
       self.assertAllEqual(y_tf, y_np)
 
   def testRandomFlipUpDownStateful(self):
+    # [FUNCTION DOC]
+    # Up-down analogue of the stateful left-right test: in a fresh graph builds one
+    # random_flip_up_down op with seed 42, checks its name prefix, runs it 100 times, checks
+    # each result is the input or its flip, and asserts at least 20 of each outcome.
     # Test random flip with single seed (stateful).
     with ops.Graph().as_default():
       x_np = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.uint8).reshape([2, 3, 1])
@@ -1338,6 +1694,9 @@ class FlipTransposeRotateTest(test_util.TensorFlowTestCase,
         self.assertGreaterEqual(count_unflipped, 20)
 
   def testRandomFlipUpDown(self):
+    # [FUNCTION DOC]
+    # Applies random_flip_up_down with seeds 0 through 99 and asserts the exact counts of 45
+    # flipped and 55 unflipped results, fixed by the seeded implementation.
     x_np = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.uint8).reshape([2, 3, 1])
     y_np = np.array([[4, 5, 6], [1, 2, 3]], dtype=np.uint8).reshape([2, 3, 1])
 
@@ -1358,6 +1717,11 @@ class FlipTransposeRotateTest(test_util.TensorFlowTestCase,
       self.assertEqual(count_unflipped, 55)
 
   def testRandomFlipUpDownWithBatch(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the local seed variable assigned at the top is unused because the loop
+    # variable shadows it.
+    # Applies random_flip_up_down to a batch of 16 identical images with seeds 0 through 99,
+    # validating each element and asserting exact totals of 772 flipped and 828 unflipped.
     batch_size = 16
     seed = 42
 
@@ -1393,6 +1757,8 @@ class FlipTransposeRotateTest(test_util.TensorFlowTestCase,
       self.assertEqual(count_unflipped, 828)
 
   def testInvolutionTranspose(self):
+    # [FUNCTION DOC]
+    # Transposes a 2x3x1 image twice and asserts the original is recovered.
     x_np = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.uint8).reshape([2, 3, 1])
 
     with self.cached_session():
@@ -1402,6 +1768,8 @@ class FlipTransposeRotateTest(test_util.TensorFlowTestCase,
       self.assertAllEqual(y_tf, x_np)
 
   def testInvolutionTransposeWithBatch(self):
+    # [FUNCTION DOC]
+    # Same transpose involution check for a batch of two images.
     x_np = np.array(
         [[[1, 2, 3], [4, 5, 6]], [[7, 8, 9], [10, 11, 12]]],
         dtype=np.uint8).reshape([2, 2, 3, 1])
@@ -1413,6 +1781,8 @@ class FlipTransposeRotateTest(test_util.TensorFlowTestCase,
       self.assertAllEqual(y_tf, x_np)
 
   def testTranspose(self):
+    # [FUNCTION DOC]
+    # Transposes a 2x3x1 image and asserts the result is the 3x2x1 height/width swap.
     x_np = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.uint8).reshape([2, 3, 1])
     y_np = np.array([[1, 4], [2, 5], [3, 6]], dtype=np.uint8).reshape([3, 2, 1])
 
@@ -1423,6 +1793,8 @@ class FlipTransposeRotateTest(test_util.TensorFlowTestCase,
       self.assertAllEqual(y_tf, y_np)
 
   def testTransposeWithBatch(self):
+    # [FUNCTION DOC]
+    # Transposes a batch of two 2x3x1 images and asserts each becomes 3x2x1 with swapped axes.
     x_np = np.array(
         [[[1, 2, 3], [4, 5, 6]], [[7, 8, 9], [10, 11, 12]]],
         dtype=np.uint8).reshape([2, 2, 3, 1])
@@ -1438,6 +1810,12 @@ class FlipTransposeRotateTest(test_util.TensorFlowTestCase,
       self.assertAllEqual(y_tf, y_np)
 
   def testPartialShapes(self):
+    # [FUNCTION DOC]
+    # In a fresh graph with placeholders of various partially known shapes, applies each of
+    # flip left-right, flip up-down, their random variants, transpose and rot90. For 3-D capable
+    # ops: unknown rank stays unknown, rank-3 shapes stay rank 3, and a zero-sized dimension
+    # raises a value error saying it must be greater than 0. For 4-D inputs the rank is
+    # preserved, and a rank-2 input raises a value error requiring at least three dimensions.
     # Shape function requires placeholders and a graph.
     with ops.Graph().as_default():
       p_unknown_rank = array_ops.placeholder(dtypes.uint8)
@@ -1482,6 +1860,8 @@ class FlipTransposeRotateTest(test_util.TensorFlowTestCase,
           op(p_wrong_rank)
 
   def testRot90GroupOrder(self):
+    # [FUNCTION DOC]
+    # Rotates a 2x4x3 image by 90 degrees four times and asserts the original is recovered.
     image = np.arange(24, dtype=np.uint8).reshape([2, 4, 3])
     with self.cached_session():
       rotated = image
@@ -1490,6 +1870,8 @@ class FlipTransposeRotateTest(test_util.TensorFlowTestCase,
       self.assertAllEqual(image, self.evaluate(rotated))
 
   def testRot90GroupOrderWithBatch(self):
+    # [FUNCTION DOC]
+    # Same four-fold rotation identity check for a batch of two images.
     image = np.arange(48, dtype=np.uint8).reshape([2, 2, 4, 3])
     with self.cached_session():
       rotated = image
@@ -1498,6 +1880,8 @@ class FlipTransposeRotateTest(test_util.TensorFlowTestCase,
       self.assertAllEqual(image, self.evaluate(rotated))
 
   def testRot90NumpyEquivalence(self):
+    # [FUNCTION DOC]
+    # For k from 0 to 3, asserts rot90 of a 2x4x3 image by k quarter turns equals NumPy's rot90.
     image = np.arange(24, dtype=np.uint8).reshape([2, 4, 3])
     with self.cached_session():
       for k in range(4):
@@ -1506,6 +1890,9 @@ class FlipTransposeRotateTest(test_util.TensorFlowTestCase,
             y_np, self.evaluate(image_ops.rot90(image, k)))
 
   def testRot90NumpyEquivalenceWithBatch(self):
+    # [FUNCTION DOC]
+    # Same as the NumPy equivalence test for a 4-D batch, comparing against NumPy's rot90
+    # restricted to the height and width axes.
     image = np.arange(48, dtype=np.uint8).reshape([2, 2, 4, 3])
     with self.cached_session():
       for k in range(4):
@@ -1514,10 +1901,17 @@ class FlipTransposeRotateTest(test_util.TensorFlowTestCase,
             y_np, self.evaluate(image_ops.rot90(image, k)))
 
   def testFlipImageUnknownShape(self):
+    # [FUNCTION DOC]
+    # Builds a dataset from a generator yielding one 1x2x2x3 int32 image, maps flip_left_right
+    # over it, fetches the single element and asserts it equals the expected flipped image.
+    # Exercises the op inside a dataset map function.
     expected_output = constant_op.constant([[[[3, 4, 5], [0, 1, 2]],
                                              [[9, 10, 11], [6, 7, 8]]]])
 
     def generator():
+      # [FUNCTION DOC]
+      # HELPER: generator used as the dataset source in the enclosing test.
+      # Yields exactly one fixed int32 array of shape 1x2x2x3 and then finishes.
       image_input = np.array(
           [[[[0, 1, 2], [3, 4, 5]], [[6, 7, 8], [9, 10, 11]]]], np.int32)
       yield image_input
@@ -1534,8 +1928,16 @@ class FlipTransposeRotateTest(test_util.TensorFlowTestCase,
 
 
 class AdjustContrastTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering adjust_contrast: fixed expected values for uint8 and float inputs,
+  # batches, a randomized comparison with a NumPy reference, validation of the contrast factor
+  # shape, and the error raised on GPU when deterministic ops are requested.
 
   def _testContrast(self, x_np, y_np, contrast_factor):
+    # [FUNCTION DOC]
+    # HELPER: shared assertion routine for the fixed-value contrast tests.
+    # Takes an input array, the expected output array and a contrast factor; runs
+    # adjust_contrast in a cached session and asserts closeness within tolerance 1e-6.
     with self.cached_session():
       x = constant_op.constant(x_np, shape=x_np.shape)
       y = image_ops.adjust_contrast(x, contrast_factor)
@@ -1543,6 +1945,9 @@ class AdjustContrastTest(test_util.TensorFlowTestCase):
       self.assertAllClose(y_tf, y_np, 1e-6)
 
   def testDoubleContrastUint8(self):
+    # [FUNCTION DOC]
+    # Doubles the contrast (factor 2.0) of a fixed 1x2x2x3 uint8 image; expected values saturate
+    # at 0 and 255.
     x_shape = [1, 2, 2, 3]
     x_data = [0, 5, 13, 54, 135, 226, 37, 8, 234, 90, 255, 1]
     x_np = np.array(x_data, dtype=np.uint8).reshape(x_shape)
@@ -1553,6 +1958,9 @@ class AdjustContrastTest(test_util.TensorFlowTestCase):
     self._testContrast(x_np, y_np, contrast_factor=2.0)
 
   def testDoubleContrastFloat(self):
+    # [FUNCTION DOC]
+    # Doubles the contrast of a float64 image scaled to 0-1; expected values are not clipped, so
+    # some fall below 0 or above 1.
     x_shape = [1, 2, 2, 3]
     x_data = [0, 5, 13, 54, 135, 226, 37, 8, 234, 90, 255, 1]
     x_np = np.array(x_data, dtype=np.float64).reshape(x_shape) / 255.
@@ -1566,6 +1974,8 @@ class AdjustContrastTest(test_util.TensorFlowTestCase):
     self._testContrast(x_np, y_np, contrast_factor=2.0)
 
   def testHalfContrastUint8(self):
+    # [FUNCTION DOC]
+    # Halves the contrast (factor 0.5) of a fixed uint8 image and checks the expected values.
     x_shape = [1, 2, 2, 3]
     x_data = [0, 5, 13, 54, 135, 226, 37, 8, 234, 90, 255, 1]
     x_np = np.array(x_data, dtype=np.uint8).reshape(x_shape)
@@ -1576,6 +1986,9 @@ class AdjustContrastTest(test_util.TensorFlowTestCase):
     self._testContrast(x_np, y_np, contrast_factor=0.5)
 
   def testBatchDoubleContrast(self):
+    # [FUNCTION DOC]
+    # Doubles the contrast of a batch of two 1x2 uint8 images; contrast is computed per image,
+    # so the expected values differ from the single-image case.
     x_shape = [2, 1, 2, 3]
     x_data = [0, 5, 13, 54, 135, 226, 37, 8, 234, 90, 255, 1]
     x_np = np.array(x_data, dtype=np.uint8).reshape(x_shape)
@@ -1586,11 +1999,18 @@ class AdjustContrastTest(test_util.TensorFlowTestCase):
     self._testContrast(x_np, y_np, contrast_factor=2.0)
 
   def _adjustContrastNp(self, x_np, contrast_factor):
+    # [FUNCTION DOC]
+    # HELPER: NumPy reference for contrast adjustment.
+    # Takes a 4-D array and a factor; returns the per-image, per-channel mean (over height and
+    # width) plus the factor times the deviation from that mean. No clipping.
     mean = np.mean(x_np, (1, 2), keepdims=True)
     y_np = mean + contrast_factor * (x_np - mean)
     return y_np
 
   def _adjustContrastTf(self, x_np, contrast_factor):
+    # [FUNCTION DOC]
+    # HELPER: evaluates the TensorFlow adjust_contrast op on an array with a given factor in a
+    # cached session and returns the result as a NumPy array.
     with self.cached_session():
       x = constant_op.constant(x_np)
       y = image_ops.adjust_contrast(x, contrast_factor)
@@ -1598,6 +2018,10 @@ class AdjustContrastTest(test_util.TensorFlowTestCase):
     return y_tf
 
   def testRandomContrast(self):
+    # [FUNCTION DOC]
+    # For several 4-D shapes, generates random 0-255 float images and a random contrast factor
+    # between 0.1 and 2.1, and asserts the TensorFlow op matches the NumPy reference within
+    # 1e-5 relative and absolute tolerance.
     x_shapes = [
         [1, 2, 2, 3],
         [2, 1, 2, 3],
@@ -1613,6 +2037,9 @@ class AdjustContrastTest(test_util.TensorFlowTestCase):
       self.assertAllClose(y_tf, y_np, rtol=1e-5, atol=1e-5)
 
   def testContrastFactorShape(self):
+    # [FUNCTION DOC]
+    # Passes a contrast factor given as a one-element list (rank 1) and expects a value error or
+    # invalid-argument error saying the factor must be a scalar or have rank 0.
     x_shape = [1, 2, 2, 3]
     x_data = [0, 5, 13, 54, 135, 226, 37, 8, 234, 90, 255, 1]
     x_np = np.array(x_data, dtype=np.uint8).reshape(x_shape)
@@ -1623,6 +2050,12 @@ class AdjustContrastTest(test_util.TensorFlowTestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testDeterminismUnimplementedExceptionThrowing(self):
+    # [FUNCTION DOC]
+    # Runs in graph and eager modes. Skipped when XLA is enabled. With deterministic ops
+    # enabled, runs adjust_contrast on zero images of several dtypes (uint8, int8, int16,
+    # int32, float32, float64, plus float16 when a GPU exists). On a GPU each call must raise an
+    # unimplemented error saying no deterministic GPU AdjustContrastv2 exists; on CPU any
+    # outcome is suppressed, so nothing is asserted.
     """Test d9m-unimplemented exception-throwing when op-determinism is enabled.
 
     This test depends upon other tests, tests which do not enable
@@ -1660,8 +2093,15 @@ class AdjustContrastTest(test_util.TensorFlowTestCase):
 
 
 class AdjustBrightnessTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering adjust_brightness with positive and negative deltas on uint8, float32
+  # and float16 images.
 
   def _testBrightness(self, x_np, y_np, delta, tol=1e-6):
+    # [FUNCTION DOC]
+    # HELPER: shared assertion routine for brightness tests.
+    # Takes input and expected arrays, a delta and an optional tolerance (default 1e-6); runs
+    # adjust_brightness in a cached session and asserts closeness within the tolerance.
     with self.cached_session():
       x = constant_op.constant(x_np, shape=x_np.shape)
       y = image_ops.adjust_brightness(x, delta)
@@ -1669,6 +2109,8 @@ class AdjustBrightnessTest(test_util.TensorFlowTestCase):
       self.assertAllClose(y_tf, y_np, tol)
 
   def testPositiveDeltaUint8(self):
+    # [FUNCTION DOC]
+    # Adds delta 10/255 to a uint8 image; expected values clamp at 255.
     x_shape = [2, 2, 3]
     x_data = [0, 5, 13, 54, 135, 226, 37, 8, 234, 90, 255, 1]
     x_np = np.array(x_data, dtype=np.uint8).reshape(x_shape)
@@ -1679,6 +2121,9 @@ class AdjustBrightnessTest(test_util.TensorFlowTestCase):
     self._testBrightness(x_np, y_np, delta=10. / 255.)
 
   def testPositiveDeltaFloat32(self):
+    # [FUNCTION DOC]
+    # Adds delta 10/255 to a float32 image in 0-1; float results are not clamped, so one
+    # expected value exceeds 1.
     x_shape = [2, 2, 3]
     x_data = [0, 5, 13, 54, 135, 226, 37, 8, 234, 90, 255, 1]
     x_np = np.array(x_data, dtype=np.float32).reshape(x_shape) / 255.
@@ -1689,6 +2134,8 @@ class AdjustBrightnessTest(test_util.TensorFlowTestCase):
     self._testBrightness(x_np, y_np, delta=10. / 255.)
 
   def testPositiveDeltaFloat16(self):
+    # [FUNCTION DOC]
+    # Same as the float32 test using float16 data with a looser tolerance of 1e-3.
     x_shape = [2, 2, 3]
     x_data = [0, 5, 13, 54, 135, 226, 37, 8, 234, 90, 255, 1]
     x_np = np.array(x_data, dtype=np.float16).reshape(x_shape) / 255.
@@ -1699,6 +2146,8 @@ class AdjustBrightnessTest(test_util.TensorFlowTestCase):
     self._testBrightness(x_np, y_np, delta=10. / 255., tol=1e-3)
 
   def testNegativeDelta(self):
+    # [FUNCTION DOC]
+    # Adds delta -10/255 to a uint8 image; expected values clamp at 0.
     x_shape = [2, 2, 3]
     x_data = [0, 5, 13, 54, 135, 226, 37, 8, 234, 90, 255, 1]
     x_np = np.array(x_data, dtype=np.uint8).reshape(x_shape)
@@ -1711,8 +2160,15 @@ class AdjustBrightnessTest(test_util.TensorFlowTestCase):
 
 class PerImageWhiteningTest(test_util.TensorFlowTestCase,
                             parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case covering per_image_standardization against a NumPy reference, for
+  # many integer and float dtypes, uniform images and batches.
 
   def _NumpyPerImageWhitening(self, x):
+    # [FUNCTION DOC]
+    # HELPER: NumPy reference for per-image standardization.
+    # Takes an image array and returns a float32 array with the mean subtracted and divided by
+    # the larger of the standard deviation and one over the square root of the element count.
     num_pixels = np.prod(x.shape)
     mn = np.mean(x)
     std = np.std(x)
@@ -1730,6 +2186,9 @@ class PerImageWhiteningTest(test_util.TensorFlowTestCase,
                                    ("_uint64", np.uint64),
                                    ("_float32", np.float32)])
   def testBasic(self, data_type):
+    # [FUNCTION DOC]
+    # Parameterized over nine NumPy dtypes. Builds a 13x9x3 ramp image of that dtype, runs
+    # per_image_standardization and asserts closeness to the NumPy reference (atol 1e-4).
     x_shape = [13, 9, 3]
     x_np = np.arange(0, np.prod(x_shape), dtype=data_type).reshape(x_shape)
     y_np = self._NumpyPerImageWhitening(x_np)
@@ -1741,6 +2200,9 @@ class PerImageWhiteningTest(test_util.TensorFlowTestCase,
       self.assertAllClose(y_tf, y_np, atol=1e-4)
 
   def testUniformImage(self):
+    # [FUNCTION DOC]
+    # Standardizes a constant 19x19x3 float image (zero variance) and asserts the output has no
+    # NaN values, i.e. the minimum standard deviation guard works.
     im_np = np.ones([19, 19, 3]).astype(np.float32) * 249
     im = constant_op.constant(im_np)
     whiten = image_ops.per_image_standardization(im)
@@ -1749,6 +2211,9 @@ class PerImageWhiteningTest(test_util.TensorFlowTestCase,
       self.assertFalse(np.any(np.isnan(whiten_np)))
 
   def testBatchWhitening(self):
+    # [FUNCTION DOC]
+    # Standardizes a random batch of four 24x24x3 images and asserts each equals the NumPy
+    # reference applied to that image individually (atol 1e-4).
     imgs_np = np.random.uniform(0., 255., [4, 24, 24, 3])
     whiten_np = [self._NumpyPerImageWhitening(img) for img in imgs_np]
     with self.cached_session():
@@ -1760,9 +2225,18 @@ class PerImageWhiteningTest(test_util.TensorFlowTestCase,
 
 
 class CropToBoundingBoxTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering crop_to_bounding_box: no-op and real crops, static shape inference,
+  # input rank and zero-size validation, bad offset/target parameters and name scoping. Helpers
+  # run each scenario with plain Python-number arguments and with tensor arguments.
 
   def _CropToBoundingBox(self, x, offset_height, offset_width, target_height,
                          target_width, use_tensor_inputs):
+    # [FUNCTION DOC]
+    # HELPER: runs crop_to_bounding_box and returns the evaluated result.
+    # Takes an image array, offsets, target sizes, and a flag; when the flag is true all of
+    # them are first converted to tensors, otherwise passed as given. Evaluates in a cached
+    # session and returns a NumPy array. Errors from the op propagate to the caller.
     if use_tensor_inputs:
       offset_height = ops.convert_to_tensor(offset_height)
       offset_width = ops.convert_to_tensor(offset_width)
@@ -1786,6 +2260,12 @@ class CropToBoundingBoxTest(test_util.TensorFlowTestCase):
                      y,
                      y_shape,
                      use_tensor_inputs_options=None):
+    # [FUNCTION DOC]
+    # HELPER: asserts a crop produces the expected image.
+    # Takes the flat input values and its shape, the offsets, the flat expected values and
+    # their shape, and an optional list of tensor-input modes (default: both plain and tensor).
+    # Reshapes the data, derives the target size from the expected shape, runs the crop helper
+    # for each mode and asserts the result is close to the expectation.
     use_tensor_inputs_options = use_tensor_inputs_options or [False, True]
     target_height, target_width, _ = y_shape
     x = np.array(x).reshape(x_shape)
@@ -1806,6 +2286,11 @@ class CropToBoundingBoxTest(test_util.TensorFlowTestCase):
                     target_width,
                     err_msg,
                     use_tensor_inputs_options=None):
+    # [FUNCTION DOC]
+    # HELPER: asserts a crop with the given arguments fails.
+    # Takes flat input values and shape, offsets, target sizes, an error message pattern and an
+    # optional list of tensor-input modes (default: both). For each mode, the crop must raise a
+    # value error or invalid-argument error whose message matches the pattern.
     use_tensor_inputs_options = use_tensor_inputs_options or [False, True]
     x = np.array(x).reshape(x_shape)
 
@@ -1816,16 +2301,27 @@ class CropToBoundingBoxTest(test_util.TensorFlowTestCase):
                                 target_width, use_tensor_inputs)
 
   def _assertShapeInference(self, pre_shape, height, width, post_shape):
+    # [FUNCTION DOC]
+    # HELPER: asserts static shape inference of crop_to_bounding_box.
+    # Takes an input placeholder shape (possibly partially unknown), target height and width,
+    # and the expected output shape list. Creates a float32 placeholder, crops at offset zero
+    # and asserts the output static shape equals the expectation.
     image = array_ops.placeholder(dtypes.float32, shape=pre_shape)
     y = image_ops.crop_to_bounding_box(image, 0, 0, height, width)
     self.assertEqual(y.get_shape().as_list(), post_shape)
 
   def testNoOp(self):
+    # [FUNCTION DOC]
+    # Crops a random 10x10x10 image at offset zero to its full size and asserts the output equals
+    # the input, with both plain and tensor arguments.
     x_shape = [10, 10, 10]
     x = np.random.uniform(size=x_shape)
     self._assertReturns(x, x_shape, 0, 0, x, x_shape)
 
   def testCrop(self):
+    # [FUNCTION DOC]
+    # Crops a 3x3x1 ramp image four ways (drop the first row, drop the first column, keep the
+    # top-left 2x3 block, keep the top-left 3x2 block) and asserts the exact expected values.
     x = [1, 2, 3, 4, 5, 6, 7, 8, 9]
     x_shape = [3, 3, 1]
 
@@ -1850,6 +2346,10 @@ class CropToBoundingBoxTest(test_util.TensorFlowTestCase):
     self._assertReturns(x, x_shape, offset_height, offset_width, y, y_shape)
 
   def testShapeInference(self):
+    # [FUNCTION DOC]
+    # In a fresh graph, asserts that crop_to_bounding_box infers a 55x66 spatial output shape
+    # whenever the spatial dimensions are known or unknown, keeps the channel dimension as
+    # known or unknown as in the input, and yields rank 3 with unknown channels for unknown rank.
     # Shape function requires placeholders and a graph.
     with ops.Graph().as_default():
       self._assertShapeInference([55, 66, 3], 55, 66, [55, 66, 3])
@@ -1865,6 +2365,9 @@ class CropToBoundingBoxTest(test_util.TensorFlowTestCase):
       self._assertShapeInference(None, 55, 66, [55, 66, None])
 
   def testNon3DInput(self):
+    # [FUNCTION DOC]
+    # Passes images of rank 2 and rank 5 to the crop and expects an error stating the image must
+    # have either 3 or 4 dimensions.
     # Input image is not 3D
     x = [0] * 15
     offset_height, offset_width = [0, 0]
@@ -1876,6 +2379,10 @@ class CropToBoundingBoxTest(test_util.TensorFlowTestCase):
                          "must have either 3 or 4 dimensions.")
 
   def testZeroLengthInput(self):
+    # [FUNCTION DOC]
+    # Feeds empty images having a zero-sized dimension (several configurations, including zero
+    # target sizes) and expects an error that the inner three dimensions of the image shape
+    # must be greater than 0, checked separately for plain and tensor arguments.
     # Input image has 0-length dimension(s).
     # Each line is a test configuration:
     #   x_shape, target_height, target_width
@@ -1907,6 +2414,10 @@ class CropToBoundingBoxTest(test_util.TensorFlowTestCase):
           use_tensor_inputs_options=[True])
 
   def testBadParams(self):
+    # [FUNCTION DOC]
+    # For a 4x4x1 zero image, tries six invalid crops (negative offsets, non-positive target
+    # sizes, and a target plus offset that exceeds the image) and expects the matching error
+    # message for each.
     x_shape = [4, 4, 1]
     x = np.zeros(x_shape)
 
@@ -1924,6 +2435,9 @@ class CropToBoundingBoxTest(test_util.TensorFlowTestCase):
       self._assertRaises(x, x_shape, *params, err_msg=err_msg)
 
   def testNameScope(self):
+    # [FUNCTION DOC]
+    # In a fresh graph, crops a placeholder image and asserts the resulting tensor's name starts
+    # with the crop_to_bounding_box scope prefix.
     # Testing name scope requires a graph.
     with ops.Graph().as_default():
       image = array_ops.placeholder(dtypes.float32, shape=[55, 66, 3])
@@ -1932,8 +2446,17 @@ class CropToBoundingBoxTest(test_util.TensorFlowTestCase):
 
 
 class CentralCropTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering central_crop for 3-D and 4-D images: no-op fraction, real cropping,
+  # rounding behavior, static shape inference, invalid fraction and rank errors, name scoping
+  # and use with a tensor-valued fraction inside a compiled function.
 
   def _assertShapeInference(self, pre_shape, fraction, post_shape):
+    # [FUNCTION DOC]
+    # HELPER: asserts static shape inference of central_crop.
+    # Takes an input placeholder shape, a crop fraction and the expected output shape (or
+    # nothing when the output rank must be unknown). Creates a float32 placeholder, crops, and
+    # asserts the static output shape (or unknown dims) matches.
     image = array_ops.placeholder(dtypes.float32, shape=pre_shape)
     y = image_ops.central_crop(image, fraction)
     if post_shape is None:
@@ -1942,6 +2465,9 @@ class CentralCropTest(test_util.TensorFlowTestCase):
       self.assertEqual(y.get_shape().as_list(), post_shape)
 
   def testNoOp(self):
+    # [FUNCTION DOC]
+    # Central-crops 3-D and 4-D all-ones images with fraction 1.0 on GPU-preferred and CPU
+    # sessions and asserts the output equals the input.
     x_shapes = [[13, 9, 3], [5, 13, 9, 3]]
     for x_shape in x_shapes:
       x_np = np.ones(x_shape, dtype=np.float32)
@@ -1953,6 +2479,9 @@ class CentralCropTest(test_util.TensorFlowTestCase):
           self.assertAllEqual(y_tf, x_np)
 
   def testCropping(self):
+    # [FUNCTION DOC]
+    # Central-crops a 4x8x1 integer image with fraction 0.5 (on both device preferences) and a
+    # batch of two such images, asserting the exact central 2x4 region and output shape.
     x_shape = [4, 8, 1]
     x_np = np.array(
         [[1, 2, 3, 4, 5, 6, 7, 8], [1, 2, 3, 4, 5, 6, 7, 8],
@@ -1984,6 +2513,9 @@ class CentralCropTest(test_util.TensorFlowTestCase):
       self.assertAllEqual(y_tf.shape, y_np.shape)
 
   def testCropping2(self):
+    # [FUNCTION DOC]
+    # Regression test for issue 10315 (rounding). Central-crops zero images of 240x320x3 (3-D and
+    # 4-D batch of five) with fraction 0.33 and asserts the output shapes are 80x106 spatially.
     # Test case for 10315
     x_shapes = [[240, 320, 3], [5, 240, 320, 3]]
     expected_y_shapes = [[80, 106, 3], [5, 80, 106, 3]]
@@ -1998,6 +2530,10 @@ class CentralCropTest(test_util.TensorFlowTestCase):
           self.assertAllEqual(y_tf.shape, y_np.shape)
 
   def testShapeInference(self):
+    # [FUNCTION DOC]
+    # In a fresh graph, checks the static output shape of central_crop for fractions 1.0 and 0.5
+    # on 3-D and 4-D placeholders with various unknown dimensions. Known cropped dimensions
+    # shrink (for example 50 to 26 and 60 to 30 at 0.5), unknown ones stay unknown.
     # Shape function requires placeholders and a graph.
     with ops.Graph().as_default():
       # Test no-op fraction=1.0, with 3-D tensors.
@@ -2039,6 +2575,9 @@ class CentralCropTest(test_util.TensorFlowTestCase):
                                  [None, None, None, None])
 
   def testErrorOnInvalidCentralCropFractionValues(self):
+    # [FUNCTION DOC]
+    # Calls central_crop with fractions 0.0 and 1.01 on a 13x9x3 image and expects a value error
+    # for each, since the fraction must be in the half-open interval above 0 up to 1.
     x_shape = [13, 9, 3]
     x_np = np.ones(x_shape, dtype=np.float32)
     for use_gpu in [True, False]:
@@ -2050,6 +2589,9 @@ class CentralCropTest(test_util.TensorFlowTestCase):
           _ = image_ops.central_crop(x, 1.01)
 
   def testErrorOnInvalidShapes(self):
+    # [FUNCTION DOC]
+    # Calls central_crop with fraction 0.5 on arrays of rank 0, 1, 2 and 5 and expects a value
+    # error because only 3-D or 4-D images are supported.
     x_shapes = [[], [3], [3, 9], [3, 9, 3, 9, 3]]
     for x_shape in x_shapes:
       x_np = np.ones(x_shape, dtype=np.float32)
@@ -2060,6 +2602,9 @@ class CentralCropTest(test_util.TensorFlowTestCase):
             _ = image_ops.central_crop(x, 0.5)
 
   def testNameScope(self):
+    # [FUNCTION DOC]
+    # In a fresh graph, central-crops a NumPy image with fraction 1.0 and asserts the output
+    # op's name starts with the central_crop scope prefix.
     # Testing name scope requires a graph.
     with ops.Graph().as_default():
       x_shape = [13, 9, 3]
@@ -2070,12 +2615,19 @@ class CentralCropTest(test_util.TensorFlowTestCase):
           self.assertTrue(y.op.name.startswith("central_crop"))
 
   def testCentralFractionTensor(self):
+    # [FUNCTION DOC]
+    # Regression test for GitHub issue 45324. Wraps central_crop in a compiled function (without
+    # autograph) so the fraction is a scalar tensor, calls it with fraction 0.33 on a zero
+    # 240x320x3 image and asserts the result is a zero 80x106x3 array.
     # Test case for GitHub issue 45324.
     x_shape = [240, 320, 3]
     y_shape = [80, 106, 3]
 
     @def_function.function(autograph=False)
     def f(x, central_fraction):
+      # [FUNCTION DOC]
+      # HELPER: compiled wrapper used by the enclosing test. Takes an image and a crop fraction
+      # (possibly a tensor) and returns the centrally cropped image.
       return image_ops.central_crop(x, central_fraction)
 
     x_np = np.zeros(x_shape, dtype=np.int32)
@@ -2087,9 +2639,19 @@ class CentralCropTest(test_util.TensorFlowTestCase):
 
 class PadToBoundingBoxTest(test_util.TensorFlowTestCase,
                            parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case covering pad_to_bounding_box (with dimension checks): padding
+  # values, int64 offsets, shape inference, rank and zero-size validation, and the various
+  # bad-parameter errors in scalar, eager-tensor and graph-tensor modes. Helpers run the op
+  # inside a compiled function with plain or tensor arguments.
 
   def _PadToBoundingBox(self, x, offset_height, offset_width, target_height,
                         target_width, use_tensor_inputs):
+    # [FUNCTION DOC]
+    # HELPER: runs pad_to_bounding_box inside a compiled function and returns the result.
+    # Takes an image array, offsets, target sizes and a flag choosing whether to convert all of
+    # them to tensors first. Evaluates in a cached session and returns a NumPy array; errors
+    # from the op propagate.
     if use_tensor_inputs:
       offset_height = ops.convert_to_tensor(offset_height)
       offset_width = ops.convert_to_tensor(offset_width)
@@ -2101,6 +2663,9 @@ class PadToBoundingBoxTest(test_util.TensorFlowTestCase,
 
     @def_function.function
     def pad_bbox(*args):
+      # [FUNCTION DOC]
+      # HELPER: compiled wrapper that forwards all positional arguments (image, offsets, target
+      # sizes) to pad_to_bounding_box and returns the padded image.
       return image_ops.pad_to_bounding_box(*args)
 
     with self.cached_session():
@@ -2115,6 +2680,11 @@ class PadToBoundingBoxTest(test_util.TensorFlowTestCase,
                      y,
                      y_shape,
                      use_tensor_inputs_options=None):
+    # [FUNCTION DOC]
+    # HELPER: asserts a pad produces the expected image.
+    # Takes flat input values and shape, offsets, flat expected values and shape, and an
+    # optional list of tensor-input modes (default both). Derives target size from the expected
+    # shape, runs the pad helper per mode and asserts closeness to the expectation.
     use_tensor_inputs_options = use_tensor_inputs_options or [False, True]
     target_height, target_width, _ = y_shape
     x = np.array(x).reshape(x_shape)
@@ -2135,6 +2705,11 @@ class PadToBoundingBoxTest(test_util.TensorFlowTestCase,
                     target_width,
                     err_msg,
                     use_tensor_inputs_options=None):
+    # [FUNCTION DOC]
+    # HELPER: asserts a pad with the given arguments fails.
+    # Takes flat input values and shape, offsets, target sizes, an error message pattern and an
+    # optional list of tensor-input modes (default both). For each mode the pad must raise a
+    # value error or invalid-argument error whose message matches the pattern.
     use_tensor_inputs_options = use_tensor_inputs_options or [False, True]
     x = np.array(x).reshape(x_shape)
 
@@ -2145,11 +2720,20 @@ class PadToBoundingBoxTest(test_util.TensorFlowTestCase,
                                target_width, use_tensor_inputs)
 
   def _assertShapeInference(self, pre_shape, height, width, post_shape):
+    # [FUNCTION DOC]
+    # HELPER: asserts static shape inference of pad_to_bounding_box.
+    # Takes an input placeholder shape (possibly partly unknown), target height and width, and
+    # the expected output shape list; builds a float32 placeholder, pads at offset zero and
+    # asserts the static output shape.
     image = array_ops.placeholder(dtypes.float32, shape=pre_shape)
     y = image_ops.pad_to_bounding_box(image, 0, 0, height, width)
     self.assertEqual(y.get_shape().as_list(), post_shape)
 
   def testInt64(self):
+    # [FUNCTION DOC]
+    # Passes the offsets and target sizes as a single int64 tensor (indexed per element) to
+    # pad_to_bounding_box on a 3x3x1 image, padding one row on top to 4x3, and asserts the
+    # exact padded values.
     x = [1, 2, 3, 4, 5, 6, 7, 8, 9]
     x_shape = [3, 3, 1]
 
@@ -2164,12 +2748,18 @@ class PadToBoundingBoxTest(test_util.TensorFlowTestCase,
       self.assertAllClose(y, self.evaluate(y_tf))
 
   def testNoOp(self):
+    # [FUNCTION DOC]
+    # Pads a random 10x10x10 image to its own size at offset zero and asserts the output equals
+    # the input.
     x_shape = [10, 10, 10]
     x = np.random.uniform(size=x_shape)
     offset_height, offset_width = [0, 0]
     self._assertReturns(x, x_shape, offset_height, offset_width, x, x_shape)
 
   def testPadding(self):
+    # [FUNCTION DOC]
+    # Pads a 3x3x1 ramp image with zeros in four ways (extra row on top, extra column on left,
+    # extra row at the bottom, extra column on the right) and asserts the exact outputs.
     x = [1, 2, 3, 4, 5, 6, 7, 8, 9]
     x_shape = [3, 3, 1]
 
@@ -2194,6 +2784,9 @@ class PadToBoundingBoxTest(test_util.TensorFlowTestCase,
     self._assertReturns(x, x_shape, offset_height, offset_width, y, y_shape)
 
   def testShapeInference(self):
+    # [FUNCTION DOC]
+    # In a fresh graph, asserts pad_to_bounding_box infers the target 55x66 spatial shape for any
+    # known or unknown input spatial size, and keeps the channel dimension (known or unknown).
     # Shape function requires placeholders and a graph.
     with ops.Graph().as_default():
       self._assertShapeInference([55, 66, 3], 55, 66, [55, 66, 3])
@@ -2209,6 +2802,9 @@ class PadToBoundingBoxTest(test_util.TensorFlowTestCase,
       self._assertShapeInference(None, 55, 66, [55, 66, None])
 
   def testNon3DInput(self):
+    # [FUNCTION DOC]
+    # Pads images of rank 2 and rank 5 and expects an error saying the image must have either 3
+    # or 4 dimensions.
     # Input image is not 3D
     x = [0] * 15
     offset_height, offset_width = [0, 0]
@@ -2220,6 +2816,11 @@ class PadToBoundingBoxTest(test_util.TensorFlowTestCase,
                          "must have either 3 or 4 dimensions.")
 
   def testZeroLengthInput(self):
+    # [FUNCTION DOC]
+    # Pads empty images with a zero-sized dimension (three configurations, target 2x2) and
+    # expects an error that the inner three dimensions of the image shape must be greater than
+    # 0. For tensor inputs the expected message contains escaped quote characters added by the
+    # runtime.
     # Input image has 0-length dimension(s).
     # Each line is a test configuration:
     #   x_shape, target_height, target_width
@@ -2252,6 +2853,10 @@ class PadToBoundingBoxTest(test_util.TensorFlowTestCase,
           use_tensor_inputs_options=[True])
 
   def testBadParamsScalarInputs(self):
+    # [FUNCTION DOC]
+    # With plain Python numbers (no tensor conversion), four invalid pad configurations (negative
+    # offsets, or target smaller than offset plus image) must raise errors with the matching
+    # message; these errors come from Python-level checks.
     # In this test, inputs do not get converted to tensors before calling the
     # tf.function. The error message here is raised in python
     # since the python function has direct access to the scalars.
@@ -2274,6 +2879,9 @@ class PadToBoundingBoxTest(test_util.TensorFlowTestCase,
           x, x_shape, *config_item, use_tensor_inputs_options=[False])
 
   def testBadParamsTensorInputsEager(self):
+    # [FUNCTION DOC]
+    # In eager mode with tensor arguments, the same four invalid configurations must raise the
+    # same Python-level error messages, since the tensor values are directly readable.
     # In this test inputs get converted to EagerTensors before calling the
     # tf.function. The error message here is raised in python
     # since the python function has direct access to the tensor's values.
@@ -2301,6 +2909,10 @@ class PadToBoundingBoxTest(test_util.TensorFlowTestCase,
                                    ("Height", (2, 0, 4, 4)),
                                    ("Width", (0, 2, 4, 4))])
   def testBadParamsTensorInputsGraph(self, config):
+    # [FUNCTION DOC]
+    # Parameterized over four invalid offset/target configurations. In graph mode with tensor
+    # arguments the values are unknown at trace time, so the failure comes from shape
+    # inference and must read that paddings must be non-negative.
     # In this test inputs get converted to tensors before calling the
     # tf.function. The error message here is raised during shape inference.
     with context.graph_mode():
@@ -2314,6 +2926,9 @@ class PadToBoundingBoxTest(test_util.TensorFlowTestCase,
           use_tensor_inputs_options=[True])
 
   def testNameScope(self):
+    # [FUNCTION DOC]
+    # In a fresh graph, pads a placeholder and asserts the output op name starts with the
+    # pad_to_bounding_box scope prefix.
     # Testing name scope requires a graph.
     with ops.Graph().as_default():
       image = array_ops.placeholder(dtypes.float32, shape=[55, 66, 3])
@@ -2321,6 +2936,10 @@ class PadToBoundingBoxTest(test_util.TensorFlowTestCase,
       self.assertTrue(y.op.name.startswith("pad_to_bounding_box"))
 
   def testInvalidInput(self):
+    # [FUNCTION DOC]
+    # Regression test for GitHub issue 46890. Returns immediately (skips) when XLA is enabled.
+    # Otherwise pads a 1x1x1 image to an enormous target size (about five billion) and expects
+    # an invalid-argument error when evaluated, rather than a crash.
     # Test case for GitHub issue 46890.
     if test_util.is_xla_enabled():
       # TODO(b/200850176): test fails with XLA.
@@ -2337,8 +2956,17 @@ class PadToBoundingBoxTest(test_util.TensorFlowTestCase,
 
 
 class ImageProjectiveTransform(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering overflow protection in the raw ImageProjectiveTransform V2 and V3 ops
+  # when the requested output shape is gigantic, for float32 and bfloat16 images.
 
   def _testShapeTooLarge(self, cdtype, V2=True):
+    # [FUNCTION DOC]
+    # HELPER: shared scenario for the oversize-output tests.
+    # Takes an image dtype and a flag selecting the V2 op (default) or V3 op. Builds a 2x5x8x3
+    # constant image, a batch of transform vectors and an output shape of roughly 1.9 billion
+    # in each spatial dimension, with bilinear interpolation and reflect fill mode, and expects
+    # an invalid-argument error about overflow when multiplying dimensions at evaluation.
     interpolation = "BILINEAR"
     fill_mode = "REFLECT"
     fill_value = 255
@@ -2373,23 +3001,39 @@ class ImageProjectiveTransform(test_util.TensorFlowTestCase):
         )
 
   def testShapeTooLargeFp32V2(self):
+    # [FUNCTION DOC]
+    # Oversize output check for the V2 op with float32 images.
     self._testShapeTooLarge(dtypes.float32)
 
   def testShapeTooLargeBfloat16V2(self):
+    # [FUNCTION DOC]
+    # Oversize output check for the V2 op with bfloat16 images.
     self._testShapeTooLarge(dtypes.bfloat16)
 
   def testShapeTooLargeFp32V3(self):
+    # [FUNCTION DOC]
+    # Oversize output check for the V3 op (which adds a fill value) with float32 images.
     self._testShapeTooLarge(dtypes.float32, False)
 
   def testShapeTooLargeBfloat16V3(self):
+    # [FUNCTION DOC]
+    # Oversize output check for the V3 op with bfloat16 images.
     self._testShapeTooLarge(dtypes.bfloat16, False)
 
 
 class InternalPadToBoundingBoxTest(test_util.TensorFlowTestCase,
                                    parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case covering the internal variant of pad_to_bounding_box that skips
+  # input dimension checks: padding values, int64 offsets, shape inference and name scoping.
+  # Helpers run the op inside a compiled function with plain or tensor arguments.
 
   def _InternalPadToBoundingBox(self, x, offset_height, offset_width,
                                 target_height, target_width, use_tensor_inputs):
+    # [FUNCTION DOC]
+    # HELPER: runs the internal pad op (dimension checks disabled) inside a compiled function.
+    # Takes an image array, offsets, target sizes and a flag choosing whether to convert them to
+    # tensors. Evaluates in a cached session and returns the NumPy result.
     if use_tensor_inputs:
       offset_height = ops.convert_to_tensor(offset_height)
       offset_width = ops.convert_to_tensor(offset_width)
@@ -2401,6 +3045,9 @@ class InternalPadToBoundingBoxTest(test_util.TensorFlowTestCase,
 
     @def_function.function
     def pad_bbox(*args):
+      # [FUNCTION DOC]
+      # HELPER: compiled wrapper forwarding positional arguments to the internal pad op with
+      # dimension checking disabled; returns the padded image.
       return image_ops.pad_to_bounding_box_internal(*args, check_dims=False)
 
     with self.cached_session():
@@ -2416,6 +3063,10 @@ class InternalPadToBoundingBoxTest(test_util.TensorFlowTestCase,
                      y,
                      y_shape,
                      use_tensor_inputs_options=None):
+    # [FUNCTION DOC]
+    # HELPER: asserts the internal pad produces the expected image.
+    # Takes flat input values and shape, offsets, flat expected values and shape, and an
+    # optional list of tensor-input modes (default both); asserts closeness for each mode.
     use_tensor_inputs_options = use_tensor_inputs_options or [False, True]
     target_height, target_width, _ = y_shape
     x = np.array(x).reshape(x_shape)
@@ -2428,12 +3079,18 @@ class InternalPadToBoundingBoxTest(test_util.TensorFlowTestCase,
       self.assertAllClose(y, y_tf)
 
   def _assertShapeInference(self, pre_shape, height, width, post_shape):
+    # [FUNCTION DOC]
+    # HELPER: asserts static shape inference of the internal pad op. Takes an input placeholder
+    # shape, target height and width, and the expected output shape list.
     image = array_ops.placeholder(dtypes.float32, shape=pre_shape)
     y = image_ops.pad_to_bounding_box_internal(
         image, 0, 0, height, width, check_dims=False)
     self.assertEqual(y.get_shape().as_list(), post_shape)
 
   def testInt64(self):
+    # [FUNCTION DOC]
+    # Same as the public-op int64 test but for the internal pad op with checks disabled: pads a
+    # 3x3x1 image by one row on top using int64 tensor arguments and asserts the exact result.
     x = [1, 2, 3, 4, 5, 6, 7, 8, 9]
     x_shape = [3, 3, 1]
 
@@ -2449,12 +3106,18 @@ class InternalPadToBoundingBoxTest(test_util.TensorFlowTestCase,
       self.assertAllClose(y, self.evaluate(y_tf))
 
   def testNoOp(self):
+    # [FUNCTION DOC]
+    # Applies the internal pad op to a random 10x10x10 image with zero offsets and its own size
+    # and asserts the output equals the input.
     x_shape = [10, 10, 10]
     x = np.random.uniform(size=x_shape)
     offset_height, offset_width = [0, 0]
     self._assertReturns(x, x_shape, offset_height, offset_width, x, x_shape)
 
   def testPadding(self):
+    # [FUNCTION DOC]
+    # Pads a 3x3x1 ramp image with zeros in four ways (top row, left column, bottom row, right
+    # column) through the internal pad op and asserts the exact outputs.
     x = [1, 2, 3, 4, 5, 6, 7, 8, 9]
     x_shape = [3, 3, 1]
 
@@ -2479,6 +3142,9 @@ class InternalPadToBoundingBoxTest(test_util.TensorFlowTestCase,
     self._assertReturns(x, x_shape, offset_height, offset_width, y, y_shape)
 
   def testShapeInference(self):
+    # [FUNCTION DOC]
+    # In a fresh graph, checks the internal pad op infers the 55x66 spatial output shape for
+    # known or unknown input sizes and preserves the channel dimension (known or unknown).
     # Shape function requires placeholders and a graph.
     with ops.Graph().as_default():
       self._assertShapeInference([55, 66, 3], 55, 66, [55, 66, 3])
@@ -2494,6 +3160,9 @@ class InternalPadToBoundingBoxTest(test_util.TensorFlowTestCase,
       self._assertShapeInference(None, 55, 66, [55, 66, None])
 
   def testNameScope(self):
+    # [FUNCTION DOC]
+    # In a fresh graph, applies the internal pad op to a placeholder and asserts the output op
+    # name starts with the pad_to_bounding_box scope prefix.
     # Testing name scope requires a graph.
     with ops.Graph().as_default():
       image = array_ops.placeholder(dtypes.float32, shape=[55, 66, 3])
@@ -2503,10 +3172,26 @@ class InternalPadToBoundingBoxTest(test_util.TensorFlowTestCase,
 
 
 class SelectDistortedCropBoxTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering sample_distorted_bounding_box and its stateless counterpart: statistical
+  # checks of sampled crop area, static output shapes, default parameter handling, seed shape
+  # validation, and deterministic-mode seed requirements. Two private helpers run the sampling
+  # many times for the stateful and stateless variants.
 
   def _testSampleDistortedBoundingBox(self, image, bounding_box,
                                       min_object_covered, aspect_ratio_range,
                                       area_range):
+    # [FUNCTION DOC]
+    # HELPER: statistical scenario for the stateful sampler.
+    # KNOWN ISSUE: the aspect ratio histogram check and the object-coverage check are commented
+    # out (flaky, per the TODOs in the code), so aspect ratio and coverage are collected but not
+    # verified.
+    # Takes an image array, a bounding box (ymin, xmin, ymax, xmax in relative coordinates),
+    # the minimum object coverage, an aspect ratio range and an area ratio range. Samples
+    # 1000 crops with a Python-number coverage and another 1000 with the coverage as a tensor,
+    # slicing the image each time and recording aspect ratio, area ratio and covered fraction.
+    # Asserts only that every area ratio lies within the area range, and prints a histogram of
+    # the area ratios. Side effect: prints to standard output.
     original_area = float(np.prod(image.shape))
     bounding_box_area = float((bounding_box[3] - bounding_box[1]) *
                               (bounding_box[2] - bounding_box[0]))
@@ -2602,6 +3287,9 @@ class SelectDistortedCropBoxTest(test_util.TensorFlowTestCase):
     # self.assertGreaterEqual(min(fraction_object_covered), min_object_covered)
 
   def testWholeImageBoundingBox(self):
+    # [FUNCTION DOC]
+    # Runs the sampling scenario on a 40x50x1 ramp image with a bounding box covering the whole
+    # image, coverage 0.1, aspect ratios 0.75-1.33 and area ratios 0.05-1.0.
     height = 40
     width = 50
     image_size = [height, width, 1]
@@ -2616,6 +3304,10 @@ class SelectDistortedCropBoxTest(test_util.TensorFlowTestCase):
         area_range=(0.05, 1.0))
 
   def testWithBoundingBox(self):
+    # [FUNCTION DOC]
+    # Builds a 40x50x1 image of zeros with a block of ones, derives the relative bounding box of
+    # that block, and runs the sampling scenario with coverage 0.1, aspect ratios 0.75-1.33 and
+    # area ratios 0.05-1.0.
     height = 40
     width = 50
     x_shape = [height, width, 1]
@@ -2646,6 +3338,11 @@ class SelectDistortedCropBoxTest(test_util.TensorFlowTestCase):
         area_range=(0.05, 1.0))
 
   def testSampleDistortedBoundingBoxShape(self):
+    # [FUNCTION DOC]
+    # In a fresh graph, calls sample_distorted_bounding_box with a constant and then with a
+    # placeholder coverage value; asserts the begin and size outputs have shape of length 3 and
+    # the drawing box output has shape 1x1x4. The first call is also evaluated to confirm the
+    # kernel produces correct shapes at run time.
     # Shape function requires placeholders and a graph.
     with ops.Graph().as_default():
       with self.cached_session():
@@ -2685,6 +3382,9 @@ class SelectDistortedCropBoxTest(test_util.TensorFlowTestCase):
         self.assertAllEqual([1, 1, 4], bbox_for_drawing.get_shape().as_list())
 
   def testDefaultMinObjectCovered(self):
+    # [FUNCTION DOC]
+    # Calls sample_distorted_bounding_box without a minimum coverage argument (default 0.1),
+    # asserts the output static shapes (3, 3 and 1x1x4) and evaluates all three outputs.
     # By default min_object_covered=0.1 if not provided
     with self.cached_session():
       image_size = constant_op.constant(
@@ -2711,6 +3411,15 @@ class SelectDistortedCropBoxTest(test_util.TensorFlowTestCase):
   def _testStatelessSampleDistortedBoundingBox(self, image, bounding_box,
                                                min_object_covered,
                                                aspect_ratio_range, area_range):
+    # [FUNCTION DOC]
+    # HELPER: scenario for the stateless sampler.
+    # KNOWN ISSUE: the area range check uses only the last sampled area ratio of each seed (the
+    # variable from the final loop pass), not every sampled value.
+    # Takes an image, bounding box, minimum coverage (number or tensor), aspect ratio range and
+    # area range. On the GPU-preferred device, for each of three fixed seeds, samples two crops
+    # with that seed and records aspect ratio, area ratio and covered fraction. Asserts the
+    # last area ratio lies in the area range and that each list holds a single repeated value,
+    # proving the same seed gives the same crop.
     with test_util.use_gpu():
       original_area = float(np.prod(image.shape))
       bounding_box_area = float((bounding_box[3] - bounding_box[1]) *
@@ -2767,6 +3476,9 @@ class SelectDistortedCropBoxTest(test_util.TensorFlowTestCase):
   # with xla_gpu. Update tests such that there is a single ground truth result
   # to test against.
   def testWholeImageBoundingBoxStateless(self):
+    # [FUNCTION DOC]
+    # Stateless variant of the whole-image scenario: runs the stateless helper on a 40x50x1 ramp
+    # image with a full-image box for both a plain-number and a tensor minimum coverage of 0.1.
     height = 40
     width = 50
     image_size = [height, width, 1]
@@ -2785,6 +3497,10 @@ class SelectDistortedCropBoxTest(test_util.TensorFlowTestCase):
   # with xla_gpu. Update tests such that there is a single ground truth result
   # to test against.
   def testWithBoundingBoxStateless(self):
+    # [FUNCTION DOC]
+    # Stateless variant of the object-box scenario: builds an image with a block of ones, derives
+    # its relative bounding box, and runs the stateless helper for both a plain-number and a
+    # tensor minimum coverage of 0.1.
     height = 40
     width = 50
     x_shape = [height, width, 1]
@@ -2813,6 +3529,11 @@ class SelectDistortedCropBoxTest(test_util.TensorFlowTestCase):
           area_range=(0.05, 1.0))
 
   def testSampleDistortedBoundingBoxShapeStateless(self):
+    # [FUNCTION DOC]
+    # Binds the stateless sampler's fixed arguments with a partial function. Seeds of the wrong
+    # shape (a scalar and a triple) must raise a value error or invalid-argument error. With a
+    # valid two-element seed, asserts static shapes (3, 3, 1x1x4) and that evaluated outputs
+    # have the same shapes.
     with test_util.use_gpu():
       image_size = constant_op.constant(
           [40, 50, 1], shape=[3], dtype=dtypes.int32)
@@ -2852,6 +3573,11 @@ class SelectDistortedCropBoxTest(test_util.TensorFlowTestCase):
       self.assertAllEqual([1, 1, 4], bbox_for_drawing.shape)
 
   def testDeterminismExceptionThrowing(self):
+    # [FUNCTION DOC]
+    # With deterministic ops enabled, the V2 sampler called without a seed must raise a value
+    # error saying a non-zero seed is required, and succeeds with seed 1. The V1 sampler without
+    # a seed must raise a value error saying seed or seed2 must be non-zero, and succeeds with
+    # seed 1.
     with test_util.deterministic_ops():
       with self.assertRaisesRegex(
           ValueError, "requires a non-zero seed to be passed in when "
@@ -2873,6 +3599,12 @@ class SelectDistortedCropBoxTest(test_util.TensorFlowTestCase):
 
 
 class ResizeImagesV2Test(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case covering resize_images_v2 across resize methods (bilinear, nearest
+  # neighbor, bicubic, area, Lanczos 3/5, Gaussian, Mitchell cubic) and element types. Class
+  # attributes list all methods, the value-preserving "interpolating" subset, and the supported
+  # NumPy dtypes. Tests check shape inference, no-op resizing, tensor arguments, result dtypes,
+  # numerical results against hand-computed or NumPy references, antialiasing and error cases.
 
   METHODS = [
       image_ops.ResizeMethod.BILINEAR, image_ops.ResizeMethod.NEAREST_NEIGHBOR,
@@ -2896,6 +3628,11 @@ class ResizeImagesV2Test(test_util.TensorFlowTestCase, parameterized.TestCase):
   ]
 
   def _assertShapeInference(self, pre_shape, size, post_shape):
+    # [FUNCTION DOC]
+    # HELPER: asserts static shape inference of resize_images_v2.
+    # Takes an unbatched input shape list, the target size and the expected unbatched output
+    # shape list. Checks a single-image placeholder, a batch with known size 99 and a batch with
+    # unknown size; the expected shape is the post shape with the matching batch dimension.
     # Try single image resize
     single_image = array_ops.placeholder(dtypes.float32, shape=pre_shape)
     y = image_ops.resize_images_v2(single_image, size)
@@ -2910,6 +3647,10 @@ class ResizeImagesV2Test(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqual(y.get_shape().as_list(), [None] + post_shape)
 
   def shouldRunOnGPU(self, method, nptype):
+    # [FUNCTION DOC]
+    # HELPER: decides whether a resize test should prefer the GPU.
+    # Takes a resize method and a NumPy dtype and returns true only for nearest-neighbor with
+    # float32 or float64, otherwise false. No side effects.
     if (method == image_ops.ResizeMethod.NEAREST_NEIGHBOR and
         nptype in [np.float32, np.float64]):
       return True
@@ -2918,6 +3659,11 @@ class ResizeImagesV2Test(test_util.TensorFlowTestCase, parameterized.TestCase):
 
   @test_util.disable_xla("align_corners=False not supported by XLA")
   def testNoOp(self):
+    # [FUNCTION DOC]
+    # Disabled under XLA. For every supported dtype and every resize method, resizes a 1x6x4x1
+    # image to its own size (6x4) and asserts the output shape is unchanged, and that values are
+    # preserved within 1e-5 for interpolating methods. Also checks a single unbatched image
+    # keeps its shape. Test data stays at or below 127 to fit int8.
     img_shape = [1, 6, 4, 1]
     single_shape = [6, 4, 1]
     # This test is also conducted with int8, so 127 is the maximum
@@ -2956,6 +3702,12 @@ class ResizeImagesV2Test(test_util.TensorFlowTestCase, parameterized.TestCase):
   # half_pixel_centers unsupported in ResizeBilinear
   @test_util.disable_xla("b/127616992")
   def testTensorArguments(self):
+    # [FUNCTION DOC]
+    # Disabled under XLA (half-pixel centers). Resizes a uint8 image to its own size with
+    # every method through a local wrapper and checks shapes (and values for interpolating
+    # methods), for batched and single images. Then checks argument validation: a target size
+    # tensor that is scalar, one-element or three-element, or that has a float dtype, or a
+    # Python size containing a float or nothing/null value, must each raise a value error.
     img_shape = [1, 6, 4, 1]
     single_shape = [6, 4, 1]
     # This test is also conducted with int8, so 127 is the maximum
@@ -2965,6 +3717,9 @@ class ResizeImagesV2Test(test_util.TensorFlowTestCase, parameterized.TestCase):
         50, 50, 100, 100, 50, 50, 100, 100
     ]
     def resize_func(t, new_size, method):
+      # [FUNCTION DOC]
+      # HELPER: thin wrapper that calls resize_images_v2 with an image, a target size and a
+      # method, and returns the resized image; errors from the op propagate.
       return image_ops.resize_images_v2(t, new_size, method)
 
     img_np = np.array(data, dtype=np.uint8).reshape(img_shape)
@@ -3013,6 +3768,10 @@ class ResizeImagesV2Test(test_util.TensorFlowTestCase, parameterized.TestCase):
       _ = resize_func(image, [6, None], image_ops.ResizeMethod.BILINEAR)
 
   def testReturnDtypeV1(self):
+    # [FUNCTION DOC]
+    # In a fresh graph, for each dtype, method and target shape (constants and placeholders),
+    # asserts the output dtype of resize_images_v2 is the input dtype for nearest-neighbor and
+    # float32 for all other methods.
     # Shape inference in V1.
     with ops.Graph().as_default():
       target_shapes = [[6, 4], [3, 2],
@@ -3033,6 +3792,11 @@ class ResizeImagesV2Test(test_util.TensorFlowTestCase, parameterized.TestCase):
 
   @parameterized.named_parameters([("_RunEagerly", True), ("_RunGraph", False)])
   def testReturnDtypeV2(self, run_func_eagerly):
+    # [FUNCTION DOC]
+    # Parameterized on whether compiled functions run eagerly. Skipped when eager running is
+    # requested while not in eager mode. Otherwise traces a compiled function over tensor specs
+    # of every dtype, method and target shape variant and checks the output dtype inside the
+    # traced function (input dtype for nearest-neighbor, float32 otherwise).
     if not context.executing_eagerly() and run_func_eagerly:
       # Skip running tf.function eagerly in V1 mode.
       self.skipTest("Skip test that runs tf.function eagerly in V1 mode.")
@@ -3040,6 +3804,12 @@ class ResizeImagesV2Test(test_util.TensorFlowTestCase, parameterized.TestCase):
 
       @def_function.function
       def test_dtype(image, target_shape, target_method):
+        # [FUNCTION DOC]
+        # HELPER: traced function used by the enclosing test.
+        # KNOWN ISSUE: the dtype expectation reads the loop variable named method from the
+        # enclosing scope instead of the target_method parameter, so it only works because the
+        # caller iterates over methods in the enclosing loop.
+        # Resizes with the given method and asserts the output dtype.
         y = image_ops.resize_images_v2(image, target_shape, target_method)
         if method == image_ops.ResizeMethod.NEAREST_NEIGHBOR:
           expected_dtype = image.dtype
@@ -3063,6 +3833,11 @@ class ResizeImagesV2Test(test_util.TensorFlowTestCase, parameterized.TestCase):
   # half_pixel_centers not supported by XLA
   @test_util.disable_xla("b/127616992")
   def testSumTensor(self):
+    # [FUNCTION DOC]
+    # Disabled under XLA (half-pixel centers). Builds the target width as the sum of two
+    # constant tensors (1 plus 3) and the height as a constant, resizes a 1x6x4x1 uint8 image
+    # to its own size with every method, and asserts the output shape and, for interpolating
+    # methods, the preserved values.
     img_shape = [1, 6, 4, 1]
     # This test is also conducted with int8, so 127 is the maximum
     # value that can be used.
@@ -3091,6 +3866,11 @@ class ResizeImagesV2Test(test_util.TensorFlowTestCase, parameterized.TestCase):
 
   @test_util.disable_xla("align_corners=False not supported by XLA")
   def testResizeDown(self):
+    # [FUNCTION DOC]
+    # Disabled under XLA. For 3-D and 4-D versions of a 6x4 image, every dtype and method, and
+    # only when a GPU is available and the GPU-preferring helper says so (nearest-neighbor with
+    # float32/float64), downsizes to 3x2 and asserts the expected values within 1e-5. On
+    # machines without a GPU the test performs no assertions.
     # This test is also conducted with int8, so 127 is the maximum
     # value that can be used.
     data = [
@@ -3123,6 +3903,10 @@ class ResizeImagesV2Test(test_util.TensorFlowTestCase, parameterized.TestCase):
 
   @test_util.disable_xla("align_corners=False not supported by XLA")
   def testResizeUp(self):
+    # [FUNCTION DOC]
+    # Disabled under XLA. Upsizes a 1x3x2x1 image to 6x4 for every dtype and for each of eight
+    # methods (bilinear, nearest neighbor, area, Lanczos 3 and 5, Gaussian, bicubic, Mitchell
+    # cubic) and compares to hard-coded expected values within 1e-4.
     img_shape = [1, 3, 2, 1]
     data = [64, 32, 32, 64, 50, 100]
     target_height = 6
@@ -3183,6 +3967,11 @@ class ResizeImagesV2Test(test_util.TensorFlowTestCase, parameterized.TestCase):
   # XLA doesn't implement half_pixel_centers
   @test_util.disable_xla("b/127616992")
   def testLegacyBicubicMethodsMatchNewMethods(self):
+    # [FUNCTION DOC]
+    # Disabled under XLA. Upsizes a float32 image with the legacy bilinear and bicubic ops using
+    # half-pixel centers, and with the scale-and-translate op using the triangle and
+    # keys-cubic kernels without antialiasing, and asserts each pair of results is close
+    # within 1e-4.
     img_shape = [1, 3, 2, 1]
     data = [64, 32, 32, 64, 50, 100]
     target_height = 6
@@ -3214,6 +4003,9 @@ class ResizeImagesV2Test(test_util.TensorFlowTestCase, parameterized.TestCase):
             self.evaluate(legacy_result), self.evaluate(new_result), atol=1e-04)
 
   def testResizeDownArea(self):
+    # [FUNCTION DOC]
+    # Downsizes a 6x6 uint8 image to 4x4 with the area method and asserts the result matches
+    # the hard-coded expected values within an absolute tolerance of 1 (rounding differences).
     img_shape = [1, 6, 6, 1]
     data = [
         128, 64, 32, 16, 8, 4, 4, 8, 16, 32, 64, 128, 128, 64, 32, 16, 8, 4, 5,
@@ -3237,6 +4029,10 @@ class ResizeImagesV2Test(test_util.TensorFlowTestCase, parameterized.TestCase):
       self.assertAllClose(resized, expected, atol=1)
 
   def testCompareNearestNeighbor(self):
+    # [FUNCTION DOC]
+    # Runs only when a GPU is available; otherwise does nothing. For float32 and float64 ramp
+    # images, resizes 5x6 to 8x12 with nearest neighbor on the GPU-preferred and on the CPU-only
+    # session and asserts the two results are close (1e-5).
     if test.is_gpu_available():
       input_shape = [1, 5, 6, 3]
       target_height = 8
@@ -3260,6 +4056,10 @@ class ResizeImagesV2Test(test_util.TensorFlowTestCase, parameterized.TestCase):
 
   @test_util.disable_xla("align_corners=False not supported by XLA")
   def testBfloat16MultipleOps(self):
+    # [FUNCTION DOC]
+    # Disabled under XLA. Resizes a random 30x10x2 image to 8x12 with bilinear, nearest
+    # neighbor, bicubic and area methods, once as float32 and once as bfloat16, and asserts
+    # the two results agree within 1e-2.
     target_height = 8
     target_width = 12
     img = np.random.uniform(0, 100, size=(30, 10, 2)).astype(np.float32)
@@ -3278,6 +4078,12 @@ class ResizeImagesV2Test(test_util.TensorFlowTestCase, parameterized.TestCase):
       self.assertAllClose(bf16_val, f32_val, rtol=1e-2, atol=1e-2)
 
   def testCompareBilinear(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: this test lives in the resize_images_v2 test class but calls the older
+    # resize_images function, so it does not exercise the V2 API.
+    # Runs only when a GPU is available. For float32 and float64 ramp images, resizes 5x6 to
+    # 8x12 with the bilinear method on GPU-preferred and CPU-only sessions and asserts the
+    # results agree within 1e-5.
     if test.is_gpu_available():
       input_shape = [1, 5, 6, 3]
       target_height = 8
@@ -3296,6 +4102,10 @@ class ResizeImagesV2Test(test_util.TensorFlowTestCase, parameterized.TestCase):
         self.assertAllClose(value[True], value[False], rtol=1e-5, atol=1e-5)
 
   def testShapeInference(self):
+    # [FUNCTION DOC]
+    # In a fresh graph, checks resize_images_v2 infers a 55x66 spatial output shape for known and
+    # unknown input spatial sizes and keeps the channel dimension (known or unknown), via the
+    # shape-inference helper which also covers batched inputs.
     # Shape function requires placeholders and a graph.
     with ops.Graph().as_default():
       self._assertShapeInference([50, 60, 3], [55, 66], [55, 66, 3])
@@ -3318,6 +4128,10 @@ class ResizeImagesV2Test(test_util.TensorFlowTestCase, parameterized.TestCase):
       self._assertShapeInference([None, None, None], [55, 66], [55, 66, None])
 
   def testNameScope(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the class tests the V2 function, but this test calls the older resize_images.
+    # In a fresh graph, resizes a placeholder to 55x66 and asserts the output op name starts
+    # with the resize prefix.
     # Testing name scope requires placeholders and a graph.
     with ops.Graph().as_default():
       with self.cached_session():
@@ -3327,6 +4141,11 @@ class ResizeImagesV2Test(test_util.TensorFlowTestCase, parameterized.TestCase):
 
   def _ResizeImageCall(self, x, max_h, max_w, preserve_aspect_ratio,
                        use_tensor_inputs):
+    # [FUNCTION DOC]
+    # HELPER: runs resize_images with an aspect-ratio option.
+    # Takes an image array, maximum height and width, a flag for preserving aspect ratio and a
+    # flag choosing tensor or plain-tuple size arguments. Resizes through a local wrapper in a
+    # cached session and returns the NumPy result.
     if use_tensor_inputs:
       target_max = ops.convert_to_tensor([max_h, max_w])
       x_tensor = ops.convert_to_tensor(x)
@@ -3337,6 +4156,9 @@ class ResizeImagesV2Test(test_util.TensorFlowTestCase, parameterized.TestCase):
     def resize_func(t,
                     target_max=target_max,
                     preserve_aspect_ratio=preserve_aspect_ratio):
+      # [FUNCTION DOC]
+      # HELPER: wrapper that calls resize_images with an image, a target size (converted to a
+      # tensor, defaulting to the enclosing size) and an aspect ratio flag; returns the result.
       return image_ops.resize_images(
           t, ops.convert_to_tensor(target_max),
           preserve_aspect_ratio=preserve_aspect_ratio)
@@ -3351,6 +4173,11 @@ class ResizeImagesV2Test(test_util.TensorFlowTestCase, parameterized.TestCase):
                          y_shape,
                          preserve_aspect_ratio=True,
                          use_tensor_inputs_options=None):
+    # [FUNCTION DOC]
+    # HELPER: asserts a resize with a bounding size produces the expected values.
+    # Takes flat input values and shape, flat expected values and shape, an aspect ratio flag
+    # (default true) and an optional list of tensor-input modes (default both). Asserts closeness
+    # to the expected array for each mode.
     use_tensor_inputs_options = use_tensor_inputs_options or [False, True]
     target_height, target_width, _ = y_shape
     x = np.array(x).reshape(x_shape)
@@ -3368,6 +4195,11 @@ class ResizeImagesV2Test(test_util.TensorFlowTestCase, parameterized.TestCase):
                               y_shape,
                               preserve_aspect_ratio=True,
                               use_tensor_inputs_options=None):
+    # [FUNCTION DOC]
+    # HELPER: asserts only the output shape of a resize with a bounding size.
+    # Takes flat input values and shape, the (height, width) bound, the expected output shape,
+    # an aspect ratio flag (default true) and an optional list of tensor-input modes (default
+    # both). Asserts the result has the expected shape for each mode.
     use_tensor_inputs_options = use_tensor_inputs_options or [False, True]
     target_height, target_width = target_shape
     x = np.array(x).reshape(x_shape)
@@ -3379,6 +4211,9 @@ class ResizeImagesV2Test(test_util.TensorFlowTestCase, parameterized.TestCase):
       self.assertShapeEqual(y, ops.convert_to_tensor(y_tf))
 
   def testPreserveAspectRatioMultipleImages(self):
+    # [FUNCTION DOC]
+    # Resizes a batch of ten 100x80 images with bound 250x250. With aspect ratio preserved the
+    # expected shape is 250x200; without, 250x250. Each flag value is a separate subtest.
     x_shape = [10, 100, 80, 10]
     x = np.random.uniform(size=x_shape)
     for preserve_aspect_ratio in [True, False]:
@@ -3392,42 +4227,61 @@ class ResizeImagesV2Test(test_util.TensorFlowTestCase, parameterized.TestCase):
             preserve_aspect_ratio=preserve_aspect_ratio)
 
   def testPreserveAspectRatioNoOp(self):
+    # [FUNCTION DOC]
+    # Resizes a random 10x10x10 image to a 10x10 bound with aspect ratio preserved and asserts
+    # the image is unchanged.
     x_shape = [10, 10, 10]
     x = np.random.uniform(size=x_shape)
 
     self._assertResizeEqual(x, x_shape, x, x_shape)
 
   def testPreserveAspectRatioSmaller(self):
+    # [FUNCTION DOC]
+    # Resizes a 100x100 image to a 75x50 bound with aspect ratio preserved and asserts the output
+    # shape is 50x50.
     x_shape = [100, 100, 10]
     x = np.random.uniform(size=x_shape)
 
     self._assertResizeCheckShape(x, x_shape, [75, 50], [50, 50, 10])
 
   def testPreserveAspectRatioSmallerMultipleImages(self):
+    # [FUNCTION DOC]
+    # Same as the smaller-image case for a batch of ten images; expects 50x50 per image.
     x_shape = [10, 100, 100, 10]
     x = np.random.uniform(size=x_shape)
 
     self._assertResizeCheckShape(x, x_shape, [75, 50], [10, 50, 50, 10])
 
   def testPreserveAspectRatioLarger(self):
+    # [FUNCTION DOC]
+    # Resizes a 100x100 image to a 150x200 bound with aspect ratio preserved and asserts the
+    # output shape is 150x150 (limited by the smaller bound).
     x_shape = [100, 100, 10]
     x = np.random.uniform(size=x_shape)
 
     self._assertResizeCheckShape(x, x_shape, [150, 200], [150, 150, 10])
 
   def testPreserveAspectRatioSameRatio(self):
+    # [FUNCTION DOC]
+    # Resizes a 1920x1080 image to a 3840x2160 bound (same aspect ratio) and asserts the output
+    # shape is exactly the bound.
     x_shape = [1920, 1080, 3]
     x = np.random.uniform(size=x_shape)
 
     self._assertResizeCheckShape(x, x_shape, [3840, 2160], [3840, 2160, 3])
 
   def testPreserveAspectRatioSquare(self):
+    # [FUNCTION DOC]
+    # Resizes a 299x299 image to a 320x320 bound and asserts the output shape is 320x320.
     x_shape = [299, 299, 3]
     x = np.random.uniform(size=x_shape)
 
     self._assertResizeCheckShape(x, x_shape, [320, 320], [320, 320, 3])
 
   def testLargeDim(self):
+    # [FUNCTION DOC]
+    # Asks resize_images_v2 (bilinear) for an enormous 1.6 billion by 1.6 billion output from a
+    # tiny image and expects an invalid-argument error on evaluation instead of a crash.
     with self.session():
       with self.assertRaises(errors.InvalidArgumentError):
         x = np.ones((5, 1, 1, 2))
@@ -3438,6 +4292,11 @@ class ResizeImagesV2Test(test_util.TensorFlowTestCase, parameterized.TestCase):
 
 class ResizeImagesTest(test_util.TensorFlowTestCase,
                        parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case covering the legacy resize_images function with the V1 resize
+  # methods (bilinear, nearest neighbor, bicubic, area): shape inference, no-op and exact
+  # resizing, tensor arguments, corner alignment, dtype handling, aspect ratio preservation
+  # and error cases. Class attributes list the methods and the supported NumPy dtypes.
 
   METHODS = [
       image_ops.ResizeMethodV1.BILINEAR,
@@ -3451,6 +4310,11 @@ class ResizeImagesTest(test_util.TensorFlowTestCase,
   ]
 
   def _assertShapeInference(self, pre_shape, size, post_shape):
+    # [FUNCTION DOC]
+    # HELPER: asserts static shape inference of resize_images.
+    # Takes an unbatched input shape list, a target size and the expected unbatched output
+    # shape list. Checks a single-image placeholder, a batch with known size 99 and a batch with
+    # unknown size.
     # Try single image resize
     single_image = array_ops.placeholder(dtypes.float32, shape=pre_shape)
     y = image_ops.resize_images(single_image, size)
@@ -3465,6 +4329,10 @@ class ResizeImagesTest(test_util.TensorFlowTestCase,
     self.assertEqual(y.get_shape().as_list(), [None] + post_shape)
 
   def shouldRunOnGPU(self, method, nptype):
+    # [FUNCTION DOC]
+    # HELPER: decides whether a resize test should prefer the GPU.
+    # Takes a V1 resize method and a NumPy dtype; returns true only for nearest-neighbor with
+    # float32 or float64, otherwise false. No side effects.
     if (method == image_ops.ResizeMethodV1.NEAREST_NEIGHBOR and
         nptype in [np.float32, np.float64]):
       return True
@@ -3473,6 +4341,10 @@ class ResizeImagesTest(test_util.TensorFlowTestCase,
 
   @test_util.disable_xla("align_corners=False not supported by XLA")
   def testNoOp(self):
+    # [FUNCTION DOC]
+    # Disabled under XLA. For every dtype and V1 method, resizes a 1x6x4x1 image to its own size
+    # and asserts the shape is unchanged and values are preserved within 1e-5; also checks a
+    # single unbatched image keeps its shape.
     img_shape = [1, 6, 4, 1]
     single_shape = [6, 4, 1]
     # This test is also conducted with int8, so 127 is the maximum
@@ -3508,6 +4380,11 @@ class ResizeImagesTest(test_util.TensorFlowTestCase,
         self.assertAllEqual(single_shape, newshape)
 
   def testTensorArguments(self):
+    # [FUNCTION DOC]
+    # Resizes a uint8 image to its own size with each V1 method through a local wrapper and
+    # checks shape and values, for batched and single images. Then checks argument validation:
+    # a size tensor that is scalar, one-element or three-element, or with a float dtype, or a
+    # Python size with a float or null entry, must each raise a value error.
     img_shape = [1, 6, 4, 1]
     single_shape = [6, 4, 1]
     # This test is also conducted with int8, so 127 is the maximum
@@ -3518,6 +4395,9 @@ class ResizeImagesTest(test_util.TensorFlowTestCase,
     ]
 
     def resize_func(t, new_size, method):
+      # [FUNCTION DOC]
+      # HELPER: thin wrapper that calls resize_images with an image, target size and method and
+      # returns the resized image; errors propagate.
       return image_ops.resize_images(t, new_size, method)
 
     img_np = np.array(data, dtype=np.uint8).reshape(img_shape)
@@ -3564,6 +4444,10 @@ class ResizeImagesTest(test_util.TensorFlowTestCase,
       _ = resize_func(image, [6, None], image_ops.ResizeMethodV1.BILINEAR)
 
   def testReturnDtypeV1(self):
+    # [FUNCTION DOC]
+    # In a fresh graph, for each dtype, V1 method and target shape (constants and placeholders),
+    # asserts the output dtype of resize_images is the input dtype for nearest-neighbor or when
+    # the target equals the input size, otherwise float32.
     # Shape inference in V1.
     with ops.Graph().as_default():
       target_shapes = [[6, 4], [3, 2], [
@@ -3584,6 +4468,10 @@ class ResizeImagesTest(test_util.TensorFlowTestCase,
 
   @parameterized.named_parameters([("_RunEagerly", True), ("_RunGraph", False)])
   def testReturnDtypeV2(self, run_func_eagerly):
+    # [FUNCTION DOC]
+    # Parameterized on whether compiled functions run eagerly; skipped when eager running is
+    # requested outside eager mode. Traces a compiled function over tensor specs of every dtype,
+    # V1 method and target shape variant, checking the output dtype inside the traced function.
     if not context.executing_eagerly() and run_func_eagerly:
       # Skip running tf.function eagerly in V1 mode.
       self.skipTest("Skip test that runs tf.function eagerly in V1 mode.")
@@ -3591,6 +4479,12 @@ class ResizeImagesTest(test_util.TensorFlowTestCase,
 
       @def_function.function
       def test_dtype(image, target_shape, target_method):
+        # [FUNCTION DOC]
+        # HELPER: traced function used by the enclosing test.
+        # KNOWN ISSUE: the method used in the expectation is read from the enclosing loop
+        # variable instead of the target_method parameter.
+        # Resizes and asserts the output dtype is the input dtype for nearest-neighbor or
+        # same-size targets, else float32.
         y = image_ops.resize_images(image, target_shape, target_method)
         if (method == image_ops.ResizeMethodV1.NEAREST_NEIGHBOR or
             target_shape == image.shape[1:3]):
@@ -3614,6 +4508,10 @@ class ResizeImagesTest(test_util.TensorFlowTestCase,
 
   @test_util.disable_xla("align_corners=False not supported by XLA")
   def testSumTensor(self):
+    # [FUNCTION DOC]
+    # Disabled under XLA. Uses a target width computed as the sum of two constant tensors and a
+    # constant height, resizes a 1x6x4x1 uint8 image to its own size with each V1 method, and
+    # asserts the shape and preserved values.
     img_shape = [1, 6, 4, 1]
     # This test is also conducted with int8, so 127 is the maximum
     # value that can be used.
@@ -3641,6 +4539,10 @@ class ResizeImagesTest(test_util.TensorFlowTestCase,
 
   @test_util.disable_xla("align_corners=False not supported by XLA")
   def testResizeDown(self):
+    # [FUNCTION DOC]
+    # Disabled under XLA. For 3-D and 4-D versions of a 6x4 image, each dtype and V1 method,
+    # and only when a GPU is available and the helper says so, downsizes to 3x2 and asserts the
+    # expected values within 1e-5; performs no assertions without a GPU.
     # This test is also conducted with int8, so 127 is the maximum
     # value that can be used.
     data = [
@@ -3673,6 +4575,10 @@ class ResizeImagesTest(test_util.TensorFlowTestCase,
 
   @test_util.disable_xla("align_corners=False not supported by XLA")
   def testResizeUpAlignCornersFalse(self):
+    # [FUNCTION DOC]
+    # Disabled under XLA. Upsizes a 1x3x2x1 image to 6x4 with corner alignment off, for every
+    # dtype and for bilinear, nearest-neighbor and area methods, and compares to hard-coded
+    # expected values within 1e-5.
     img_shape = [1, 3, 2, 1]
     data = [64, 32, 32, 64, 50, 100]
     target_height = 6
@@ -3711,6 +4617,10 @@ class ResizeImagesTest(test_util.TensorFlowTestCase,
           self.assertAllClose(resized, expected, atol=1e-05)
 
   def testResizeUpAlignCornersTrue(self):
+    # [FUNCTION DOC]
+    # Upsizes a 1x3x2x1 image to 5x4 with corner alignment on, for every dtype and for
+    # bilinear, nearest-neighbor and area methods, comparing with hard-coded expectations within
+    # 1e-5. A TODO notes the area method's alignment with aligned corners is not ideal.
     img_shape = [1, 3, 2, 1]
     data = [6, 3, 3, 6, 6, 9]
     target_height = 5
@@ -3748,6 +4658,9 @@ class ResizeImagesTest(test_util.TensorFlowTestCase,
           self.assertAllClose(resized, expected, atol=1e-05)
 
   def testResizeUpBicubic(self):
+    # [FUNCTION DOC]
+    # Upsizes a 6x6 uint8 image to 8x8 with the V1 bicubic method and compares to hard-coded
+    # expected values within an absolute tolerance of 1.
     img_shape = [1, 6, 6, 1]
     data = [
         128, 128, 64, 64, 128, 128, 64, 64, 64, 64, 128, 128, 64, 64, 128, 128,
@@ -3775,6 +4688,9 @@ class ResizeImagesTest(test_util.TensorFlowTestCase,
       self.assertAllClose(resized, expected, atol=1)
 
   def testResizeDownArea(self):
+    # [FUNCTION DOC]
+    # Downsizes a 6x6 uint8 image to 4x4 with the V1 area method and asserts the hard-coded
+    # expected values within an absolute tolerance of 1.
     img_shape = [1, 6, 6, 1]
     data = [
         128, 64, 32, 16, 8, 4, 4, 8, 16, 32, 64, 128, 128, 64, 32, 16, 8, 4, 5,
@@ -3798,6 +4714,10 @@ class ResizeImagesTest(test_util.TensorFlowTestCase,
       self.assertAllClose(resized, expected, atol=1)
 
   def testCompareNearestNeighbor(self):
+    # [FUNCTION DOC]
+    # Runs only when a GPU is available. For float32 and float64 ramp images and both corner
+    # alignment settings, resizes 5x6 to 8x12 with nearest neighbor on the GPU-preferred and the
+    # CPU-only sessions and asserts the results agree within 1e-5.
     if test.is_gpu_available():
       input_shape = [1, 5, 6, 3]
       target_height = 8
@@ -3827,6 +4747,10 @@ class ResizeImagesTest(test_util.TensorFlowTestCase,
           self.assertAllClose(cpu_val, gpu_val, rtol=1e-5, atol=1e-5)
 
   def testCompareBilinear(self):
+    # [FUNCTION DOC]
+    # Runs only when a GPU is available. Same as the nearest-neighbor comparison but with the
+    # bilinear method: GPU-preferred and CPU-only results must agree within 1e-5 for both dtypes
+    # and both corner alignment settings.
     if test.is_gpu_available():
       input_shape = [1, 5, 6, 3]
       target_height = 8
@@ -3849,6 +4773,10 @@ class ResizeImagesTest(test_util.TensorFlowTestCase,
           self.assertAllClose(value[True], value[False], rtol=1e-5, atol=1e-5)
 
   def testShapeInference(self):
+    # [FUNCTION DOC]
+    # In a fresh graph, checks resize_images infers a 55x66 spatial output shape for known and
+    # unknown input spatial sizes and keeps the channel dimension (known or unknown), including
+    # batched inputs via the helper.
     # Shape function requires placeholders and a graph.
     with ops.Graph().as_default():
       self._assertShapeInference([50, 60, 3], [55, 66], [55, 66, 3])
@@ -3871,6 +4799,10 @@ class ResizeImagesTest(test_util.TensorFlowTestCase,
       self._assertShapeInference([None, None, None], [55, 66], [55, 66, None])
 
   def testNameScope(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the local image shape variable assigned at the start is never used.
+    # In a fresh graph, resizes a placeholder to 55x66 and asserts the output op name starts
+    # with the resize prefix.
     # Testing name scope requires placeholders and a graph.
     with ops.Graph().as_default():
       img_shape = [1, 3, 2, 1]
@@ -3881,6 +4813,11 @@ class ResizeImagesTest(test_util.TensorFlowTestCase,
 
   def _ResizeImageCall(self, x, max_h, max_w, preserve_aspect_ratio,
                        use_tensor_inputs):
+    # [FUNCTION DOC]
+    # HELPER: runs resize_images with an aspect-ratio option.
+    # Takes an image array, maximum height and width, a preserve-aspect-ratio flag and a flag
+    # choosing tensor or plain-list size arguments. Evaluates in a cached session and returns
+    # the NumPy result.
     if use_tensor_inputs:
       target_max = ops.convert_to_tensor([max_h, max_w])
       x_tensor = ops.convert_to_tensor(x)
@@ -3897,6 +4834,11 @@ class ResizeImagesTest(test_util.TensorFlowTestCase,
   def _assertResizeEqual(self, x, x_shape, y, y_shape,
                          preserve_aspect_ratio=True,
                          use_tensor_inputs_options=None):
+    # [FUNCTION DOC]
+    # HELPER: asserts a bounded resize produces the expected values.
+    # Takes flat input values and shape, flat expected values and shape, an aspect ratio flag
+    # (default true) and an optional list of tensor-input modes (default both); asserts
+    # closeness to the expectation for each mode.
     use_tensor_inputs_options = use_tensor_inputs_options or [False, True]
     target_height, target_width, _ = y_shape
     x = np.array(x).reshape(x_shape)
@@ -3910,6 +4852,11 @@ class ResizeImagesTest(test_util.TensorFlowTestCase,
   def _assertResizeCheckShape(self, x, x_shape, target_shape,
                               y_shape, preserve_aspect_ratio=True,
                               use_tensor_inputs_options=None):
+    # [FUNCTION DOC]
+    # HELPER: asserts only the output shape of a bounded resize.
+    # Takes flat input values and shape, the (height, width) bound, the expected output shape,
+    # an aspect ratio flag (default true) and an optional list of tensor-input modes (default
+    # both); asserts the result has the expected shape for each mode.
     use_tensor_inputs_options = use_tensor_inputs_options or [False, True]
     target_height, target_width = target_shape
     x = np.array(x).reshape(x_shape)
@@ -3921,6 +4868,9 @@ class ResizeImagesTest(test_util.TensorFlowTestCase,
       self.assertShapeEqual(y, ops.convert_to_tensor(y_tf))
 
   def testPreserveAspectRatioMultipleImages(self):
+    # [FUNCTION DOC]
+    # Resizes a batch of ten 100x100 images to a 250x250 bound with aspect ratio preservation
+    # turned off and asserts the output shape is 250x250 per image.
     x_shape = [10, 100, 100, 10]
     x = np.random.uniform(size=x_shape)
 
@@ -3928,36 +4878,49 @@ class ResizeImagesTest(test_util.TensorFlowTestCase,
                                  preserve_aspect_ratio=False)
 
   def testPreserveAspectRatioNoOp(self):
+    # [FUNCTION DOC]
+    # Resizes a random 10x10x10 image to a 10x10 bound with aspect ratio preserved and asserts
+    # the image is unchanged.
     x_shape = [10, 10, 10]
     x = np.random.uniform(size=x_shape)
 
     self._assertResizeEqual(x, x_shape, x, x_shape)
 
   def testPreserveAspectRatioSmaller(self):
+    # [FUNCTION DOC]
+    # Resizes a 100x100 image to a 75x50 bound with aspect ratio preserved; expects 50x50.
     x_shape = [100, 100, 10]
     x = np.random.uniform(size=x_shape)
 
     self._assertResizeCheckShape(x, x_shape, [75, 50], [50, 50, 10])
 
   def testPreserveAspectRatioSmallerMultipleImages(self):
+    # [FUNCTION DOC]
+    # Same as the smaller-image case for a batch of ten images; expects 50x50 per image.
     x_shape = [10, 100, 100, 10]
     x = np.random.uniform(size=x_shape)
 
     self._assertResizeCheckShape(x, x_shape, [75, 50], [10, 50, 50, 10])
 
   def testPreserveAspectRatioLarger(self):
+    # [FUNCTION DOC]
+    # Resizes a 100x100 image to a 150x200 bound with aspect ratio preserved; expects 150x150.
     x_shape = [100, 100, 10]
     x = np.random.uniform(size=x_shape)
 
     self._assertResizeCheckShape(x, x_shape, [150, 200], [150, 150, 10])
 
   def testPreserveAspectRatioSameRatio(self):
+    # [FUNCTION DOC]
+    # Resizes a 1920x1080 image to a 3840x2160 bound (same aspect ratio); expects exactly that.
     x_shape = [1920, 1080, 3]
     x = np.random.uniform(size=x_shape)
 
     self._assertResizeCheckShape(x, x_shape, [3840, 2160], [3840, 2160, 3])
 
   def testPreserveAspectRatioSquare(self):
+    # [FUNCTION DOC]
+    # Resizes a 299x299 image to a 320x320 bound; expects a 320x320 output.
     x_shape = [299, 299, 3]
     x = np.random.uniform(size=x_shape)
 
@@ -3965,9 +4928,18 @@ class ResizeImagesTest(test_util.TensorFlowTestCase,
 
 
 class ResizeImageWithPadV1Test(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering resize_image_with_pad_v1, which resizes while keeping the aspect ratio
+  # and padding with zeros: static shape inference for 3-D and 4-D inputs, no-op, padding
+  # results, and one misplaced antialias overflow check. Helpers run the op with plain or
+  # tensor arguments.
 
   def _ResizeImageWithPad(self, x, target_height, target_width,
                           use_tensor_inputs):
+    # [FUNCTION DOC]
+    # HELPER: runs resize_image_with_pad_v1 and returns the evaluated result.
+    # Takes an image array, target height and width, and a flag choosing whether to convert all
+    # to tensors first. Evaluates in a cached session and returns a NumPy array.
     if use_tensor_inputs:
       target_height = ops.convert_to_tensor(target_height)
       target_width = ops.convert_to_tensor(target_width)
@@ -3986,6 +4958,11 @@ class ResizeImageWithPadV1Test(test_util.TensorFlowTestCase):
                      y,
                      y_shape,
                      use_tensor_inputs_options=None):
+    # [FUNCTION DOC]
+    # HELPER: asserts the pad-resize produces the expected image.
+    # Takes flat input values and shape, flat expected values and shape, and an optional list of
+    # tensor-input modes (default both). The target size is taken from the expected shape;
+    # asserts closeness for each mode.
     use_tensor_inputs_options = use_tensor_inputs_options or [False, True]
     target_height, target_width, _ = y_shape
     x = np.array(x).reshape(x_shape)
@@ -4003,6 +4980,11 @@ class ResizeImageWithPadV1Test(test_util.TensorFlowTestCase):
                     target_width,
                     err_msg,
                     use_tensor_inputs_options=None):
+    # [FUNCTION DOC]
+    # HELPER: asserts the pad-resize fails with a matching error.
+    # Takes flat input values and shape, target size, an error message pattern and an optional
+    # list of tensor-input modes (default both); each mode must raise a value error or
+    # invalid-argument error matching the pattern.
     use_tensor_inputs_options = use_tensor_inputs_options or [False, True]
     x = np.array(x).reshape(x_shape)
 
@@ -4013,11 +4995,19 @@ class ResizeImageWithPadV1Test(test_util.TensorFlowTestCase):
                                  use_tensor_inputs)
 
   def _assertShapeInference(self, pre_shape, height, width, post_shape):
+    # [FUNCTION DOC]
+    # HELPER: asserts static shape inference of resize_image_with_pad_v1.
+    # Takes an input placeholder shape, target height and width, and the expected output shape
+    # list; asserts the static output shape.
     image = array_ops.placeholder(dtypes.float32, shape=pre_shape)
     y = image_ops.resize_image_with_pad_v1(image, height, width)
     self.assertEqual(y.get_shape().as_list(), post_shape)
 
   def testShapeInference(self):
+    # [FUNCTION DOC]
+    # In a fresh graph, asserts resize_image_with_pad_v1 infers the target height and width for
+    # any known or unknown input spatial size, for 3-D and 4-D inputs, and preserves known
+    # channel (and batch) dimensions.
     # Shape function requires placeholders and a graph.
     with ops.Graph().as_default():
       # Test with 3-D tensors.
@@ -4049,12 +5039,17 @@ class ResizeImageWithPadV1Test(test_util.TensorFlowTestCase):
                                  [None, 55, 66, None])
 
   def testNoOp(self):
+    # [FUNCTION DOC]
+    # Pad-resizes a random 10x10x10 image to its own size and asserts the output is unchanged.
     x_shape = [10, 10, 10]
     x = np.random.uniform(size=x_shape)
 
     self._assertReturns(x, x_shape, x, x_shape)
 
   def testPad(self):
+    # [FUNCTION DOC]
+    # Shrinks a 2x4x1 ramp image to 1x4, 2x2 and 1x2 targets with the V1 function and asserts the
+    # exact results (aspect ratio kept, zero padding, nearest-neighbor style sampling values).
     # Reduce vertical dimension
     x = [1, 2, 3, 4, 5, 6, 7, 8]
     x_shape = [2, 4, 1]
@@ -4082,6 +5077,11 @@ class ResizeImageWithPadV1Test(test_util.TensorFlowTestCase):
     self._assertReturns(x, x_shape, y, y_shape)
 
   def testImageResizeAntialiasWithInvalidInput(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: this test is in the pad-resize class but exercises resize_images_v2 with
+    # antialiasing, not the pad function.
+    # Requests an enormous antialiased resize (about 1.8 billion by 1.8 billion) of a tiny 4-D
+    # image and expects an invalid-argument or value error rather than a crash.
     with self.session():
       with self.assertRaises((errors.InvalidArgumentError, ValueError)):
         op = image_ops.resize_images_v2(
@@ -4094,9 +5094,18 @@ class ResizeImageWithPadV1Test(test_util.TensorFlowTestCase):
 # half_pixel_centers not supported by XLA
 @test_util.for_all_test_methods(test_util.disable_xla, "b/127616992")
 class ResizeImageWithPadV2Test(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering resize_image_with_pad_v2 (aspect-ratio-preserving resize with zero
+  # padding using the newer resize implementation). All test methods are disabled under XLA by
+  # a class decorator because half-pixel centers are unsupported there. Covers shape
+  # inference (though see the known issue), no-op and padding results.
 
   def _ResizeImageWithPad(self, x, target_height, target_width,
                           use_tensor_inputs):
+    # [FUNCTION DOC]
+    # HELPER: runs resize_image_with_pad_v2 and returns the evaluated result.
+    # Takes an image array, target height and width, and a flag choosing whether to convert all
+    # to tensors first. Evaluates in a cached session and returns a NumPy array.
     if use_tensor_inputs:
       target_height = ops.convert_to_tensor(target_height)
       target_width = ops.convert_to_tensor(target_width)
@@ -4115,6 +5124,11 @@ class ResizeImageWithPadV2Test(test_util.TensorFlowTestCase):
                      y,
                      y_shape,
                      use_tensor_inputs_options=None):
+    # [FUNCTION DOC]
+    # HELPER: asserts the V2 pad-resize produces the expected image.
+    # Takes flat input values and shape, flat expected values and shape, and an optional list of
+    # tensor-input modes (default both). Target size is taken from the expected shape; asserts
+    # closeness for each mode.
     use_tensor_inputs_options = use_tensor_inputs_options or [False, True]
     target_height, target_width, _ = y_shape
     x = np.array(x).reshape(x_shape)
@@ -4132,6 +5146,11 @@ class ResizeImageWithPadV2Test(test_util.TensorFlowTestCase):
                     target_width,
                     err_msg,
                     use_tensor_inputs_options=None):
+    # [FUNCTION DOC]
+    # HELPER: asserts the V2 pad-resize fails with a matching error.
+    # Takes flat input values and shape, target size, an error message pattern and an optional
+    # list of tensor-input modes (default both); each mode must raise a value error or
+    # invalid-argument error matching the pattern.
     use_tensor_inputs_options = use_tensor_inputs_options or [False, True]
     x = np.array(x).reshape(x_shape)
 
@@ -4142,11 +5161,21 @@ class ResizeImageWithPadV2Test(test_util.TensorFlowTestCase):
                                  use_tensor_inputs)
 
   def _assertShapeInference(self, pre_shape, height, width, post_shape):
+    # [FUNCTION DOC]
+    # HELPER: shape-inference assertion routine for the pad-resize tests.
+    # KNOWN ISSUE: despite living in the V2 test class, this helper calls
+    # resize_image_with_pad_v1, so the V2 function's shape inference is not tested.
+    # Asserts static shape inference of a pad-resize. Takes an input placeholder
+    # shape, target height and width, and the expected output shape list.
     image = array_ops.placeholder(dtypes.float32, shape=pre_shape)
     y = image_ops.resize_image_with_pad_v1(image, height, width)
     self.assertEqual(y.get_shape().as_list(), post_shape)
 
   def testShapeInference(self):
+    # [FUNCTION DOC]
+    # In a fresh graph, asserts the shape helper reports the target height and width for any known
+    # or unknown input spatial size, for 3-D and 4-D inputs (see the known issue on the helper:
+    # it exercises the V1 function).
     # Shape function requires placeholders and a graph.
     with ops.Graph().as_default():
       # Test with 3-D tensors.
@@ -4178,12 +5207,18 @@ class ResizeImageWithPadV2Test(test_util.TensorFlowTestCase):
                                  [None, 55, 66, None])
 
   def testNoOp(self):
+    # [FUNCTION DOC]
+    # Pad-resizes a random 10x10x10 image to its own size with the V2 function and asserts the
+    # output is unchanged.
     x_shape = [10, 10, 10]
     x = np.random.uniform(size=x_shape)
 
     self._assertReturns(x, x_shape, x, x_shape)
 
   def testPad(self):
+    # [FUNCTION DOC]
+    # Shrinks a 2x4x1 ramp image to 1x4, 2x2 and 1x2 targets with the V2 function and asserts the
+    # exact results, which are averaged (for example 3.5 and 5.5) because V2 interpolates.
     # Reduce vertical dimension
     x = [1, 2, 3, 4, 5, 6, 7, 8]
     x_shape = [2, 4, 1]
@@ -4212,8 +5247,14 @@ class ResizeImageWithPadV2Test(test_util.TensorFlowTestCase):
 
 
 class ResizeNearestNeighborGrad(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering overflow protection in the raw resize-nearest-neighbor gradient op.
 
   def testSizeTooLarge(self):
+    # [FUNCTION DOC]
+    # Calls the raw ResizeNearestNeighborGrad op with float16 gradients and an output size of
+    # roughly 1.9 billion in each dimension (aligned corners, no half-pixel centers) and expects
+    # an invalid-argument error about overflow when multiplying dimensions.
     align_corners = True
     half_pixel_centers = False
     grads = constant_op.constant(1, shape=[1, 8, 16, 3], dtype=dtypes.float16)
@@ -4231,9 +5272,17 @@ class ResizeNearestNeighborGrad(test_util.TensorFlowTestCase):
 
 
 class ResizeImageWithCropOrPadTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering resize_image_with_crop_or_pad: no-op, padding (even and odd amounts),
+  # cropping, mixed crop and pad, shape inference, rank and zero-size validation, bad target
+  # sizes and name scoping. Helpers run the op inside a compiled function.
 
   def _ResizeImageWithCropOrPad(self, x, target_height, target_width,
                                 use_tensor_inputs):
+    # [FUNCTION DOC]
+    # HELPER: runs resize_image_with_crop_or_pad inside a compiled function.
+    # Takes an image array, target height and width, and a flag choosing whether to convert all
+    # to tensors first. Evaluates in a cached session and returns a NumPy array.
     if use_tensor_inputs:
       target_height = ops.convert_to_tensor(target_height)
       target_width = ops.convert_to_tensor(target_width)
@@ -4243,6 +5292,9 @@ class ResizeImageWithCropOrPadTest(test_util.TensorFlowTestCase):
 
     @def_function.function
     def resize_crop_or_pad(*args):
+      # [FUNCTION DOC]
+      # HELPER: compiled wrapper forwarding all positional arguments to
+      # resize_image_with_crop_or_pad and returning the result.
       return image_ops.resize_image_with_crop_or_pad(*args)
 
     with self.cached_session():
@@ -4255,6 +5307,11 @@ class ResizeImageWithCropOrPadTest(test_util.TensorFlowTestCase):
                      y,
                      y_shape,
                      use_tensor_inputs_options=None):
+    # [FUNCTION DOC]
+    # HELPER: asserts the crop-or-pad produces the expected image.
+    # Takes flat input values and shape, flat expected values and shape, and an optional list of
+    # tensor-input modes (default both). Target size comes from the expected shape; asserts
+    # closeness for each mode.
     use_tensor_inputs_options = use_tensor_inputs_options or [False, True]
     target_height, target_width, _ = y_shape
     x = np.array(x).reshape(x_shape)
@@ -4272,6 +5329,11 @@ class ResizeImageWithCropOrPadTest(test_util.TensorFlowTestCase):
                     target_width,
                     err_msg,
                     use_tensor_inputs_options=None):
+    # [FUNCTION DOC]
+    # HELPER: asserts the crop-or-pad fails with a matching error.
+    # Takes flat input values and shape, target size, an error message pattern and an optional
+    # list of tensor-input modes (default both); each mode must raise a value error or
+    # invalid-argument error matching the pattern.
     use_tensor_inputs_options = use_tensor_inputs_options or [False, True]
     x = np.array(x).reshape(x_shape)
 
@@ -4282,17 +5344,26 @@ class ResizeImageWithCropOrPadTest(test_util.TensorFlowTestCase):
                                        use_tensor_inputs)
 
   def _assertShapeInference(self, pre_shape, height, width, post_shape):
+    # [FUNCTION DOC]
+    # HELPER: asserts static shape inference of resize_image_with_crop_or_pad. Takes an input
+    # placeholder shape, target height and width, and the expected output shape list.
     image = array_ops.placeholder(dtypes.float32, shape=pre_shape)
     y = image_ops.resize_image_with_crop_or_pad(image, height, width)
     self.assertEqual(y.get_shape().as_list(), post_shape)
 
   def testNoOp(self):
+    # [FUNCTION DOC]
+    # Applies crop-or-pad to a random 10x10x10 image with its own size; asserts it is unchanged.
     x_shape = [10, 10, 10]
     x = np.random.uniform(size=x_shape)
 
     self._assertReturns(x, x_shape, x, x_shape)
 
   def testPad(self):
+    # [FUNCTION DOC]
+    # Pads a 2x4x1 ramp image with zeros to 2x6 (even extra columns), 2x7 (odd extra columns),
+    # 4x4 (even extra rows) and 5x4 (odd extra rows) and asserts exact outputs; the odd cases
+    # show the extra zero goes to the far side.
     # Pad even along col.
     x = [1, 2, 3, 4, 5, 6, 7, 8]
     x_shape = [2, 4, 1]
@@ -4330,6 +5401,9 @@ class ResizeImageWithCropOrPadTest(test_util.TensorFlowTestCase):
     self._assertReturns(x, x_shape, y, y_shape)
 
   def testCrop(self):
+    # [FUNCTION DOC]
+    # Center-crops ramp images along columns and rows by even and odd amounts and asserts the
+    # exact remaining values (for odd differences the extra pixel is removed from the far side).
     # Crop even along col.
     x = [1, 2, 3, 4, 5, 6, 7, 8]
     x_shape = [2, 4, 1]
@@ -4367,6 +5441,9 @@ class ResizeImageWithCropOrPadTest(test_util.TensorFlowTestCase):
     self._assertReturns(x, x_shape, y, y_shape)
 
   def testCropAndPad(self):
+    # [FUNCTION DOC]
+    # Mixed cases on a 2x4 and a 4x2 ramp image: pad rows while cropping columns (to 4x2), and
+    # crop rows while padding columns (to 2x4); asserts exact outputs.
     # Pad along row but crop along col.
     x = [1, 2, 3, 4, 5, 6, 7, 8]
     x_shape = [2, 4, 1]
@@ -4386,6 +5463,9 @@ class ResizeImageWithCropOrPadTest(test_util.TensorFlowTestCase):
     self._assertReturns(x, x_shape, y, y_shape)
 
   def testShapeInference(self):
+    # [FUNCTION DOC]
+    # In a fresh graph, asserts resize_image_with_crop_or_pad infers a 55x66 spatial output
+    # shape for any known or unknown input spatial size and keeps the channel dimension.
     # Shape function requires placeholders and a graph.
     with ops.Graph().as_default():
       self._assertShapeInference([50, 60, 3], 55, 66, [55, 66, 3])
@@ -4409,6 +5489,9 @@ class ResizeImageWithCropOrPadTest(test_util.TensorFlowTestCase):
       self._assertShapeInference(None, 55, 66, [55, 66, None])
 
   def testNon3DInput(self):
+    # [FUNCTION DOC]
+    # Passes a rank-2 and a rank-5 image to crop-or-pad (target 4x4) and expects an error saying
+    # the image must have either 3 or 4 dimensions.
     # Input image is not 3D
     x = [0] * 15
     target_height, target_width = [4, 4]
@@ -4422,6 +5505,10 @@ class ResizeImageWithCropOrPadTest(test_util.TensorFlowTestCase):
                          "must have either 3 or 4 dimensions.")
 
   def testZeroLengthInput(self):
+    # [FUNCTION DOC]
+    # Passes empty images with a zero-sized dimension (target 1x1) and expects an error that the
+    # inner three dimensions of the image shape must be greater than 0; for tensor inputs the
+    # expected message contains escaped quotes added by the runtime.
     # Input image has 0-length dimension(s).
     target_height, target_width = [1, 1]
     x = []
@@ -4447,6 +5534,9 @@ class ResizeImageWithCropOrPadTest(test_util.TensorFlowTestCase):
           use_tensor_inputs_options=[True])
 
   def testBadParams(self):
+    # [FUNCTION DOC]
+    # On a 4x4x1 zero image, a target height of 0 must raise an error that target_height must be
+    # greater than 0, and a target width of 0 must raise one about target_width.
     x_shape = [4, 4, 1]
     x = np.zeros(x_shape)
 
@@ -4461,6 +5551,9 @@ class ResizeImageWithCropOrPadTest(test_util.TensorFlowTestCase):
                        "target_width must be > 0")
 
   def testNameScope(self):
+    # [FUNCTION DOC]
+    # In a fresh graph, applies crop-or-pad to a placeholder and asserts the output op name
+    # starts with the resize_image_with_crop_or_pad scope prefix.
     # Testing name scope requires placeholders and a graph.
     with ops.Graph().as_default():
       image = array_ops.placeholder(dtypes.float32, shape=[50, 60, 3])
@@ -4469,6 +5562,10 @@ class ResizeImageWithCropOrPadTest(test_util.TensorFlowTestCase):
 
 
 def simple_color_ramp():
+  # [FUNCTION DOC]
+  # HELPER: shared synthetic image generator for the JPEG and PNG tests.
+  # Takes no arguments and returns a 200x256x3 uint8 array: the red channel is the row index,
+  # the green channel is the column index, and the blue channel is the average of the two.
   """Build a simple color ramp RGB image."""
   w, h = 256, 200
   i = np.arange(h)[:, None]
@@ -4481,14 +5578,26 @@ def simple_color_ramp():
 
 
 class JpegTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering JPEG decode, encode, combined decode-and-crop, DCT method selection,
+  # static shapes, shape extraction without decoding, CMYK handling, and random and stateless
+  # random JPEG quality adjustment. Uses test data files from the core JPEG library test data
+  # directory, referenced by relative path, so tests must run from the repository root.
 
   # TODO(irving): Add self.assertAverageLess or similar to test_util
   def averageError(self, image0, image1):
+    # [FUNCTION DOC]
+    # HELPER: image similarity metric for the lossy JPEG tests.
+    # Takes two image arrays, asserts they have equal shapes, casts the first to a wider integer
+    # type to avoid overflow, and returns the mean absolute per-element difference as a number.
     self.assertEqual(image0.shape, image1.shape)
     image0 = image0.astype(int)  # Avoid overflow
     return np.abs(image0 - image1).sum() / np.prod(image0.shape)
 
   def testExisting(self):
+    # [FUNCTION DOC]
+    # Reads a real JPEG test file, decodes it, re-encodes and decodes again; asserts the file is
+    # 3771 bytes, the image shape is 256x128x3 and the average round-trip error is below 1.4.
     # Read a real jpeg and verify shape
     path = ("tensorflow/core/lib/jpeg/testdata/"
             "jpeg_merge_test1.jpg")
@@ -4502,6 +5611,10 @@ class JpegTest(test_util.TensorFlowTestCase):
       self.assertLess(self.averageError(image0, image1), 1.4)
 
   def testCmyk(self):
+    # [FUNCTION DOC]
+    # Decodes an RGB JPEG and its CMYK counterpart with channels set to 3 and to 0 (automatic);
+    # asserts both decode as 256x128x3 and differ by an average error below 4, i.e. CMYK is
+    # converted to RGB.
     # Confirm that CMYK reads in as RGB
     base = "tensorflow/core/lib/jpeg/testdata"
     rgb_path = os.path.join(base, "jpeg_merge_test1.jpg")
@@ -4520,6 +5633,12 @@ class JpegTest(test_util.TensorFlowTestCase):
         self.assertLess(error, 4)
 
   def testCropAndDecodeJpeg(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the inline comment about encoding then decoding then encoding is stale; the
+    # test only decodes and crops, and the session variable is unused.
+    # For six valid crop windows on a real JPEG file, compares a full decode followed by a crop
+    # against the combined decode-and-crop op: static shapes must match and evaluated pixel
+    # values must be identical.
     with self.cached_session() as sess:
       # Encode it, then decode it, then encode it
       base = "tensorflow/core/lib/jpeg/testdata"
@@ -4548,6 +5667,11 @@ class JpegTest(test_util.TensorFlowTestCase):
         self.assertAllEqual(image1_crop, image2)
 
   def testCropAndDecodeJpegWithInvalidCropWindow(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the inline comment about encoding is stale and the session variable is unused.
+    # Tries eight invalid crop windows (negative values, zero sizes, windows larger than the
+    # 256x128 image) with the combined decode-and-crop op; each must raise a value error or
+    # invalid-argument error mentioning invalid JPEG data or crop window.
     with self.cached_session() as sess:
       # Encode it, then decode it, then encode it
       base = "tensorflow/core/lib/jpeg/testdata"
@@ -4566,6 +5690,10 @@ class JpegTest(test_util.TensorFlowTestCase):
           self.evaluate(result)
 
   def testSynthetic(self):
+    # [FUNCTION DOC]
+    # Encodes the synthetic color ramp to JPEG, decodes with the accurate integer DCT method,
+    # re-encodes and decodes again. Asserts the first round trip error is below 0.6, the second
+    # is below 0.02 (near a fixed point), and the compressed size is between 5000 and 6000 bytes.
     with self.cached_session():
       # Encode it, then decode it, then encode it
       image0 = constant_op.constant(simple_color_ramp())
@@ -4587,6 +5715,9 @@ class JpegTest(test_util.TensorFlowTestCase):
       self.assertLessEqual(len(jpeg0), 6000)
 
   def testSyntheticFasterAlgorithm(self):
+    # [FUNCTION DOC]
+    # Same round trip as the accurate test but decoding with the fast integer DCT method;
+    # looser bounds apply: first error below 0.95, second below 1.05, size 5000 to 6000 bytes.
     with self.cached_session():
       # Encode it, then decode it, then encode it
       image0 = constant_op.constant(simple_color_ramp())
@@ -4611,6 +5742,9 @@ class JpegTest(test_util.TensorFlowTestCase):
       self.assertLessEqual(len(jpeg0), 6000)
 
   def testDefaultDCTMethodIsIntegerFast(self):
+    # [FUNCTION DOC]
+    # Decodes the same JPEG data once with the fast integer DCT method named explicitly and
+    # once with the default, and asserts the two images are equal.
     with self.cached_session():
       # Compare decoding with both dct_option=INTEGER_FAST and
       # default.  They should be the same.
@@ -4624,6 +5758,10 @@ class JpegTest(test_util.TensorFlowTestCase):
       self.assertAllClose(image1, image2)
 
   def testShape(self):
+    # [FUNCTION DOC]
+    # In a fresh graph, decodes a nonsense string constant as JPEG with channels 0, 1 and 3 and
+    # asserts only the static shape (unknown height and width, channel count or unknown for 0);
+    # the data is never evaluated.
     # Shape function requires placeholders and a graph.
     with ops.Graph().as_default():
       with self.cached_session():
@@ -4634,6 +5772,8 @@ class JpegTest(test_util.TensorFlowTestCase):
                            [None, None, channels or None])
 
   def testExtractJpegShape(self):
+    # [FUNCTION DOC]
+    # Extracts the shape of a real JPEG file without decoding and asserts it is 256x128x3.
     # Read a real jpeg and verify shape.
     path = ("tensorflow/core/lib/jpeg/testdata/"
             "jpeg_merge_test1.jpg")
@@ -4644,6 +5784,9 @@ class JpegTest(test_util.TensorFlowTestCase):
       self.assertAllEqual(image_shape, [256, 128, 3])
 
   def testExtractJpegShapeforCmyk(self):
+    # [FUNCTION DOC]
+    # Extracts the shape of the CMYK JPEG test file and asserts it reports four channels
+    # (256x128x4), unlike decoding which converts to RGB.
     # Read a cmyk jpeg image, and verify its shape.
     path = ("tensorflow/core/lib/jpeg/testdata/"
             "jpeg_merge_test1_cmyk.jpg")
@@ -4654,6 +5797,10 @@ class JpegTest(test_util.TensorFlowTestCase):
       self.assertAllEqual(image_shape, [256, 128, 4])
 
   def testRandomJpegQuality(self):
+    # [FUNCTION DOC]
+    # In a fresh graph with a seeded NumPy generator, decodes a real JPEG and applies the random
+    # JPEG quality op (range 40 to 100) five times in one session; asserts the results are not
+    # all equal to the first, showing the quality is re-randomized on each run.
     # Previous implementation of random_jpeg_quality had a bug.
     # This unit test tests the fixed version, but due to forward compatibility
     # this test can only be done when fixed version is used.
@@ -4679,6 +5826,10 @@ class JpegTest(test_util.TensorFlowTestCase):
   # with xla_gpu. Update tests such that there is a single ground truth result
   # to test against.
   def testStatelessRandomJpegQuality(self):
+    # [FUNCTION DOC]
+    # On the GPU-preferred device, applies the stateless random JPEG quality op (range 40 to
+    # 100) with two fixed seeds, for two rounds. Each distorted image must differ from the
+    # original, and each round must yield identical results for identical seeds.
     # Test deterministic randomness in jpeg quality by checking that the same
     # sequence of jpeg quality adjustments are returned each round given the
     # same seed.
@@ -4706,6 +5857,10 @@ class JpegTest(test_util.TensorFlowTestCase):
                             random_jpeg_images_all[i])
 
   def testAdjustJpegQuality(self):
+    # [FUNCTION DOC]
+    # In a fresh graph, adjusts the JPEG quality of a decoded real image using a plain Python
+    # integer quality (backward compatibility, not a tensor) and runs it; asserts nothing beyond
+    # the run succeeding.
     # Test if image_ops.adjust_jpeg_quality works when jpeq quality
     # is an int (not tensor) for backward compatibility.
     with ops.Graph().as_default(), self.test_session():
@@ -4720,6 +5875,9 @@ class JpegTest(test_util.TensorFlowTestCase):
         sess.run(adjust_jpeg_quality_image)
 
   def testAdjustJpegQualityShape(self):
+    # [FUNCTION DOC]
+    # Adjusts quality 80 on a 2x4x3 uint8 image and asserts the static output shape is
+    # compatible with an unknown height and width and three channels.
     with self.cached_session():
       image = constant_op.constant(
           np.arange(24, dtype=np.uint8).reshape([2, 4, 3]))
@@ -4728,8 +5886,18 @@ class JpegTest(test_util.TensorFlowTestCase):
 
 
 class PngTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering PNG decode and encode: real files with various channel counts, lossless
+  # round trips for uint8 and uint16 including two-channel images, batched encoding (including a
+  # zero-length batch) and static shape inference. Uses test data files referenced by relative
+  # path from the repository root.
 
   def testExisting(self):
+    # [FUNCTION DOC]
+    # Reads four real PNG files (gray, RGBA, palette, palette with transparency) and decodes each
+    # requesting 0, 1, 3 or 4 channels; asserts the shape is 26x51 with the requested (or native)
+    # channels, and that when the channel count equals the native count a re-encode and decode
+    # round trip gives identical pixels.
     # Read some real PNGs, converting to different channel numbers
     prefix = "tensorflow/core/lib/png/testdata/"
     inputs = ((1, "lena_gray.png"), (4, "lena_rgba.png"),
@@ -4746,6 +5914,9 @@ class PngTest(test_util.TensorFlowTestCase):
             self.assertAllEqual(image0, self.evaluate(image1))
 
   def testSynthetic(self):
+    # [FUNCTION DOC]
+    # Encodes the synthetic color ramp as PNG (compression level 7), decodes it, asserts the
+    # round trip is lossless and the encoded size is between 400 and 1150 bytes.
     with self.cached_session():
       # Encode it, then decode it
       image0 = constant_op.constant(simple_color_ramp())
@@ -4761,6 +5932,9 @@ class PngTest(test_util.TensorFlowTestCase):
       self.assertLessEqual(len(png0), 1150)
 
   def testSyntheticUint16(self):
+    # [FUNCTION DOC]
+    # Lossless PNG round trip for the color ramp stored as 16-bit unsigned integers; asserts
+    # equality and an encoded size between 800 and 2100 bytes.
     with self.cached_session():
       # Encode it, then decode it
       image0 = constant_op.constant(simple_color_ramp(), dtype=dtypes.uint16)
@@ -4776,6 +5950,9 @@ class PngTest(test_util.TensorFlowTestCase):
       self.assertLessEqual(len(png0), 2100)
 
   def testSyntheticTwoChannel(self):
+    # [FUNCTION DOC]
+    # Takes only the first two channels of the ramp (gray plus alpha layout), encodes and decodes
+    # as PNG, and asserts the result still has two channels and equals the original.
     with self.cached_session():
       # Strip the b channel from an rgb image to get a two-channel image.
       gray_alpha = simple_color_ramp()[:, :, 0:2]
@@ -4787,6 +5964,9 @@ class PngTest(test_util.TensorFlowTestCase):
       self.assertAllEqual(image0, image1)
 
   def testSyntheticTwoChannelUint16(self):
+    # [FUNCTION DOC]
+    # Same as the two-channel test with 16-bit unsigned data and decoding with the 16-bit dtype;
+    # asserts two channels and a lossless round trip.
     with self.cached_session():
       # Strip the b channel from an rgb image to get a two-channel image.
       gray_alpha = simple_color_ramp()[:, :, 0:2]
@@ -4798,6 +5978,9 @@ class PngTest(test_util.TensorFlowTestCase):
       self.assertAllEqual(image0, image1)
 
   def testBatchedEncodeSynthetic(self):
+    # [FUNCTION DOC]
+    # Encodes the ramp both as a single image and as a 3x4 stack of identical images; asserts the
+    # batched output is a 3x4 array of strings each equal to the single-image encoding.
     with self.cached_session():
       image0 = simple_color_ramp()
       image_stack = np.broadcast_to(image0, (3, 4) + image0.shape)
@@ -4812,6 +5995,9 @@ class PngTest(test_util.TensorFlowTestCase):
       self.assertAllEqual(png_stack, expected)
 
   def testBatchedZeroLengthEncodeSynthetic(self):
+    # [FUNCTION DOC]
+    # Encodes an empty batch (zero by four images) as PNG and asserts the output string tensor
+    # has shape zero by four.
     with self.cached_session():
       image0 = simple_color_ramp()
       image_stack = np.broadcast_to(image0, (3, 4) + image0.shape)
@@ -4824,6 +6010,9 @@ class PngTest(test_util.TensorFlowTestCase):
       self.assertAllEqual(png_stack.shape, (0, 4))
 
   def testShape(self):
+    # [FUNCTION DOC]
+    # In a fresh graph, decodes a nonsense string constant as PNG with channels 0, 1 and 3 and
+    # asserts only the static shape (unknown height and width; channel count or unknown for 0).
     # Shape function requires placeholders and a graph.
     with ops.Graph().as_default():
       with self.cached_session():
@@ -4835,8 +6024,18 @@ class PngTest(test_util.TensorFlowTestCase):
 
 
 class GifTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering GIF decoding: synthetic multi-frame test files compared against expected
+  # moving-stripe frames, static shape inference and an animated GIF compared with reference PNG
+  # frames. Uses test data files referenced by relative path from the repository root.
 
   def _testValid(self, filename):
+    # [FUNCTION DOC]
+    # HELPER: validates a synthetic animated GIF test file.
+    # Takes the GIF file name inside the GIF test data directory. Decodes it and asserts the
+    # shape is 12 frames of 40x20x3. Each frame is compared with an expected image of black with
+    # a white vertical stripe of width 5 moving right by 5 per frame, then (after the width is
+    # exhausted) a horizontal stripe. Side effect: prints each frame index to standard output.
     # Read some real GIFs
     prefix = "tensorflow/core/lib/gif/testdata/"
     WIDTH = 20
@@ -4866,10 +6065,15 @@ class GifTest(test_util.TensorFlowTestCase):
         self.assertAllClose(frame, gt)
 
   def testValid(self):
+    # [FUNCTION DOC]
+    # Runs the GIF validation helper on the scan-order test file and on the optimized test file.
     self._testValid("scan.gif")
     self._testValid("optimized.gif")
 
   def testShape(self):
+    # [FUNCTION DOC]
+    # In a fresh graph, decodes a nonsense string constant as GIF and asserts the static shape
+    # is four-dimensional with unknown frame count, height and width and three channels.
     # Shape function requires placeholders and a graph.
     with ops.Graph().as_default():
       with self.cached_session():
@@ -4878,6 +6082,9 @@ class GifTest(test_util.TensorFlowTestCase):
         self.assertEqual(image.get_shape().as_list(), [None, None, None, 3])
 
   def testAnimatedGif(self):
+    # [FUNCTION DOC]
+    # Decodes a real animated GIF and three reference PNG frames; asserts the first three decoded
+    # frames equal the corresponding PNG images exactly.
     # Test if all frames in the animated GIF file is properly decoded.
     with self.cached_session():
       base = "tensorflow/core/lib/gif/testdata"
@@ -4899,8 +6106,16 @@ class GifTest(test_util.TensorFlowTestCase):
 
 
 class WebpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case covering WebP decoding via the dedicated decoder and the generic
+  # decode_image: still files (RGB, lossless, alpha), animations, dropping animation, channel
+  # argument shapes, invalid channel counts and unsupported dtypes. Uses test data from the WebP
+  # test data directory referenced by relative path.
 
   def _path(self, name):
+    # [FUNCTION DOC]
+    # HELPER: builds the path of a WebP test data file.
+    # Takes a file name and returns it joined to the WebP test data directory (relative path).
     base = "tensorflow/core/lib/webp/testdata/"
     return os.path.join(base, name)
 
@@ -4910,6 +6125,10 @@ class WebpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       ("_alpha", "lossy_alpha1.webp", (1, 307, 1000, 4)),
   ])
   def testRegularFile(self, filename, expected_dimensions):
+    # [FUNCTION DOC]
+    # Parameterized over three WebP files (noisy RGB, lossless, lossy with alpha). Decodes with
+    # both the WebP decoder and the generic decoder, asserts the shape equals the expected
+    # dimensions (with a leading frame dimension of one) and that both results are identical.
     # Read a real WebP image, via both APIs and check they're equal.
     with self.cached_session():
       webp = io_ops.read_file(self._path(filename))
@@ -4920,6 +6139,9 @@ class WebpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       self.assertAllEqual(image0, image1)
 
   def testAnimation(self):
+    # [FUNCTION DOC]
+    # Decodes an animated WebP with the WebP decoder and with the generic decoder allowing
+    # animation expansion; asserts the shape is 15 frames of 450x450x4 and both outputs match.
     # Read a WebP animation file, via both APIs and check they're equal.
     with self.cached_session():
       webp = io_ops.read_file(self._path("bouncy_ball.webp"))
@@ -4932,6 +6154,10 @@ class WebpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       self.assertAllEqual(image0, image1)
 
   def testAnimationFrame0(self):
+    # [FUNCTION DOC]
+    # Decodes the animated WebP with the WebP decoder (all 15 frames) and with the generic decoder
+    # with animation expansion disabled (a single 450x450x4 frame); asserts both shapes and that
+    # the first frame of the animation equals the still output.
     # Read a WebP animation file, via both APIs, but drop
     # animation. Compare frame 0.
     with self.cached_session():
@@ -4952,6 +6178,10 @@ class WebpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       self.assertAllEqual(image0[0, ...], image1)
 
   def testChannelsArg(self):
+    # [FUNCTION DOC]
+    # In a fresh graph, decodes a WebP with channels 0, 3 and 4 and asserts the static shape has
+    # unknown frame, height and width and a last dimension equal to the channel count (unknown
+    # for 0).
     # Shape function requires placeholders and a graph.
     with ops.Graph().as_default():
       with self.cached_session():
@@ -4966,6 +6196,9 @@ class WebpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
           )
 
   def testInvalidChannels(self):
+    # [FUNCTION DOC]
+    # Requests one channel (grayscale) from the WebP decoder and expects an invalid-argument or
+    # value error saying WebP only supports 3 or 4 channels.
     with self.cached_session():
       webp = io_ops.read_file(self._path("RGB_noise_large_pixels_115x115.webp"))
 
@@ -4981,6 +6214,9 @@ class WebpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       [("_int8", np.int8), ("_int16", np.int16), ("_float32", np.float32)]
   )
   def testUnsupportedDtypes(self, dtype):
+    # [FUNCTION DOC]
+    # Parameterized over int8, int16 and float32. Calls the generic decoder on a WebP file with
+    # that dtype and expects an invalid-argument or value error that WebP only supports uint8.
     with self.cached_session():
       webp = io_ops.read_file(self._path("RGB_noise_large_pixels_115x115.webp"))
 
@@ -4995,8 +6231,15 @@ class WebpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
 
 class JxlTest(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case covering JPEG XL decoding via the generic and the dedicated decoder:
+  # lossless files compared to PNG originals, lossy file shapes, channel argument handling and
+  # unsupported dtypes. Uses test data files referenced by relative path.
 
   def _path(self, name):
+    # [FUNCTION DOC]
+    # HELPER: builds the path of a JPEG XL test data file.
+    # Takes a file name and returns it joined to the JXL test data directory (relative path).
     base = "tensorflow/core/lib/jxl/testdata/"
     return os.path.join(base, name)
 
@@ -5006,6 +6249,10 @@ class JxlTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       ("_gray", "random_128x96_gray.png", "random_128x96_gray_q100.jxl"),
   ])
   def testDecodeLossless(self, png_filename, jxl_filename):
+    # [FUNCTION DOC]
+    # Parameterized over RGB, RGBA and gray random images. Decodes the PNG original and the
+    # lossless JPEG XL file (via the generic and the dedicated decoder) and asserts both JXL
+    # results equal the PNG pixels exactly.
     with self.cached_session():
       png_file = io_ops.read_file(self._path(png_filename))
       png_image = self.evaluate(image_ops.decode_image(png_file))
@@ -5021,6 +6268,10 @@ class JxlTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       ("_gray", "random_128x96_gray_q50.jxl", (96, 128, 1)),
   ])
   def testDecodeLossy(self, jxl_filename, expected_jxl_shape):
+    # [FUNCTION DOC]
+    # Parameterized over RGB, RGBA and gray quality-50 files. Decodes with both decoders and
+    # asserts the shape equals the expected height, width and channel count (96x128 by 3, 4
+    # or 1); pixel values are not compared.
     with self.cached_session():
       jxl_file = io_ops.read_file(self._path(jxl_filename))
       jxl_image0 = self.evaluate(image_ops.decode_image(jxl_file))
@@ -5037,6 +6288,12 @@ class JxlTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       ("_gray_q100", "random_128x96_gray_q100.jxl", 1),
   ])
   def testChannelsArgument(self, jxl_filename, jxl_channels):
+    # [FUNCTION DOC]
+    # Parameterized over six files (RGB, RGBA, gray at quality 50 and 100) with their native
+    # channel counts. For requested channels 0, 1, 3 and 4: a request that is neither automatic
+    # nor equal to the native count must raise an invalid-argument or value error saying the
+    # requested channels do not match the input; otherwise the output shape is 96x128 with the
+    # requested (or native) channels.
     with self.cached_session():
       jxl_file = io_ops.read_file(self._path(jxl_filename))
       for channels in (0, 1, 3, 4):
@@ -5058,6 +6315,10 @@ class JxlTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       [("_int8", np.int8), ("_int16", np.int16), ("_float32", np.float32)]
   )
   def testUnsupportedDtypeArgument(self, dtype):
+    # [FUNCTION DOC]
+    # Parameterized over int8, int16 and float32. Calls the generic decoder on a JPEG XL file
+    # with that dtype and expects an invalid-argument or value error that JXL only supports
+    # uint8.
     with self.cached_session():
       jxl_file = io_ops.read_file(self._path("random_128x96_rbga_q50.jxl"))
       message = "JXL only supports uint8 for dtype"
@@ -5069,8 +6330,18 @@ class JxlTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
 
 class ConvertImageTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering convert_image_dtype: identity conversion producing an identity op,
+  # integer-to-integer scaling, float-to-float conversion, integer-to-float scaling and
+  # conversions among 8- and 16-bit integer types. One helper runs a single conversion check.
 
   def _convert(self, original, original_dtype, output_dtype, expected):
+    # [FUNCTION DOC]
+    # HELPER: shared check for dtype conversion tests.
+    # Takes a list of values, their source dtype, the target dtype and the expected converted
+    # values. Converts a constant tensor, asserts the output dtype and values (tolerance 1e-5),
+    # and for float32, float64, int32 and int64 targets also repeats the conversion with
+    # saturation enabled and checks the same expectations.
     x_np = np.array(original, dtype=original_dtype.as_numpy_dtype())
     y_np = np.array(expected, dtype=output_dtype.as_numpy_dtype())
 
@@ -5088,6 +6359,9 @@ class ConvertImageTest(test_util.TensorFlowTestCase):
         self.assertAllClose(y_saturate, y_np, atol=1e-5)
 
   def testNoConvert(self):
+    # [FUNCTION DOC]
+    # In a fresh graph, converts a uint8 tensor to uint8 and asserts the result is produced by an
+    # identity operation whose input is the original tensor.
     # Tests with Tensor.op requires a graph.
     with ops.Graph().as_default():
       # Make sure converting to the same data type creates only an identity op
@@ -5099,6 +6373,9 @@ class ConvertImageTest(test_util.TensorFlowTestCase):
         self.assertEqual(y.op.inputs[0], image)
 
   def testConvertBetweenInteger(self):
+    # [FUNCTION DOC]
+    # Checks scaling conversions between integer types: uint8 to int16 (multiply by 128 at the
+    # top), int16 to uint8, int64 to int32 and int32 to int64.
     # Make sure converting to between integer types scales appropriately
     with self.cached_session():
       self._convert([0, 255], dtypes.uint8, dtypes.int16, [0, 255 * 128])
@@ -5107,6 +6384,9 @@ class ConvertImageTest(test_util.TensorFlowTestCase):
       self._convert([0, 1], dtypes.int32, dtypes.int64, [0, 2**32])
 
   def testConvertBetweenFloat(self):
+    # [FUNCTION DOC]
+    # Converts values between float32 and float64 (including values outside 0-1) and asserts they
+    # are unchanged.
     # Make sure converting to between float types does nothing interesting
     with self.cached_session():
       self._convert([-1.0, 0, 1.0, 200000], dtypes.float32, dtypes.float64,
@@ -5115,6 +6395,9 @@ class ConvertImageTest(test_util.TensorFlowTestCase):
                     [-1.0, 0, 1.0, 200000])
 
   def testConvertBetweenIntegerAndFloat(self):
+    # [FUNCTION DOC]
+    # Converts uint8 to float32 (dividing by 255) and a float32 slightly above 1/255 back to
+    # uint8, checking the expected scaled values.
     # Make sure converting from and to a float type scales appropriately
     with self.cached_session():
       self._convert([0, 1, 255], dtypes.uint8, dtypes.float32,
@@ -5123,6 +6406,9 @@ class ConvertImageTest(test_util.TensorFlowTestCase):
                     [0, 1, 255])
 
   def testConvertBetweenInt16AndInt8(self):
+    # [FUNCTION DOC]
+    # Checks 8- and 16-bit integer conversions in both directions for uint16 with uint8, int8
+    # and int16, verifying the expected rescaling factors.
     with self.cached_session():
       # uint8, uint16
       self._convert([0, 255 * 256], dtypes.uint16, dtypes.uint8, [0, 255])
@@ -5136,6 +6422,10 @@ class ConvertImageTest(test_util.TensorFlowTestCase):
 
 
 class TotalVariationTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering total_variation: small handmade examples with known sums, and larger
+  # random images compared with an equivalent NumPy implementation, for single images and
+  # batches. Edge cases such as overflows and invalid arguments are intentionally not tested.
   """Tests the function total_variation() in image_ops.
 
   We test a few small handmade examples, as well as
@@ -5146,6 +6436,10 @@ class TotalVariationTest(test_util.TensorFlowTestCase):
   """
 
   def _test(self, x_np, y_np):
+    # [FUNCTION DOC]
+    # HELPER: core assertion for total variation tests.
+    # Takes an input image (or batch) array and the expected total variation values; computes
+    # the TensorFlow result in a cached session and asserts closeness to the expectation.
     """Test that the TensorFlow implementation of
     total_variation(x_np) calculates the values in y_np.
 
@@ -5169,6 +6463,14 @@ class TotalVariationTest(test_util.TensorFlowTestCase):
       self.assertAllClose(y_tf, y_np)
 
   def _total_variation_np(self, x_np):
+    # [FUNCTION DOC]
+    # HELPER: NumPy reference for total variation.
+    # KNOWN ISSUE: for inputs that are neither 3-D nor 4-D the else branch does nothing, so the
+    # later use of the difference arrays would fail with an undefined-variable error; the
+    # comment claims this never occurs in the tests.
+    # Takes a 3-D image or 4-D batch array; sums absolute differences between vertically and
+    # horizontally neighboring pixels, over all axes for 3-D input or over the last three axes
+    # (one value per image) for 4-D input, and returns that sum.
     """Calculate the total variation of x_np using numpy.
     This implements the same function as TensorFlow but
     using numpy instead.
@@ -5203,6 +6505,9 @@ class TotalVariationTest(test_util.TensorFlowTestCase):
     return tot_var
 
   def _test_tensorflow_vs_numpy(self, x_np):
+    # [FUNCTION DOC]
+    # HELPER: compares TensorFlow total variation with the NumPy reference for one input.
+    # Takes a 3-D or 4-D array, computes the reference values and delegates to the core helper.
     """Test the TensorFlow implementation against a numpy implementation.
 
     Args:
@@ -5215,6 +6520,10 @@ class TotalVariationTest(test_util.TensorFlowTestCase):
     self._test(x_np, y_np)
 
   def _generateArray(self, shape):
+    # [FUNCTION DOC]
+    # HELPER: test data generator for the total variation tests.
+    # Takes a shape (tuple of sizes) and returns an integer array of that shape holding the
+    # cumulative sum of 0, 1, 2, ..., so neighbor differences vary across the array.
     """Generate an array of the given shape for use in testing.
     The numbers are calculated as the cumulative sum, which
     causes the difference between neighboring numbers to vary."""
@@ -5230,6 +6539,12 @@ class TotalVariationTest(test_util.TensorFlowTestCase):
 
   # TODO(b/133851381): re-enable this test.
   def disabledtestTotalVariationNumpy(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: this method is disabled on purpose (name does not start with the test prefix,
+    # see the TODO to re-enable), so it never runs.
+    # Intended behavior: generate a 100x80x3 cumulative-sum image, compare TensorFlow total
+    # variation against the NumPy reference for the image, the image plus one, its negation and a
+    # scaled copy, then for a stacked 4-D batch of four variants.
     """Test the TensorFlow implementation against a numpy implementation.
     The two implementations are very similar so it is possible that both
     have the same bug, which would not be detected by this test. It is
@@ -5257,6 +6572,13 @@ class TotalVariationTest(test_util.TensorFlowTestCase):
     self._test_tensorflow_vs_numpy(multi)
 
   def testTotalVariationHandmade(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the comments label the second channel as blue and the third as green, while
+    # the variables are named g and b (colors are mislabeled in comments only).
+    # Builds a 2x2 RGB image whose total variation is worked out by hand (564) and asserts the
+    # TensorFlow value for it, for the image plus one and the negated image (unchanged), for
+    # copies scaled by 1.1 and 1.2 (scaled value), and for a batch of the three, which must
+    # return the three values as an array.
     """Test the total variation for a few handmade examples."""
 
     # We create an image that is 2x2 pixels with 3 color channels.
@@ -5314,8 +6636,18 @@ class TotalVariationTest(test_util.TensorFlowTestCase):
 
 
 class FormatTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering decoding the same picture stored in different file formats (PNG, JPEG,
+  # GIF) and rejecting a multi-frame GIF by the JPEG and PNG decoders.
 
   def testFormats(self):
+    # [FUNCTION DOC]
+    # Reads three test files (PNG, JPEG and GIF), decodes each with all three format-specific
+    # decoders (the GIF result drops its frame dimension), asserts each result is 3-D, and
+    # asserts all decoded images for a given file are identical. Prints shape information as a
+    # side effect.
+    # KNOWN ISSUE: the decoders other than the matching one are applied to the wrong format, so
+    # the test relies on the decoders sniffing the actual file content.
     prefix = "tensorflow/core/lib"
     paths = ("png/testdata/lena_gray.png", "jpeg/testdata/jpeg_merge_test1.jpg",
              "gif/testdata/lena.gif")
@@ -5338,6 +6670,9 @@ class FormatTest(test_util.TensorFlowTestCase):
           images[name] = image
 
   def testError(self):
+    # [FUNCTION DOC]
+    # Feeds a 12-frame GIF to the JPEG decoder and to the PNG decoder and expects an op error
+    # whose message mentions that it got 12 frames, since those decoders accept only one image.
     path = "tensorflow/core/lib/gif/testdata/scan.gif"
     with self.cached_session():
       for decode in image_ops.decode_jpeg, image_ops.decode_png:
@@ -5346,12 +6681,20 @@ class FormatTest(test_util.TensorFlowTestCase):
 
 
 class CombinedNonMaxSuppressionTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering combined_non_max_suppression: rejection of a total size that overflows a
+  # 32-bit integer (given as Python number or tensor) and handling of a huge per-class output
+  # size without overflow.
 
   # NOTE(b/142795960): parameterized tests do not work well with tf.tensor
   # inputs. Due to failures, creating another test `testInvalidTensorInput`
   # which is identical to this one except that the input here is a scalar as
   # opposed to a tensor.
   def testInvalidPyInput(self):
+    # [FUNCTION DOC]
+    # Calls combined_non_max_suppression with a Python-number maximum total size of 2^31 (too
+    # large for a 32-bit integer) and expects a type or value error about the 64-bit type not
+    # matching the expected 32-bit type.
     boxes_np = [[[[0, 0, 1, 1], [0, 0.1, 1, 1.1], [0, -0.1, 1, 0.9],
                   [0, 10, 1, 11], [0, 10.1, 1, 11.1], [0, 100, 1, 101]]]]
     scores_np = [[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]
@@ -5372,6 +6715,9 @@ class CombinedNonMaxSuppressionTest(test_util.TensorFlowTestCase):
   # `testInvalidPyInput` except that the input is a tensor here as opposed
   # to a scalar.
   def testInvalidTensorInput(self):
+    # [FUNCTION DOC]
+    # Same as the Python-number variant but the maximum total size 2^31 is converted to a tensor
+    # first; expects a type or value error about the 64-bit dtype not matching the 32-bit one.
     boxes_np = [[[[0, 0, 1, 1], [0, 0.1, 1, 1.1], [0, -0.1, 1, 0.9],
                   [0, 10, 1, 11], [0, 10.1, 1, 11.1], [0, 100, 1, 101]]]]
     scores_np = [[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]
@@ -5388,6 +6734,11 @@ class CombinedNonMaxSuppressionTest(test_util.TensorFlowTestCase):
           max_total_size=max_total_size)
 
   def testLargeMaxOutputSizePerClass(self):
+    # [FUNCTION DOC]
+    # Runs combined_non_max_suppression on six boxes with one score per class and a per-class
+    # limit of 2^31 minus 1, total size 8, padding per class and no clipping. Asserts the
+    # returned boxes (sorted by score, padded with zero boxes), classes, scores and the count
+    # of six valid detections, verifying no integer overflow.
     # Ensure the max_output_size_per_class doesn't result in overflows.
     boxes = [[[
         [0, 0, 1, 1],
@@ -5430,8 +6781,15 @@ class CombinedNonMaxSuppressionTest(test_util.TensorFlowTestCase):
 
 
 class NonMaxSuppressionTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering non_max_suppression and the raw non-max-suppression ops V2 to V5: basic
+  # selection, invalid shapes, tensors in eager mode, data types, and a zero overlap threshold.
 
   def testNonMaxSuppression(self):
+    # [FUNCTION DOC]
+    # Runs non_max_suppression on six boxes forming three clusters with maximum output 3 and IoU
+    # threshold 0.5; asserts the selected indices are 3, 0 and 5 (best box of each cluster by
+    # score).
     boxes_np = [[0, 0, 1, 1], [0, 0.1, 1, 1.1], [0, -0.1, 1, 0.9],
                 [0, 10, 1, 11], [0, 10.1, 1, 11.1], [0, 100, 1, 101]]
     scores_np = [0.9, 0.75, 0.6, 0.95, 0.5, 0.3]
@@ -5447,8 +6805,16 @@ class NonMaxSuppressionTest(test_util.TensorFlowTestCase):
       self.assertAllClose(selected_indices, [3, 0, 5])
 
   def testInvalidShape(self):
+    # [FUNCTION DOC]
+    # Calls non_max_suppression through a wrapper with six malformed inputs (boxes of rank 1,
+    # boxes with 3 columns, boxes and scores with different counts, rank-2 scores, non-scalar
+    # maximum output size, non-scalar IoU threshold); each must raise a value error or
+    # invalid-argument error.
 
     def nms_func(box, score, max_output_size, iou_thres):
+      # [FUNCTION DOC]
+      # HELPER: thin wrapper calling non_max_suppression with boxes, scores, maximum output size
+      # and IoU threshold, returning the selected indices.
       return image_ops.non_max_suppression(box, score, max_output_size,
                                            iou_thres)
 
@@ -5495,6 +6861,10 @@ class NonMaxSuppressionTest(test_util.TensorFlowTestCase):
   @test_util.xla_allow_fallback(
       "non_max_suppression with dynamic output shape unsupported.")
   def testTensors(self):
+    # [FUNCTION DOC]
+    # XLA falls back for the dynamic output shape. In eager mode, runs the raw V5 op on three
+    # heavily overlapping boxes for float16 and float32 with a score threshold of 0.3 and soft
+    # sigma 0.25, and asserts exactly one box is selected.
     with context.eager_mode():
       boxes_tensor = constant_op.constant([[6.625, 6.688, 272., 158.5],
                                            [6.625, 6.75, 270.5, 158.4],
@@ -5518,6 +6888,11 @@ class NonMaxSuppressionTest(test_util.TensorFlowTestCase):
   @test_util.xla_allow_fallback(
       "non_max_suppression with dynamic output shape unsupported.")
   def testDataTypes(self):
+    # [FUNCTION DOC]
+    # Regression test for GitHub issue 20199. XLA falls back for the dynamic output shape. Runs
+    # the raw ops V2, V3, V4 and V5 on the same three-cluster example with float16 and float32
+    # boxes/scores and (where allowed) mixed threshold dtypes, and asserts each returns indices
+    # 3, 0, 5. When XLA is enabled the V3 case requires equal input and threshold dtypes.
     # Test case for GitHub issue 20199.
     boxes_np = [[0, 0, 1, 1], [0, 0.1, 1, 1.1], [0, -0.1, 1, 0.9],
                 [0, 10, 1, 11], [0, 10.1, 1, 11.1], [0, 100, 1, 101]]
@@ -5588,6 +6963,9 @@ class NonMaxSuppressionTest(test_util.TensorFlowTestCase):
         self.assertAllClose(selected_indices, [3, 0, 5])
 
   def testZeroIOUThreshold(self):
+    # [FUNCTION DOC]
+    # Runs non_max_suppression with all scores equal and IoU threshold 0.0; any overlap
+    # suppresses a box, so asserts the selected indices are 0, 3 and 5 (one per cluster).
     boxes_np = [[0, 0, 1, 1], [0, 0.1, 1, 1.1], [0, -0.1, 1, 0.9],
                 [0, 10, 1, 11], [0, 10.1, 1, 11.1], [0, 100, 1, 101]]
     scores_np = [1., 1., 1., 1., 1., 1.]
@@ -5604,10 +6982,18 @@ class NonMaxSuppressionTest(test_util.TensorFlowTestCase):
 
 
 class NonMaxSuppressionWithScoresTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering non_max_suppression_with_scores (soft non-max suppression), which also
+  # returns the decayed scores of the selected boxes.
 
   @test_util.xla_allow_fallback(
       "non_max_suppression with dynamic output shape unsupported.")
   def testSelectFromThreeClustersWithSoftNMS(self):
+    # [FUNCTION DOC]
+    # XLA falls back for the dynamic output shape. Runs soft NMS with sigma 0.5, IoU threshold
+    # 0.5 and score threshold 0 on a six-box example; asserts the selected indices are 3, 0, 1,
+    # 5, 4, 2 and the decayed scores are approximately 0.95, 0.9, 0.384, 0.3, 0.256, 0.197
+    # (tolerance 1e-2).
     boxes_np = [[0, 0, 1, 1], [0, 0.1, 1, 1.1], [0, -0.1, 1, 0.9],
                 [0, 10, 1, 11], [0, 10.1, 1, 11.1], [0, 100, 1, 101]]
     scores_np = [0.9, 0.75, 0.6, 0.95, 0.5, 0.3]
@@ -5639,11 +7025,20 @@ class NonMaxSuppressionWithScoresTest(test_util.TensorFlowTestCase):
 
 class NonMaxSuppressionPaddedTest(test_util.TensorFlowTestCase,
                                   parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case covering non_max_suppression_padded: padded versus unpadded output,
+  # static shape definedness, valid counts, graph mode (V1) and compiled-function mode (V2,
+  # eager or graph), score thresholds and invalid maximum size dtype.
 
   @test_util.disable_xla(
       "b/141236442: "
       "non_max_suppression with dynamic output shape unsupported.")
   def testSelectFromThreeClustersV1(self):
+    # [FUNCTION DOC]
+    # Disabled under XLA. In a fresh graph, runs padded NMS with maximum output 5 with and
+    # without padding on a three-cluster example. Asserts the padded output has a fully defined
+    # static shape and the unpadded does not, the padded result is 3, 0, 5, 0, 0 with three
+    # valid entries, and the unpadded result is 3, 0, 5 with three valid entries.
     with ops.Graph().as_default():
       boxes_np = [[0, 0, 1, 1], [0, 0.1, 1, 1.1], [0, -0.1, 1, 0.9],
                   [0, 10, 1, 11], [0, 10.1, 1, 11.1], [0, 100, 1, 101]]
@@ -5681,6 +7076,11 @@ class NonMaxSuppressionPaddedTest(test_util.TensorFlowTestCase,
       "b/141236442: "
       "non_max_suppression with dynamic output shape unsupported.")
   def testSelectFromThreeClustersV2(self, run_func_eagerly):
+    # [FUNCTION DOC]
+    # Parameterized on whether compiled functions run eagerly; disabled under XLA; skipped when
+    # eager running is requested outside eager mode. Calls a compiled function that runs padded
+    # and unpadded NMS on the three-cluster example and checks static shape definedness inside
+    # it; afterwards asserts padded result 3, 0, 5, 0, 0 (three valid) and unpadded 3, 0, 5.
     if not context.executing_eagerly() and run_func_eagerly:
       # Skip running tf.function eagerly in V1 mode.
       self.skipTest("Skip test that runs tf.function eagerly in V1 mode.")
@@ -5688,6 +7088,12 @@ class NonMaxSuppressionPaddedTest(test_util.TensorFlowTestCase,
 
       @def_function.function
       def func(boxes, scores, max_output_size, iou_threshold):
+        # [FUNCTION DOC]
+        # HELPER: compiled function used by the enclosing test.
+        # KNOWN ISSUE: the parameters are ignored; the function immediately rebuilds constants
+        # from the enclosing test's NumPy variables, shadowing the arguments.
+        # Returns the padded indices, padded valid count, unpadded indices and unpadded count,
+        # and asserts the padded output shape is fully defined and the unpadded is not.
         boxes = constant_op.constant(boxes_np)
         scores = constant_op.constant(scores_np)
         max_output_size = constant_op.constant(max_output_size_np)
@@ -5732,6 +7138,10 @@ class NonMaxSuppressionPaddedTest(test_util.TensorFlowTestCase,
   @test_util.xla_allow_fallback(
       "non_max_suppression with dynamic output shape unsupported.")
   def testSelectFromContinuousOverLapV1(self):
+    # [FUNCTION DOC]
+    # XLA falls back for the dynamic output shape. In a fresh graph, runs padded NMS (default
+    # no padding) on six horizontally shifting boxes with score threshold 0.1; asserts the
+    # output shape is not fully defined, the selected indices are 0, 2, 4 and three are valid.
     with ops.Graph().as_default():
       boxes_np = [[0, 0, 1, 1], [0, 0.2, 1, 1.2], [0, 0.4, 1, 1.4],
                   [0, 0.6, 1, 1.6], [0, 0.8, 1, 1.8], [0, 2, 1, 2]]
@@ -5760,6 +7170,10 @@ class NonMaxSuppressionPaddedTest(test_util.TensorFlowTestCase,
   @test_util.xla_allow_fallback(
       "non_max_suppression with dynamic output shape unsupported.")
   def testSelectFromContinuousOverLapV2(self, run_func_eagerly):
+    # [FUNCTION DOC]
+    # Parameterized on whether compiled functions run eagerly; XLA falls back; skipped when eager
+    # running is requested outside eager mode. Runs padded NMS inside a compiled function on the
+    # overlapping-box example and asserts indices 0, 2, 4 with three valid detections.
     if not context.executing_eagerly() and run_func_eagerly:
       # Skip running tf.function eagerly in V1 mode.
       self.skipTest("Skip test that runs tf.function eagerly in V1 mode.")
@@ -5767,6 +7181,10 @@ class NonMaxSuppressionPaddedTest(test_util.TensorFlowTestCase,
 
       @def_function.function
       def func(boxes, scores, max_output_size, iou_threshold, score_threshold):
+        # [FUNCTION DOC]
+        # HELPER: compiled function used by the enclosing test. Converts its five arguments to
+        # constants, runs padded NMS, asserts the output shape is not fully defined, and returns
+        # the selected indices and valid count.
         boxes = constant_op.constant(boxes)
         scores = constant_op.constant(scores)
         max_output_size = constant_op.constant(max_output_size)
@@ -5796,6 +7214,9 @@ class NonMaxSuppressionPaddedTest(test_util.TensorFlowTestCase,
           self.assertEqual(self.evaluate(num_valid), 3)
 
   def testInvalidDtype(self):
+    # [FUNCTION DOC]
+    # Calls padded NMS with a maximum output size of 2^31 (which needs 64 bits) and expects a
+    # type or value error that the 64-bit type does not match the expected 32-bit type.
     boxes_np = [[4.0, 6.0, 3.0, 6.0],
                 [2.0, 1.0, 5.0, 4.0],
                 [9.0, 0.0, 9.0, 9.0]]
@@ -5808,8 +7229,15 @@ class NonMaxSuppressionPaddedTest(test_util.TensorFlowTestCase,
 
 
 class NonMaxSuppressionWithOverlapsTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering non_max_suppression_with_overlaps, which takes a precomputed overlap
+  # matrix instead of box coordinates.
 
   def testSelectOneFromThree(self):
+    # [FUNCTION DOC]
+    # Gives a 3x3 overlap matrix and scores 0.7, 0.9, 0.1 with overlap threshold 0.6 and score
+    # threshold 0.4; box 1 has the best score and suppresses box 0 and box 2 falls below the
+    # score threshold, so the selected indices must be just 1.
     overlaps_np = [
         [1.0, 0.7, 0.2],
         [0.7, 1.0, 0.0],
@@ -5832,9 +7260,16 @@ class NonMaxSuppressionWithOverlapsTest(test_util.TensorFlowTestCase):
 
 
 class VerifyCompatibleImageShapesTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering the internal shape-compatibility check shared by the SSIM and PSNR
+  # functions: wrong rank and mismatched shapes must produce runtime check failures.
   """Tests utility function used by ssim() and psnr()."""
 
   def testWrongDims(self):
+    # [FUNCTION DOC]
+    # In a fresh graph, builds the shape checks for a placeholder image against itself and runs
+    # them feeding a one-dimensional array; expects an invalid-argument error because the image
+    # rank is too small.
     # Shape function requires placeholders and a graph.
     with ops.Graph().as_default():
       img = array_ops.placeholder(dtype=dtypes.float32)
@@ -5846,6 +7281,10 @@ class VerifyCompatibleImageShapesTest(test_util.TensorFlowTestCase):
           sess.run(checks, {img: img_np})
 
   def testShapeMismatch(self):
+    # [FUNCTION DOC]
+    # In a fresh graph, builds the shape checks for two placeholder images and runs them feeding
+    # shapes one-by-two-by-two-by-one and one-by-three-by-three-by-one; expects an
+    # invalid-argument error because the shapes differ.
     # Shape function requires placeholders and a graph.
     with ops.Graph().as_default():
       img1 = array_ops.placeholder(dtype=dtypes.float32)
@@ -5862,9 +7301,17 @@ class VerifyCompatibleImageShapesTest(test_util.TensorFlowTestCase):
 
 
 class PSNRTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering the psnr function: comparison with a NumPy implementation for single
+  # images and batches, and golden values from real JPEG test files of different qualities.
   """Tests for PSNR."""
 
   def _LoadTestImage(self, sess, filename):
+    # [FUNCTION DOC]
+    # HELPER: loads one PSNR test image.
+    # Takes a session object (unused beyond signature) and a file name inside the PSNR test data
+    # directory. Reads and decodes the JPEG with the accurate DCT method, converts to float32
+    # in 0-1, evaluates it and returns the image with a leading batch dimension of one.
     content = io_ops.read_file(os.path.join(
         "tensorflow/core/lib/psnr/testdata", filename))
     im = image_ops.decode_jpeg(content, dct_method="INTEGER_ACCURATE")
@@ -5873,6 +7320,9 @@ class PSNRTest(test_util.TensorFlowTestCase):
     return np.expand_dims(im, axis=0)
 
   def _LoadTestImages(self):
+    # [FUNCTION DOC]
+    # HELPER: loads the three PSNR reference images (cat at JPEG quality 20, 72 and 95) using
+    # the single-image loader in one session and returns them as a tuple of three arrays.
     with self.cached_session() as sess:
       q20 = self._LoadTestImage(sess, "cat_q20.jpg")
       q72 = self._LoadTestImage(sess, "cat_q72.jpg")
@@ -5880,15 +7330,27 @@ class PSNRTest(test_util.TensorFlowTestCase):
       return q20, q72, q95
 
   def _PSNR_NumPy(self, orig, target, max_value):
+    # [FUNCTION DOC]
+    # HELPER: NumPy reference for peak signal-to-noise ratio.
+    # Takes two image arrays and the maximum pixel value; computes the mean squared error over
+    # the last three axes and returns 20 times log10 of the maximum minus 10 times log10 of the
+    # error, one value per image.
     """Numpy implementation of PSNR."""
     mse = ((orig - target) ** 2).mean(axis=(-3, -2, -1))
     return 20 * np.log10(max_value) - 10 * np.log10(mse)
 
   def _RandomImage(self, shape, max_val):
+    # [FUNCTION DOC]
+    # HELPER: random test image generator.
+    # Takes a shape and a maximum value and returns a float32 array of uniform random numbers in
+    # zero to the maximum.
     """Returns an image or image batch with given shape."""
     return np.random.rand(*shape).astype(np.float32) * max_val
 
   def testPSNRSingleImage(self):
+    # [FUNCTION DOC]
+    # Computes PSNR (max value 1.0) between two random 8x8x1 images with the TensorFlow op and
+    # with the NumPy reference; asserts agreement within 0.001.
     image1 = self._RandomImage((8, 8, 1), 1)
     image2 = self._RandomImage((8, 8, 1), 1)
     psnr = self._PSNR_NumPy(image1, image2, 1)
@@ -5902,6 +7364,9 @@ class PSNRTest(test_util.TensorFlowTestCase):
       self.assertAllClose(psnr, tf_psnr, atol=0.001)
 
   def testPSNRMultiImage(self):
+    # [FUNCTION DOC]
+    # Same comparison for a batch of ten random 8x8x1 images (max value given as integer 1);
+    # asserts per-image agreement within 0.001.
     image1 = self._RandomImage((10, 8, 8, 1), 1)
     image2 = self._RandomImage((10, 8, 8, 1), 1)
     psnr = self._PSNR_NumPy(image1, image2, 1)
@@ -5915,6 +7380,10 @@ class PSNRTest(test_util.TensorFlowTestCase):
       self.assertAllClose(psnr, tf_psnr, atol=0.001)
 
   def testGoldenPSNR(self):
+    # [FUNCTION DOC]
+    # Loads three JPEG qualities of a test picture. First checks the NumPy PSNR matches golden
+    # values generated with Octave (30.321, 29.994, 35.302, tolerance 0.001), then checks the
+    # TensorFlow psnr op matches the NumPy results within 0.001.
     q20, q72, q95 = self._LoadTestImages()
 
     # Verify NumPy implementation first.
@@ -5939,6 +7408,9 @@ class PSNRTest(test_util.TensorFlowTestCase):
       self.assertAllClose(psnr3, tf_psnr3, atol=0.001)
 
   def testInfinity(self):
+    # [FUNCTION DOC]
+    # Computes PSNR of an image with itself (zero error, so infinite PSNR) with NumPy and with
+    # the TensorFlow op and asserts they agree within 0.001.
     q20, _, _ = self._LoadTestImages()
     psnr = self._PSNR_NumPy(q20, q20, 1)
     with self.cached_session():
@@ -5947,6 +7419,9 @@ class PSNRTest(test_util.TensorFlowTestCase):
       self.assertAllClose(psnr, tf_psnr, atol=0.001)
 
   def testInt(self):
+    # [FUNCTION DOC]
+    # Computes PSNR on random uint8 images with max value 255 and on the same images converted to
+    # float32 with max value 1.0; asserts the two results agree within 0.001.
     img1 = self._RandomImage((10, 8, 8, 1), 255)
     img2 = self._RandomImage((10, 8, 8, 1), 255)
     img1 = constant_op.constant(img1, dtypes.uint8)
@@ -5961,6 +7436,11 @@ class PSNRTest(test_util.TensorFlowTestCase):
 
 
 class SSIMTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering the structural similarity index function ssim: agreement with Matlab
+  # reference values on checkerboard images, batching and broadcasting, NumPy inputs, negative
+  # scores, integer image inputs and the optional local index map. Class attributes list the
+  # test image file names and the expected 3x3 matrix of pairwise similarity values.
   """Tests for SSIM."""
 
   _filenames = ["checkerboard1.png",
@@ -5972,6 +7452,11 @@ class SSIMTest(test_util.TensorFlowTestCase):
                       [0.231153, 0.996828, 1.000000]])
 
   def _LoadTestImage(self, sess, filename):
+    # [FUNCTION DOC]
+    # HELPER: loads one SSIM test image.
+    # Takes a session object (not otherwise used) and a file name in the SSIM test data
+    # directory; decodes the PNG, converts to float32 in 0-1, evaluates it and returns the image
+    # with a leading batch dimension of one.
     content = io_ops.read_file(os.path.join(
         "tensorflow/core/lib/ssim/testdata", filename))
     im = image_ops.decode_png(content)
@@ -5980,19 +7465,31 @@ class SSIMTest(test_util.TensorFlowTestCase):
     return np.expand_dims(im, axis=0)
 
   def _LoadTestImages(self):
+    # [FUNCTION DOC]
+    # HELPER: loads all three checkerboard test images and returns them as a list of arrays.
     with self.cached_session() as sess:
       return [self._LoadTestImage(sess, f) for f in self._filenames]
 
   def _RandomImage(self, shape, max_val):
+    # [FUNCTION DOC]
+    # HELPER: random test image generator. Takes a shape and a maximum value and returns a
+    # float32 array of uniform random numbers between zero and the maximum.
     """Returns an image or image batch with given shape."""
     return np.random.rand(*shape).astype(np.float32) * max_val
 
   def testAgainstMatlab(self):
+    # [FUNCTION DOC]
+    # Computes ssim (max value 1.0, window 11, sigma 1.5, k1 0.01, k2 0.03) for every unordered
+    # pair of the three images including each with itself, via a local wrapper, and asserts the
+    # six scores match the stored upper-triangular reference values within 1e-4.
     """Tests against values produced by Matlab."""
     img = self._LoadTestImages()
     expected = self._ssim[np.triu_indices(3)]
 
     def ssim_func(x):
+      # [FUNCTION DOC]
+      # HELPER: wrapper that unpacks a pair of images and returns their SSIM with the fixed
+      # Matlab-compatible parameters (max value 1.0, window 11, sigma 1.5, k1 0.01, k2 0.03).
       return image_ops.ssim(
           *x, max_val=1.0, filter_size=11, filter_sigma=1.5, k1=0.01, k2=0.03)
 
@@ -6005,6 +7502,10 @@ class SSIMTest(test_util.TensorFlowTestCase):
     self.assertAllClose(expected, np.squeeze(scores), atol=1e-4)
 
   def testBatch(self):
+    # [FUNCTION DOC]
+    # Stacks the three distinct image pairs into two batches of three images each, computes ssim
+    # in one call on tensors, and asserts the three scores match the off-diagonal reference values
+    # within 1e-4.
     img = self._LoadTestImages()
     expected = self._ssim[np.triu_indices(3, k=1)]
 
@@ -6024,6 +7525,9 @@ class SSIMTest(test_util.TensorFlowTestCase):
       self.assertAllClose(expected, self.evaluate(ssim), atol=1e-4)
 
   def testBatchNumpyInputs(self):
+    # [FUNCTION DOC]
+    # Same as the batch test but passes plain NumPy arrays (materialized from constants) to ssim
+    # instead of tensors; asserts the same reference scores within 1e-4.
     img = self._LoadTestImages()
     expected = self._ssim[np.triu_indices(3, k=1)]
 
@@ -6047,6 +7551,9 @@ class SSIMTest(test_util.TensorFlowTestCase):
       self.assertAllClose(expected, self.evaluate(ssim), atol=1e-4)
 
   def testBroadcast(self):
+    # [FUNCTION DOC]
+    # Takes two images, builds a 1x2 and a 2x1 batch arrangement of them and checks ssim
+    # broadcasts to a 2x2 matrix equal to the reference top-left block within 1e-4.
     img = self._LoadTestImages()[:2]
     expected = self._ssim[:2, :2]
 
@@ -6060,6 +7567,9 @@ class SSIMTest(test_util.TensorFlowTestCase):
       self.assertAllClose(expected, self.evaluate(ssim), atol=1e-4)
 
   def testNegative(self):
+    # [FUNCTION DOC]
+    # Builds a 16x16 uint8 horizontal gradient and its left-right mirror, computes ssim with max
+    # value 255, and asserts the score is negative (anti-correlated structure).
     """Tests against negative SSIM index."""
     step = np.expand_dims(np.arange(0, 256, 16, dtype=np.uint8), axis=0)
     img1 = np.tile(step, (16, 1))
@@ -6080,6 +7590,9 @@ class SSIMTest(test_util.TensorFlowTestCase):
       self.assertLess(self.evaluate(ssim), 0)
 
   def testInt(self):
+    # [FUNCTION DOC]
+    # Computes ssim on random uint8 16x16x3 images with max value 255 and on the same images
+    # converted to float32 with max value 1.0; asserts the scores agree within 0.001.
     img1 = self._RandomImage((1, 16, 16, 3), 255)
     img2 = self._RandomImage((1, 16, 16, 3), 255)
     img1 = constant_op.constant(img1, dtypes.uint8)
@@ -6095,6 +7608,12 @@ class SSIMTest(test_util.TensorFlowTestCase):
           self.evaluate(ssim_uint8), self.evaluate(ssim_float32), atol=0.001)
 
   def testWithIndexMap(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the images are random in 0-255 but ssim is called with max value 1.0, so the
+    # score values are not meaningful; the test only checks shapes and consistency.
+    # Computes ssim with the local index map enabled and asserts its shape is 1x6x6 (valid
+    # window positions for a 16x16 image with window 11); then asserts the global score equals
+    # the mean of the local map over its last two axes.
     img1 = self._RandomImage((1, 16, 16, 3), 255)
     img2 = self._RandomImage((1, 16, 16, 3), 255)
 
@@ -6117,6 +7636,11 @@ class SSIMTest(test_util.TensorFlowTestCase):
 
 
 class MultiscaleSSIMTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering ssim_multiscale (MS-SSIM): agreement with Matlab reference values on
+  # checkerboard images, differentiability (compiled and eager), batching and broadcasting,
+  # score range, integer inputs and NumPy input. Class attributes list the test image names and
+  # the expected 3x3 matrix of pairwise MS-SSIM values.
   """Tests for MS-SSIM."""
 
   _filenames = ["checkerboard1.png",
@@ -6128,6 +7652,11 @@ class MultiscaleSSIMTest(test_util.TensorFlowTestCase):
                         [0.091025, 0.999567, 1.000000]])
 
   def _LoadTestImage(self, sess, filename):
+    # [FUNCTION DOC]
+    # HELPER: loads one MS-SSIM test image.
+    # Takes a session object (not otherwise used) and a file name in the SSIM test data
+    # directory; decodes the PNG, converts to float32 in 0-1, evaluates it and returns the image
+    # with a leading batch dimension of one.
     content = io_ops.read_file(os.path.join(
         "tensorflow/core/lib/ssim/testdata", filename))
     im = image_ops.decode_png(content)
@@ -6136,14 +7665,23 @@ class MultiscaleSSIMTest(test_util.TensorFlowTestCase):
     return np.expand_dims(im, axis=0)
 
   def _LoadTestImages(self):
+    # [FUNCTION DOC]
+    # HELPER: loads all three checkerboard test images and returns them as a list of arrays.
     with self.cached_session() as sess:
       return [self._LoadTestImage(sess, f) for f in self._filenames]
 
   def _RandomImage(self, shape, max_val):
+    # [FUNCTION DOC]
+    # HELPER: random test image generator. Takes a shape and a maximum value and returns a
+    # float32 array of uniform random numbers between zero and the maximum.
     """Returns an image or image batch with given shape."""
     return np.random.rand(*shape).astype(np.float32) * max_val
 
   def testAgainstMatlab(self):
+    # [FUNCTION DOC]
+    # Computes ssim_multiscale for every unordered pair of the three images (including each with
+    # itself) via a local wrapper and asserts the six scores match the stored upper-triangular
+    # reference within 1e-4; color images are averaged over channels.
     """Tests against MS-SSIM computed with Matlab implementation.
 
     For color images, MS-SSIM scores are averaged over color channels.
@@ -6152,6 +7690,10 @@ class MultiscaleSSIMTest(test_util.TensorFlowTestCase):
     expected = self._msssim[np.triu_indices(3)]
 
     def ssim_func(x):
+      # [FUNCTION DOC]
+      # HELPER: wrapper that unpacks a pair of images and returns their multiscale SSIM with the
+      # fixed Matlab-compatible parameters (max value 1.0, window 11, sigma 1.5, k1 0.01, k2
+      # 0.03).
       return image_ops.ssim_multiscale(
           *x, max_val=1.0, filter_size=11, filter_sigma=1.5, k1=0.01, k2=0.03)
 
@@ -6164,10 +7706,18 @@ class MultiscaleSSIMTest(test_util.TensorFlowTestCase):
     self.assertAllClose(expected, np.squeeze(scores), atol=1e-4)
 
   def testUnweightedIsDifferentiable(self):
+    # [FUNCTION DOC]
+    # Builds a compiled function computing MS-SSIM with equal power factors on two images scaled
+    # by a scalar, takes the gradient with respect to the scalar using a gradient tape, and
+    # asserts every gradient value is finite.
     img = self._LoadTestImages()
 
     @def_function.function
     def msssim_func(x1, x2, scalar):
+      # [FUNCTION DOC]
+      # HELPER: compiled function used by the enclosing test. Multiplies both images by the
+      # scalar and returns their MS-SSIM with five equal power factors (max value 1.0, window
+      # 11, sigma 1.5, k1 0.01, k2 0.03).
       return image_ops.ssim_multiscale(
           x1 * scalar,
           x2 * scalar,
@@ -6189,12 +7739,18 @@ class MultiscaleSSIMTest(test_util.TensorFlowTestCase):
     self.assertTrue(np.isfinite(np_grads).all())
 
   def testUnweightedIsDifferentiableEager(self):
+    # [FUNCTION DOC]
+    # Eager-mode only (skipped otherwise). Same gradient finiteness check as the compiled
+    # variant but with a plain Python function instead of a compiled one.
     if not context.executing_eagerly():
       self.skipTest("Eager mode only")
 
     img = self._LoadTestImages()
 
     def msssim_func(x1, x2, scalar):
+      # [FUNCTION DOC]
+      # HELPER: function used by the enclosing test. Multiplies both images by the scalar and
+      # returns their MS-SSIM with five equal power factors.
       return image_ops.ssim_multiscale(
           x1 * scalar,
           x2 * scalar,
@@ -6216,6 +7772,9 @@ class MultiscaleSSIMTest(test_util.TensorFlowTestCase):
     self.assertTrue(np.isfinite(np_grads).all())
 
   def testBatch(self):
+    # [FUNCTION DOC]
+    # Stacks the three distinct image pairs into two batches, computes MS-SSIM in one call, and
+    # asserts the three scores match the off-diagonal reference values within 1e-4.
     """Tests MS-SSIM computed in batch."""
     img = self._LoadTestImages()
     expected = self._msssim[np.triu_indices(3, k=1)]
@@ -6236,6 +7795,9 @@ class MultiscaleSSIMTest(test_util.TensorFlowTestCase):
       self.assertAllClose(expected, self.evaluate(msssim), 1e-4)
 
   def testBroadcast(self):
+    # [FUNCTION DOC]
+    # Arranges two images as a 1x2 and a 2x1 batch, computes MS-SSIM, and asserts the 2x2 result
+    # equals the reference top-left block within 1e-4.
     """Tests MS-SSIM broadcasting."""
     img = self._LoadTestImages()[:2]
     expected = self._msssim[:2, :2]
@@ -6250,6 +7812,11 @@ class MultiscaleSSIMTest(test_util.TensorFlowTestCase):
       self.assertAllClose(expected, self.evaluate(score_tensor), 1e-4)
 
   def testRange(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the all-255 filler image is outside the 0-1 range expected for max value 1.0.
+    # Computes MS-SSIM for all pairs among two checkerboard images, an all-zero image and an
+    # all-255 image, and asserts every score lies between 0 and 1 (negative components are
+    # treated as zero).
     """Tests against low MS-SSIM score.
 
     MS-SSIM is a geometric mean of SSIM and CS scores of various scales.
@@ -6275,6 +7842,9 @@ class MultiscaleSSIMTest(test_util.TensorFlowTestCase):
     self.assertTrue(np.all(msssim <= 1.0))
 
   def testInt(self):
+    # [FUNCTION DOC]
+    # Computes MS-SSIM on random uint8 180x240x3 images with max value 255 and on the same images
+    # converted to float32 with max value 1.0; asserts the scores agree within 0.001.
     img1 = self._RandomImage((1, 180, 240, 3), 255)
     img2 = self._RandomImage((1, 180, 240, 3), 255)
     img1 = constant_op.constant(img1, dtypes.uint8)
@@ -6290,6 +7860,10 @@ class MultiscaleSSIMTest(test_util.TensorFlowTestCase):
           self.evaluate(ssim_uint8), self.evaluate(ssim_float32), atol=0.001)
 
   def testNumpyInput(self):
+    # [FUNCTION DOC]
+    # Regression test for GitHub issue 28241. Passes a plain 512x512x1 NumPy array (float64) as
+    # both images to ssim_multiscale with max value 1.0 and just evaluates it; asserts only that
+    # no error is raised.
     """Test case for GitHub issue 28241."""
     image = np.random.random([512, 512, 1])
     score_tensor = image_ops.ssim_multiscale(image, image, max_val=1.0)
@@ -6298,8 +7872,15 @@ class MultiscaleSSIMTest(test_util.TensorFlowTestCase):
 
 
 class ImageGradientsTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering image_gradients, which returns vertical and horizontal finite
+  # differences (with a zero border row/column): a single image, a multichannel batch and a
+  # badly shaped input.
 
   def testImageGradients(self):
+    # [FUNCTION DOC]
+    # Computes gradients of a 1x2x4x1 image and asserts the vertical differences (last row zero)
+    # and horizontal differences (last column zero) equal hand-computed arrays.
     shape = [1, 2, 4, 1]
     img = constant_op.constant([[1, 3, 4, 2], [8, 7, 5, 6]])
     img = array_ops.reshape(img, shape)
@@ -6315,6 +7896,10 @@ class ImageGradientsTest(test_util.TensorFlowTestCase):
       self.assertAllClose(expected_dx, actual_dx)
 
   def testImageGradientsMultiChannelBatch(self):
+    # [FUNCTION DOC]
+    # Computes gradients for a batch of two 2x3 images with two channels, asserts the static
+    # batch shape is 2x2x3x2, and asserts the vertical and horizontal differences equal
+    # hand-computed arrays.
     batch = [[[[1, 2], [2, 5], [3, 3]],
               [[8, 4], [5, 1], [9, 8]]],
              [[[5, 3], [7, 9], [1, 6]],
@@ -6340,6 +7925,9 @@ class ImageGradientsTest(test_util.TensorFlowTestCase):
       self.assertAllClose(expected_dx, actual_dx)
 
   def testImageGradientsBadShape(self):
+    # [FUNCTION DOC]
+    # Passes a 2x4 matrix (no batch or depth dimensions) to image_gradients and expects a value
+    # error.
     # [2 x 4] image but missing batch and depth dimensions.
     img = constant_op.constant([[1, 3, 4, 2], [8, 7, 5, 6]])
     with self.assertRaises(ValueError):
@@ -6347,8 +7935,15 @@ class ImageGradientsTest(test_util.TensorFlowTestCase):
 
 
 class SobelEdgesTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering sobel_edges: one disabled single-image case and a batch with two
+  # channels, checking the stacked vertical and horizontal Sobel responses.
 
   def disabled_testSobelEdges1x2x3x1(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the method name starts with "disabled_" so the test runner never runs it.
+    # Intended behavior: compute Sobel edges for a 1x2x3x1 float32 image and assert the result
+    # equals a hand-computed array with a trailing dimension of two (vertical and horizontal).
     img = constant_op.constant([[1, 3, 6], [4, 1, 5]],
                                dtype=dtypes.float32, shape=[1, 2, 3, 1])
     expected = np.reshape([[[0, 0], [0, 12], [0, 0]],
@@ -6359,6 +7954,10 @@ class SobelEdgesTest(test_util.TensorFlowTestCase):
       self.assertAllClose(expected, actual_sobel)
 
   def testSobelEdges5x3x4x2(self):
+    # [FUNCTION DOC]
+    # Builds a batch of five 3x4 images with two identical channels, computes Sobel edges and
+    # asserts the output (batch, height, width, channel, 2) equals the hand-computed response
+    # repeated across channels and batch.
     batch_size = 5
     plane = np.reshape([[1, 3, 6, 2], [4, 1, 5, 7], [2, 5, 1, 4]],
                        [1, 3, 4, 1])
@@ -6383,6 +7982,13 @@ class SobelEdgesTest(test_util.TensorFlowTestCase):
 
 @test_util.run_all_in_graph_and_eager_modes
 class DecodeImageTest(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case, run in both graph and eager modes by a class decorator, covering
+  # the generic decode_image function against format-specific decoders (BMP, JPEG, PNG, GIF) for
+  # channel handling, unsigned 16-bit and float32 output types, animation expansion, and the
+  # crop-and-resize op's input validation. The class attribute lists forward-compatibility
+  # dates (two past ones and a far-future one) that every decoding test iterates over so that
+  # old and new behaviors are both checked.
 
   _FORWARD_COMPATIBILITY_HORIZONS = [
       (2020, 1, 1),
@@ -6391,6 +7997,12 @@ class DecodeImageTest(test_util.TensorFlowTestCase, parameterized.TestCase):
   ]
 
   def testBmpChannels(self):
+    # [FUNCTION DOC]
+    # For each compatibility horizon and on the GPU-preferred device, verifies BMP channel
+    # handling: decode_image and decode_bmp agree on a four-channel file; requesting 3 channels
+    # from a 4-channel file drops alpha (equals the 3-channel file); requesting 4 channels from a
+    # 3-channel file adds alpha equal to 255; grayscale files expand to 3 or 4 channels the same
+    # way as the prebuilt multi-channel files.
     for horizon in self._FORWARD_COMPATIBILITY_HORIZONS:
       with compat.forward_compatibility_horizon(*horizon):
         with test_util.use_gpu():
@@ -6445,6 +8057,9 @@ class DecodeImageTest(test_util.TensorFlowTestCase, parameterized.TestCase):
           self.assertAllEqual(image8, image9)
 
   def testJpegUint16(self):
+    # [FUNCTION DOC]
+    # For each compatibility horizon, decodes a JPEG with decode_image requesting 16-bit output
+    # and compares to decode_jpeg converted to 16-bit; the results must be identical.
     for horizon in self._FORWARD_COMPATIBILITY_HORIZONS:
       with compat.forward_compatibility_horizon(*horizon):
         with self.cached_session():
@@ -6457,6 +8072,11 @@ class DecodeImageTest(test_util.TensorFlowTestCase, parameterized.TestCase):
           self.assertAllEqual(image0, image1)
 
   def testPngUint16(self):
+    # [FUNCTION DOC]
+    # For each horizon, decodes an RGBA PNG with decode_image requesting 16-bit output and
+    # compares to decode_png with 16-bit dtype (must be identical); also round-trips a random
+    # 4x4x3 16-bit array through the PNG encoder and decode_image with explicit channels and
+    # dtype, asserting the array is recovered.
     for horizon in self._FORWARD_COMPATIBILITY_HORIZONS:
       with compat.forward_compatibility_horizon(*horizon):
         with self.cached_session():
@@ -6476,6 +8096,9 @@ class DecodeImageTest(test_util.TensorFlowTestCase, parameterized.TestCase):
           self.assertAllEqual(x, x_dec)
 
   def testGifUint16(self):
+    # [FUNCTION DOC]
+    # For each horizon, decodes a GIF with decode_image requesting 16-bit output and compares to
+    # decode_gif converted to 16-bit; results must be identical.
     for horizon in self._FORWARD_COMPATIBILITY_HORIZONS:
       with compat.forward_compatibility_horizon(*horizon):
         with self.cached_session():
@@ -6488,6 +8111,9 @@ class DecodeImageTest(test_util.TensorFlowTestCase, parameterized.TestCase):
           self.assertAllEqual(image0, image1)
 
   def testBmpUint16(self):
+    # [FUNCTION DOC]
+    # For each horizon, decodes a BMP with decode_image requesting 16-bit output and compares to
+    # decode_bmp converted to 16-bit; results must be identical.
     for horizon in self._FORWARD_COMPATIBILITY_HORIZONS:
       with compat.forward_compatibility_horizon(*horizon):
         with self.cached_session():
@@ -6500,6 +8126,9 @@ class DecodeImageTest(test_util.TensorFlowTestCase, parameterized.TestCase):
           self.assertAllEqual(image0, image1)
 
   def testJpegFloat32(self):
+    # [FUNCTION DOC]
+    # For each horizon, decodes a JPEG with decode_image requesting float32 output and compares
+    # to decode_jpeg converted to float32; results must be identical.
     for horizon in self._FORWARD_COMPATIBILITY_HORIZONS:
       with compat.forward_compatibility_horizon(*horizon):
         with self.cached_session():
@@ -6512,6 +8141,9 @@ class DecodeImageTest(test_util.TensorFlowTestCase, parameterized.TestCase):
           self.assertAllEqual(image0, image1)
 
   def testPngFloat32(self):
+    # [FUNCTION DOC]
+    # For each horizon, decodes an RGBA PNG with decode_image requesting float32 and compares to
+    # decode_png at 16-bit depth converted to float32; results must be identical.
     for horizon in self._FORWARD_COMPATIBILITY_HORIZONS:
       with compat.forward_compatibility_horizon(*horizon):
         with self.cached_session():
@@ -6524,6 +8156,9 @@ class DecodeImageTest(test_util.TensorFlowTestCase, parameterized.TestCase):
           self.assertAllEqual(image0, image1)
 
   def testGifFloat32(self):
+    # [FUNCTION DOC]
+    # For each horizon, decodes a GIF with decode_image requesting float32 and compares to
+    # decode_gif converted to float32; results must be identical.
     for horizon in self._FORWARD_COMPATIBILITY_HORIZONS:
       with compat.forward_compatibility_horizon(*horizon):
         with self.cached_session():
@@ -6536,6 +8171,9 @@ class DecodeImageTest(test_util.TensorFlowTestCase, parameterized.TestCase):
           self.assertAllEqual(image0, image1)
 
   def testBmpFloat32(self):
+    # [FUNCTION DOC]
+    # For each horizon, decodes a BMP with decode_image requesting float32 and compares to
+    # decode_bmp converted to float32; results must be identical.
     for horizon in self._FORWARD_COMPATIBILITY_HORIZONS:
       with compat.forward_compatibility_horizon(*horizon):
         with self.cached_session():
@@ -6548,6 +8186,10 @@ class DecodeImageTest(test_util.TensorFlowTestCase, parameterized.TestCase):
           self.assertAllEqual(image0, image1)
 
   def testExpandAnimations(self):
+    # [FUNCTION DOC]
+    # For each horizon, decodes a 12-frame GIF with animation expansion disabled (a single
+    # 40x20x3 first frame equal to the first frame of the full decode) and enabled (a 12x40x20x3
+    # array equal to the full GIF decode), asserting ranks, shapes and values.
     for horizon in self._FORWARD_COMPATIBILITY_HORIZONS:
       with compat.forward_compatibility_horizon(*horizon):
         with self.cached_session():
@@ -6575,6 +8217,10 @@ class DecodeImageTest(test_util.TensorFlowTestCase, parameterized.TestCase):
           self.assertAllEqual(image2, image3)
 
   def testImageCropAndResize(self):
+    # [FUNCTION DOC]
+    # Calls crop_and_resize with a box coordinate that is not a finite number (1e40). If a GPU is
+    # available the op is just evaluated (no error expected); otherwise expects an
+    # invalid-argument or value error saying boxes contain a non-finite element.
     if test_util.is_gpu_available():
       op = image_ops_impl.crop_and_resize_v2(
           image=array_ops.zeros((2, 1, 1, 1)),
@@ -6594,6 +8240,9 @@ class DecodeImageTest(test_util.TensorFlowTestCase, parameterized.TestCase):
         self.evaluate(op)
 
   def testImageCropAndResizeWithInvalidInput(self):
+    # [FUNCTION DOC]
+    # Calls crop_and_resize with a tiny image, eleven boxes and a crop size of about two billion
+    # by one billion; expects an invalid-argument or value error rather than a crash.
     with self.session():
       with self.assertRaises((errors.InvalidArgumentError, ValueError)):
         op = image_ops_impl.crop_and_resize_v2(
@@ -6604,6 +8253,9 @@ class DecodeImageTest(test_util.TensorFlowTestCase, parameterized.TestCase):
         self.evaluate(op)
 
   def testImageCropAndResizeWithNon1DBoxes(self):
+    # [FUNCTION DOC]
+    # Calls crop_and_resize with empty boxes and a two-dimensional box index array; expects an
+    # invalid-argument or value error saying the index input must be rank 1.
     with self.assertRaisesRegex((errors.InvalidArgumentError, ValueError),
                                 "must be rank 1"):
       op = image_ops_impl.crop_and_resize_v2(
@@ -6619,6 +8271,10 @@ class DecodeImageTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       ("_gif", "GIF", "scan.gif"),
   )
   def testWrongOpBmp(self, img_format, filename):
+    # [FUNCTION DOC]
+    # Parameterized over a JPEG, a PNG and a GIF file. Feeds the file to decode_bmp and expects
+    # an invalid-argument or value error saying it tried to decode that format using the BMP
+    # decoding op.
     base_folder = "tensorflow/core/lib"
     base_path = os.path.join(base_folder, img_format.lower(), "testdata")
     err_msg = "Trying to decode " + img_format + " format using DecodeBmp op"
@@ -6634,6 +8290,10 @@ class DecodeImageTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       ("_gif", image_ops.decode_gif, "DecodeGif"),
   )
   def testWrongOp(self, decode_op, op_used):
+    # [FUNCTION DOC]
+    # Parameterized over the JPEG, PNG and GIF decoders and their op names. Feeds a BMP file to
+    # each decoder and expects an invalid-argument or value error telling the user to use the BMP
+    # decoder or the generic decoder instead, naming the op that was used.
     base = "tensorflow/core/lib/bmp/testdata"
     bmp0 = io_ops.read_file(os.path.join(base, "rgba_small.bmp"))
     err_msg = ("Trying to decode BMP format using a wrong op. Use `decode_bmp` "
@@ -6649,6 +8309,10 @@ class DecodeImageTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       ("_bmp", "BMP", "rgba_small.bmp"),
   )
   def testWrongOpJpeg(self, img_format, filename):
+    # [FUNCTION DOC]
+    # Parameterized over a PNG, a GIF and a BMP file. Feeds the file to the combined JPEG
+    # decode-and-crop op with a small crop window and expects an invalid-argument or value error
+    # saying that operation can run on JPEG only and naming the detected format.
     base_folder = "tensorflow/core/lib"
     base_path = os.path.join(base_folder, img_format.lower(), "testdata")
     err_msg = ("DecodeAndCropJpeg operation can run on JPEG only, but "
@@ -6660,6 +8324,11 @@ class DecodeImageTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       self.evaluate(img)
 
   def testGifFramesWithDiffSize(self):
+    # [FUNCTION DOC]
+    # Decodes an animated GIF whose first frame (10x10) is smaller than the canvas (16x16) with
+    # animation expansion disabled, and decodes a single-image GIF that is the same picture with
+    # zero background; asserts the first frame of the animation equals that ground truth, i.e.
+    # unoccupied canvas areas are filled with zeros.
     """Test decoding an animated GIF.
 
     This test verifies that `decode_image` op can decode animated GIFs whose
@@ -6688,6 +8357,15 @@ class DecodeImageTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertAllEqual(image0, image1_0)
 
   def testDecodeImageShapeInferenceInDataPipeline(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the final else branch that assigns an all-unknown expected shape for more than
+    # four channels is unreachable, because the channel loop only visits 0, 1, 3 and 4.
+    # Encodes a 2x2 RGB image as JPEG, maps decode (animations not expanded) followed by resize
+    # to 224x224 over a one-element dataset, and asserts the output shape is 224x224x3. Then
+    # asserts the static shape of decode_image is rank 3 with channels known for 3, and for the
+    # channel settings 0, 1 (grayscale PNG), 3 and 4 (RGBA PNG) checks the shape is compatible
+    # with unknown height/width and the requested channel count (unknown for 0), and checks
+    # automatic channel detection yields a rank-3 shape compatible with 2x2x3.
     """Test that decode_image sets proper shape inference in tf.data pipelines.
 
     This test verifies the fix for the issue where tf.image.decode_image
@@ -6707,6 +8385,10 @@ class DecodeImageTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     jpeg_bytes = gen_image_ops.encode_jpeg(test_image)
 
     def process_image_fixed(image_bytes):
+      # [FUNCTION DOC]
+      # HELPER: dataset map function used by the enclosing test. Takes encoded image bytes,
+      # decodes them as a 3-channel image without expanding animations (so the static shape is
+      # rank 3), resizes to 224x224 and returns the resized image.
       """Process function using expand_animations=False for shape inference."""
       decoded = image_ops.decode_image(
           image_bytes, channels=3, expand_animations=False
