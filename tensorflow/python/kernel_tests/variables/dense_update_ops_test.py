@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test module for the variable assign, assign-add and assign-subtract state ops across several
+# numeric types on CPU and (when built with GPU support) GPU. Defines one test class; no
+# import-time side effects.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,8 +28,18 @@ from tensorflow.python.platform import test
 
 
 class AssignOpTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for dense assign, assign-add and assign-subtract on variables. Private helper methods
+  # build a variable, apply one update op and return both the variable value and the op result.
 
   def _initAssignFetch(self, x, y, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: Shared fixture for the assign tests.
+    # KNOWN ISSUE: it calls the parent class setUp inside the helper on every invocation, which is
+    # unusual (setUp is normally run by the framework only) and may reset per-test state.
+    # Inputs: x initial value, y value to assign, use_gpu whether to place ops on the GPU.
+    # Creates a variable from x, assigns y, initializes the variable and returns a pair of the
+    # variable's final value and the result of the assign op.
     """Initialize a param to init and update it with y."""
     super(AssignOpTest, self).setUp()
     with test_util.device(use_gpu=use_gpu):
@@ -36,6 +50,11 @@ class AssignOpTest(test.TestCase):
       return self.evaluate(p), new_value
 
   def _initAssignAddFetch(self, x, y, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: Shared fixture for the assign tests.
+    # Inputs: x initial value, y addend, use_gpu whether to place ops on the chosen device.
+    # Creates a variable from x, builds assign-add of y, initializes the variable, runs the op and
+    # returns a pair of the variable's final value and the op's result.
     """Initialize a param to init, and compute param += y."""
     with test_util.device(use_gpu=use_gpu):
       p = variables.Variable(x)
@@ -45,6 +64,11 @@ class AssignOpTest(test.TestCase):
       return self.evaluate(p), new_value
 
   def _initAssignSubFetch(self, x, y, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: Shared fixture for the assign tests.
+    # Inputs: x initial value, y subtrahend, use_gpu whether to place ops on the chosen device.
+    # Creates a variable from x, builds assign-subtract of y, initializes the variable, runs the
+    # op and returns a pair of the variable's final value and the op's result.
     """Initialize a param to init, and compute param -= y."""
     with test_util.device(use_gpu=use_gpu):
       p = variables.Variable(x)
@@ -54,6 +78,12 @@ class AssignOpTest(test.TestCase):
       return self.evaluate(p), new_value
 
   def _testTypes(self, vals):
+    # [FUNCTION DOC]
+    # HELPER: Driver for the type sweep. For each of float32, float64, int32, int64 and bfloat16,
+    # takes an all-zero array x and the input values y cast to that type, then on CPU checks that
+    # assign gives y, assign-add gives x plus y and assign-subtract gives x minus y, for both the
+    # final variable value and the op result. When built with GPU support, repeats on the GPU for
+    # float32 and float64 only. Input vals is a numpy array; returns nothing.
     for dtype in [
         np.float32, np.float64, np.int32, np.int64,
         dtypes.bfloat16.as_numpy_dtype
@@ -81,6 +111,8 @@ class AssignOpTest(test.TestCase):
         self.assertAllEqual(x - y, op_value)
 
   def testBasic(self):
+    # [FUNCTION DOC]
+    # Scenario: run the type sweep with a four by five array of the integers 0 through 19.
     self._testTypes(np.arange(0, 20).reshape([4, 5]))
 
 if __name__ == "__main__":

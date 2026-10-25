@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test module for variable assign and assign-add ops under concurrent multi-threaded updates, with
+# and without locking. These tests contain deliberate or known data races, so they are excluded
+# from thread-sanitizer targets. Defines one test class; no import-time side effects.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,11 +29,20 @@ from tensorflow.python.platform import test
 
 
 class AssignOpTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case that launches many threads each running one assign or assign-add op against a
+  # shared 1024 by 1024 float variable, checking the outcome bounds for the unlocked and locked
+  # variants. No shared fixtures.
 
   # NOTE(mrry): We exclude thess tests from the TSAN TAP target, because they
   #   contain benign and deliberate data races when multiple threads update
   #   the same parameters without a lock.
   def testParallelUpdateWithoutLocking(self):
+    # [FUNCTION DOC]
+    # Scenario: switch the default graph to thread-local device stacks, then run 20 assign-add
+    # ops (adding ones, no locking) concurrently on 20 threads against a zero variable. Because
+    # updates may be lost to races, asserts every element lies between 1 and 20 inclusive.
+    # Side effect: modifies the default graph's thread-local setting.
     # We need each thread to keep its own device stack or the device scopes
     # won't be properly nested.
     ops.get_default_graph().switch_to_thread_local()
@@ -43,6 +56,9 @@ class AssignOpTest(test.TestCase):
       self.evaluate(variables.global_variables_initializer())
 
       def run_add(add_op):
+        # [FUNCTION DOC]
+        # HELPER: Thread target for the parallel update test. Evaluates the given op in the
+        # test session; returns nothing.
         self.evaluate(add_op)
 
       threads = [
@@ -60,6 +76,10 @@ class AssignOpTest(test.TestCase):
       self.assertTrue((vals <= ones * 20).all())
 
   def testParallelAssignWithoutLocking(self):
+    # [FUNCTION DOC]
+    # Scenario: with thread-local graph state, run 20 unlocked assign ops concurrently, the i-th
+    # assigning a matrix filled with i (1 to 20), to a zero variable. Asserts every element ends
+    # up greater than zero and at most 20. Side effect: sets the default graph thread-local.
     # We need each thread to keep its own device stack or the device scopes
     # won't be properly nested.
     ops.get_default_graph().switch_to_thread_local()
@@ -73,6 +93,9 @@ class AssignOpTest(test.TestCase):
       self.evaluate(variables.global_variables_initializer())
 
       def run_assign(assign_op):
+        # [FUNCTION DOC]
+        # HELPER: Thread target for the parallel assign test. Evaluates the given assign op in
+        # the test session; returns nothing.
         self.evaluate(assign_op)
 
       threads = [
@@ -95,6 +118,10 @@ class AssignOpTest(test.TestCase):
   # returning the output tensors. This issue will be resolved with the new
   # resource variables.
   def testParallelUpdateWithLocking(self):
+    # [FUNCTION DOC]
+    # Scenario: with thread-local graph state, run 20 assign-add ops of ones with locking enabled
+    # concurrently on a zero variable. Because updates are serialized, asserts every element
+    # equals exactly 20. Side effect: sets the default graph thread-local.
     # We need each thread to keep its own device stack or the device scopes
     # won't be properly nested.
     ops.get_default_graph().switch_to_thread_local()
@@ -109,6 +136,9 @@ class AssignOpTest(test.TestCase):
       self.evaluate(p.initializer)
 
       def run_add(add_op):
+        # [FUNCTION DOC]
+        # HELPER: Thread target for the locked parallel update test. Evaluates the given op in
+        # the test session; returns nothing.
         self.evaluate(add_op)
 
       threads = [
@@ -125,6 +155,11 @@ class AssignOpTest(test.TestCase):
       self.assertAllEqual(vals, ones * 20)
 
   def testParallelAssignWithLocking(self):
+    # [FUNCTION DOC]
+    # Scenario: with thread-local graph state, run 20 locked assign ops (the i-th assigning a
+    # matrix filled with i) concurrently on a zero variable. Asserts the first element is between
+    # 1 and 20 and that all elements equal that first element, i.e. one assignment won as a whole.
+    # Side effect: sets the default graph thread-local.
     # We need each thread to keep its own device stack or the device scopes
     # won't be properly nested.
     ops.get_default_graph().switch_to_thread_local()
@@ -140,6 +175,9 @@ class AssignOpTest(test.TestCase):
       self.evaluate(p.initializer)
 
       def run_assign(assign_op):
+        # [FUNCTION DOC]
+        # HELPER: Thread target for the locked parallel assign test. Evaluates the given assign
+        # op in the test session; returns nothing.
         self.evaluate(assign_op)
 
       threads = [

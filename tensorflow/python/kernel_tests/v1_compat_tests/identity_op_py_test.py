@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test module for the reference identity operation, run in V1 only. Checks that the static shape
+# of a legacy reference variable is preserved by the reference-identity op. Defines one test
+# class and runs the test main entry point as a script. No import-time side effects.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,9 +27,15 @@ from tensorflow.python.platform import test
 
 
 class IdentityOpTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the reference identity op; its single test runs only under V1.
 
   @test_util.run_v1_only("Don't need to test VariableV1 in TF2.")
   def testRefIdentityShape(self):
+    # [FUNCTION DOC]
+    # Scenario: create a V1 variable from a 2 by 3 int32 constant. Asserts that the variable's
+    # static shape equals the expected 2 by 3 shape and that the shape of the output of the
+    # reference-identity op applied to it is also 2 by 3. Returns nothing.
     shape = [2, 3]
     tensor = variable_v1.VariableV1(
         constant_op.constant([[1, 2, 3], [6, 5, 4]], dtype=dtypes.int32))

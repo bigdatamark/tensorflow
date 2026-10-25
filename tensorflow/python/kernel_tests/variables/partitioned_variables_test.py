@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test module for partitioned variables: the partitioner factories (fixed size, variable axis
+# size, min-max) and the function creating partitioned variables with various initializers,
+# slicing, saving/restoring and graph placement. Includes a helper to read a variable's value
+# conditionally and an iota-style initializer. Defines test classes; no import-time side effects.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,14 +40,24 @@ from tensorflow.python.training import saver as saver_lib
 
 
 def initialized_value(var):
+  # [FUNCTION DOC]
+  # HELPER: Test utility returning a variable's value even if uninitialized.
+  # Takes a variable and returns a conditional tensor: its current value if the variable is
+  # initialized, otherwise its initial value expression. Builds graph ops; no other side effects.
   return cond.cond(
       variable_v1.is_variable_initialized(var), var.read_value,
       lambda: var.initial_value)
 
 
 class PartitionerCreatorsTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the partitioner factory functions. Each test builds a variable scope with a
+  # partitioner and checks the number of variable shards and the partition counts per axis.
 
   def testFixedSizePartitioner(self):
+    # [FUNCTION DOC]
+    # Scenario: fixed-size partitioner with five shards on axis zero applied to a float32 variable
+    # of shape ten by ten. Asserts five variable pieces and partition counts of five and one.
     with self.cached_session():
       partitioner = partitioned_variables.fixed_size_partitioner(5, axis=0)
       with variable_scope.variable_scope("root", partitioner=partitioner):
@@ -54,6 +69,9 @@ class PartitionerCreatorsTest(test.TestCase):
         self.assertAllEqual(v0_part, (5, 1))
 
   def testFixedSizePartitionerInt64(self):
+    # [FUNCTION DOC]
+    # Scenario: fixed-size partitioner with four shards on axis zero applied to an int64 variable
+    # of shape twenty. Asserts the variable is split into four pieces.
     with self.cached_session():
       partitioner = partitioned_variables.fixed_size_partitioner(4, axis=0)
       with variable_scope.variable_scope("root", partitioner=partitioner):
@@ -62,6 +80,9 @@ class PartitionerCreatorsTest(test.TestCase):
         self.assertEqual(len(v0_list), 4)
 
   def testResourceFixedSizePartitioner(self):
+    # [FUNCTION DOC]
+    # Scenario: same as the basic fixed-size test (five shards, ten by ten float32) but with
+    # resource variables enabled in the scope. Asserts five pieces and partition counts five, one.
     with self.cached_session():
       partitioner = partitioned_variables.fixed_size_partitioner(5, axis=0)
       with variable_scope.variable_scope(
@@ -80,6 +101,13 @@ class PartitionerCreatorsTest(test.TestCase):
                                        expected_axis_shards,
                                        expected_partitions,
                                        max_shards=None):
+    # [FUNCTION DOC]
+    # HELPER: Shared check for the axis-size partitioner tests.
+    # Inputs: name of the variable, axis to partition, max_shard_bytes size limit per shard,
+    # expected number of shards on that axis, expected full partition counts, and optional
+    # max_shards upper bound (default none). Creates a float32 variable of shape four, eight,
+    # sixteen, thirty-two under a variable-axis-size partitioner and asserts the shard count and
+    # partitions match. Returns nothing.
     partitioner = partitioned_variables.variable_axis_size_partitioner(
         axis=axis, max_shard_bytes=max_shard_bytes, max_shards=max_shards)
 
@@ -92,6 +120,12 @@ class PartitionerCreatorsTest(test.TestCase):
       self.assertAllEqual(v0_part, expected_partitions)
 
   def testVariableAxisSizePartitioner(self):
+    # [FUNCTION DOC]
+    # Scenario: partition a four, eight, sixteen, thirty-two float32 variable with several byte
+    # limits and axes: no split when it fits, exactly at the limit, split into two along axis
+    # two, maximal thirty-two shards along axis three (also when the limit is below one slice),
+    # max_shards above and below the natural count, and finally a string-typed variable using an
+    # assumed byte size per string element, expecting four shards on axis three.
     with self.cached_session():
       # Create a partitioned variable of shape (4, 8, 16, 32) type float32
       # Bytes per slice along the given axes:
@@ -203,6 +237,12 @@ class PartitionerCreatorsTest(test.TestCase):
   def _testMinMaxVariablePartitioner(self, max_partitions, axis, min_slice_size,
                                      var_name, var_shape, expected_axis_shards,
                                      expected_partitions):
+    # [FUNCTION DOC]
+    # HELPER: Shared check for the min-max partitioner tests.
+    # Inputs: max_partitions upper bound on shards, axis to partition, min_slice_size minimum
+    # bytes per shard, var_name, var_shape, expected shard count and expected partition counts.
+    # Creates a float32 variable under a min-max variable partitioner and asserts the shard count
+    # and partitions equal the expectations. Returns nothing.
     partitioner = partitioned_variables.min_max_variable_partitioner(
         max_partitions=max_partitions, axis=axis, min_slice_size=min_slice_size)
     with variable_scope.variable_scope("root", partitioner=partitioner):
@@ -214,6 +254,10 @@ class PartitionerCreatorsTest(test.TestCase):
       self.assertAllEqual(v0_part, expected_partitions)
 
   def testMinMaxVariablePartitioner(self):
+    # [FUNCTION DOC]
+    # Scenario: runs the min-max check over many shapes: minimum slice size drives shard count,
+    # max_partitions caps it (sixteen, one), halving or doubling the slice size doubles or halves
+    # the shards, partitioning along other axes, and shards limited by the dimension size.
     with self.cached_session():
       # Partitioning a variable of shape=[2048] with a minimum of 2K per slice.
       self._testMinMaxVariablePartitioner(
@@ -311,6 +355,11 @@ class PartitionerCreatorsTest(test.TestCase):
 
 
 def _IotaInitializer(shape, dtype=dtypes.float32, partition_info=None):
+  # [FUNCTION DOC]
+  # HELPER: Initializer function used by the partitioned-variable tests.
+  # Inputs: shape list, dtype (must be float32, enforced by an assertion), partition_info unused.
+  # For a one-dimensional shape returns a range of integers; otherwise recursively builds nested
+  # lists where row i is the inner pattern scaled by ten to the power i.
   assert dtype == dtypes.float32
   if len(shape) == 1:
     return range(shape[0])
@@ -320,13 +369,23 @@ def _IotaInitializer(shape, dtype=dtypes.float32, partition_info=None):
 
 
 class PartitionedVariablesTestCase(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the function that creates partitioned variables from initial values, slice
+  # lists and partition counts; has a helper to check each slice's save specification.
 
   def _TestSaveSpec(self, slices, expected_specs):
+    # [FUNCTION DOC]
+    # HELPER: Asserts the list of variable slices has the same length as the expected spec list
+    # and that each slice's save-slice-info spec string equals the corresponding expected string.
     self.assertEqual(len(expected_specs), len(slices))
     for i in range(len(expected_specs)):
       self.assertEqual(expected_specs[i], slices[i]._save_slice_info.spec)
 
   def testVecConstantInit(self):
+    # [FUNCTION DOC]
+    # Scenario: partition a constant length-four int32 vector into four single-element pieces.
+    # Asserts the concatenation equals the constant, all pieces are int32, and the save specs are
+    # the four one-element slices.
     with self.cached_session():
       rnd_par = constant_op.constant([1, 2, 3, 4])
       vs = partitioned_variables.create_partitioned_variables([4], [4], rnd_par)
@@ -338,6 +397,10 @@ class PartitionedVariablesTestCase(test.TestCase):
       self._TestSaveSpec(vs, ["4 0,1", "4 1,1", "4 2,1", "4 3,1"])
 
   def testConstantInit(self):
+    # [FUNCTION DOC]
+    # Scenario: partition a constant two by four int32 matrix into two column slices. Asserts the
+    # concatenation along axis one equals the constant, pieces are int32, and the save specs
+    # describe the two column ranges.
     with self.cached_session():
       rnd_par = constant_op.constant([[1, 2, 3, 4], [5, 6, 7, 8]])
       vs = partitioned_variables.create_partitioned_variables([2, 4], [1, 2],
@@ -350,6 +413,12 @@ class PartitionedVariablesTestCase(test.TestCase):
       self._TestSaveSpec(vs, ["2 4 0,2:0,2", "2 4 0,2:2,2"])
 
   def _testNameHelper(self, use_resource=False):
+    # [FUNCTION DOC]
+    # HELPER: Shared body for the naming tests; the optional flag use_resource (default false)
+    # selects resource variables. Checks three cases: (1) two partitioned variables created in
+    # the same scope get full names ending in PartitionedVariable and PartitionedVariable_1 and
+    # parts named with part suffixes; (2) creating again in the same scope with reuse yields the
+    # same full name; (3) a name scope has no effect on the names. Returns nothing.
     with self.cached_session():
       rnd_par = constant_op.constant([[1, 2, 3, 4], [5, 6, 7, 8]])
       with variable_scope.variable_scope("hi", use_resource=use_resource):
@@ -407,12 +476,20 @@ class PartitionedVariablesTestCase(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testName(self):
+    # [FUNCTION DOC]
+    # Scenario: run the naming checks with non-resource variables (deprecated V1 mode only).
     self._testNameHelper(use_resource=False)
 
   def testResourceName(self):
+    # [FUNCTION DOC]
+    # Scenario: run the naming checks with resource variables enabled.
     self._testNameHelper(use_resource=True)
 
   def testRandomInitValue(self):
+    # [FUNCTION DOC]
+    # Scenario: a 200 by 40 random uniform variable is partitioned into ten column slices using
+    # its conditional initial value. After initialization asserts the concatenation equals the
+    # source, all pieces are float32, and the save specs are ten four-column ranges.
     with self.cached_session():
       rnd = variables.Variable(random_ops.random_uniform([200, 40]))
       vs = partitioned_variables.create_partitioned_variables(
@@ -430,6 +507,11 @@ class PartitionedVariablesTestCase(test.TestCase):
       ])
 
   def testRandomInitUnevenPartitions(self):
+    # [FUNCTION DOC]
+    # Scenario: a 20 by 43 float64 variable is partitioned into one through nine column slices,
+    # where 43 does not divide evenly. Asserts each concatenation equals the source and dtypes are
+    # float64; for one to five slices also asserts the exact save specs (earlier slices get the
+    # extra columns).
     with self.cached_session():
       rnd = variables.Variable(
           random_ops.random_uniform([20, 43], dtype=dtypes.float64))
@@ -468,6 +550,9 @@ class PartitionedVariablesTestCase(test.TestCase):
           self._TestSaveSpec(vs, save_specs[i])
 
   def testDegenerate(self):
+    # [FUNCTION DOC]
+    # Scenario: partition a 10 by 43 variable with partition counts of one and one (a single
+    # slice). Asserts the result equals the source and the single save spec covers everything.
     with self.cached_session():
       rnd = variables.Variable(random_ops.random_uniform([10, 43]))
       vs = partitioned_variables.create_partitioned_variables(
@@ -479,6 +564,9 @@ class PartitionedVariablesTestCase(test.TestCase):
       self._TestSaveSpec(vs, ["10 43 0,10:0,43"])
 
   def testSliceSizeOne(self):
+    # [FUNCTION DOC]
+    # Scenario: partition a 10 by 43 variable into ten row slices of size one. Asserts the row
+    # concatenation equals the source and the save specs are ten single-row ranges.
     with self.cached_session():
       rnd = variables.Variable(random_ops.random_uniform([10, 43]))
       vs = partitioned_variables.create_partitioned_variables(
@@ -494,6 +582,11 @@ class PartitionedVariablesTestCase(test.TestCase):
       ])
 
   def testIotaInitializer(self):
+    # [FUNCTION DOC]
+    # Scenario: first checks the iota initializer directly for a vector of four and a four by two
+    # shape (powers of ten per row). Then partitions a 13 by 5 variable into three row slices
+    # using that initializer as the initial value function and asserts the concatenation equals
+    # slices of sizes 5, 4, 4 initialized separately, and the save specs match those row ranges.
     self.assertAllClose([0., 1., 2., 3.], _IotaInitializer([4]))
     self.assertAllClose([[0., 1.], [0., 10.], [0., 100.], [0., 1000.]],
                         _IotaInitializer([4, 2]))
@@ -510,6 +603,10 @@ class PartitionedVariablesTestCase(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testRandomInitializer(self):
+    # [FUNCTION DOC]
+    # Scenario: partition a 20 by 12 variable into two column slices with a random uniform
+    # initializer. Without a seed asserts the slices differ (distance above a small threshold,
+    # since each slice uses a different seed); with a fixed seed asserts both slices are equal.
     # Sanity check that the slices uses a different seed when using a random
     # initializer function.
     with self.cached_session():
@@ -528,6 +625,11 @@ class PartitionedVariablesTestCase(test.TestCase):
       self.assertAllClose(val0, val1)
 
   def testSomeErrors(self):
+    # [FUNCTION DOC]
+    # Scenario: invalid arguments to create partitioned variables must raise value errors: shape
+    # rank not matching the source rank, partition list of wrong length (too short or too long),
+    # shape not matching the initial value, and partition counts larger than the dimension size
+    # (11 or 20 over 10 rows, 50 over 43 columns). Seven cases, each asserted to raise.
     with self.cached_session():
       rnd = variables.Variable(random_ops.random_uniform([10, 43]))
       with self.assertRaises(ValueError):
@@ -554,6 +656,10 @@ class PartitionedVariablesTestCase(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testControlDepsNone(self):
+    # [FUNCTION DOC]
+    # Scenario: inside a control-dependency scope on a constant, a normal constant picks up the
+    # dependency, but reading a partitioned variable as a tensor must add none to the new ops.
+    # Asserts the constant has the control input and each newly created reading op has none.
     with self.cached_session() as session:
       c = constant_op.constant(1.0)
       with ops.control_dependencies([c]):
@@ -581,6 +687,10 @@ class PartitionedVariablesTestCase(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testConcat(self):
+    # [FUNCTION DOC]
+    # Scenario: a partitioned variable is concatenated inside a control-dependency scope. Asserts
+    # that the concat ops receive the scope's control dependency, and after initialization that
+    # the concatenated value equals the variable converted to a tensor.
     with self.cached_session() as session:
       var_x = variable_scope.get_variable(
           "x",
@@ -606,6 +716,14 @@ class PartitionedVariablesTestCase(test.TestCase):
       self.assertAllClose(value, var_x.as_tensor())
 
   def testMetaGraphSaveLoad(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: after importing the meta graph into the restore graph, the collection is read
+    # from the save graph rather than the restore graph, so the restored variable is the original
+    # object and the restored collection is not actually verified.
+    # Scenario: in a temp directory, build a fixed-size partitioned variable (five shards), save a
+    # checkpoint with the variable recorded in a graph collection, then in a new graph import the
+    # meta graph and restore. Asserts the variable from the collection is a partitioned variable
+    # and its tensor value equals the value saved. Side effects: writes checkpoint files.
     save_prefix = os.path.join(self.get_temp_dir(), "ckpt")
     save_graph = ops.Graph()
     with save_graph.as_default(), self.session(
