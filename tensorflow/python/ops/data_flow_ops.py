@@ -1,3 +1,15 @@
+# [MODULE DOC]
+# Data flow operations for TensorFlow: the Python queue classes (QueueBase and its concrete
+# subclasses for first-in-first-out, GPU-compatible FIFO, random shuffle, priority and padding
+# queues), Barrier, the dense and sparse conditional gradient accumulators, the staging areas
+# (StagingArea and MapStagingArea, optionally ordered) and RecordInput, plus small private
+# helpers that normalise dtype, shape and name arguments.
+# Each class wraps a generated op from the gen_data_flow_ops module and adds argument validation,
+# static shape propagation and graph/eager handling. Public classes are exported to the public
+# API through the tf_export decorator, with some deprecated v1 aliases.
+# Import-time side effects: the wildcard import re-exports every generated data flow op from this
+# module, and the decorators register the exported symbols and deprecated endpoints.
+# This is a core library module (not a pure helper module).
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -43,6 +55,11 @@ from tensorflow.python.util.tf_export import tf_export
 
 
 def _as_type_list(dtypes):
+  # [FUNCTION DOC]
+  # HELPER: normalises dtype arguments for the queue and container constructors in this module.
+  # Takes a single dtype or a list/tuple of dtypes (must not be null; asserts otherwise) and
+  # returns a new list: a single dtype is wrapped in a one-element list, a list or tuple is
+  # copied into a list. No side effects.
   """Convert dtypes to a list of types."""
   assert dtypes is not None
   if not (isinstance(dtypes, list) or isinstance(dtypes, tuple)):
@@ -57,6 +74,19 @@ def _as_shape_list(shapes,
                    dtypes,
                    unknown_dim_allowed=False,
                    unknown_rank_allowed=False):
+  # [FUNCTION DOC]
+  # HELPER: normalises shape arguments for the queue and container constructors in this module.
+  # KNOWN ISSUE: the dtypes parameter is accepted but immediately deleted and never used.
+  # KNOWN ISSUE: the docstring says it returns a list of tuples of ints, but it actually returns
+  # a list of TensorShape objects (or null when shapes is null).
+  # Inputs: shapes is null, a single TensorShape, a single shape written as a sequence of
+  # integers/nulls, or a list/tuple of shapes; unknown_dim_allowed (default false) permits
+  # partially defined shapes; unknown_rank_allowed (default false) permits shapes of unknown rank.
+  # Returns null for null input, otherwise a list of TensorShapes.
+  # Raises ValueError if partial shapes are allowed but the input is not a non-empty sequence of
+  # shapes (a bare list of integers/nulls), if a shape is not fully defined when unknown
+  # dimensions are disallowed, or if a shape has unknown rank when that is disallowed; raises
+  # TypeError if shapes is not a TensorShape, list or tuple. No side effects.
   """Convert shapes to a list of tuples of int (or None)."""
   del dtypes
   if unknown_dim_allowed:
@@ -87,6 +117,11 @@ def _as_shape_list(shapes,
 
 
 def _as_name_list(names, dtypes):
+  # [FUNCTION DOC]
+  # HELPER: normalises the optional component names for queue and container constructors.
+  # Takes names (null, a single name, or a list/tuple of names) and the list of dtypes. Returns
+  # null when names is null, otherwise a new list of names (a single name is wrapped).
+  # Raises ValueError when the number of names differs from the number of dtypes.
   if names is None:
     return None
   if not isinstance(names, (list, tuple)):
@@ -99,6 +134,12 @@ def _as_name_list(names, dtypes):
 
 
 def _shape_common(s1, s2):
+  # [FUNCTION DOC]
+  # HELPER: used by QueueBase.from_list to merge the shapes of several queues.
+  # Takes two shapes (anything convertible to a TensorShape) and returns the most specific shape
+  # compatible with both: unknown shape if either rank is unknown or the ranks differ, otherwise
+  # a shape keeping each dimension only where both agree and is known, with unknown elsewhere.
+  # No side effects.
   """The greatest lower bound (ordered by specificity) TensorShape."""
   s1 = tensor_shape.TensorShape(s1)
   s2 = tensor_shape.TensorShape(s2)
@@ -116,6 +157,15 @@ def _shape_common(s1, s2):
            v1=["queue.QueueBase", "io.QueueBase", "QueueBase"])
 @deprecation.deprecated_endpoints(["io.QueueBase", "QueueBase"])
 class QueueBase:
+  # [CLASS DOC]
+  # Common base class for all graph/eager queue wrappers. It holds the per-component dtypes,
+  # shapes and optional names, the queue reference tensor (a resource handle in eager mode or a
+  # resource/ref tensor in graph mode) and a display name. It provides enqueue, enqueue_many,
+  # dequeue, dequeue_many, dequeue_up_to, close, is_closed and size, each of which builds the
+  # matching generated op (the v2 resource variants when the reference is a resource) and sets
+  # static output shapes in graph mode. Concrete subclasses create the queue op and call the
+  # constructor with the resulting reference. The class is exported as the public queue base
+  # with deprecated v1 aliases.
   """Base class for queue implementations.
 
   A queue is a TensorFlow data structure that stores tensors across
@@ -135,6 +185,14 @@ class QueueBase:
   """
 
   def __init__(self, dtypes, shapes, names, queue_ref):
+    # [FUNCTION DOC]
+    # Stores queue metadata. dtypes: list of component types; shapes: null or list of shapes of
+    # the same length (null gives unknown shapes for all components); names: null or list of the
+    # same length; queue_ref: the queue handle tensor produced by the queue creation op.
+    # Raises ValueError if shapes or names lengths differ from dtypes. In eager mode the name is
+    # taken from the current scope name (or "Empty") and a resource deleter is attached so the
+    # queue resource is freed with the object; in graph mode the name is the last component of
+    # the queue op name.
     """Constructs a queue object from a queue reference.
 
     The two optional lists, `shapes` and `names`, must be of the same length
@@ -186,6 +244,13 @@ class QueueBase:
 
   @staticmethod
   def from_list(index, queues):
+    # [FUNCTION DOC]
+    # Static factory that builds a queue object whose reference is selected at run time from
+    # several queues. index: integer scalar tensor choosing which queue; queues: non-empty list
+    # of QueueBase objects with identical dtypes and names. The shapes are merged component-wise
+    # to the most specific common shape. Stacks the queue references and gathers the chosen one.
+    # Returns a new QueueBase. Raises TypeError if queues is empty, not a list, contains
+    # non-queues, or dtypes or names differ. Adds stack/gather ops to the graph.
     """Create a queue using the queue reference from `queues[index]`.
 
     Args:
@@ -227,11 +292,16 @@ class QueueBase:
 
   @property
   def queue_ref(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the queue handle tensor given at construction.
     """The underlying queue reference."""
     return self._queue_ref
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the queue name: the cached name when executing eagerly,
+    # otherwise the full name of the op that created the queue reference.
     """The name of the underlying queue."""
     if context.executing_eagerly():
       return self._name
@@ -239,20 +309,36 @@ class QueueBase:
 
   @property
   def dtypes(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the list of component dtypes.
     """The list of dtypes for each component of a queue element."""
     return self._dtypes
 
   @property
   def shapes(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the list of component TensorShapes (unknown shapes if none
+    # were given).
     """The list of shapes for each component of a queue element."""
     return self._shapes
 
   @property
   def names(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the list of component names, or null if unnamed.
     """The list of names for each component of a queue element."""
     return self._names
 
   def _check_enqueue_dtypes(self, vals):
+    # [FUNCTION DOC]
+    # HELPER: argument conversion shared by enqueue and enqueue_many.
+    # Takes vals (a tensor, list/tuple of tensors, or a mapping from names to tensors). For a
+    # mapping the queue must have names and the keys must match them; values are ordered by the
+    # queue names. Unnamed queues reject mappings in reverse: a named queue requires a mapping.
+    # Each value is converted to a tensor of the matching component dtype, named by position.
+    # Returns a list of tensors. Raises ValueError for any of the mismatches above.
+    # KNOWN ISSUE: the dtype loop uses zip, so surplus values beyond the number of dtypes are
+    # silently dropped rather than reported.
     """Validate and convert `vals` to a list of `Tensor`s.
 
     The `vals` argument can be a Tensor, a list or tuple of tensors, or a
@@ -296,6 +382,12 @@ class QueueBase:
     return tensors
 
   def _scope_vals(self, vals):
+    # [FUNCTION DOC]
+    # HELPER: supplies the values list for the name scope of enqueue operations.
+    # KNOWN ISSUE: the docstring says the result is a list, but a mapping input yields a
+    # dictionary values view, and a list or tuple is returned unchanged (a tuple stays a tuple).
+    # Returns the sequence itself for list/tuple, the values of a mapping, or a one-element list
+    # wrapping a single tensor. No side effects.
     """Return a list of values to pass to `name_scope()`.
 
     Args:
@@ -312,6 +404,14 @@ class QueueBase:
       return [vals]
 
   def enqueue(self, vals, name=None):
+    # [FUNCTION DOC]
+    # Adds (or in eager mode runs) an op that enqueues one element. vals: tensor, list/tuple or
+    # mapping of component values (see the argument checker); name: optional op name.
+    # Each value is converted to the component dtype and its static shape must be compatible with
+    # the declared component shape (otherwise a shape-compatibility ValueError). Uses the v2
+    # resource op when the queue reference is a resource, else the reference op. Returns the
+    # enqueue operation. Blocks at run time when the queue is full; may raise a cancelled error
+    # if the queue is closed.
     """Enqueues one element to this queue.
 
     If the queue is full when this operation executes, it will block
@@ -362,6 +462,13 @@ class QueueBase:
             self._queue_ref, vals, name=scope)
 
   def enqueue_many(self, vals, name=None):
+    # [FUNCTION DOC]
+    # Enqueues a batch of elements, slicing every component along dimension zero. vals: tensor,
+    # list/tuple or mapping of batched component values; name: optional op name.
+    # Statically merges the batch dimensions of all components (raises ValueError if they
+    # conflict, or if a component has rank below one) and checks the remaining dimensions are
+    # compatible with the declared shapes. Always uses the v2 resource op. Returns the enqueue
+    # operation. Blocks when the queue is full; may raise a cancelled error if closed.
     """Enqueues zero or more elements to this queue.
 
     This operation slices each component tensor along the 0th dimension to
@@ -415,6 +522,10 @@ class QueueBase:
           self._queue_ref, vals, name=scope)
 
   def _dequeue_return_value(self, tensors):
+    # [FUNCTION DOC]
+    # HELPER: shapes the result of the dequeue family of methods.
+    # Takes the list of dequeued tensors and returns a mapping from component names to tensors if
+    # the queue has names, a single tensor if there is exactly one component, else the list.
     """Return the value to return from a dequeue op.
 
     If the queue has names, return a dictionary with the
@@ -438,6 +549,12 @@ class QueueBase:
       return tensors
 
   def dequeue(self, name=None):
+    # [FUNCTION DOC]
+    # Dequeues one element. name: optional op name (default derived from the queue name).
+    # Uses the v2 resource op when the reference is a resource. In graph mode each output's
+    # static shape is set to the declared component shape. Returns a tensor, list of tensors or
+    # mapping (see the return-value helper). Blocks when the queue is empty at run time; raises an
+    # out-of-range error when closed and empty.
     """Dequeues one element from this queue.
 
     If the queue is empty when this operation executes, it will block
@@ -484,6 +601,13 @@ class QueueBase:
     return self._dequeue_return_value(ret)
 
   def dequeue_many(self, n, name=None):
+    # [FUNCTION DOC]
+    # Dequeues n elements and concatenates each component along a new leading dimension.
+    # n: scalar integer tensor (or constant); name: optional op name.
+    # In graph mode, sets output static shapes to the batch size (if n is a constant, else
+    # unknown) followed by the component shape. Returns a tensor, list or mapping like dequeue.
+    # KNOWN ISSUE: the docstring says it returns a list, but it may return a single tensor or a
+    # mapping depending on the queue. Raises out-of-range at run time if closed with fewer than n.
     """Dequeues and concatenates `n` elements from this queue.
 
     This operation concatenates queue-element component tensors along
@@ -538,6 +662,12 @@ class QueueBase:
     return self._dequeue_return_value(ret)
 
   def dequeue_up_to(self, n, name=None):
+    # [FUNCTION DOC]
+    # Like dequeue_many but returns fewer than n elements if the queue is closed with some left.
+    # n: scalar integer tensor; name: optional op name. In graph mode output static shapes get an
+    # unknown leading dimension followed by the component shape. Returns a tensor, list or
+    # mapping. Not supported by every queue type (unimplemented error at run time); raises
+    # out-of-range if closed and empty.
     """Dequeues and concatenates `n` elements from this queue.
 
     **Note** This operation is not supported by all queues.  If a queue does not
@@ -588,6 +718,11 @@ class QueueBase:
     return self._dequeue_return_value(ret)
 
   def close(self, cancel_pending_enqueues=False, name=None):
+    # [FUNCTION DOC]
+    # Closes the queue so no more elements can be enqueued. cancel_pending_enqueues: boolean,
+    # default false; if true pending enqueue requests are cancelled. name: optional op name.
+    # Uses the v2 resource op when the reference is a resource. Returns the close operation;
+    # the queue is closed when it runs.
     """Closes this queue.
 
     This operation signals that no more elements will be enqueued in
@@ -630,6 +765,10 @@ class QueueBase:
           name=name)
 
   def is_closed(self, name=None):
+    # [FUNCTION DOC]
+    # Builds an op reporting whether the queue is closed. name: optional op name. Uses the v2
+    # resource op for resource references, else the reference op. Returns a scalar boolean
+    # tensor.
     """Returns true if queue is closed.
 
     This operation returns true if the queue is closed and false if the queue
@@ -653,6 +792,9 @@ class QueueBase:
       return gen_data_flow_ops.queue_is_closed_(self._queue_ref, name=name)
 
   def size(self, name=None):
+    # [FUNCTION DOC]
+    # Builds an op returning the current number of elements. name: optional op name. Uses the v2
+    # resource op for resource references. Returns a scalar int32 tensor.
     """Compute the number of elements in this queue.
 
     >>> q = tf.queue.FIFOQueue(capacity=10, dtypes=tf.int32)
@@ -674,6 +816,11 @@ class QueueBase:
       return gen_data_flow_ops.queue_size(self._queue_ref, name=name)
 
 def _shared_name(shared_name):
+  # [FUNCTION DOC]
+  # HELPER: picks the resource sharing name for queues and containers.
+  # When executing eagerly returns a fresh unique identifier string (so eager resources are never
+  # shared accidentally, and the argument is ignored); otherwise returns shared_name unchanged
+  # (possibly null).
   if context.executing_eagerly():
     return str(ops.uid())
   return shared_name
@@ -686,6 +833,11 @@ def _shared_name(shared_name):
 @deprecation.deprecated_endpoints(
     ["io.RandomShuffleQueue", "RandomShuffleQueue"])
 class RandomShuffleQueue(QueueBase):
+  # [CLASS DOC]
+  # Bounded queue that returns elements in random order. Creating an instance builds a random
+  # shuffle queue resource op and registers its handle with the QueueBase constructor; all
+  # enqueue/dequeue/close/size methods are inherited. Exported as a public queue class with
+  # deprecated v1 aliases.
   """A queue implementation that dequeues elements in a random order.
 
   See `tf.queue.QueueBase` for a description of the methods on
@@ -701,6 +853,17 @@ class RandomShuffleQueue(QueueBase):
                seed=None,
                shared_name=None,
                name="random_shuffle_queue"):
+    # [FUNCTION DOC]
+    # Creates the random shuffle queue op. capacity: maximum number of elements; min_after_dequeue:
+    # minimum number of elements left after a dequeue (for mixing; ignored once closed); dtypes:
+    # component dtype or list; shapes: optional fully defined shapes; names: optional component
+    # names; seed: optional integer for random seeding; shared_name: optional name for sharing
+    # across sessions (ignored in eager mode, where a unique name is used); name: op name.
+    # Seed handling: derives two seeds from the global/op seeds; if neither exists both are zero;
+    # if only the graph seed exists and a shared name is given, the second seed is a hash of the
+    # graph seed and shared name so that sharing workers agree. Raises ValueError/TypeError via
+    # the shape and name helpers for invalid arguments. Side effect: adds a queue op to the graph
+    # (or creates the eager resource).
     """Create a queue that dequeues elements in a random order.
 
     A `RandomShuffleQueue` has bounded capacity; supports multiple
@@ -772,6 +935,10 @@ class RandomShuffleQueue(QueueBase):
 @tf_export("queue.FIFOQueue", v1=["queue.FIFOQueue", "FIFOQueue"])
 @deprecation.deprecated_endpoints("FIFOQueue")
 class FIFOQueue(QueueBase):
+  # [CLASS DOC]
+  # Bounded first-in first-out queue. Instances create the FIFO queue resource on the CPU and
+  # hand its handle to QueueBase, inheriting all queue methods. Exported publicly with
+  # deprecated v1 aliases.
   """A queue implementation that dequeues elements in first-in first-out order.
 
   See `tf.queue.QueueBase` for a description of the methods on
@@ -785,6 +952,12 @@ class FIFOQueue(QueueBase):
                names=None,
                shared_name=None,
                name="fifo_queue"):
+    # [FUNCTION DOC]
+    # Creates the FIFO queue resource. capacity: maximum number of elements; dtypes: component
+    # dtype or list; shapes: optional fully defined shapes; names: optional component names;
+    # shared_name: optional sharing name (a unique name is used when eager); name: op name.
+    # The op is created in the init scope on the CPU device. Argument errors surface as
+    # ValueError/TypeError from the normalisation helpers.
     """Creates a queue that dequeues elements in a first-in first-out order.
 
     A `FIFOQueue` has bounded capacity; supports multiple concurrent
@@ -836,6 +1009,9 @@ class FIFOQueue(QueueBase):
 # implement GPU kernels for EnqueueMany and DequeueMany so we can make the
 # public FIFOQueue GPU-compatible and remove this internal version.
 class GPUCompatibleFIFOQueue(QueueBase):
+  # [CLASS DOC]
+  # Internal (not exported) FIFO queue whose resource may live on CPU or GPU. Only single-element
+  # enqueue and dequeue are supported; the batched variants are overridden to always fail.
   """A queue implementation that dequeues elements in first-in first-out order.
 
   GPUCompatibleFIFOQueue is like FIFOQueue, but the queue resource may be placed
@@ -853,6 +1029,10 @@ class GPUCompatibleFIFOQueue(QueueBase):
                names=None,
                shared_name=None,
                name="fifo_queue"):
+    # [FUNCTION DOC]
+    # Same arguments as the FIFO queue constructor (capacity, dtypes, optional shapes, names,
+    # shared_name, name) but the resource is created in the init scope without forcing the CPU
+    # device, so it can be placed on a GPU. Hands the handle to the QueueBase constructor.
     """Creates a queue that dequeues elements in a first-in first-out order.
 
     A `FIFOQueue` has bounded capacity; supports multiple concurrent
@@ -897,12 +1077,16 @@ class GPUCompatibleFIFOQueue(QueueBase):
         dtypes, shapes, names, queue_ref)
 
   def enqueue_many(self, vals, name=None):
+    # [FUNCTION DOC]
+    # Override that always raises a not-implemented error; arguments are ignored.
     """enqueue_many is not supported on GPUCompatibleFIFOQueue."""
     raise NotImplementedError(
         "GPUCompatibleFIFOQueue does not support enqueue_many or dequeue_many, "
         "only enqueue and dequeue.")
 
   def dequeue_many(self, n, name=None):
+    # [FUNCTION DOC]
+    # Override that always raises a not-implemented error; arguments are ignored.
     """dequeue_many is not supported on GPUCompatibleFIFOQueue."""
     raise NotImplementedError(
         "GPUCompatibleFIFOQueue does not support enqueue_many or dequeue_many, "
@@ -914,6 +1098,9 @@ class GPUCompatibleFIFOQueue(QueueBase):
     v1=["queue.PaddingFIFOQueue", "io.PaddingFIFOQueue", "PaddingFIFOQueue"])
 @deprecation.deprecated_endpoints(["io.PaddingFIFOQueue", "PaddingFIFOQueue"])
 class PaddingFIFOQueue(QueueBase):
+  # [CLASS DOC]
+  # FIFO queue whose component shapes may have unknown dimensions; dequeue_many pads those
+  # dimensions with zeros up to the largest size in the batch. Inherits all queue methods.
   """A FIFOQueue that supports batching variable-sized tensors by padding.
 
   A `PaddingFIFOQueue` may contain components with dynamic shape, while also
@@ -930,6 +1117,12 @@ class PaddingFIFOQueue(QueueBase):
                names=None,
                shared_name=None,
                name="padding_fifo_queue"):
+    # [FUNCTION DOC]
+    # Creates the padding FIFO queue resource. capacity: maximum number of elements; dtypes:
+    # component dtype or list; shapes: required list of shapes (dimensions may be unknown);
+    # names: optional component names; shared_name: optional sharing name; name: op name.
+    # Raises ValueError if the number of shapes differs from the number of dtypes, or if shapes
+    # are not a proper list of shapes (from the shape helper). Side effect: adds the queue op.
     """Creates a queue that dequeues elements in a first-in first-out order.
 
     A `PaddingFIFOQueue` has bounded capacity; supports multiple concurrent
@@ -989,6 +1182,10 @@ class PaddingFIFOQueue(QueueBase):
            v1=["queue.PriorityQueue", "io.PriorityQueue", "PriorityQueue"])
 @deprecation.deprecated_endpoints(["io.PriorityQueue", "PriorityQueue"])
 class PriorityQueue(QueueBase):
+  # [CLASS DOC]
+  # Queue that dequeues elements in priority order (smallest int64 priority first). Elements carry
+  # an extra leading int64 priority component which the constructor prepends to the dtypes and
+  # shapes. Inherits all queue methods.
   """A queue implementation that dequeues elements in prioritized order.
 
   See `tf.queue.QueueBase` for a description of the methods on
@@ -1002,6 +1199,16 @@ class PriorityQueue(QueueBase):
                names=None,
                shared_name=None,
                name="priority_queue"):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring headline says first-in first-out order, but the queue dequeues
+    # by priority. Also, names is not passed through the name-list helper, so its length is not
+    # validated against the types here; and since names are passed with the priority-prefixed
+    # dtypes, a names list matching types alone has the wrong length for the base constructor.
+    # Creates the priority queue resource. capacity: maximum elements; types: component dtype or
+    # list excluding the priority; shapes: optional fully defined shapes excluding priority;
+    # names: optional names; shared_name: optional sharing name; name: op name.
+    # The base constructor receives int64 plus the types, and an empty-shape entry plus the
+    # shapes (when given).
     """Creates a queue that dequeues elements in a first-in first-out order.
 
     A `PriorityQueue` has bounded capacity; supports multiple concurrent
@@ -1058,9 +1265,20 @@ class PriorityQueue(QueueBase):
 
 
 class Barrier:
+  # [CLASS DOC]
+  # Wrapper around a barrier resource: a key-value map (string keys, tuples of tensors as values)
+  # that persists across graph executions. Elements become complete when all components are
+  # inserted. Holds the component types, shapes, barrier reference and a display name.
+  # Provides insert_many, take_many, close, ready_size and incomplete_size.
   """Represents a key-value map that persists across graph executions."""
 
   def __init__(self, types, shapes=None, shared_name=None, name="barrier"):
+    # [FUNCTION DOC]
+    # Creates the barrier op. types: dtype or list of dtypes of the value components; shapes:
+    # optional shape constraints (unknown shapes if omitted); shared_name: optional sharing name;
+    # name: op name. Raises ValueError if any given shape has zero elements. Stores the types,
+    # shapes, barrier reference and a name (scope name in eager mode, else the op's last name
+    # component). Side effect: adds the barrier op.
     """Creates a barrier that persists across different graph executions.
 
     A barrier represents a key-value map, where each key is a string, and
@@ -1142,17 +1360,26 @@ class Barrier:
 
   @property
   def barrier_ref(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the underlying barrier handle.
     """Get the underlying barrier reference."""
     return self._barrier_ref
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Read-only property: cached name when eager, otherwise the full op name of the barrier.
     """The name of the underlying barrier."""
     if context.executing_eagerly():
       return self._name
     return self._barrier_ref.op.name
 
   def insert_many(self, component_index, keys, values, name=None):
+    # [FUNCTION DOC]
+    # Builds an op that assigns values to one component of the elements identified by keys.
+    # component_index: which component of the value tuple; keys: vector of n string keys;
+    # values: tensor whose first dimension is n; name: optional op name. Returns the insert
+    # operation. At run time raises an invalid-argument error for keys/values without elements.
     """For each key, assigns the respective value to the specified component.
 
     This operation updates each element at component_index.
@@ -1179,6 +1406,13 @@ class Barrier:
                 allow_small_batch=False,
                 timeout=None,
                 name=None):
+    # [FUNCTION DOC]
+    # Builds an op that removes completed elements. num_elements: how many to take;
+    # allow_small_batch: if true and the barrier is closed, return what is available;
+    # timeout: milliseconds to wait (documented as unsupported); name: optional op name.
+    # Returns the op outputs: indices, keys and the list of value tensors. In graph mode sets
+    # static shapes: batch dimension is the constant num_elements, or unknown when small batches
+    # are allowed, followed by each component's shape.
     """Takes the given number of completed elements from this barrier.
 
     This operation concatenates completed-element component tensors along
@@ -1244,6 +1478,10 @@ class Barrier:
     return ret
 
   def close(self, cancel_pending_enqueues=False, name=None):
+    # [FUNCTION DOC]
+    # Builds an op closing the barrier: new keys can no longer be inserted. cancel_pending_enqueues:
+    # boolean default false, cancels pending requests and further completion; name: optional.
+    # Returns the close operation.
     """Closes this barrier.
 
     This operation signals that no more new key values will be inserted in the
@@ -1273,6 +1511,9 @@ class Barrier:
         name=name)
 
   def ready_size(self, name=None):
+    # [FUNCTION DOC]
+    # Builds an op returning the number of complete elements. name: optional op name. Returns a
+    # scalar int32 tensor.
     """Compute the number of complete elements in the given barrier.
 
     Args:
@@ -1287,6 +1528,9 @@ class Barrier:
     return gen_data_flow_ops.barrier_ready_size(self._barrier_ref, name=name)
 
   def incomplete_size(self, name=None):
+    # [FUNCTION DOC]
+    # Builds an op returning the number of incomplete elements. name: optional op name. Returns a
+    # scalar int32 tensor.
     """Compute the number of incomplete elements in the given barrier.
 
     Args:
@@ -1304,6 +1548,10 @@ class Barrier:
 
 @tf_export(v1=["ConditionalAccumulatorBase"])
 class ConditionalAccumulatorBase:
+  # [CLASS DOC]
+  # Base for accumulators that aggregate gradients only when they are up to date with the
+  # accumulator's time step. Holds dtype, shape, accumulator handle and name; subclasses create
+  # the handle. Provides num_accumulated and set_global_step (resource kernels).
   """A conditional accumulator for aggregating gradients.
 
   Up-to-date gradients (i.e., time step at which gradient was computed is
@@ -1314,6 +1562,9 @@ class ConditionalAccumulatorBase:
   """
 
   def __init__(self, dtype, shape, accumulator_ref):
+    # [FUNCTION DOC]
+    # Stores dtype, shape (unknown if null) and accumulator handle created by a subclass.
+    # Name is the eager scope name, or the last component of the handle op name in graph mode.
     """Creates a new ConditionalAccumulator.
 
     Args:
@@ -1335,20 +1586,30 @@ class ConditionalAccumulatorBase:
 
   @property
   def accumulator_ref(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the accumulator handle.
     """The underlying accumulator reference."""
     return self._accumulator_ref
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the cached accumulator name.
     """The name of the underlying accumulator."""
     return self._name
 
   @property
   def dtype(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the dtype of accumulated gradients.
     """The datatype of the gradients accumulated by this accumulator."""
     return self._dtype
 
   def num_accumulated(self, name=None):
+    # [FUNCTION DOC]
+    # Builds an op returning how many gradients are currently aggregated (resource-based kernel).
+    # name: optional op name, default derived from the accumulator name. Returns an int32 scalar
+    # tensor.
     """Number of gradients that have currently been aggregated in accumulator.
 
     Args:
@@ -1364,6 +1625,10 @@ class ConditionalAccumulatorBase:
         self._accumulator_ref, name=name)
 
   def set_global_step(self, new_global_step, name=None):
+    # [FUNCTION DOC]
+    # Builds an op that sets the accumulator's time step (resource-based kernel). new_global_step:
+    # variable or constant, converted to a tensor and cast to 64-bit integer; name: optional.
+    # Returns the op. The kernel logs a warning if the new step is lower than the current one.
     """Sets the global time step of the accumulator.
 
     The operation logs a warning if we attempt to set to a time step that is
@@ -1384,6 +1649,11 @@ class ConditionalAccumulatorBase:
 
 @tf_export(v1=["ConditionalAccumulator"])
 class ConditionalAccumulator(ConditionalAccumulatorBase):
+  # [CLASS DOC]
+  # Dense gradient accumulator backed by a resource conditional-accumulator op. Gradients whose
+  # local step is older than the accumulator's step are dropped; take_grad blocks until enough
+  # gradients are aggregated and then returns their average (or sum, per reduction type).
+  # Exported for the v1 API only.
   """A conditional accumulator for aggregating gradients.
 
   Up-to-date gradients (i.e., time step at which gradient was computed is
@@ -1399,6 +1669,11 @@ class ConditionalAccumulator(ConditionalAccumulatorBase):
                shared_name=None,
                name="conditional_accumulator",
                reduction_type="MEAN"):
+    # [FUNCTION DOC]
+    # Creates the accumulator resource. dtype: dtype of gradients; shape: optional gradient shape
+    # (unknown if null); shared_name: optional sharing name; name: op name; reduction_type: how
+    # gradients are combined when taken, default mean. In eager mode attaches a resource deleter
+    # to free the resource with the object. Then initialises the base class with the handle.
     """Creates a new ConditionalAccumulator.
 
     Args:
@@ -1422,6 +1697,11 @@ class ConditionalAccumulator(ConditionalAccumulatorBase):
     super(ConditionalAccumulator, self).__init__(dtype, shape, accumulator_ref)
 
   def apply_grad(self, grad, local_step=0, name=None):
+    # [FUNCTION DOC]
+    # Builds an op that adds a dense gradient. grad: gradient convertible to a tensor of the
+    # accumulator dtype; local_step: step at which it was computed (default 0, cast to 64-bit
+    # integer); name: optional. Raises ValueError if the gradient shape is incompatible with the
+    # accumulator shape. The op silently drops stale gradients. Returns the op.
     """Attempts to apply a gradient to the accumulator.
 
     The attempt is silently dropped if the gradient is stale, i.e., local_step
@@ -1446,6 +1726,11 @@ class ConditionalAccumulator(ConditionalAccumulatorBase):
         self._accumulator_ref, local_step=local_step, gradient=grad, name=name)
 
   def take_grad(self, num_required, name=None):
+    # [FUNCTION DOC]
+    # Builds an op that extracts the aggregated gradient once num_required gradients have been
+    # applied (blocks until then), resets the counter and sum, and increments the accumulator's
+    # time step. name: optional. Returns a tensor with the accumulator dtype whose static shape is
+    # set to the accumulator shape. Run-time invalid-argument error if num_required is below one.
     """Attempts to extract the average gradient from the accumulator.
 
     The operation blocks until sufficient number of gradients have been
@@ -1476,6 +1761,11 @@ class ConditionalAccumulator(ConditionalAccumulatorBase):
 @tf_export(
     v1=["sparse.SparseConditionalAccumulator", "SparseConditionalAccumulator"])
 class SparseConditionalAccumulator(ConditionalAccumulatorBase):
+  # [CLASS DOC]
+  # Accumulator for sparse gradients (indices, values, optional dense shape; or IndexedSlices).
+  # Same stale-gradient dropping and blocking take semantics as the dense accumulator but uses the
+  # older non-resource kernels, so no eager resource deleter is attached.
+  # Exported for the v1 API only.
   """A conditional accumulator for aggregating sparse gradients.
 
   Sparse gradients are represented by `IndexedSlices`.
@@ -1501,6 +1791,10 @@ class SparseConditionalAccumulator(ConditionalAccumulatorBase):
                shared_name=None,
                name="sparse_conditional_accumulator",
                reduction_type="MEAN"):
+    # [FUNCTION DOC]
+    # Creates the sparse accumulator op and initialises the base class. dtype: gradient dtype;
+    # shape: optional dense shape; shared_name: optional sharing name; name: op name;
+    # reduction_type: how gradients are combined, default mean. Adds an op to the graph.
     accumulator_ref = gen_data_flow_ops.sparse_conditional_accumulator(
         dtype=dtype,
         shape=shape,
@@ -1511,6 +1805,10 @@ class SparseConditionalAccumulator(ConditionalAccumulatorBase):
                                                        accumulator_ref)
 
   def apply_indexed_slices_grad(self, grad, local_step=0, name=None):
+    # [FUNCTION DOC]
+    # Convenience wrapper that applies an IndexedSlices gradient by splitting it into indices,
+    # values and dense shape and delegating to apply_grad. local_step defaults to 0; name optional.
+    # Returns the apply operation.
     """Attempts to apply a gradient to the accumulator.
 
     The attempt is silently dropped if the gradient is stale, i.e., `local_step`
@@ -1540,6 +1838,12 @@ class SparseConditionalAccumulator(ConditionalAccumulatorBase):
                  grad_shape=None,
                  local_step=0,
                  name=None):
+    # [FUNCTION DOC]
+    # Builds an op applying a sparse gradient. grad_indices: vector of locations of nonzero slices
+    # (cast to 64-bit integer); grad_values: the slices, same leading size as indices; grad_shape:
+    # optional dense shape (null means unknown shape, passed as empty with a known-shape flag of
+    # false); local_step: step of the gradient (default 0); name optional. Stale gradients are
+    # silently dropped; invalid-argument error at run time for inconsistent shapes. Returns the op.
     """Attempts to apply a sparse gradient to the accumulator.
 
     The attempt is silently dropped if the gradient is stale, i.e., `local_step`
@@ -1583,6 +1887,11 @@ class SparseConditionalAccumulator(ConditionalAccumulatorBase):
         name=name)
 
   def take_grad(self, num_required, name=None):
+    # [FUNCTION DOC]
+    # Builds an op that blocks until num_required sparse gradients have been applied, then
+    # returns the aggregate and resets the accumulator, incrementing its time step.
+    # Returns the raw op outputs: indices, values and dense shape. name: optional. Run-time
+    # invalid-argument error if num_required is below one.
     """Attempts to extract the average gradient from the accumulator.
 
     The operation blocks until sufficient number of gradients have been
@@ -1607,6 +1916,9 @@ class SparseConditionalAccumulator(ConditionalAccumulatorBase):
         self._accumulator_ref, num_required, dtype=self._dtype, name=name)
 
   def take_indexed_slices_grad(self, num_required, name=None):
+    # [FUNCTION DOC]
+    # Same as take_grad but wraps the result in an IndexedSlices (indices, values, dense shape).
+    # num_required: gradients needed; name optional. Run-time error if num_required is below one.
     """Attempts to extract the average gradient from the accumulator.
 
     The operation blocks until sufficient number of gradients have been
@@ -1636,6 +1948,9 @@ class SparseConditionalAccumulator(ConditionalAccumulatorBase):
 
   # SparseConditionalAccumulator is not switched to resource. Use old kernels.
   def num_accumulated(self, name=None):
+    # [FUNCTION DOC]
+    # Override using the older non-resource kernel: builds an op returning the number of
+    # gradients currently aggregated. name optional. Returns an int32 scalar tensor.
     """Number of gradients that have currently been aggregated in accumulator.
 
     Args:
@@ -1651,6 +1966,10 @@ class SparseConditionalAccumulator(ConditionalAccumulatorBase):
         self._accumulator_ref, name=name)
 
   def set_global_step(self, new_global_step, name=None):
+    # [FUNCTION DOC]
+    # Override using the older non-resource kernel: builds an op setting the accumulator's time
+    # step to new_global_step (variable or constant, cast to 64-bit integer). name optional.
+    # Returns the op; the kernel warns if the new step is lower than the current one.
     """Sets the global time step of the accumulator.
 
     The operation logs a warning if we attempt to set to a time step that is
@@ -1670,6 +1989,14 @@ class SparseConditionalAccumulator(ConditionalAccumulatorBase):
 
 
 class BaseStagingArea:
+  # [CLASS DOC]
+  # Shared implementation of staging areas (buffers of tensor tuples carried across steps, often
+  # used to overlap host-to-device copies). Holds dtypes, shapes, optional names, a unique or
+  # user-given shared name, capacity and memory limit, plus a no-op used to colocate every put
+  # and get with the staging area's device. Provides validation and result-formatting helpers
+  # for the concrete subclasses (StagingArea, MapStagingArea, OrderedMapStagingArea).
+  # KNOWN ISSUE: the class attributes for an identifier counter and a lock are declared but not
+  # used anywhere in this class.
   """Base class for Staging Areas."""
   _identifier = 0
   _lock = threading.Lock()
@@ -1681,6 +2008,14 @@ class BaseStagingArea:
                shared_name=None,
                capacity=0,
                memory_limit=0):
+    # [FUNCTION DOC]
+    # Initialises common state. dtypes: list of component types; shapes: optional list of shapes
+    # (same length; unknown if null); names: optional names (same length); shared_name: optional
+    # string, otherwise a unique graph name derived from the class name is generated; capacity:
+    # max elements, zero means unbounded; memory_limit: max bytes, zero means unbounded.
+    # Raises ValueError if shared_name is not a string or lengths of shapes/names differ from
+    # dtypes. Side effect: creates a no-op in the default graph under a root name scope, used for
+    # colocation.
     if shared_name is None:
       self._name = (
           ops.get_default_graph().unique_name(self.__class__.__name__))
@@ -1714,35 +2049,61 @@ class BaseStagingArea:
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the staging area name (also the shared resource name).
     """The name of the staging area."""
     return self._name
 
   @property
   def dtypes(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the list of component dtypes.
     """The list of dtypes for each component of a staging area element."""
     return self._dtypes
 
   @property
   def shapes(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the list of component shapes.
     """The list of shapes for each component of a staging area element."""
     return self._shapes
 
   @property
   def names(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the component names, or null if unnamed.
     """The list of names for each component of a staging area element."""
     return self._names
 
   @property
   def capacity(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the element capacity (zero means unbounded).
     """The maximum number of elements of this staging area."""
     return self._capacity
 
   @property
   def memory_limit(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the byte limit (zero means unbounded).
     """The maximum number of bytes of this staging area."""
     return self._memory_limit
 
   def _check_put_dtypes(self, vals, indices=None):
+    # [FUNCTION DOC]
+    # HELPER: argument validation for put/insert style methods of the staging areas.
+    # vals: a tensor, a list/tuple of tensors, or a mapping from component names to tensors;
+    # indices: component positions for a list of values (required for lists, inferred from keys
+    # for mappings). For mappings the keys must be a subset of the area's names; values are
+    # ordered by the position of their names. Checks dtype equality and shape compatibility of
+    # every value, then converts each to a tensor. Returns a pair: list of tensors and indices.
+    # Raises ValueError for: mapping without names, unknown keys, list given to a named area,
+    # missing indices, length mismatch between indices and values, too many values, or dtype
+    # mismatch; shape incompatibility raises from the shape check.
+    # KNOWN ISSUE: a single non-sequence value is compared by length against indices before being
+    # wrapped in a list, so passing a bare tensor fails the length check or relies on tensor
+    # length. An empty mapping makes the internal unpacking of zero results fail with a generic
+    # error. The unknown-key message lacks a separator before the queue listing.
     """Validate and convert `vals` to a list of `Tensor`s.
 
     The `vals` argument can be a Tensor, a list or tuple of tensors, or a
@@ -1823,6 +2184,12 @@ class BaseStagingArea:
     return tensors, indices
 
   def _create_device_transfers(self, tensors):
+    # [FUNCTION DOC]
+    # HELPER: ensures returned tensors are placed per the caller's device scope.
+    # Takes a tensor or list/tuple of tensors; if the current device scope differs from the
+    # staging area's colocation op device, wraps each tensor in an identity op (forcing a
+    # transfer). Returns a list of tensors (the original ones if devices match). Adds ops to the
+    # graph.
     """Encode inter-device transfers if the current device
     is not the same as the Staging Area's device.
     """
@@ -1838,6 +2205,13 @@ class BaseStagingArea:
     return tensors
 
   def _get_return_value(self, tensors, indices):
+    # [FUNCTION DOC]
+    # HELPER: formats the results of get-style ops. tensors: outputs of the op; indices: component
+    # positions they correspond to. Applies device transfers, sets each output's static shape from
+    # the declared shape of its component, then returns a mapping from names to tensors if the area
+    # has names, otherwise the list of tensors.
+    # KNOWN ISSUE: the docstring says a single tensor may be returned when there is one component,
+    # but the code always returns a list (or a mapping).
     """Return the value to return from a get op.
 
     If the staging area has names, return a dictionary with the
@@ -1866,6 +2240,11 @@ class BaseStagingArea:
     return tensors
 
   def _scope_vals(self, vals):
+    # [FUNCTION DOC]
+    # HELPER: supplies the values for name scopes of put operations.
+    # KNOWN ISSUE: docstring promises a list, but a mapping yields a dictionary values view and a
+    # list or tuple is returned unchanged.
+    # Returns the sequence itself, the mapping values, or a one-element list for a lone tensor.
     """Return a list of values to pass to `name_scope()`.
 
     Args:
@@ -1883,6 +2262,10 @@ class BaseStagingArea:
 
 
 class StagingArea(BaseStagingArea):
+  # [CLASS DOC]
+  # Unordered staging area: a buffer of tensor tuples with put (stage) and get/peek/size/clear
+  # operations and no ordering guarantees. Storage lives on the device in effect at construction;
+  # all ops are colocated with the area's root op. Elements are addressed positionally.
   """Class for staging inputs. No ordering guarantees.
 
   A `StagingArea` is a TensorFlow data structure that stores tensors across
@@ -1923,6 +2306,11 @@ class StagingArea(BaseStagingArea):
                shared_name=None,
                capacity=0,
                memory_limit=0):
+    # [FUNCTION DOC]
+    # Delegates to the base constructor. dtypes: list of component types; shapes, names:
+    # optional lists of the same length; shared_name: optional string for sharing between Python
+    # objects; capacity and memory_limit: optional bounds, zero meaning unbounded.
+    # Raises ValueError for invalid arguments (from the base class).
     """Constructs a staging area object.
 
     The two optional lists, `shapes` and `names`, must be of the same length
@@ -1961,6 +2349,12 @@ class StagingArea(BaseStagingArea):
                                       capacity, memory_limit)
 
   def put(self, values, name=None):
+    # [FUNCTION DOC]
+    # Builds a stage op that puts one element into the area. values: tensor, list/tuple or mapping
+    # of component tensors (count must match the dtypes; a bare tensor is wrapped); name optional.
+    # Indices are assumed to be positions zero to n-1. Validates dtypes and shapes (ValueError on
+    # mismatch). The op is colocated with the area and blocks at run time when capacity or the
+    # memory limit is reached. Returns the op.
     """Create an op that places a value into the staging area.
 
     This operation will block if the `StagingArea` has reached
@@ -1999,6 +2393,11 @@ class StagingArea(BaseStagingArea):
       return op
 
   def __internal_get(self, get_fn, name):
+    # [FUNCTION DOC]
+    # HELPER: shared body of get and peek. get_fn is a callback with no arguments that builds the
+    # actual op; it is invoked colocated with the area. The result is formatted with all component
+    # indices.
+    # KNOWN ISSUE: the name parameter is never used.
     with ops.colocate_with(self._coloc_op):
       ret = get_fn()
 
@@ -2006,6 +2405,11 @@ class StagingArea(BaseStagingArea):
     return self._get_return_value(ret, indices)
 
   def get(self, name=None):
+    # [FUNCTION DOC]
+    # Builds an unstage op that removes and returns one element. name: optional op name (default
+    # derived from the area name). Built colocated with the area; blocks at run time while empty.
+    # Returns the list of tensors (or a mapping by component name for named areas), with static
+    # shapes set and a device transfer inserted if the caller's device differs.
     """Gets one element from this staging area.
 
     If the staging area is empty when this operation executes, it will block
@@ -2040,6 +2444,10 @@ class StagingArea(BaseStagingArea):
     return self.__internal_get(fn, name)
 
   def peek(self, index, name=None):
+    # [FUNCTION DOC]
+    # Builds an op that reads (without removing) the element at the given position. index: integer
+    # position within the area; name: optional op name. Blocks at run time until enough elements
+    # exist. Returns the tensors formatted like get.
     """Peeks at an element in the staging area.
 
     If the staging area is too small to contain the element at
@@ -2070,6 +2478,9 @@ class StagingArea(BaseStagingArea):
     return self.__internal_get(fn, name)
 
   def size(self, name=None):
+    # [FUNCTION DOC]
+    # Builds an op returning the number of elements currently held. name: optional op name.
+    # Returns the op (a scalar tensor result).
     """Returns the number of elements in the staging area.
 
     Args:
@@ -2089,6 +2500,8 @@ class StagingArea(BaseStagingArea):
         memory_limit=self._memory_limit)
 
   def clear(self, name=None):
+    # [FUNCTION DOC]
+    # Builds an op that removes all elements. name: optional op name. Returns the op.
     """Clears the staging area.
 
     Args:
@@ -2109,6 +2522,12 @@ class StagingArea(BaseStagingArea):
 
 
 class MapStagingArea(BaseStagingArea):
+  # [CLASS DOC]
+  # Staging area acting as an associative container keyed by int64 with tuple-of-tensor values.
+  # Supports partial puts (kept in an incomplete map), partial gets, peek, pop by key, pop of
+  # an arbitrary or smallest item, size, incomplete size and clear. In addition to base state it
+  # holds an ordered flag and a set of function handles that point to either the hashtable or the
+  # ordered (tree) generated ops, chosen once at construction.
   """A `MapStagingArea` is a TensorFlow data structure that stores tensors
   across multiple steps, and exposes operations that can put and get tensors.
 
@@ -2176,6 +2595,13 @@ class MapStagingArea(BaseStagingArea):
                ordered=False,
                capacity=0,
                memory_limit=0):
+    # [FUNCTION DOC]
+    # Initialises the base state and selects the generated ops. dtypes: component types; shapes,
+    # names: optional lists of equal length; shared_name: optional string; ordered: if true use
+    # the key-ordered tree variants of the ops, otherwise hashtable variants (default false);
+    # capacity and memory_limit: bounds, zero meaning unbounded. Raises ValueError for invalid
+    # arguments (from the base class). Stores the ordered flag and seven op callables
+    # (put, pop, pop-any, peek, size, incomplete size, clear).
     """Args:
 
       dtypes:  A list of types.  The length of dtypes must equal the number
@@ -2227,6 +2653,12 @@ class MapStagingArea(BaseStagingArea):
       self._clear_fn = gen_data_flow_ops.map_clear
 
   def put(self, key, vals, indices=None, name=None):
+    # [FUNCTION DOC]
+    # Builds an op storing (key, vals), possibly only some components. key: int64 key tensor;
+    # vals: tensor, list/tuple or mapping of component tensors; indices: component positions,
+    # required for lists, inferred for mappings; name: optional. Validates via the base put
+    # checker (ValueError on mismatch), colocates with the area and blocks at run time when a
+    # limit is reached. Returns the op.
     """Create an op that stores the (key, vals) pair in the staging area.
 
     Incomplete puts are possible, preferably using a dictionary for vals
@@ -2271,6 +2703,12 @@ class MapStagingArea(BaseStagingArea):
     return op
 
   def _get_indices_and_dtypes(self, indices=None):
+    # [FUNCTION DOC]
+    # HELPER: normalises the partial-retrieval indices for peek, get and pop.
+    # indices: null (meaning all components), or a non-empty list/tuple of all integers or all
+    # strings (component names, translated to positions via the area's names). Returns a pair of
+    # integer positions and the matching dtypes. Raises TypeError for a non-sequence or mixed
+    # types; ValueError for an empty list, names used on an unnamed area, or an unknown name.
     if indices is None:
       indices = list(range(len(self._dtypes)))
 
@@ -2301,6 +2739,13 @@ class MapStagingArea(BaseStagingArea):
     return indices, dtypes
 
   def peek(self, key, indices=None, name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: when no name is given the op is named with a pop suffix instead of a peek
+    # suffix, and the docstring says it returns the created op while the code returns the
+    # formatted tensors (list or mapping).
+    # Builds an op reading without removing the entry for key. key: int64 key; indices: optional
+    # partial list of component positions or names; name: optional. Blocks at run time until the
+    # key exists. Returns the retrieved tensors with static shapes set.
     """Peeks at staging area data associated with the key.
 
     If the key is not in the staging area, it will block
@@ -2336,6 +2781,12 @@ class MapStagingArea(BaseStagingArea):
     return self._get_return_value(result, indices)
 
   def get(self, key=None, indices=None, name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it returns the created op, but it returns a pair of key and
+    # formatted tensors.
+    # Removes and returns an entry. key: int64 key, or null to take the smallest key (ordered
+    # area) or an arbitrary entry; indices: optional partial component selection; name: optional.
+    # Dispatches to the keyed pop or the no-key pop helper. Blocks at run time if absent/empty.
     """If the key is provided, the associated (key, value) is returned from the staging area.
 
     If the key is not in the staging area, this method will block until
@@ -2364,6 +2815,11 @@ class MapStagingArea(BaseStagingArea):
       return self._pop(key, indices=indices, name=name)
 
   def _pop(self, key, indices=None, name=None):
+    # [FUNCTION DOC]
+    # HELPER: keyed removal used by get. key: int64 key; indices: optional partial component
+    # selection; name: optional (default uses a get suffix). Builds the unstage op colocated with
+    # the area. Returns a pair of the key and the formatted tensors.
+    # KNOWN ISSUE: docstring claims it returns the created op, but a key/tensors pair is returned.
     """Remove and return the associated (key, value) is returned from the staging area.
 
     If the key is not in the staging area, this method will block until
@@ -2397,6 +2853,12 @@ class MapStagingArea(BaseStagingArea):
     return key, self._get_return_value(result, indices)
 
   def _popitem(self, indices=None, name=None):
+    # [FUNCTION DOC]
+    # HELPER: no-key removal used by get. indices: optional partial component selection; name:
+    # optional. Removes the smallest-key entry for an ordered area, otherwise an arbitrary one.
+    # Returns a pair of the key (with a device transfer if needed) and the formatted tensors.
+    # KNOWN ISSUE: the docstring lists a key argument that the method does not accept and claims
+    # an op is returned.
     """If the staging area is ordered, the (key, value) with the smallest key will be returned.
 
     Otherwise, a random (key, value) will be returned.
@@ -2436,6 +2898,8 @@ class MapStagingArea(BaseStagingArea):
     return key, result
 
   def size(self, name=None):
+    # [FUNCTION DOC]
+    # Builds an op returning the number of complete entries. name: optional. Returns the op.
     """Returns the number of elements in the staging area.
 
     Args:
@@ -2455,6 +2919,8 @@ class MapStagingArea(BaseStagingArea):
         memory_limit=self._memory_limit)
 
   def incomplete_size(self, name=None):
+    # [FUNCTION DOC]
+    # Builds an op returning the number of partially filled entries. name: optional. Returns it.
     """Returns the number of incomplete elements in the staging area.
 
     Args:
@@ -2474,6 +2940,8 @@ class MapStagingArea(BaseStagingArea):
         memory_limit=self._memory_limit)
 
   def clear(self, name=None):
+    # [FUNCTION DOC]
+    # Builds an op removing all entries, complete and incomplete. name: optional. Returns the op.
     """Clears the staging area.
 
     Args:
@@ -2494,6 +2962,10 @@ class MapStagingArea(BaseStagingArea):
 
 
 class RecordInput:
+  # [CLASS DOC]
+  # Configuration holder for the asynchronous record input op, which reads TFRecord files matching
+  # a pattern into a shuffling buffer and yields random batches. Stores the settings given at
+  # construction; the op itself is only created by get_yield_op.
   """RecordInput asynchronously reads and randomly yields TFRecords.
 
   A RecordInput Op will continuously read a batch of records asynchronously
@@ -2517,6 +2989,13 @@ class RecordInput:
                name=None,
                batches=None,
                compression_type=None):
+    # [FUNCTION DOC]
+    # Stores settings; creates no op yet. file_pattern: path with wildcards; batch_size: records
+    # per batch; buffer_size: buffer capacity; parallelism: reader threads; shift_ratio: fraction
+    # of files by which the starting file moves each epoch; seed: random seed; name: optional op
+    # name; batches: optional count of batches, in which case the stored batch size is multiplied
+    # by it and the output is later split; compression_type: compression of the files, default
+    # none. No validation is performed here despite the documented ValueError.
     """Constructs a RecordInput Op.
 
     Args:
@@ -2555,6 +3034,12 @@ class RecordInput:
       self._compression_type = compression_type
 
   def get_yield_op(self):
+    # [FUNCTION DOC]
+    # Adds the record input op to the graph using the stored settings and returns its output: a
+    # tensor of serialized records when batches is null; otherwise a list with one list of
+    # scalar record tensors per batch, built by splitting the records and distributing them
+    # round robin across batches (inside a name scope of the given name). Each execution of the op
+    # yields a fresh group of records.
     """Adds a node that yields a group of records every time it is executed.
     If RecordInput `batches` parameter is not None, it yields a list of
     record batches with the specified `batch_size`.
