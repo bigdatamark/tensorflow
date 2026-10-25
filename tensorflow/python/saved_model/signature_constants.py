@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: constants module shared by SavedModel builders, loaders and serving code.
+# Defines string constants for SavedModel signatures: the default serving signature key, the input,
+# output and method-name keys used by the classification, prediction and regression signatures, and
+# the method names and key names used for supervised train and eval signatures. Each constant is
+# registered with the public API export mechanism under the saved_model namespace (both the v2 name
+# and the v1 names including a signature_constants sub-namespace), which happens at import time.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

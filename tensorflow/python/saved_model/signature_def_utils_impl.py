@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Implementation of SignatureDef helper functions for SavedModel. Provides builders that create
+# SignatureDef protocol buffers from tensors (generic, regression, classification, prediction,
+# supervised train and eval), validators that decide whether a signature is servable by TensorFlow
+# Serving, and helpers to create an op-based signature and load the op back from a graph. Public
+# functions are exported under the v1 saved_model API names, some with deprecated endpoints. It is
+# re-exported by signature_def_utils. Importing it has no side effects besides API registration.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,6 +44,13 @@ from tensorflow.python.util.tf_export import tf_export
 def build_signature_def(
     inputs=None, outputs=None, method_name=None, defaults=None
 ):
+  # [FUNCTION DOC]
+  # Builds a SignatureDef protocol buffer. inputs and outputs are optional mappings from names to
+  # tensor-info protos and are copied into the result; method_name is an optional string; defaults
+  # is an optional mapping from argument names to tensors. Eager tensors are converted to constant
+  # tensor protos from their numpy value; graph tensors are accepted only when produced by a
+  # constant operation, whose value attribute is copied. Returns the new SignatureDef.
+  # Raises a value error if a default is a non-constant graph tensor. No other side effects.
   """Utility function to build a SignatureDef protocol buffer.
 
   Args:
@@ -87,6 +101,12 @@ def build_signature_def(
 @deprecation.deprecated_endpoints(
     'saved_model.signature_def_utils.regression_signature_def')
 def regression_signature_def(examples, predictions):
+  # [FUNCTION DOC]
+  # Builds a regression signature for TensorFlow Serving from an examples tensor and a predictions
+  # tensor. Validates that examples is not null, is a tensor, and has string dtype, and that
+  # predictions is not null and has float dtype. Returns a SignatureDef with the regress input and
+  # output keys and the regress method name. Raises a value error on any failed check (the
+  # docstring mentions only the null examples case; type checks also raise).
   """Creates regression signature from given examples and predictions.
 
   This function produces signatures intended for use with the TensorFlow Serving
@@ -138,6 +158,13 @@ def regression_signature_def(examples, predictions):
 @deprecation.deprecated_endpoints(
     'saved_model.signature_def_utils.classification_signature_def')
 def classification_signature_def(examples, classes, scores):
+  # [FUNCTION DOC]
+  # Builds a classification signature for TensorFlow Serving. examples must be a string tensor;
+  # classes (string tensor) and scores (float tensor) are each optional but not both null. Returns a
+  # SignatureDef with the classify input key, the classes and/or scores output keys and the classify
+  # method name. Raises a value error when examples is null or not a tensor, both outputs are null,
+  # or any dtype is wrong.
+  # KNOWN ISSUE: the classes dtype error message ends with a stray backtick character.
   """Creates classification signature from given examples and predictions.
 
   This function produces signatures intended for use with the TensorFlow Serving
@@ -201,6 +228,11 @@ def classification_signature_def(examples, classes, scores):
 @deprecation.deprecated_endpoints(
     'saved_model.signature_def_utils.predict_signature_def')
 def predict_signature_def(inputs, outputs):
+  # [FUNCTION DOC]
+  # Builds a prediction signature for TensorFlow Serving from a mapping of names to input tensors
+  # and a mapping of names to output tensors, converting each tensor to tensor info. Both mappings
+  # must be non-empty. Returns a SignatureDef with the predict method name. Raises a value error
+  # if either mapping is null or empty.
   """Creates prediction signature from given inputs and outputs.
 
   This function produces signatures intended for use with the TensorFlow Serving
@@ -236,6 +268,13 @@ def predict_signature_def(inputs, outputs):
 
 def supervised_train_signature_def(
     inputs, loss, predictions=None, metrics=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: has no docstring; loss is a required parameter here although the shared helper
+  # treats it as optional.
+  # Builds a supervised training signature by delegating to the shared supervised helper with the
+  # supervised training method name. inputs and loss are required mappings of names to tensors;
+  # predictions and metrics are optional mappings. Returns a SignatureDef; raises a value error
+  # if inputs is null or empty.
   return _supervised_signature_def(
       signature_constants.SUPERVISED_TRAIN_METHOD_NAME, inputs, loss=loss,
       predictions=predictions, metrics=metrics)
@@ -243,6 +282,12 @@ def supervised_train_signature_def(
 
 def supervised_eval_signature_def(
     inputs, loss, predictions=None, metrics=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: has no docstring.
+  # Builds a supervised evaluation signature by delegating to the shared supervised helper with the
+  # supervised eval method name. inputs and loss are required mappings of names to tensors;
+  # predictions and metrics are optional mappings. Returns a SignatureDef; raises a value error if
+  # inputs is null or empty.
   return _supervised_signature_def(
       signature_constants.SUPERVISED_EVAL_METHOD_NAME, inputs, loss=loss,
       predictions=predictions, metrics=metrics)
@@ -251,6 +296,14 @@ def supervised_eval_signature_def(
 def _supervised_signature_def(
     method_name, inputs, loss=None, predictions=None,
     metrics=None):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation for the supervised train and eval signature builders.
+  # KNOWN ISSUE: the docstring says it raises when inputs or outputs is null, but only inputs is
+  # checked; loss, predictions and metrics may all be null, giving a signature with no outputs.
+  # Builds a SignatureDef from method_name (string), inputs (required non-empty mapping of names to
+  # tensors) and optional loss, predictions and metrics mappings, whose entries are merged into one
+  # outputs mapping (later sets overwrite same-named keys). Raises a value error if inputs is null
+  # or empty. Returns the SignatureDef.
   """Creates a signature for training and eval data.
 
   This function produces signatures that describe the inputs and outputs
@@ -298,6 +351,10 @@ def _supervised_signature_def(
 @deprecation.deprecated_endpoints(
     'saved_model.signature_def_utils.is_valid_signature')
 def is_valid_signature(signature_def):
+  # [FUNCTION DOC]
+  # Returns whether a SignatureDef is servable by TensorFlow Serving, i.e. is a valid
+  # classification, regression or predict signature. A null signature returns false.
+  # Takes a SignatureDef proto; returns a boolean; no side effects.
   """Determine whether a SignatureDef can be served by TensorFlow Serving."""
   if signature_def is None:
     return False
@@ -307,6 +364,10 @@ def is_valid_signature(signature_def):
 
 
 def _is_valid_predict_signature(signature_def):
+  # [FUNCTION DOC]
+  # HELPER: validity check used by the public servable-signature check.
+  # Returns true if the SignatureDef has the predict method name and at least one input and one
+  # output; otherwise false. Pure function of the proto.
   """Determine whether the argument is a servable 'predict' SignatureDef."""
   if signature_def.method_name != signature_constants.PREDICT_METHOD_NAME:
     return False
@@ -318,6 +379,11 @@ def _is_valid_predict_signature(signature_def):
 
 
 def _is_valid_regression_signature(signature_def):
+  # [FUNCTION DOC]
+  # HELPER: validity check used by the public servable-signature check.
+  # Returns true only if the method name is the regress one, the inputs consist of exactly the
+  # regress input key with string dtype, and the outputs consist of exactly the regress output key
+  # with float dtype; otherwise false. Pure function of the proto.
   """Determine whether the argument is a servable 'regress' SignatureDef."""
   if signature_def.method_name != signature_constants.REGRESS_METHOD_NAME:
     return False
@@ -340,6 +406,11 @@ def _is_valid_regression_signature(signature_def):
 
 
 def _is_valid_classification_signature(signature_def):
+  # [FUNCTION DOC]
+  # HELPER: validity check used by the public servable-signature check.
+  # Returns true only if the method name is the classify one, the inputs are exactly the classify
+  # input key with string dtype, outputs are non-empty and limited to the classes and scores keys,
+  # classes (if present) is string dtype and scores (if present) is float dtype; else false.
   """Determine whether the argument is a servable 'classify' SignatureDef."""
   if signature_def.method_name != signature_constants.CLASSIFY_METHOD_NAME:
     return False
@@ -373,6 +444,10 @@ def _is_valid_classification_signature(signature_def):
 
 
 def op_signature_def(op, key):
+  # [FUNCTION DOC]
+  # Creates a SignatureDef whose single output, stored under the given key (string), refers to the
+  # given graph element by name (an operation, or possibly a tensor). Returns the SignatureDef.
+  # No other side effects.
   """Creates a signature def with the output pointing to an op.
 
   Note that op isn't strictly enforced to be an Op object, and may be a Tensor.
@@ -391,6 +466,10 @@ def op_signature_def(op, key):
 
 
 def load_op_from_signature_def(signature_def, key, import_scope=None):
+  # [FUNCTION DOC]
+  # Loads the graph element (operation or tensor) referenced by the output stored under key in a
+  # SignatureDef, using the default graph and an optional import_scope prefix. Returns the element.
+  # Raises a not-found error if the name is not present in the graph.
   """Load an Op from a SignatureDef created by op_signature_def().
 
   Args:

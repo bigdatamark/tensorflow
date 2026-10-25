@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Tests for the SavedModel builder and loader in graph mode. Defines a base test class with
+# shared helpers, a large test class for the private builder, and a smaller one for the legacy
+# public builder, covering tags, variables, collections, signatures and their validation, assets,
+# init and train ops, savers, import scopes, device clearing, attribute handling and fingerprints.
+# Each test writes to its own directory under the temp dir; a module-level hook deletes the temp
+# dir after all tests finish. Running the file as a main program starts the test runner.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -53,21 +60,46 @@ SAVED_MODEL_PATH = ("cc/saved_model/testdata/half_plus_two/00000123")
 
 
 def tearDownModule():
+  # [FUNCTION DOC]
+  # HELPER: module-level fixture hook run once after all tests in this file.
+  # Recursively deletes the shared temporary test directory (all exported SavedModels). Takes no
+  # arguments and returns nothing.
   file_io.delete_recursively(test.get_temp_dir())
 
 
 class SavedModelTestBase(test.TestCase):
+  # [CLASS DOC]
+  # HELPER: shared base class for the SavedModel builder/loader test cases below.
+  # Provides small utilities: computing export directories under the temp dir, initializing and
+  # checking variables, creating asset files plus an asset collection, and evaluating tensors by
+  # name while accounting for resource-variable naming. Holds no state of its own.
 
   def _get_export_dir(self, label):
+    # [FUNCTION DOC]
+    # HELPER: builds the path of a per-test export directory.
+    # Joins the shared temporary directory with the given label (string) and returns the path.
+    # Does not create anything on disk.
     return os.path.join(test.get_temp_dir(), label)
 
   def _init_and_validate_variable(self, sess, variable_name, variable_value):
+    # [FUNCTION DOC]
+    # HELPER: creates a variable and checks its initial value.
+    # Creates a legacy variable with the given name and initial value in the current graph, runs the
+    # global variable initializer, and asserts that evaluating the variable yields the value.
+    # The session argument is unused. Returns nothing; adds the variable to the graph.
     v = variable_v1.VariableV1(variable_value, name=variable_name)
     self.evaluate(variables.global_variables_initializer())
     self.assertEqual(variable_value, self.evaluate(v))
 
   def _build_asset_collection(self, asset_file_name, asset_file_contents,
                               asset_file_tensor_name, asset_subdir=""):
+    # [FUNCTION DOC]
+    # HELPER: creates an asset file on disk and registers it in the asset collection.
+    # Writes the given contents (string) to a file with the given name inside a subdirectory (default
+    # empty, meaning the temp dir itself) of the temporary test directory, creating directories as
+    # needed. Then creates a constant string tensor holding the file path with the given tensor name,
+    # adds it to the asset file paths collection of the default graph, and returns the whole
+    # collection (including assets added earlier).
     parent_dir = os.path.join(
         compat.as_bytes(test.get_temp_dir()), compat.as_bytes(asset_subdir))
     file_io.recursive_create_dir(parent_dir)
@@ -81,6 +113,11 @@ class SavedModelTestBase(test.TestCase):
     return asset_collection
 
   def _eval(self, tensor):
+    # [FUNCTION DOC]
+    # HELPER: evaluates a tensor or tensor name, handling resource variables.
+    # Accepts a tensor or a string name (optionally with an output index, default zero). When resource
+    # variables are enabled, the name is redirected to the variable read operation. Evaluates the
+    # resulting name with the test evaluate helper and returns the numpy value.
     """Evaluate a tensor.
 
     Takes care of the variations between graphs produced with and without
@@ -102,6 +139,12 @@ class SavedModelTestBase(test.TestCase):
 
 
 class SavedModelTest(SavedModelTestBase):
+  # [CLASS DOC]
+  # Tests for the graph-mode SavedModel builder (private builder class) and the loader.
+  # Covers tag handling, variables, collections, signature definitions and their validation, assets
+  # and name collisions, init/train ops, custom savers and saveables, import scopes, device
+  # clearing, inconsistent op attributes and fingerprints. Each test exports to its own directory
+  # under the temp dir. Inherits the shared helpers from the base test class.
 
   def _validate_assets(self,
                        export_dir,
@@ -110,6 +153,11 @@ class SavedModelTest(SavedModelTestBase):
                        expected_asset_file_contents,
                        expected_asset_tensor_name,
                        asset_id=0):
+    # [FUNCTION DOC]
+    # HELPER: assertion helper for asset checks in the tests of this class.
+    # Verifies that the asset file stored in the assets subdirectory of the export directory has the
+    # expected contents, and that the asset file definition at index asset_id (default zero) has the
+    # expected file name and tensor name. Returns nothing; fails the test on mismatch.
     assets_path = os.path.join(
         compat.as_bytes(export_dir),
         compat.as_bytes(constants.ASSETS_DIRECTORY),
@@ -123,6 +171,11 @@ class SavedModelTest(SavedModelTestBase):
                      asset_file_def[asset_id].tensor_info.name)
 
   def _validate_inputs_tensor_info_fail(self, builder, tensor_info):
+    # [FUNCTION DOC]
+    # HELPER: signature validation check for invalid input tensor info.
+    # Builds a signature with a single input holding the given tensor info and asserts that adding
+    # the graph with variables to the builder raises an assertion error. Creates a fresh graph and
+    # session with one variable. Returns nothing.
     with self.session(graph=ops.Graph()) as sess:
       self._init_and_validate_variable(sess, "v", 42)
 
@@ -136,6 +189,10 @@ class SavedModelTest(SavedModelTestBase):
           signature_def_map={"foo_key": foo_signature})
 
   def _validate_inputs_tensor_info_accept(self, builder, tensor_info):
+    # [FUNCTION DOC]
+    # HELPER: signature validation check for acceptable input tensor info.
+    # Builds a signature with a single input holding the given tensor info and adds the graph with
+    # variables to the builder; the test fails if an error is raised. Uses a fresh graph and session.
     with self.session(graph=ops.Graph()) as sess:
       self._init_and_validate_variable(sess, "v", 42)
 
@@ -145,6 +202,10 @@ class SavedModelTest(SavedModelTestBase):
           sess, ["foo"], signature_def_map={"foo_key": foo_signature})
 
   def _validate_outputs_tensor_info_fail(self, builder, tensor_info):
+    # [FUNCTION DOC]
+    # HELPER: signature validation check for invalid output tensor info.
+    # Builds a signature with a single output holding the given tensor info and asserts that adding
+    # the graph with variables to the builder raises an assertion error. Uses a fresh graph/session.
     with self.session(graph=ops.Graph()) as sess:
       self._init_and_validate_variable(sess, "v", 42)
 
@@ -157,6 +218,10 @@ class SavedModelTest(SavedModelTestBase):
           signature_def_map={"foo_key": foo_signature})
 
   def _validate_outputs_tensor_info_accept(self, builder, tensor_info):
+    # [FUNCTION DOC]
+    # HELPER: signature validation check for acceptable output tensor info.
+    # Builds a signature with a single output holding the given tensor info and adds the graph with
+    # variables to the builder; the test fails if an error is raised. Uses a fresh graph and session.
     with self.session(graph=ops.Graph()) as sess:
       self._init_and_validate_variable(sess, "v", 42)
 
@@ -166,6 +231,10 @@ class SavedModelTest(SavedModelTestBase):
           sess, ["foo"], signature_def_map={"foo_key": foo_signature})
 
   def _validate_sig_def_keys(self, builder, valid_tensor_info, invalid_key):
+    # [FUNCTION DOC]
+    # HELPER: signature validation check for reserved signature map keys.
+    # Builds a signature with one valid output and tries to register it in the signature map under
+    # the given key (a reserved key); asserts that the builder raises a key error. Returns nothing.
     with self.session(graph=ops.Graph()) as sess:
       self._init_and_validate_variable(sess, "v", 42)
 
@@ -178,6 +247,10 @@ class SavedModelTest(SavedModelTestBase):
           signature_def_map={invalid_key: foo_signature})
 
   def testMaybeSavedModelDir(self):
+    # [FUNCTION DOC]
+    # Checks the loader function that detects SavedModel directories: a source directory without
+    # a model is rejected, the half-plus-two test data directory is accepted, and a nonexistent
+    # path is rejected.
     base_path = test.test_src_dir_path("/python/saved_model")
     self.assertFalse(loader.maybe_saved_model_directory(base_path))
     base_path = test.test_src_dir_path(SAVED_MODEL_PATH)
@@ -186,6 +259,10 @@ class SavedModelTest(SavedModelTestBase):
     self.assertFalse(loader.maybe_saved_model_directory(base_path))
 
   def testBadSavedModelFileFormat(self):
+    # [FUNCTION DOC]
+    # Loading from a missing directory must raise an IO error saying the model file does not exist.
+    # Then writes invalid content as the binary model file and as the text model file in turn, and
+    # expects an IO error saying the file cannot be parsed (naming the text file in the second case).
     export_dir = self._get_export_dir("test_bad_saved_model_file_format")
     # Attempt to load a SavedModel from an export directory that does not exist.
     with self.session(graph=ops.Graph()) as sess:
@@ -218,6 +295,9 @@ class SavedModelTest(SavedModelTestBase):
         loader.load(sess, ["foo"], export_dir)
 
   def testVerifySessionGraphUsage(self):
+    # [FUNCTION DOC]
+    # Saves a model with a variable, then loads it into a separate session with its own graph and
+    # verifies that the variable in that session graph has the saved value (42).
     export_dir = self._get_export_dir("test_verify_session_graph_usage")
     builder = saved_model_builder._SavedModelBuilder(export_dir)
 
@@ -240,6 +320,9 @@ class SavedModelTest(SavedModelTestBase):
             self._eval(ops.get_collection(ops.GraphKeys.GLOBAL_VARIABLES)[0]))
 
   def testSequence(self):
+    # [FUNCTION DOC]
+    # Checks call ordering rules of the builder: adding a plain meta graph before the one with
+    # variables raises an assertion error, and adding variables twice raises an assertion error.
     export_dir = self._get_export_dir("test_sequence")
     builder = saved_model_builder._SavedModelBuilder(export_dir)
 
@@ -259,6 +342,11 @@ class SavedModelTest(SavedModelTestBase):
                           sess, ["baz"])
 
   def testTags(self):
+    # [FUNCTION DOC]
+    # Saves several meta graphs under single, multiple (serving with GPU or TPU) and custom tags,
+    # then loads each tag set and checks the variable value from the one saved with weights (42).
+    # Duplicate tags are treated as a set, while an unknown tag or a partially matching tag set must
+    # raise a runtime error.
     export_dir = self._get_export_dir("test_tags")
     builder = saved_model_builder._SavedModelBuilder(export_dir)
 
@@ -357,6 +445,10 @@ class SavedModelTest(SavedModelTestBase):
                           export_dir)
 
   def testVariables(self):
+    # [FUNCTION DOC]
+    # Saves variables with one graph and adds other graphs with a subset or a disjoint set of
+    # variables without weights. Loading the first returns both saved values, the subset graph is
+    # restored from the checkpointed value, and the disjoint graph raises a not-found error.
     export_dir = self._get_export_dir("test_variables")
     builder = saved_model_builder._SavedModelBuilder(export_dir)
 
@@ -410,6 +502,9 @@ class SavedModelTest(SavedModelTestBase):
                           export_dir)
 
   def testGraphWithoutVariables(self):
+    # [FUNCTION DOC]
+    # Saves two graphs that contain only constants, loads each by its tag, reads the constant by name
+    # and multiplies it by a new constant, asserting the product equals thirty in both cases.
     export_dir = self._get_export_dir("test_graph_has_variables")
     builder = saved_model_builder._SavedModelBuilder(export_dir)
 
@@ -446,6 +541,9 @@ class SavedModelTest(SavedModelTestBase):
         self.assertEqual(30.0, self.evaluate(c))
 
   def testNoOverwrite(self):
+    # [FUNCTION DOC]
+    # Saves a model as text, loads it to verify the variable value, then asserts that creating a
+    # second builder for the same export directory raises an assertion error.
     export_dir = self._get_export_dir("test_no_overwrite")
     builder = saved_model_builder._SavedModelBuilder(export_dir)
 
@@ -470,6 +568,9 @@ class SavedModelTest(SavedModelTestBase):
                         export_dir)
 
   def testSaveAsText(self):
+    # [FUNCTION DOC]
+    # Saves two meta graphs in text format and loads both tags, checking that the variable value
+    # saved with the first graph (42) is restored in each.
     export_dir = self._get_export_dir("test_astext")
     builder = saved_model_builder._SavedModelBuilder(export_dir)
 
@@ -504,6 +605,9 @@ class SavedModelTest(SavedModelTestBase):
             self._eval(ops.get_collection(ops.GraphKeys.GLOBAL_VARIABLES)[0]))
 
   def testCollections(self):
+    # [FUNCTION DOC]
+    # Saves two graphs with differently named collections holding a variable. Loading each tag must
+    # yield only that graph collection with the saved value (42) and an empty other collection.
     export_dir = self._get_export_dir("test_collections")
     builder = saved_model_builder._SavedModelBuilder(export_dir)
 
@@ -556,6 +660,10 @@ class SavedModelTest(SavedModelTestBase):
         self.assertEqual(len(ops.get_collection("foo_vars")), 0)
 
   def testSignatureDefs(self):
+    # [FUNCTION DOC]
+    # Saves graphs with signature definition maps, including one overriding a key from the earlier
+    # graph. Loading each tag must return the expected number of signatures and the method names
+    # (one entry for the first tag, two with the new value for the overridden key for the second).
     export_dir = self._get_export_dir("test_signature_defs")
     builder = saved_model_builder._SavedModelBuilder(export_dir)
 
@@ -617,6 +725,10 @@ class SavedModelTest(SavedModelTestBase):
         self.assertEqual("foo_new", bar_signature["foo_key"].method_name)
 
   def testSignatureDefValidationFails(self):
+    # [FUNCTION DOC]
+    # Tensor infos lacking encoding, lacking dtype or empty must be rejected as inputs and outputs
+    # when adding graphs to the builder, and reserved init-op and train-op signature keys must be
+    # rejected as signature map keys.
     export_dir = self._get_export_dir("test_signature_def_validation_fail")
     builder = saved_model_builder._SavedModelBuilder(export_dir)
 
@@ -644,6 +756,8 @@ class SavedModelTest(SavedModelTestBase):
                                 constants.TRAIN_OP_SIGNATURE_KEY)
 
   def testSignatureDefValidationSucceedsWithName(self):
+    # [FUNCTION DOC]
+    # A tensor info with a name and float dtype must be accepted as signature input and as output.
     tensor_with_name = meta_graph_pb2.TensorInfo()
     tensor_with_name.name = "foo"
     tensor_with_name.dtype = types_pb2.DT_FLOAT
@@ -658,6 +772,9 @@ class SavedModelTest(SavedModelTestBase):
       self._validate_outputs_tensor_info_accept(builder, tensor_with_name)
 
   def testSignatureDefValidationSucceedsWithCoo(self):
+    # [FUNCTION DOC]
+    # A sparse tensor info (coordinate format with a values tensor name and float dtype) must be
+    # accepted as signature input and as output. Field-level validation is a noted to-do.
     with ops.Graph().as_default():
       tensor_with_coo = meta_graph_pb2.TensorInfo()
       # TODO(soergel) test validation of each of the fields of coo_sparse
@@ -673,6 +790,8 @@ class SavedModelTest(SavedModelTestBase):
       self._validate_outputs_tensor_info_accept(builder, tensor_with_coo)
 
   def testSignatureDefValidationSucceedsWithRagged(self):
+    # [FUNCTION DOC]
+    # Tensor info built from a ragged tensor must be accepted as signature input and as output.
     with ops.Graph().as_default():
       ragged_tensor = ragged_factory_ops.constant([[1, 2], [3]])
       tensor_with_ragged = utils.build_tensor_info(ragged_tensor)
@@ -688,6 +807,10 @@ class SavedModelTest(SavedModelTestBase):
       self._validate_outputs_tensor_info_accept(builder, tensor_with_ragged)
 
   def testAssets(self):
+    # [FUNCTION DOC]
+    # Saves a graph with one asset in the asset list plus an unrelated ignored file. After loading,
+    # the asset file must be copied into the assets directory with correct contents and tensor name,
+    # and the ignored file must not appear there.
     export_dir = self._get_export_dir("test_assets")
     builder = saved_model_builder._SavedModelBuilder(export_dir)
 
@@ -722,6 +845,10 @@ class SavedModelTest(SavedModelTestBase):
         self.assertFalse(file_io.file_exists(ignored_asset_path))
 
   def testAssetsNameCollisionDiffFile(self):
+    # [FUNCTION DOC]
+    # Two assets with the same file name but different contents (from different directories) are
+    # saved. The first keeps its name; the second must be stored under a renamed file (underscore one
+    # suffix) with its own contents.
     export_dir = self._get_export_dir("test_assets_name_collision_diff_file")
     builder = saved_model_builder._SavedModelBuilder(export_dir)
 
@@ -758,6 +885,9 @@ class SavedModelTest(SavedModelTestBase):
             asset_id=1)
 
   def testAssetsNameCollisionSameFilepath(self):
+    # [FUNCTION DOC]
+    # Two asset tensors point to the same file path. Both are recorded with the same file name, and
+    # no renamed duplicate file is written to the assets directory.
     export_dir = self._get_export_dir("test_assets_name_collision_same_path")
     builder = saved_model_builder._SavedModelBuilder(export_dir)
 
@@ -797,6 +927,9 @@ class SavedModelTest(SavedModelTestBase):
         self.assertFalse(file_io.file_exists(ignored_asset_path))
 
   def testAssetsNameCollisionSameFile(self):
+    # [FUNCTION DOC]
+    # Two assets in different directories have the same name and same contents. Both are recorded
+    # under the same file name, and no renamed duplicate file is written.
     export_dir = self._get_export_dir("test_assets_name_collision_same_file")
     builder = saved_model_builder._SavedModelBuilder(export_dir)
 
@@ -839,6 +972,9 @@ class SavedModelTest(SavedModelTestBase):
         self.assertFalse(file_io.file_exists(ignored_asset_path))
 
   def testAssetsNameCollisionManyFiles(self):
+    # [FUNCTION DOC]
+    # Five assets with the same file name but different contents are saved. The first keeps its
+    # name and the others are renamed with index suffixes, each with the correct contents.
     export_dir = self._get_export_dir("test_assets_name_collision_many_files")
     builder = saved_model_builder._SavedModelBuilder(export_dir)
 
@@ -877,6 +1013,10 @@ class SavedModelTest(SavedModelTestBase):
                               "asset_file_tensor_0:0")
 
   def testCustomInitOp(self):
+    # [FUNCTION DOC]
+    # Saves a graph passing a custom init operation that assigns the sum of two variables to a third
+    # (with the main op as a control dependency). After loading, the first two variables keep their
+    # values and the third equals their sum, showing the init op ran on restore.
     export_dir = self._get_export_dir("test_main_op")
     builder = saved_model_builder._SavedModelBuilder(export_dir)
 
@@ -912,6 +1052,10 @@ class SavedModelTest(SavedModelTestBase):
         self.assertEqual(3, self._eval("v3"))
 
   def testTrainOp(self):
+    # [FUNCTION DOC]
+    # Saves a graph with a training operation (assign-add). After loading, variable values reflect
+    # the training step (three and two) and the loaded training op is an assign-add operation when
+    # resource variables are enabled, otherwise a tensor.
     export_dir = self._get_export_dir("test_train_op")
     builder = saved_model_builder._SavedModelBuilder(export_dir)
 
@@ -943,6 +1087,9 @@ class SavedModelTest(SavedModelTestBase):
               loader_impl.get_train_op(meta_graph_def), tensor_lib.Tensor)
 
   def testTrainOpGroup(self):
+    # [FUNCTION DOC]
+    # Saves a graph whose training operation is an empty group. After loading, variables keep their
+    # values and the loaded training op is an operation object.
     export_dir = self._get_export_dir("test_train_op_group")
     builder = saved_model_builder._SavedModelBuilder(export_dir)
 
@@ -969,6 +1116,9 @@ class SavedModelTest(SavedModelTestBase):
             loader_impl.get_train_op(meta_graph_def), ops.Operation)
 
   def testTrainOpAfterVariables(self):
+    # [FUNCTION DOC]
+    # Saves variables first with one tag, then adds a second meta graph with a training operation.
+    # The second tag loads a train op of the expected kind; the first tag has no train op collection.
     export_dir = self._get_export_dir("test_train_op_after_variables")
     builder = saved_model_builder._SavedModelBuilder(export_dir)
 
@@ -1003,6 +1153,9 @@ class SavedModelTest(SavedModelTestBase):
         self.assertFalse(ops.get_collection(constants.TRAIN_OP_KEY))
 
   def testMultipleAssets(self):
+    # [FUNCTION DOC]
+    # Saves two meta graphs each with a different asset file (different names). Each tag when loaded
+    # must expose its own asset with the right contents and tensor name.
     export_dir = self._get_export_dir("test_multiple_assets")
     builder = saved_model_builder._SavedModelBuilder(export_dir)
 
@@ -1044,6 +1197,9 @@ class SavedModelTest(SavedModelTestBase):
                               "content_bar", "asset_file_tensor:0")
 
   def testDuplicateAssets(self):
+    # [FUNCTION DOC]
+    # Saves two meta graphs with the same asset file name but different contents. The second graph
+    # must refer to the first stored contents, since an asset with the same name is only stored once.
     export_dir = self._get_export_dir("test_duplicate_assets")
     builder = saved_model_builder._SavedModelBuilder(export_dir)
 
@@ -1091,6 +1247,10 @@ class SavedModelTest(SavedModelTestBase):
                               "content_foo", "asset_file_tensor:0")
 
   def testOp(self):
+    # [FUNCTION DOC]
+    # With two CPU devices, saves a graph with variables on separate devices plus an unsaved variable
+    # and a named init operation. After loading, the saved variables are restored, and running the
+    # named init operation sets the unsaved variable to their sum (three).
     export_dir = self._get_export_dir("test_op")
     builder = saved_model_builder._SavedModelBuilder(export_dir)
 
@@ -1131,6 +1291,10 @@ class SavedModelTest(SavedModelTestBase):
         self.assertEqual(3, self._eval("v3"))
 
   def testCustomSaveable(self):
+    # [FUNCTION DOC]
+    # Saves a graph with a checkpointed key-value table (custom saveable object), registering its
+    # reference in a collection. After loading in a new session, the table wrapper rebuilt from the
+    # reference yields the saved key and value.
     export_dir = self._get_export_dir("custom_saveable")
     builder = saved_model_builder._SavedModelBuilder(export_dir)
 
@@ -1160,6 +1324,9 @@ class SavedModelTest(SavedModelTestBase):
       self.assertEqual(3.0, v1.values().eval())
 
   def testCustomSaver(self):
+    # [FUNCTION DOC]
+    # Passes a custom named saver to the builder. After loading, the graph contains the custom
+    # saver restore operation and not the default one, and the saver definition names the custom one.
     export_dir = self._get_export_dir("test_custom_saver")
     builder = saved_model_builder._SavedModelBuilder(export_dir)
 
@@ -1182,6 +1349,9 @@ class SavedModelTest(SavedModelTestBase):
             saved_graph.saver_def.restore_op_name, "my_saver/restore_all")
 
   def testNoCustomSaver(self):
+    # [FUNCTION DOC]
+    # Creates a named saver in the graph but does not pass it to the builder. After loading, both
+    # the named and default restore operations exist and the saver definition uses the default one.
     export_dir = self._get_export_dir("test_no_custom_saver")
     builder = saved_model_builder._SavedModelBuilder(export_dir)
 
@@ -1204,6 +1374,10 @@ class SavedModelTest(SavedModelTestBase):
             saved_graph.saver_def.restore_op_name, "save/restore_all")
 
   def testMultipleCustomSavers(self):
+    # [FUNCTION DOC]
+    # Saves three meta graphs, the first with the default saver and the others with two more saver
+    # objects. A nested check loads each tag and asserts the saver definition restore operation name
+    # is the default, the numbered one and the second numbered one respectively.
     export_dir = self._get_export_dir("test_multiple_custom_savers")
     builder = saved_model_builder._SavedModelBuilder(export_dir)
 
@@ -1223,6 +1397,11 @@ class SavedModelTest(SavedModelTestBase):
       builder.save()
 
     def _validate_custom_saver(tag_name, saver_name):
+      # [FUNCTION DOC]
+      # HELPER: nested assertion helper for the multiple custom savers test.
+      # Loads the model for the given tag into a new graph and session and asserts that the saver
+      # definition restore operation name equals the expected saver name. Uses the enclosing export
+      # directory. Returns nothing.
       with ops.Graph().as_default() as graph:
         with self.session(graph=graph) as sess:
           saved_graph = loader.load(sess, [tag_name], export_dir)
@@ -1235,6 +1414,10 @@ class SavedModelTest(SavedModelTestBase):
     _validate_custom_saver("tag_2", "save_2/restore_all")
 
   def testImportScope(self):
+    # [FUNCTION DOC]
+    # Saves a model with a variable, an asset and a constant, then loads it with an import scope.
+    # Variable, asset tensor and constant names get the scope prefix while values and asset file
+    # path are unchanged, and the asset definition in the returned meta graph is not scoped.
     export_dir = self._get_export_dir("test_scoped_assets")
     builder = saved_model_builder._SavedModelBuilder(export_dir)
 
@@ -1285,6 +1468,9 @@ class SavedModelTest(SavedModelTestBase):
                 "scope_name/constant_tensor_name:0").eval())
 
   def testClearDevices(self):
+    # [FUNCTION DOC]
+    # Saves a variable placed on a CPU device with device clearing enabled, then loads in a new
+    # graph without device configuration and checks the variable value (42).
     export_dir = self._get_export_dir("test_clear_devices")
     builder = saved_model_builder._SavedModelBuilder(export_dir)
 
@@ -1310,6 +1496,11 @@ class SavedModelTest(SavedModelTestBase):
   # Tests the behavior of loading SavedModels that having missing attrs or attrs
   # with incorrect types.
   def testInconsistentConsumerDefaultAttrs(self):
+    # [FUNCTION DOC]
+    # Saves a text-format model containing a test op with an attribute that has no default, then
+    # rewrites the file twice. First the attribute is removed: loading must raise a value error
+    # about the missing attribute. Then its type is changed to double: loading must raise an
+    # invalid-argument error that no kernel is registered for it.
     export_dir = self._get_export_dir(
         "test_strip_default_attrs_no_consumer_defaults")
     builder = saved_model_builder._SavedModelBuilder(export_dir)
@@ -1374,6 +1565,9 @@ class SavedModelTest(SavedModelTestBase):
       loader.load(sess, ["foo"], export_dir)
 
   def testFingerprint(self):
+    # [FUNCTION DOC]
+    # Skipped in this build (fingerprinting is disabled in the open-source build). When enabled it
+    # saves and loads a model and expects reading the fingerprint not to raise a value error.
     self.skipTest("TF1 fingerprinting disabled in OSS.")
     export_dir = self._get_export_dir("fingerprint")
     builder = saved_model_builder._SavedModelBuilder(export_dir)
@@ -1396,6 +1590,9 @@ class SavedModelTest(SavedModelTestBase):
           self.fail("Fingerprint read failed.")
 
   def testFingerprintInTextFormatModel(self):
+    # [FUNCTION DOC]
+    # Skipped in this build (fingerprinting disabled). When enabled it does the same as the
+    # fingerprint test but saves the model in text format.
     """Tests that fingerprinting works with as_text saved models."""
     self.skipTest("TF1 fingerprinting disabled in OSS.")
     export_dir = self._get_export_dir("fingerprint_pbtxt")
@@ -1420,6 +1617,9 @@ class SavedModelTest(SavedModelTestBase):
 
 
 class SavedModelV1Test(SavedModelTestBase):
+  # [CLASS DOC]
+  # Tests for the legacy public SavedModel builder class (asset collection, legacy init op and
+  # main op keys, default attribute stripping). Inherits shared helpers from the base test class.
 
   def _validate_asset_collection(self,
                                  export_dir,
@@ -1428,6 +1628,11 @@ class SavedModelV1Test(SavedModelTestBase):
                                  expected_asset_file_contents,
                                  expected_asset_tensor_name,
                                  asset_id=0):
+    # [FUNCTION DOC]
+    # HELPER: assertion helper for asset checks in the tests of this class.
+    # Reads the asset definition at index asset_id (default zero) from the assets collection of a
+    # graph collection definition and verifies the stored asset file contents, file name and tensor
+    # name against the expected values. Returns nothing; fails the test on mismatch.
     assets_any = graph_collection_def[constants.ASSETS_KEY].any_list.value
     asset = meta_graph_pb2.AssetFileDef()
     assets_any[asset_id].Unpack(asset)
@@ -1442,6 +1647,9 @@ class SavedModelV1Test(SavedModelTestBase):
     self.assertEqual(expected_asset_tensor_name, asset.tensor_info.name)
 
   def testWritingAssetsToCollection(self):
+    # [FUNCTION DOC]
+    # Saves a graph with an asset collection through the legacy builder. After loading, the asset is
+    # found in the collection definition with the right data, and an unrelated file is not copied.
     export_dir = self._get_export_dir("test_writing_assets_to_collection")
     builder = saved_model_builder.SavedModelBuilder(export_dir)
 
@@ -1477,16 +1685,25 @@ class SavedModelV1Test(SavedModelTestBase):
         self.assertFalse(file_io.file_exists(ignored_asset_path))
 
   def testLegacyInitOpWithNonEmptyCollection(self):
+    # [FUNCTION DOC]
+    # Runs the shared init-op collection check using the legacy init op key.
     export_dir = self._get_export_dir(
         "test_legacy_init_op_with_non_empty_collection")
     self._testInitOpsWithNonEmptyCollection(export_dir,
                                             constants.LEGACY_INIT_OP_KEY)
 
   def testMainOpWithNonEmptyCollection(self):
+    # [FUNCTION DOC]
+    # Runs the shared init-op collection check using the main op key.
     export_dir = self._get_export_dir("test_main_op_with_non_empty_collection")
     self._testInitOpsWithNonEmptyCollection(export_dir, constants.MAIN_OP_KEY)
 
   def _testInitOpsWithNonEmptyCollection(self, export_dir, key):
+    # [FUNCTION DOC]
+    # HELPER: shared body for the two init-op collection tests above.
+    # Puts an operation in the collection with the given key, then asserts that adding the graph
+    # with a legacy init op, and again with a main op, raises a value error saying the graph already
+    # contains one. Takes the export directory and the collection key; returns nothing.
     builder = saved_model_builder.SavedModelBuilder(export_dir)
 
     with ops.Graph().as_default():
@@ -1517,6 +1734,10 @@ class SavedModelV1Test(SavedModelTestBase):
           builder.add_meta_graph_and_variables(sess, ["foo"], main_op=init_op)
 
   def testStripDefaultAttrs(self):
+    # [FUNCTION DOC]
+    # Saves two graphs with a complex-number operation, one with default attribute stripping and one
+    # without. Loading restores the defaults, but the on-disk node of the first lacks the type
+    # attributes while the second keeps them.
     export_dir = self._get_export_dir("test_strip_default_attrs")
     builder = saved_model_builder.SavedModelBuilder(export_dir)
 
@@ -1585,6 +1806,9 @@ class SavedModelV1Test(SavedModelTestBase):
     self.assertIn("Tout", node_def.attr)
 
   def testLegacyInitOp(self):
+    # [FUNCTION DOC]
+    # Saves a graph with a legacy init operation that assigns the sum of two variables to a third.
+    # After loading, the first two keep their values and the third equals their sum.
     export_dir = self._get_export_dir("test_legacy_init_op")
     builder = saved_model_builder.SavedModelBuilder(export_dir)
 

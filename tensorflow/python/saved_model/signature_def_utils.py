@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: public facade module for the signature-definition helpers implemented in the _impl module.
+# Re-exports the public SignatureDef utilities from signature_def_utils_impl: building generic,
+# classification, regression, prediction, supervised train and eval signatures, validity checking
+# for serving, and creating/loading op-based signatures. It defines no logic of its own and has no
+# import-time side effects beyond importing the implementation module (which registers API exports).
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
