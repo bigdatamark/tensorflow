@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Unit tests for the v1 summary FileWriter, its event file writer backends and the writer cache.
+# A shared test mixin runs the same scenarios against the default thread-based writer and a
+# session-based writer: recording summaries, graphs, meta graphs and run metadata, close and
+# reopen, use after close, context manager use, file name suffixes, plugin assets, metadata
+# stripping, error propagation from the writer thread, file sharing with v2 summary writers and
+# the per-directory cache. Reads results back through the summary iterator.
+# Run as a test program.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -45,21 +53,38 @@ from tensorflow.python.util import compat
 
 
 class FileWriterTestBase:
+  # [CLASS DOC]
+  # HELPER: Mixin of shared test scenarios and utilities for FileWriter tests; combined with a test
+  # case base class by subclasses. Provides a writer factory that subclasses may override (default
+  # builds a plain FileWriter), test directory helpers, an events reader, timestamp and graph
+  # event assertions, and the common test methods.
 
   def _FileWriter(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: Factory for the writer under test. Forwards all arguments to the FileWriter
+    # constructor and returns the new writer. Overridden by the session-based test case.
     return writer.FileWriter(*args, **kwargs)
 
   def _TestDir(self, test_name):
+    # [FUNCTION DOC]
+    # HELPER: Returns the path of a per-test subdirectory (named by test_name) inside the test
+    # temporary directory. Does not create or delete anything.
     test_dir = os.path.join(self.get_temp_dir(), test_name)
     return test_dir
 
   def _CleanTestDir(self, test_name):
+    # [FUNCTION DOC]
+    # HELPER: Computes the per-test directory path for test_name, recursively deletes it if it
+    # already exists, and returns the path (the directory itself is not recreated).
     test_dir = self._TestDir(test_name)
     if os.path.exists(test_dir):
       shutil.rmtree(test_dir)
     return test_dir
 
   def _EventsReader(self, test_dir):
+    # [FUNCTION DOC]
+    # HELPER: Finds event files in test_dir, asserts at least one exists, and returns an iterator
+    # over the events of the last file in the listing.
     event_paths = glob.glob(os.path.join(test_dir, "event*"))
     # If the tests runs multiple times in the same directory we can have
     # more than one matching event file.  We only want to read the last one.
@@ -67,6 +92,9 @@ class FileWriterTestBase:
     return summary_iterator.summary_iterator(event_paths[-1])
 
   def assertRecent(self, t):
+    # [FUNCTION DOC]
+    # HELPER: Assertion that timestamp t (seconds) is not in the future and within the past hour
+    # of the current time.
     # We want to ensure the timestamp is something plausible, and aren't able
     # to mock out the actual clock used through many layers of the stack, so
     # just assert that it's within the past hour, which should always be true.
@@ -74,6 +102,11 @@ class FileWriterTestBase:
     self.assertLess(abs(t - time.time()), 3600)
 
   def assertEventsWithGraph(self, test_dir, g, has_shapes):
+    # [FUNCTION DOC]
+    # HELPER: Asserts the event file in test_dir holds exactly three events: a version event, a
+    # step-zero graph event equal to graph g serialized (with shapes only if has_shapes is true),
+    # and a step-zero meta graph event equal to the meta graph built from that graph definition;
+    # then no more events. Timestamps must be recent.
     meta_graph_def = meta_graph.create_meta_graph_def(
         graph_def=g.as_graph_def(add_shapes=has_shapes))
 
@@ -105,6 +138,12 @@ class FileWriterTestBase:
 
   @test_util.run_deprecated_v1
   def testAddingSummaryGraphAndRunMetadata(self):
+    # [FUNCTION DOC]
+    # Scenario: write a session start log (step 1), two simple-value summaries (steps 10 and 20), a
+    # graph (step 30) and run metadata tagged "test run" (step 40), then close. Expects the events
+    # file to contain, in order, a version event followed by those events with the same steps and
+    # contents (graph equal to the shapes-annotated graph, metadata round-trips), recent
+    # timestamps, and nothing more.
     test_dir = self._CleanTestDir("basics")
     sw = self._FileWriter(test_dir)
 
@@ -179,6 +218,9 @@ class FileWriterTestBase:
 
   @test_util.run_deprecated_v1
   def testGraphAsNamed(self):
+    # [FUNCTION DOC]
+    # Scenario: construct a writer passing a graph by keyword, then close. Expects the graph and
+    # meta graph events (with shapes) to be written.
     test_dir = self._CleanTestDir("basics_named_graph")
     with ops.Graph().as_default() as g:
       constant_op.constant([12], name="douze")
@@ -188,6 +230,9 @@ class FileWriterTestBase:
 
   @test_util.run_deprecated_v1
   def testGraphAsPositional(self):
+    # [FUNCTION DOC]
+    # Scenario: construct a writer passing the graph as the second positional argument, then
+    # close. Expects the same graph and meta graph events (with shapes) as the keyword case.
     test_dir = self._CleanTestDir("basics_positional_graph")
     with ops.Graph().as_default() as g:
       constant_op.constant([12], name="douze")
@@ -197,6 +242,9 @@ class FileWriterTestBase:
 
   @test_util.run_deprecated_v1
   def testGraphDefAsNamed(self):
+    # [FUNCTION DOC]
+    # Scenario: construct a writer passing a graph definition by the deprecated keyword, then
+    # close. Expects graph and meta graph events written without added shape information.
     test_dir = self._CleanTestDir("basics_named_graph_def")
     with ops.Graph().as_default() as g:
       constant_op.constant([12], name="douze")
@@ -207,6 +255,9 @@ class FileWriterTestBase:
 
   @test_util.run_deprecated_v1
   def testGraphDefAsPositional(self):
+    # [FUNCTION DOC]
+    # Scenario: construct a writer passing a graph definition positionally (in the graph slot),
+    # then close. Expects graph and meta graph events without added shape information.
     test_dir = self._CleanTestDir("basics_positional_graph_def")
     with ops.Graph().as_default() as g:
       constant_op.constant([12], name="douze")
@@ -217,6 +268,8 @@ class FileWriterTestBase:
 
   @test_util.run_deprecated_v1
   def testGraphAndGraphDef(self):
+    # [FUNCTION DOC]
+    # Scenario: construct a writer with both a graph and a graph definition. Expects a value error.
     with self.assertRaises(ValueError):
       test_dir = self._CleanTestDir("basics_graph_and_graph_def")
       with ops.Graph().as_default() as g:
@@ -227,6 +280,8 @@ class FileWriterTestBase:
 
   @test_util.run_deprecated_v1
   def testNeitherGraphNorGraphDef(self):
+    # [FUNCTION DOC]
+    # Scenario: construct a writer passing a string where a graph is expected. Expects a type error.
     with self.assertRaises(TypeError):
       test_dir = self._CleanTestDir("basics_string_instead_of_graph")
       sw = self._FileWriter(test_dir, "string instead of graph object")
@@ -234,6 +289,10 @@ class FileWriterTestBase:
 
   @test_util.run_deprecated_v1
   def testCloseAndReopen(self):
+    # [FUNCTION DOC]
+    # Scenario: write a start log at step 1, close, wait over a second so file names differ,
+    # reopen, write a start log at step 2, close. Expects two events files, the first holding a
+    # version event and the step 1 log only, the second a version event and the step 2 log only.
     test_dir = self._CleanTestDir("close_and_reopen")
     sw = self._FileWriter(test_dir)
     sw.add_session_log(event_pb2.SessionLog(status=SessionLog.START), 1)
@@ -278,6 +337,10 @@ class FileWriterTestBase:
 
   @test_util.run_deprecated_v1
   def testNonBlockingClose(self):
+    # [FUNCTION DOC]
+    # Scenario: create a writer, wait for the queue to drain, then close it. Only checks that the
+    # close completes and the recorded time before closing is recent; it does not measure how long
+    # the close took.
     test_dir = self._CleanTestDir("non_blocking_close")
     sw = self._FileWriter(test_dir)
     # Sleep 1.2 seconds to make sure event queue is empty.
@@ -288,6 +351,9 @@ class FileWriterTestBase:
 
   @test_util.run_deprecated_v1
   def testUseAfterClose(self):
+    # [FUNCTION DOC]
+    # Scenario: close a writer, then add a summary, a session log and a graph while recording
+    # warnings. Expects no warnings beforehand and exactly three user warnings afterwards.
     test_dir = self._CleanTestDir("use_after_close")
     sw = self._FileWriter(test_dir)
     sw.close()
@@ -304,6 +370,9 @@ class FileWriterTestBase:
 
   @test_util.run_deprecated_v1
   def testWithStatement(self):
+    # [FUNCTION DOC]
+    # Scenario: use the writer as a context manager and write a start log inside it. Expects
+    # exactly one events file to exist afterwards.
     test_dir = self._CleanTestDir("with_statement")
     with self._FileWriter(test_dir) as sw:
       sw.add_session_log(event_pb2.SessionLog(status=SessionLog.START), 1)
@@ -315,6 +384,10 @@ class FileWriterTestBase:
   # protocol buffers correctly.
   @test_util.run_deprecated_v1
   def testAddingSummariesFromSessionRunCalls(self):
+    # [FUNCTION DOC]
+    # Scenario: evaluate a 32-bit and a 64-bit integer constant (numpy values) and use them as
+    # global steps; add one serialized summary and one summary object, then close. Expects a
+    # version event and two summary events with steps 1 and 2 and the right values.
     test_dir = self._CleanTestDir("global_step")
     sw = self._FileWriter(test_dir)
     with self.cached_session():
@@ -362,6 +435,9 @@ class FileWriterTestBase:
 
   @test_util.run_deprecated_v1
   def testPluginMetadataStrippedFromSubsequentEvents(self):
+    # [FUNCTION DOC]
+    # Scenario: add a start log and two summaries with the same tag, each carrying plugin metadata.
+    # Expects the first summary event to keep the metadata and the second to have it stripped.
     test_dir = self._CleanTestDir("basics")
     sw = self._FileWriter(test_dir)
 
@@ -422,6 +498,9 @@ class FileWriterTestBase:
 
   @test_util.run_deprecated_v1
   def testFileWriterWithSuffix(self):
+    # [FUNCTION DOC]
+    # Scenario: create a writer with a file name suffix, then ten times add a summary, close and
+    # reopen. Expects every events file found in the directory to have a name ending in the suffix.
     test_dir = self._CleanTestDir("test_suffix")
     sw = self._FileWriter(test_dir, filename_suffix="_test_suffix")
     for _ in range(10):
@@ -438,10 +517,19 @@ class FileWriterTestBase:
       self.assertTrue(filename.endswith("_test_suffix"))
 
   def testPluginAssetSerialized(self):
+    # [FUNCTION DOC]
+    # Scenario: register an example plugin asset (two small text files) on a graph, create a writer
+    # in the temp directory and add that graph. Expects the plugins/example subdirectory under the
+    # log directory to hold the two files with the exact contents.
     class ExamplePluginAsset(plugin_asset.PluginAsset):
+      # [CLASS DOC]
+      # HELPER: Example plugin asset container named "example" whose assets are two text files.
       plugin_name = "example"
 
       def assets(self):
+        # [FUNCTION DOC]
+        # HELPER: Returns a mapping from file names to contents: one file with foo text and one
+        # with bar text.
         return {"foo.txt": "foo!", "bar.txt": "bar!"}
 
     with ops.Graph().as_default() as g:
@@ -462,13 +550,22 @@ class FileWriterTestBase:
 
 
 class FakeWriteError(Exception):
+  # [CLASS DOC]
+  # HELPER: Marker exception injected into the mocked native writer to simulate a write failure.
   pass
 
 
 class FileWriterTestCase(FileWriterTestBase, test.TestCase):
+  # [CLASS DOC]
+  # Runs the shared scenarios against the default thread-based writer and adds tests that inject
+  # failures into the writer thread and check how they surface to callers.
 
   @test_util.run_deprecated_v1
   def testWriterException_raisedFromFlush(self):
+    # [FUNCTION DOC]
+    # Scenario: replace the worker thread's native writer with a mock whose write waits for a
+    # signal and then raises the fake error; add two events, release the signal. Expects flush to
+    # raise the fake error.
     test_dir = self.get_temp_dir()
     sw = self._FileWriter(test_dir)
     writer_thread = sw.event_writer._worker
@@ -478,6 +575,9 @@ class FileWriterTestCase(FileWriterTestBase, test.TestCase):
       # thread dies, to avoid the second add_event() failing instead of flush().
       second_event_added = threading.Event()
       def _FakeWriteEvent(event):
+        # [FUNCTION DOC]
+        # HELPER: Mock write behavior. Ignores the event, waits until the test signals that the
+        # second event was added, then raises the fake write error.
         del event  # unused
         second_event_added.wait()
         raise FakeWriteError()
@@ -490,6 +590,9 @@ class FileWriterTestCase(FileWriterTestBase, test.TestCase):
 
   @test_util.run_deprecated_v1
   def testWriterException_raisedFromClose(self):
+    # [FUNCTION DOC]
+    # Scenario: mock the worker's native writer so writing raises the fake error; add one event.
+    # Expects close to raise the fake error.
     test_dir = self.get_temp_dir()
     sw = self._FileWriter(test_dir)
     writer_thread = sw.event_writer._worker
@@ -502,6 +605,9 @@ class FileWriterTestCase(FileWriterTestBase, test.TestCase):
 
   @test_util.run_deprecated_v1
   def testWriterException_raisedFromAddEvent(self):
+    # [FUNCTION DOC]
+    # Scenario: mock the native writer to raise on write, add one event, wait for the worker thread
+    # to die. Expects the next add event call to raise the fake error.
     test_dir = self.get_temp_dir()
     sw = self._FileWriter(test_dir)
     writer_thread = sw.event_writer._worker
@@ -516,6 +622,11 @@ class FileWriterTestCase(FileWriterTestBase, test.TestCase):
 
   @test_util.run_deprecated_v1
   def testWriterException_raisedFromPendingAddEvent(self):
+    # [FUNCTION DOC]
+    # Scenario: writer with queue size one and a mocked native writer that waits, briefly sleeps,
+    # then raises the fake error. Add two events (one consumed, one queued), release the signal and
+    # add a third event that blocks on the full queue. Expects the blocked add to raise the fake
+    # error when the thread dies and the queue closes.
     test_dir = self.get_temp_dir()
     # Set max_queue=1 to allow the third add_event() call to block (first event
     # is consumed immediately, the second fills the queue, the third blocks).
@@ -529,6 +640,9 @@ class FileWriterTestCase(FileWriterTestBase, test.TestCase):
       # queue closes on writer thread exit, since that's what we want to test.
       second_event_added = threading.Event()
       def _FakeWriteEvent(event):
+        # [FUNCTION DOC]
+        # HELPER: Mock write behavior. Ignores the event, waits for the test's signal, sleeps a
+        # tenth of a second so a blocked add can pend, then raises the fake write error.
         del event  # unused
         second_event_added.wait()
         time.sleep(0.1)
@@ -542,9 +656,15 @@ class FileWriterTestCase(FileWriterTestBase, test.TestCase):
 
 
 class SessionBasedFileWriterTestCase(FileWriterTestBase, test.TestCase):
+  # [CLASS DOC]
+  # Runs the shared scenarios with writers backed by a session, and adds tests of resource sharing
+  # between session-based writers and explicit v2 summary file writers.
   """Tests for FileWriter behavior when passed a Session argument."""
 
   def _FileWriter(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: Factory override. If no session keyword was given, runs inside a cached test session
+    # and passes it as the session; otherwise passes arguments through. Returns the new writer.
     if "session" not in kwargs:
       # Pass in test_session() as the session. It will be cached during this
       # test method invocation so that any other use of test_session() with no
@@ -555,11 +675,20 @@ class SessionBasedFileWriterTestCase(FileWriterTestBase, test.TestCase):
     return writer.FileWriter(*args, **kwargs)
 
   def _createTaggedSummary(self, tag):
+    # [FUNCTION DOC]
+    # HELPER: Builds and returns a Summary proto containing one value with the given tag (and no
+    # numeric payload).
     summary = summary_pb2.Summary()
     summary.value.add(tag=tag)
     return summary
 
   def testSharing_withOtherSessionBasedFileWriters(self):
+    # [FUNCTION DOC]
+    # Scenario: several session-based writers: two on the same session and directory, one on a
+    # different directory, one on another session (after a delay so file names differ), and one
+    # more on the first session. Expects the same-session same-directory writers to share one file
+    # (tags one, two, five), the other session to get its own file (tag four), no other files in
+    # the directory, and the other directory to contain an events file.
     logdir = self.get_temp_dir()
     with session.Session() as sess:
       # Initial file writer
@@ -612,6 +741,12 @@ class SessionBasedFileWriterTestCase(FileWriterTestBase, test.TestCase):
     self.assertTrue(glob.glob(os.path.join(logdir + "-other", "event*")))
 
   def testSharing_withExplicitSummaryFileWriters(self):
+    # [FUNCTION DOC]
+    # Scenario: mix session-based writers with v2 summary file writers on the same directory:
+    # default-named ones in one session, a differently named one, and writers in a second session.
+    # Expects sharing per session and name: the first file holds tags one, two and six; the
+    # second (other name) holds three; the third (second session, both kinds) holds four and
+    # five; and there are no further files.
     logdir = self.get_temp_dir()
     with session.Session() as sess:
       # Initial file writer via FileWriter(session=?)
@@ -687,6 +822,10 @@ class SessionBasedFileWriterTestCase(FileWriterTestBase, test.TestCase):
     self.assertRaises(StopIteration, lambda: next(event_paths))
 
   def testSummaryFileWritersInvalidInput(self):
+    # [FUNCTION DOC]
+    # Regression scenario for a reported issue: create a v2 file writer with an invalid flush
+    # interval (a list instead of a number), then initialize and flush it in a session. Expects an
+    # invalid-argument error.
     # Test case for GitHub issue 46909
     logdir = self.get_temp_dir()
     with session.Session() as sess:
@@ -698,9 +837,14 @@ class SessionBasedFileWriterTestCase(FileWriterTestBase, test.TestCase):
 
 
 class FileWriterCacheTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for the per-directory FileWriter cache.
   """FileWriterCache tests."""
 
   def _test_dir(self, test_name):
+    # [FUNCTION DOC]
+    # HELPER: Ensures an empty directory named test_name under the test temp directory (removing
+    # files if it exists, creating it otherwise) and returns its path.
     """Create an empty dir to use for tests.
 
     Args:
@@ -718,6 +862,10 @@ class FileWriterCacheTest(test.TestCase):
     return test_dir
 
   def test_cache(self):
+    # [FUNCTION DOC]
+    # Scenario: get writers for two directories and the first directory again. Expects the repeated
+    # request to return the same writer and different directories different writers; after closing,
+    # both directories contain events files and an unrelated path does not.
     with ops.Graph().as_default():
       dir1 = self._test_dir("test_cache_1")
       dir2 = self._test_dir("test_cache_2")
@@ -736,6 +884,9 @@ class FileWriterCacheTest(test.TestCase):
       self.assertFalse(events3)
 
   def test_clear(self):
+    # [FUNCTION DOC]
+    # Scenario: get a writer, clear the cache, get a writer for the same directory again. Expects a
+    # different writer object.
     with ops.Graph().as_default():
       dir1 = self._test_dir("test_clear")
       sw1 = writer_cache.FileWriterCache.get(dir1)

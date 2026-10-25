@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Asynchronous event-file writer used by the v1 summary FileWriter. It defines EventFileWriter,
+# which creates an events file in a log directory and writes Event protocol buffers to it from a
+# background daemon thread fed through a bounded, closeable queue. It also defines the private
+# writer thread class, the CloseableQueue (a stripped-down closeable fork of the standard library
+# queue) and QueueClosedError raised when putting to a closed queue.
+# Importing has no side effects beyond loading the native events writer extension.
+# Consumed by the summary writer module of this package.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,6 +35,12 @@ from tensorflow.python.util import compat
 
 
 class EventFileWriter:
+  # [CLASS DOC]
+  # Writes Event protocol buffers to a tfrecord events file inside a log directory. Holds the log
+  # directory, queue size and flush interval, a native events writer, a closeable queue and a
+  # background writer thread, plus sentinel objects used to request flush and close and an event
+  # used to signal flush completion. Created with a log directory and used through add_event,
+  # flush, close and reopen. Not thread-safe.
   """Writes `Event` protocol buffers to an event file.
 
   The `EventFileWriter` class creates an event file in the specified directory,
@@ -38,6 +52,13 @@ class EventFileWriter:
 
   def __init__(self, logdir, max_queue=10, flush_secs=120,
                filename_suffix=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: logdir (directory path, converted to text), max_queue (maximum number
+    # of pending events before adding blocks, default 10), flush_secs (seconds between automatic
+    # flushes, default 120), filename_suffix (optional text appended to the event file name).
+    # Side effects: creates the log directory if missing, creates the native events writer for a
+    # file named with the events prefix, applies the suffix when given, and starts the background
+    # writer thread via the initialization helper. Marks the writer as open. Returns nothing.
     """Creates a `EventFileWriter` and an event file to write to.
 
     On construction the summary writer creates a new event file in `logdir`.
@@ -75,6 +96,11 @@ class EventFileWriter:
     self._closed = False
 
   def _initialize(self):
+    # [FUNCTION DOC]
+    # HELPER: Sets up the queue and worker thread for the constructor and reopen.
+    # Creates a fresh closeable queue of the configured size and a new writer thread bound to it,
+    # the native writer, flush interval and sentinels, then starts the thread. Takes no inputs
+    # and returns nothing.
     """Initializes or re-initializes the queue and writer thread.
 
     The EventsWriter itself does not need to be re-initialized explicitly,
@@ -89,10 +115,16 @@ class EventFileWriter:
     self._worker.start()
 
   def get_logdir(self):
+    # [FUNCTION DOC]
+    # Returns the log directory path (as text) in which the event file is written. No side effects.
     """Returns the directory where event file will be written."""
     return self._logdir
 
   def reopen(self):
+    # [FUNCTION DOC]
+    # If the writer was closed, restarts the queue and worker thread and marks it open again, so
+    # new events go to a new events file in the same directory. Does nothing when not closed.
+    # Takes no inputs and returns nothing.
     """Reopens the EventFileWriter.
 
     Can be called after `close()` to add more events in the same directory.
@@ -105,6 +137,10 @@ class EventFileWriter:
       self._closed = False
 
   def add_event(self, event):
+    # [FUNCTION DOC]
+    # Enqueues an Event protocol buffer for the background thread to write. Input: event. Silently
+    # ignored if the writer is closed. May block while the queue is full. If the worker thread had
+    # failed, the original exception is re-raised by the enqueue helper. Returns nothing.
     """Adds an event to the event file.
 
     Args:
@@ -114,6 +150,12 @@ class EventFileWriter:
       self._try_put(event)
 
   def _try_put(self, item):
+    # [FUNCTION DOC]
+    # HELPER: Enqueue primitive shared by add_event, flush and close.
+    # Puts the item (an event or a sentinel) on the queue. If the queue is closed, closes the
+    # writer internally and, when the worker thread recorded a failure, re-raises that exception
+    # (without chaining the queue error). If no failure was recorded the error is swallowed.
+    # Returns nothing.
     """Attempts to enqueue an item to the event queue.
 
     If the queue is closed, this will close the EventFileWriter and reraise the
@@ -131,6 +173,11 @@ class EventFileWriter:
         raise exception from None
 
   def flush(self):
+    # [FUNCTION DOC]
+    # Blocks until all queued events are written and flushed to disk. Does nothing if closed.
+    # Clears the completion event, enqueues the flush sentinel, and waits for the worker to signal
+    # completion. If the worker thread has failed, closes the writer and re-raises the worker's
+    # original exception. Takes no inputs and returns nothing.
     """Flushes the event file to disk.
 
     Call this method to make sure that all pending events have been written to
@@ -148,6 +195,10 @@ class EventFileWriter:
         raise exception
 
   def close(self):
+    # [FUNCTION DOC]
+    # Flushes pending events, enqueues the close sentinel so the worker exits, then joins the
+    # worker and closes the native writer. Does nothing if already closed. May raise the worker's
+    # failure exception from the flush. Takes no inputs and returns nothing.
     """Flushes the event file to disk and close the file.
 
     Call this method when you do not need the summary writer anymore.
@@ -158,16 +209,33 @@ class EventFileWriter:
       self._internal_close()
 
   def _internal_close(self):
+    # [FUNCTION DOC]
+    # HELPER: Shared teardown for close, flush and the enqueue helper.
+    # Marks the writer closed, waits for the worker thread to finish, and closes the native events
+    # writer. Does not flush or enqueue anything. Takes no inputs and returns nothing.
     self._closed = True
     self._worker.join()
     self._ev_writer.Close()
 
 
 class _EventLoggerThread(threading.Thread):
+  # [CLASS DOC]
+  # HELPER: Background worker for EventFileWriter.
+  # Daemon thread named for event logging that repeatedly takes items from the closeable queue and
+  # writes events with the native writer, flushing periodically, on request (flush sentinel) and
+  # exiting on the close sentinel. Records exception info when the loop fails so the owner can
+  # re-raise it. Always unblocks pending flushes and closes the queue on exit.
   """Thread that logs events."""
 
   def __init__(self, queue, ev_writer, flush_secs, flush_complete,
                flush_sentinel, close_sentinel):
+    # [FUNCTION DOC]
+    # HELPER: Constructor of the writer thread.
+    # Inputs: queue (closeable queue to read from), ev_writer (native events writer), flush_secs
+    # (seconds between periodic flushes), flush_complete (threading event set after each requested
+    # flush), flush_sentinel and close_sentinel (marker objects compared by identity). Initializes
+    # the base thread with a fixed name, marks it as a daemon, schedules the first flush
+    # immediately, and sets failure info to empty. Does not start the thread. Returns nothing.
     """Creates an _EventLoggerThread.
 
     Args:
@@ -199,6 +267,13 @@ class _EventLoggerThread(threading.Thread):
     self.failure_exc_info = ()
 
   def run(self):
+    # [FUNCTION DOC]
+    # Thread body. Loops forever taking items from the queue: the close sentinel ends the loop; the
+    # flush sentinel flushes the writer and sets the completion event; any other item is written
+    # as an event and the writer is flushed if the flush interval has elapsed. If any exception
+    # occurs it is logged as an error, its exception info is stored in the failure attribute, and
+    # it is re-raised. In all cases on exit it sets the completion event and closes the queue so
+    # that blocked callers do not deadlock. Returns nothing.
     try:
       while True:
         event = self._queue.get()
@@ -228,9 +303,18 @@ class _EventLoggerThread(threading.Thread):
 
 
 class CloseableQueue:
+  # [CLASS DOC]
+  # Bounded first-in first-out queue shared between producer callers and the writer thread. Holds a
+  # double-ended buffer, a maximum size, a closed flag, and one lock shared by two condition
+  # variables (not empty, not full). Closing makes pending and future puts fail. Gets are
+  # blocking and are not affected by closing.
   """Stripped-down fork of the standard library Queue that is closeable."""
 
   def __init__(self, maxsize=0):
+    # [FUNCTION DOC]
+    # Constructor. Input: maxsize, the integer capacity; zero or negative means unbounded
+    # (default 0). Creates the empty buffer, the open state, the lock and the two conditions.
+    # Returns nothing.
     """Create a queue object with a given maximum size.
 
     Args:
@@ -249,6 +333,9 @@ class CloseableQueue:
     self._not_full = threading.Condition(self._mutex)
 
   def get(self):
+    # [FUNCTION DOC]
+    # Removes and returns the oldest item. Blocks while the queue is empty (even if the queue has
+    # been closed, so it never raises on closure). Wakes one blocked producer after removal.
     """Remove and return an item from the queue.
 
     If the queue is empty, blocks until an item is available.
@@ -264,6 +351,10 @@ class CloseableQueue:
       return item
 
   def put(self, item):
+    # [FUNCTION DOC]
+    # Appends an item. Input: item, any object. Raises QueueClosedError immediately if the queue
+    # is closed, or if it becomes closed while waiting for space in a full bounded queue. Blocks
+    # while full. Wakes one waiting consumer after appending. Returns nothing.
     """Put an item into the queue.
 
     If the queue is closed, fails immediately.
@@ -289,6 +380,9 @@ class CloseableQueue:
       self._not_empty.notify()
 
   def close(self):
+    # [FUNCTION DOC]
+    # Marks the queue closed and wakes all producers blocked on a full queue so their puts fail.
+    # Already queued items remain retrievable. Returns nothing.
     """Closes the queue, causing any pending or future `put()` calls to fail."""
     with self._not_full:
       self._closed = True
@@ -296,4 +390,7 @@ class CloseableQueue:
 
 
 class QueueClosedError(Exception):
+  # [CLASS DOC]
+  # Exception type raised by the closeable queue when an item is put into a closed queue. Carries
+  # no extra state; caught by the event file writer to trigger shutdown handling.
   """Raised when CloseableQueue.put() fails because the queue is closed."""

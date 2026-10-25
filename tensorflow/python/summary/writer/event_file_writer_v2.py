@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Graph-based variant of the event file writer. Defines EventFileWriterV2, which writes Event
+# protocol buffers through a shared v2 summary writer resource and graph operations executed in a
+# session, instead of using a native writer and background thread. Presents the same interface as
+# the thread-based writer (get log dir, reopen, add event, flush, close).
+# No import-time side effects other than imports.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +29,11 @@ from tensorflow.python.platform import gfile
 
 
 class EventFileWriterV2(object):
+  # [CLASS DOC]
+  # Event file writer backed by the v2 summary file writer resource. Holds the session, log
+  # directory, a closed flag, a string placeholder for serialized events, and graph operations for
+  # adding an event, initializing, flushing and closing the resource. Every stateful method runs
+  # these operations in the session. Created with a session and log directory.
   """Writes `Event` protocol buffers to an event file via the graph.
 
   The `EventFileWriterV2` class is backed by the summary file writer in the v2
@@ -36,6 +47,14 @@ class EventFileWriterV2(object):
 
   def __init__(self, session, logdir, max_queue=10, flush_secs=120,
                filename_suffix=''):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: session (v1 session whose graph holds the writer ops), logdir (directory
+    # path), max_queue (pending event capacity, default 10), flush_secs (seconds between flushes,
+    # default 120, converted to milliseconds), filename_suffix (text appended to file names,
+    # default empty). Side effects: creates the log directory, adds a file writer resource, a
+    # placeholder, and import-event, init, flush and close operations to the session graph under a
+    # name scope, and runs the init operation in the session. Marks the writer open. Returns
+    # nothing.
     """Creates an `EventFileWriterV2` and an event file to write to.
 
     On construction, this calls `tf.contrib.summary.create_file_writer` within
@@ -91,10 +110,15 @@ class EventFileWriterV2(object):
       self._session.run(self._init_op)
 
   def get_logdir(self):
+    # [FUNCTION DOC]
+    # Returns the log directory given at construction. No side effects.
     """Returns the directory where event file will be written."""
     return self._logdir
 
   def reopen(self):
+    # [FUNCTION DOC]
+    # If closed, clears the closed flag and re-runs the init operation in the session so a new
+    # events file is created. Does nothing if not closed. Returns nothing.
     """Reopens the EventFileWriter.
 
     Can be called after `close()` to add more events in the same directory.
@@ -107,6 +131,10 @@ class EventFileWriterV2(object):
       self._session.run(self._init_op)
 
   def add_event(self, event):
+    # [FUNCTION DOC]
+    # Input: event, an Event protocol buffer. Unless closed, serializes it and runs the import
+    # event operation in the session, feeding the bytes through the placeholder. Silently ignored
+    # when closed. Session errors propagate. Returns nothing.
     """Adds an event to the event file.
 
     Args:
@@ -118,6 +146,10 @@ class EventFileWriterV2(object):
           self._add_event_op, feed_dict={self._event_placeholder: event_pb})
 
   def flush(self):
+    # [FUNCTION DOC]
+    # Runs the flush operation in the session so pending events reach disk. Unlike the thread-based
+    # writer, it does not check the closed flag, so calling it after close runs the operation on
+    # the closed resource. Returns nothing.
     """Flushes the event file to disk.
 
     Call this method to make sure that all pending events have been written to
@@ -126,6 +158,9 @@ class EventFileWriterV2(object):
     self._session.run(self._flush_op)
 
   def close(self):
+    # [FUNCTION DOC]
+    # If not already closed, flushes, runs the close operation in the session and marks the writer
+    # closed. Does nothing if already closed. Returns nothing.
     """Flushes the event file to disk and close the file.
 
     Call this method when you do not need the summary writer anymore.

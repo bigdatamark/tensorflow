@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Version 1 summary writer API. Defines SummaryToEventTransformer, which converts summaries, session
+# logs, graphs, meta graphs and run metadata into Event protocol buffers and hands them to an event
+# writer, and FileWriter (exported publicly for the v1 summary API), which adds a real event writer:
+# the thread-based one by default or the session-graph-based one when a session is supplied.
+# Also writes plugin asset files next to graphs. Not usable under eager execution.
+# Import-time side effects: registers FileWriter in the public API export table.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,6 +43,12 @@ _PLUGINS_DIR = "plugins"
 
 
 class SummaryToEventTransformer(object):
+  # [CLASS DOC]
+  # Base class implementing the summary writer endpoints (add summary, session log, graph, meta
+  # graph, run metadata). Each endpoint builds an Event protocol buffer, stamps it with wall clock
+  # time and optional step, and forwards it to the contained event writer. Holds the event writer,
+  # a record of tags used for run metadata, and the set of summary tags already seen (used to
+  # strip repeated metadata). Subclassed by FileWriter.
   """Abstractly implements the SummaryWriter API.
 
   This API basically implements a number of endpoints (add_summary,
@@ -44,6 +57,15 @@ class SummaryToEventTransformer(object):
   """
 
   def __init__(self, event_writer, graph=None, graph_def=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: event_writer (object with add event and get log directory methods),
+    # graph (optional graph, or possibly a graph definition passed positionally) and graph_def
+    # (deprecated optional graph definition). Stores the writer and initializes the tag
+    # bookkeeping. If either graph argument is given, adds the graph to the event stream and also
+    # exports and adds a meta graph built from it. May raise errors from add graph (value error if
+    # both are given, type error for unsupported types). Returns nothing.
+    # The seen-tags set is created after the graph is added, which is harmless since add graph
+    # does not use it.
     """Creates a `SummaryWriter` and an event file.
 
     On construction the summary writer creates a new event file in `logdir`.
@@ -95,6 +117,12 @@ class SummaryToEventTransformer(object):
     self._seen_summary_tags = set()
 
   def add_summary(self, summary, global_step=None):
+    # [FUNCTION DOC]
+    # Writes a summary event. Inputs: summary (Summary proto or its serialized bytes, which are
+    # parsed) and global_step (optional number recorded as the event step). To save space, the
+    # metadata of any value whose tag was already seen is removed; the first metadata-bearing
+    # value for a tag keeps it and the tag is remembered. Note this mutates the passed summary.
+    # Wraps the summary in an Event and forwards it. Returns nothing.
     """Adds a `Summary` protocol buffer to the event file.
 
     This method wraps the provided summary in an `Event` protocol buffer
@@ -138,6 +166,9 @@ class SummaryToEventTransformer(object):
     self._add_event(event, global_step)
 
   def add_session_log(self, session_log, global_step=None):
+    # [FUNCTION DOC]
+    # Wraps a SessionLog proto in an Event and forwards it with the optional global_step. Returns
+    # nothing.
     """Adds a `SessionLog` protocol buffer to the event file.
 
     This method wraps the provided session in an `Event` protocol buffer
@@ -152,11 +183,22 @@ class SummaryToEventTransformer(object):
     self._add_event(event, global_step)
 
   def _add_graph_def(self, graph_def, global_step=None):
+    # [FUNCTION DOC]
+    # HELPER: Final stage of add graph.
+    # Serializes a graph definition proto to bytes, wraps it in an Event and forwards it with the
+    # optional global_step. Returns nothing.
     graph_bytes = graph_def.SerializeToString()
     event = event_pb2.Event(graph_def=graph_bytes)
     self._add_event(event, global_step)
 
   def add_graph(self, graph, global_step=None, graph_def=None):
+    # [FUNCTION DOC]
+    # Writes a graph event. Inputs: graph (a Graph, or a deprecated graph definition), global_step
+    # (optional number) and graph_def (deprecated; may hold a Graph or graph definition).
+    # Raises a value error if both graph and graph_def are given, and a type error if neither is a
+    # Graph or graph definition. A Graph found in graph_def triggers a warning and is used. For a
+    # Graph, serializes it with shapes and also writes plugin asset files into the log directory.
+    # A graph definition triggers a deprecation warning and is written as is. Returns nothing.
     """Adds a `Graph` to the event file.
 
     The graph described by the protocol buffer will be displayed by
@@ -210,6 +252,12 @@ class SummaryToEventTransformer(object):
     self._add_graph_def(true_graph_def, global_step)
 
   def _write_plugin_assets(self, graph):
+    # [FUNCTION DOC]
+    # HELPER: Persists plugin assets for add graph.
+    # Input: graph, whose registered plugin asset containers are collected. For each container,
+    # creates a plugins/<plugin name> subdirectory under the writer's log directory and writes each
+    # named asset's content as a file there. Side effects: directory creation and file writes.
+    # Returns nothing.
     plugin_assets = plugin_asset.get_all_plugin_assets(graph)
     logdir = self.event_writer.get_logdir()
     for asset_container in plugin_assets:
@@ -223,6 +271,11 @@ class SummaryToEventTransformer(object):
           f.write(content)
 
   def add_meta_graph(self, meta_graph_def, global_step=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring's error description is garbled ("If both meta_graph_def is not");
+    # the code simply raises a type error when the input is not a MetaGraphDef.
+    # Serializes a MetaGraphDef proto, wraps it in an Event and forwards it with the optional
+    # global_step. Raises a type error for any other input type. Returns nothing.
     """Adds a `MetaGraphDef` to the event file.
 
     The `MetaGraphDef` allows running the given graph via
@@ -245,6 +298,11 @@ class SummaryToEventTransformer(object):
     self._add_event(event, global_step)
 
   def add_run_metadata(self, run_metadata, tag, global_step=None):
+    # [FUNCTION DOC]
+    # Writes a tagged run metadata event. Inputs: run_metadata (RunMetadata proto, stored in
+    # serialized form), tag (name, must be unused so far on this writer) and global_step
+    # (optional). Raises a value error if the tag was used before; otherwise records the tag,
+    # builds the event and forwards it. Returns nothing.
     """Adds a metadata information for a single session.run() call.
 
     Args:
@@ -269,6 +327,10 @@ class SummaryToEventTransformer(object):
     self._add_event(event, global_step)
 
   def _add_event(self, event, step):
+    # [FUNCTION DOC]
+    # HELPER: Common sink for all endpoints.
+    # Sets the event's wall time to now, sets its step to the integer value of step when step is
+    # not null, and passes it to the event writer. Mutates the event. Returns nothing.
     event.wall_time = time.time()
     if step is not None:
       event.step = int(step)
@@ -277,6 +339,11 @@ class SummaryToEventTransformer(object):
 
 @tf_export(v1=["summary.FileWriter"])
 class FileWriter(SummaryToEventTransformer):
+  # [CLASS DOC]
+  # Public v1 summary writer that writes Summary protos and other events to an events file in a
+  # log directory. Chooses the event writer backend at construction (thread-based, or
+  # session-graph-based when a session is given), tracks a closed flag, warns when used after
+  # close, and supports use as a context manager. Not thread-safe and not usable in eager mode.
   """Writes `Summary` protocol buffers to event files.
 
   The `FileWriter` class provides a mechanism to create an event file in a
@@ -356,6 +423,14 @@ class FileWriter(SummaryToEventTransformer):
                graph_def=None,
                filename_suffix=None,
                session=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: logdir (directory path), graph (optional graph), max_queue (pending
+    # queue size, default 10), flush_secs (seconds between flushes, default 120), graph_def
+    # (deprecated), filename_suffix (optional file name suffix) and session (optional v1 session).
+    # Raises a runtime error if eager execution is enabled. With a session, builds the
+    # session-graph-based writer (adding ops to the session graph and running init); otherwise the
+    # thread-based writer, which creates the directory and file and starts a thread. Marks the
+    # writer open and initializes the base class, which writes the graph if one was given.
     """Creates a `FileWriter`, optionally shared within the given session.
 
     Typically, constructing a file writer creates a new event file in `logdir`.
@@ -422,28 +497,45 @@ class FileWriter(SummaryToEventTransformer):
     super(FileWriter, self).__init__(event_writer, graph, graph_def)
 
   def __enter__(self):
+    # [FUNCTION DOC]
+    # Context manager entry. Returns the writer itself; no other effects.
     """Make usable with "with" statement."""
     return self
 
   def __exit__(self, unused_type, unused_value, unused_traceback):
+    # [FUNCTION DOC]
+    # Context manager exit. Ignores the exception information and closes the writer (flushing
+    # pending events). Does not suppress exceptions. Returns nothing.
     """Make usable with "with" statement."""
     self.close()
 
   def get_logdir(self):
+    # [FUNCTION DOC]
+    # Returns the log directory reported by the underlying event writer. No side effects.
     """Returns the directory where event file will be written."""
     return self.event_writer.get_logdir()
 
   def _warn_if_event_writer_is_closed(self):
+    # [FUNCTION DOC]
+    # HELPER: Guard for event-producing methods.
+    # Emits a user warning that a closed writer is being used (operations are no-ops until
+    # reopened) when the closed flag is set. Returns nothing.
     if self._closed:
       warnings.warn("Attempting to use a closed FileWriter. "
                     "The operation will be a noop unless the FileWriter "
                     "is explicitly reopened.")
 
   def _add_event(self, event, step):
+    # [FUNCTION DOC]
+    # HELPER: Override of the base sink. Warns if the writer is closed, then delegates to the base
+    # implementation (stamp time and step, forward to the event writer). Returns nothing.
     self._warn_if_event_writer_is_closed()
     super(FileWriter, self)._add_event(event, step)
 
   def add_event(self, event):
+    # [FUNCTION DOC]
+    # Passes a prebuilt Event proto directly to the event writer (without stamping time or step),
+    # warning first if the writer is closed. Returns nothing.
     """Adds an event to the event file.
 
     Args:
@@ -453,6 +545,10 @@ class FileWriter(SummaryToEventTransformer):
     self.event_writer.add_event(event)
 
   def flush(self):
+    # [FUNCTION DOC]
+    # Warns if the writer is closed, then asks the event writer to flush pending events to disk.
+    # With the session-based backend, flushing a closed writer may raise an error from the
+    # session; the thread-based backend treats it as a no-op. Returns nothing.
     """Flushes the event file to disk.
 
     Call this method to make sure that all pending events have been written to
@@ -464,6 +560,9 @@ class FileWriter(SummaryToEventTransformer):
     self.event_writer.flush()
 
   def close(self):
+    # [FUNCTION DOC]
+    # Closes the underlying event writer (which flushes first) and sets the closed flag. Returns
+    # nothing.
     """Flushes the event file to disk and close the file.
 
     Call this method when you do not need the summary writer anymore.
@@ -472,6 +571,9 @@ class FileWriter(SummaryToEventTransformer):
     self._closed = True
 
   def reopen(self):
+    # [FUNCTION DOC]
+    # Reopens the underlying event writer (new events file in the same directory) and clears the
+    # closed flag. Harmless if the writer was not closed. Returns nothing.
     """Reopens the EventFileWriter.
 
     Can be called after `close()` to add more events in the same directory.

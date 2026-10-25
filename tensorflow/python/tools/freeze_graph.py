@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Command-line tool and library for freezing a model: converts variables stored in a checkpoint
+# (or SavedModel) into constant operations inside a standalone graph definition file, so the graph
+# can be loaded without restore operations (useful on mobile or embedded targets in C++).
+# Exposes freeze_graph_with_def_protos (works on in-memory protos), freeze_graph (loads protos from
+# files first), a main entry that validates the checkpoint version flag, and run_main which
+# builds the command-line flag parser and runs the application. Private helpers parse graph,
+# meta graph and saver files and detect variable-free graphs.
+# No import-time side effects; running as a script calls run_main.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -57,6 +66,11 @@ from tensorflow.python.training import saver as saver_lib
 
 
 def _has_no_variables(sess: session.Session) -> bool:
+  # [FUNCTION DOC]
+  # HELPER: Diagnostic used by freeze_graph_with_def_protos to explain a failed saver creation.
+  # Input: sess, a session. Scans the operations of the session's graph; returns false as soon as
+  # an operation whose type starts with the variable prefix or ends with the variable-op suffix is
+  # found, otherwise true. No side effects.
   """Determines if the graph has any variables.
 
   Args:
@@ -88,6 +102,31 @@ def freeze_graph_with_def_protos(
     saved_model_tags: Optional[List[str]] = None,
     checkpoint_version: int = saver_pb2.SaverDef.V2,
 ) -> graph_pb2.GraphDef:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it returns the location of the output graph; the code returns
+  # the frozen graph definition itself (the file is only an optional side effect).
+  # KNOWN ISSUE: when no saved model directory is given and input_checkpoint is null, the missing
+  # checkpoint error message is built by joining text with a null value, which raises a type error
+  # instead of the intended value error.
+  # KNOWN ISSUE: the initializer nodes are only run in the meta graph and checkpoint-only branches;
+  # with a saver definition or a saved model directory they are silently ignored. The unused
+  # restore operation and filename tensor names are deleted at the start.
+  # Freezes a model. Inputs: input_graph_def (graph definition, may be null), input_saver_def
+  # (optional saver definition), input_checkpoint (checkpoint prefix, V1 or V2), output_node_names
+  # (comma separated names, required), restore_op_name and filename_tensor_name (unused),
+  # output_graph (file path; nothing written when empty), clear_devices (strip device placements
+  # from the node list of the meta graph or graph definition), initializer_nodes (comma separated
+  # names run before freezing), variable_names_whitelist and variable_names_denylist (comma
+  # separated names to convert or skip; empty means none specified), input_meta_graph_def
+  # (optional), input_saved_model_dir (optional), saved_model_tags (list of tags, defaults to
+  # empty when a saved model directory is used) and checkpoint_version (saver format, default V2).
+  # Raises a value error if neither a saved model directory nor an existing checkpoint is given,
+  # if no output node names are given, or (when the saver cannot be built) if partition variables
+  # are present or the graph has no variables; other type errors propagate.
+  # Behavior: imports the graph definition if given, opens a session, restores variables from the
+  # saver definition, meta graph, saved model, or checkpoint (mapping checkpoint variable names to
+  # graph tensors), converts variables to constants for the requested outputs, optionally writes
+  # the deterministic serialization to output_graph, and returns the frozen graph definition.
   """Converts all variables in a graph and checkpoint into constants.
 
   Args:
@@ -255,6 +294,11 @@ def freeze_graph_with_def_protos(
 def _parse_input_graph_proto(
     input_graph: str, input_binary: bool
 ) -> graph_pb2.GraphDef:
+  # [FUNCTION DOC]
+  # HELPER: Loads the graph file for freeze_graph.
+  # Inputs: input_graph (file path) and input_binary (true for binary format, false for text).
+  # Raises an IO error if the file does not exist. Reads and parses the file into a graph
+  # definition and returns it.
   """Parses input tensorflow graph into GraphDef proto."""
   if not gfile.Exists(input_graph):
     raise IOError("Input graph file '" + input_graph + "' does not exist!")
@@ -271,6 +315,13 @@ def _parse_input_graph_proto(
 def _parse_input_meta_graph_proto(
     input_graph: str, input_binary: bool
 ) -> meta_graph_pb2.MetaGraphDef:
+  # [FUNCTION DOC]
+  # HELPER: Loads the meta graph file for freeze_graph.
+  # KNOWN ISSUE: the docstring says it parses a graph; it actually parses a meta graph file, and
+  # the printed confirmation message is missing its closing quote.
+  # Inputs: input_graph (file path of the meta graph) and input_binary (binary or text format).
+  # Raises an IO error if the file does not exist. Prints a message and returns the meta graph
+  # definition.
   """Parses input tensorflow graph into MetaGraphDef proto."""
   if not gfile.Exists(input_graph):
     raise IOError("Input meta graph file '" + input_graph + "' does not exist!")
@@ -286,6 +337,10 @@ def _parse_input_meta_graph_proto(
 
 
 def _parse_input_saver_proto(input_saver, input_binary):
+  # [FUNCTION DOC]
+  # HELPER: Loads the saver file for freeze_graph.
+  # Inputs: input_saver (file path) and input_binary (binary or text format). Raises an IO error
+  # if the file does not exist. Returns the parsed saver definition.
   """Parses input tensorflow Saver into SaverDef proto."""
   if not gfile.Exists(input_saver):
     raise IOError("Input saver file '" + input_saver + "' does not exist!")
@@ -317,6 +372,19 @@ def freeze_graph(
     saved_model_tags: str = tag_constants.SERVING,
     checkpoint_version: int = saver_pb2.SaverDef.V2,
 ) -> graph_pb2.GraphDef:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it returns the location of the frozen graph; the code returns
+  # the frozen graph definition object.
+  # File-based front end of freezing. Inputs: input_graph (graph file path, used when no saved
+  # model directory), input_saver (saver file path, may be empty), input_binary (all given files
+  # are binary rather than text), input_checkpoint, output_node_names, restore_op_name and
+  # filename_tensor_name (unused), output_graph, clear_devices, initializer_nodes, the variable
+  # white and deny lists, input_meta_graph (meta graph file path, truthy to load), input_saved_model_dir
+  # (optional), saved_model_tags (comma separated text, default serving tag) and
+  # checkpoint_version. With a saved model directory the graph definition is taken from the
+  # meta graph selected by the tags; otherwise it is parsed from the graph file. Splits the tags
+  # text into a list (dropping empty entries) and delegates to the proto-based function, whose
+  # result it returns. Errors: IO errors for missing files, plus those of the delegate.
   """Converts all variables in a graph and checkpoint into constants.
 
   Args:
@@ -384,6 +452,11 @@ def freeze_graph(
 
 
 def main(unused_args, flags):
+  # [FUNCTION DOC]
+  # Application entry. Inputs: unused_args (ignored) and flags (parsed command-line flags object).
+  # Maps the checkpoint version flag (1 or 2) to the saver format, raising a value error for any
+  # other number, then calls freeze_graph with the flag values. The result is discarded; the
+  # frozen graph is written to the output file. Returns nothing.
   if flags.checkpoint_version == 1:
     checkpoint_version = saver_pb2.SaverDef.V1
   elif flags.checkpoint_version == 2:
@@ -414,6 +487,14 @@ def main(unused_args, flags):
 
 
 def run_main():
+  # [FUNCTION DOC]
+  # Script entry. Builds the argument parser with a boolean type converter (text compared to true,
+  # ignoring case) and flags for the input graph, saver, checkpoint, checkpoint version, output
+  # graph, binary input, output node names, deprecated restore op and filename tensor names, clear
+  # devices (default true), initializer nodes, variable white and deny lists, meta graph, saved
+  # model directory and saved model tags (default serve). Parses known arguments, then runs the
+  # application with a callback that invokes main, passing unrecognized arguments through to the
+  # application runner. Exits the process via the runner. Returns nothing.
   """Main function of freeze_graph."""
   parser = argparse.ArgumentParser()
   parser.register("type", "bool", lambda v: v.lower() == "true")
