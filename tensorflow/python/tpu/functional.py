@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: thin alias module giving the TPU functional-ops API a stable import location.
+# Exposes a single public name, TPUPartitionedCall, which is simply the generated TPU
+# partitioned-call op wrapper from the TPU ops module. The name uses a capitalized style on
+# purpose (lint check disabled). No logic, flags or registrations happen here; the only
+# import-time effect is importing the TPU ops module.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

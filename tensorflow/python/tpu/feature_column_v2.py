@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# TPU feature column library (version 2 feature columns). Exposes two public factories, exported
+# in the v1 API namespace as TPU experimental embedding_column and shared_embedding_columns, which
+# validate arguments and build TPU-aware embedding columns (plain, shared, and device-specific
+# variants for CPU / TPU tensor core lookups). Also provides helpers to split sequence columns
+# from non-sequence ones, to aggregate sparse embedding lookups into padded dense tensors, and to
+# pad sparse lookup indices. Columns subclass the core embedding column classes and the TPU base
+# embedding column from the older TPU feature column module; on TPU they mostly record variable
+# scope and name so TPU embedding variables can be created later, otherwise they fall back to
+# normal CPU lookups. Import-time side effects: API export registration only.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -41,6 +51,9 @@ _TENSOR_CORE_MASK_KEY_SUFFIX = '__TENSOR_CORE_MASK'
 
 
 class EmbeddingDevice(enum.Enum):
+  # [CLASS DOC]
+  # Enumeration of where an embedding lookup runs: host CPU, TPU tensor core, or TPU embedding
+  # core. The factory functions translate user-supplied device strings into these members.
   CPU = 1
   TPU_TENSOR_CORE = 2
   TPU_EMBEDDING_CORE = 3
@@ -56,6 +69,21 @@ def embedding_column_v2(categorical_column,
                         embedding_lookup_device=None,
                         tensor_core_shape=None,
                         use_safe_embedding_lookup=True):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring lists only value errors, but the function also raises a type error
+  # when the categorical column is not one of the supported v2 categorical column types.
+  # Factory for a TPU embedding column. Inputs: categorical_column (supported categorical or
+  # sequence categorical column), dimension (positive integer), combiner (reduction name, default
+  # mean), initializer (optional callable; default truncated normal with standard deviation of
+  # one over square root of dimension), max_sequence_length (non-negative integer, 0 for
+  # non-sequence), learning_rate_fn (optional callable of global step), embedding_lookup_device
+  # (optional string among cpu, tpu_tensor_core, tpu_embedding_core), tensor_core_shape (optional
+  # list of two entries, required for tensor core lookup), use_safe_embedding_lookup (boolean,
+  # default true). Raises a type error for unsupported column types; raises value errors for
+  # invalid dimension, tensor_core_shape not of size 2, non-callable initializer, unknown device
+  # string, tensor core device without a shape, or tensor core with a sequence column. Returns a
+  # plain TPU embedding column when no device is given, otherwise a device-specific one. No other
+  # side effects.
   """TPU version of `tf.compat.v1.feature_column.embedding_column`.
 
   Note that the interface for `tf.tpu.experimental.embedding_column` is
@@ -213,6 +241,24 @@ def shared_embedding_columns_v2(categorical_columns,
                                 embedding_lookup_device=None,
                                 tensor_core_shape=None,
                                 use_safe_embedding_lookup=True):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring omits the type error for unsupported column types, the value error
+  # when columns have differing bucket counts, and the other device/shape errors. It also says
+  # the device defaults to cpu, but when unset the plain (non device-specific) shared columns are
+  # returned. An empty column list would fail with an index error when reading the first sorted
+  # column.
+  # Factory for a list of TPU shared embedding columns sharing one table. Inputs:
+  # categorical_columns (list of supported categorical columns), dimension (positive integer),
+  # combiner (default mean), initializer (optional callable, default truncated normal),
+  # shared_embedding_collection_name (optional; default is the sorted column names joined with
+  # underscores plus a shared-embedding suffix), max_sequence_lengths (optional list matching the
+  # columns; defaults to zeros), learning_rate_fn (optional), embedding_lookup_device (optional
+  # string), tensor_core_shape (optional two-entry list), use_safe_embedding_lookup (default
+  # true). Columns are sorted by name only to derive the default name and bucket count; the
+  # output keeps the input order. Raises a type error for unsupported column types and value
+  # errors for length mismatch, bad dimension, bad shape size, non-callable initializer,
+  # differing bucket counts, unknown device, tensor core without a shape or with sequence
+  # columns. Returns one column per input, built around a single shared column creator.
   """TPU version of `tf.compat.v1.feature_column.shared_embedding_columns`.
 
   Note that the interface for `tf.tpu.experimental.shared_embedding_columns` is
@@ -414,6 +460,13 @@ def shared_embedding_columns_v2(categorical_columns,
 
 
 class _TPUEmbeddingColumnV2(_TPUBaseEmbeddingColumn, fc_lib.EmbeddingColumn):
+  # [CLASS DOC]
+  # Embedding column for TPU use, combining the TPU base embedding column (sequence length,
+  # learning rate function, scope bookkeeping) with the core embedding column. Created by the
+  # embedding column factory. On CPU or during TPU inference it delegates to the core
+  # implementation (inference uses outside compilation on the host); in TPU training mode it
+  # only records the variable scope and name and passes the id tensor through, since the TPU
+  # embedding machinery does the lookup. Extra state: a flag to bypass scope validation.
   """Core Embedding Column."""
 
   def __new__(cls,
@@ -425,6 +478,11 @@ class _TPUEmbeddingColumnV2(_TPUBaseEmbeddingColumn, fc_lib.EmbeddingColumn):
               learning_rate_fn=None,
               use_safe_embedding_lookup=True,
               bypass_scope_validation=False):
+    # [FUNCTION DOC]
+    # Constructor for the immutable named-tuple style base. Takes the same inputs as the
+    # initializer; the bypass flag is discarded here (handled in the initializer). Builds the
+    # core embedding column with no checkpoint loading, no max norm, trainable true, and the
+    # given safe lookup setting. Returns the new column.
     del bypass_scope_validation
     # pylint: disable=redundant-keyword-arg
     return fc_lib.EmbeddingColumn.__new__(
@@ -440,11 +498,18 @@ class _TPUEmbeddingColumnV2(_TPUBaseEmbeddingColumn, fc_lib.EmbeddingColumn):
         use_safe_embedding_lookup=use_safe_embedding_lookup)
 
   def __getnewargs__(self):
+    # [FUNCTION DOC]
+    # Supports copying and pickling: returns the tuple of constructor arguments (TPU categorical
+    # column, dimension, combiner, initializer, max sequence length, learning rate function,
+    # safe lookup flag, bypass scope validation flag).
     return (self._tpu_categorical_column, self.dimension, self.combiner,
             self.initializer, self._max_sequence_length, self._learning_rate_fn,
             self.use_safe_embedding_lookup, self._bypass_scope_validation)
 
   def __deepcopy__(self, memo):
+    # [FUNCTION DOC]
+    # Deep copy support. Input: memo, the copy bookkeeping mapping. Deep copies each constructor
+    # argument and builds a new embedding column from them. Returns the new column.
     return _TPUEmbeddingColumnV2(
         *(copy.deepcopy(a, memo) for a in self.__getnewargs__()))
 
@@ -457,6 +522,13 @@ class _TPUEmbeddingColumnV2(_TPUBaseEmbeddingColumn, fc_lib.EmbeddingColumn):
                learning_rate_fn=None,
                use_safe_embedding_lookup=True,
                bypass_scope_validation=False):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: dimension, combiner, initializer and use_safe_embedding_lookup are accepted
+    # but not used here; they are only consumed by the constructor that builds the base.
+    # Initializer. Inputs: categorical_column, max_sequence_length and learning_rate_fn are passed
+    # to the TPU base column initializer; bypass_scope_validation (boolean, default false) is
+    # stored so the same column may be used in several variable scopes. Also resets the internal
+    # key to nothing. Returns nothing.
     _TPUBaseEmbeddingColumn.__init__(
         self,
         categorical_column,
@@ -469,32 +541,50 @@ class _TPUEmbeddingColumnV2(_TPUBaseEmbeddingColumn, fc_lib.EmbeddingColumn):
     self._bypass_scope_validation = bypass_scope_validation
 
   def get_combiner(self):
+    # [FUNCTION DOC]
+    # Returns the combiner name (how multiple ids per row are reduced).
     return self.combiner
 
   def get_embedding_table_size(self):
+    # [FUNCTION DOC]
+    # Returns a pair: number of buckets (ids) of the categorical column and the embedding
+    # dimension (table width). Uses a private attribute of the categorical column.
     """Returns num_ids and width."""
     return (self.categorical_column._num_buckets, self.dimension)
 
   def get_feature_key_name(self):
+    # [FUNCTION DOC]
+    # Returns the input feature key to look up: for a weighted categorical column, the name of the
+    # wrapped (id) column; otherwise the categorical column name.
     """get_feature_key_name."""
     if self.is_categorical_column_weighted():
       return self.categorical_column.categorical_column.name
     return self.categorical_column.name
 
   def get_weight_key_name(self):
+    # [FUNCTION DOC]
+    # Returns the feature key holding the weights if the categorical column is weighted,
+    # otherwise nothing.
     """get_weight_key_name."""
     if self.is_categorical_column_weighted():
       return self.categorical_column.weight_feature_key
     return None
 
   def get_embedding_var_name(self):
+    # [FUNCTION DOC]
+    # Returns the name used for the embedding variable, which is the categorical column name.
     """get_embedding_var_name."""
     return self.categorical_column.name
 
   def get_initializer(self):
+    # [FUNCTION DOC]
+    # Returns the embedding variable initializer callable given at construction.
     return self.initializer
 
   def is_categorical_column_weighted(self):
+    # [FUNCTION DOC]
+    # Returns true if the categorical column is a weighted categorical column (either the legacy
+    # or the v2 class), otherwise false.
     """Check if the categorical column of the embedding column is weighted."""
     if isinstance(
         self.categorical_column,
@@ -505,8 +595,18 @@ class _TPUEmbeddingColumnV2(_TPUBaseEmbeddingColumn, fc_lib.EmbeddingColumn):
     return False
 
   def _get_dense_tensor(self, inputs, weight_collections=None, trainable=None):
+    # [FUNCTION DOC]
+    # Legacy (v1 feature column) dense tensor getter. Inputs: inputs (the lazy input builder),
+    # weight_collections and trainable (optional, passed to the core implementation). Under TPU
+    # inference, runs the core lookup on the host through outside compilation and returns its
+    # result. On CPU, delegates to the core lookup. In TPU training mode, fetches the raw feature
+    # tensor for the feature key, records the embedding variable scope and name (side effect on
+    # module bookkeeping, honoring the bypass flag) and returns that tensor unchanged.
     if tpu.under_tpu_inference_context():
       def host_computation():
+        # [FUNCTION DOC]
+        # Nested helper: runs the core embedding column dense tensor lookup with the enclosing
+        # arguments; executed on the host via outside compilation. Returns the dense tensor.
         return fc_lib.EmbeddingColumn._get_dense_tensor(
             self, inputs, weight_collections, trainable)
 
@@ -529,6 +629,11 @@ class _TPUEmbeddingColumnV2(_TPUBaseEmbeddingColumn, fc_lib.EmbeddingColumn):
     return tensor
 
   def create_state(self, state_manager):
+    # [FUNCTION DOC]
+    # Creates column state (embedding variables). Input: state_manager. On CPU, delegates to the
+    # core column and returns its result. On TPU, creates no variable; it only records the
+    # variable scope and name for the embedding weights (honoring the bypass flag), which may
+    # raise a value error if the same column is seen in a different scope.
     if _is_running_on_cpu():
       return fc_lib.EmbeddingColumn.create_state(
           self, state_manager)
@@ -542,8 +647,17 @@ class _TPUEmbeddingColumnV2(_TPUBaseEmbeddingColumn, fc_lib.EmbeddingColumn):
         bypass_scope_validation=self._bypass_scope_validation)
 
   def get_dense_tensor(self, transformation_cache, state_manager):
+    # [FUNCTION DOC]
+    # Version 2 dense tensor getter. Inputs: transformation_cache (feature transformation cache)
+    # and state_manager. Under TPU inference, runs the core lookup on the host via outside
+    # compilation. On CPU, delegates to the core lookup. In TPU training mode, fetches the raw
+    # feature tensor for the feature key from the cache and returns it; unlike the legacy getter
+    # it records nothing (scope recording happens in create_state).
     if tpu.under_tpu_inference_context():
       def host_computation():
+        # [FUNCTION DOC]
+        # Nested helper: runs the core dense tensor lookup with the enclosing arguments on the
+        # host through outside compilation. Returns the dense tensor.
         return fc_lib.EmbeddingColumn.get_dense_tensor(
             self, transformation_cache, state_manager)
 
@@ -562,8 +676,18 @@ class _TPUEmbeddingColumnV2(_TPUBaseEmbeddingColumn, fc_lib.EmbeddingColumn):
 
   def _get_sequence_dense_tensor(
       self, inputs, weight_collections=None, trainable=None):
+    # [FUNCTION DOC]
+    # Legacy sequence dense tensor getter. Inputs: inputs (lazy input builder), weight_collections
+    # and trainable (optional). Under TPU inference runs the core sequence lookup on the host via
+    # outside compilation; on CPU delegates to the core implementation. In TPU training mode it
+    # fetches the id tensor and the sequence length tensor, removes the extra trailing dimension
+    # the builder adds to the lengths, records the embedding variable scope and name, and returns
+    # a pair of dense tensor and sequence length.
     if tpu.under_tpu_inference_context():
       def host_computation():
+        # [FUNCTION DOC]
+        # Nested helper: runs the core sequence dense tensor lookup on the host (outside
+        # compilation). Returns the sequence tensor and length pair.
         return fc_lib.EmbeddingColumn._get_sequence_dense_tensor(
             self, inputs, weight_collections, trainable)
 
@@ -590,8 +714,17 @@ class _TPUEmbeddingColumnV2(_TPUBaseEmbeddingColumn, fc_lib.EmbeddingColumn):
         dense_tensor=tensor, sequence_length=tensor_lengths)
 
   def get_sequence_dense_tensor(self, transformation_cache, state_manager):
+    # [FUNCTION DOC]
+    # Version 2 sequence dense tensor getter. Inputs: transformation_cache and state_manager.
+    # Under TPU inference runs the core lookup on the host; on CPU delegates to the core
+    # implementation. In TPU training mode gets the id tensor and sequence lengths from the cache,
+    # squeezes the lengths back to rank one, and returns the pair of dense tensor and lengths.
+    # Records no variable scope.
     if tpu.under_tpu_inference_context():
       def host_computation():
+        # [FUNCTION DOC]
+        # Nested helper: runs the core sequence lookup on the host via outside compilation and
+        # returns the tensor and length pair.
         return fc_lib.EmbeddingColumn.get_sequence_dense_tensor(
             self, transformation_cache, state_manager)
 
@@ -618,6 +751,12 @@ class _TPUEmbeddingColumnV2(_TPUBaseEmbeddingColumn, fc_lib.EmbeddingColumn):
 
 class _TPUSharedEmbeddingColumnV2(_TPUBaseEmbeddingColumn,
                                   fc_lib.SharedEmbeddingColumn):
+  # [CLASS DOC]
+  # Shared embedding column for TPU: several columns reference one shared column creator that
+  # owns the table. Holds the initializer and the shared collection name in addition to the TPU
+  # base state. Created by the shared embedding columns factory. Same CPU / inference / TPU
+  # training split as the single column; in TPU training it records the variable under the shared
+  # name flagged as shared.
   """Core Shared Embedding Column."""
 
   def __new__(cls,
@@ -629,6 +768,10 @@ class _TPUSharedEmbeddingColumnV2(_TPUBaseEmbeddingColumn,
               max_sequence_length=0,
               learning_rate_fn=None,
               use_safe_embedding_lookup=True):
+    # [FUNCTION DOC]
+    # Constructor for the immutable base. Inputs mirror the initializer; initializer, collection
+    # name, max sequence length and learning rate function are ignored here (handled in the
+    # initializer). Builds the core shared embedding column with no max norm. Returns it.
     # pylint: disable=redundant-keyword-arg
     return fc_lib.SharedEmbeddingColumn.__new__(
         cls,
@@ -639,12 +782,21 @@ class _TPUSharedEmbeddingColumnV2(_TPUBaseEmbeddingColumn,
         use_safe_embedding_lookup=use_safe_embedding_lookup)
 
   def __getnewargs__(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the returned tuple omits the safe embedding lookup flag, so copies made from it
+    # always fall back to the default (true) for that setting.
+    # Returns the constructor argument tuple for copy/pickle: TPU categorical column, shared
+    # column creator, combiner, initializer, shared collection name, max sequence length and
+    # learning rate function.
     return (self._tpu_categorical_column, self.shared_embedding_column_creator,
             self.combiner, self._initializer,
             self._shared_embedding_collection_name, self._max_sequence_length,
             self._learning_rate_fn)
 
   def __deepcopy__(self, memo):
+    # [FUNCTION DOC]
+    # Deep copy support. Input: memo, copy bookkeeping mapping. Deep copies each constructor
+    # argument and builds a new shared embedding column. Returns it.
     return _TPUSharedEmbeddingColumnV2(
         *(copy.deepcopy(a, memo) for a in self.__getnewargs__()))
 
@@ -657,6 +809,11 @@ class _TPUSharedEmbeddingColumnV2(_TPUBaseEmbeddingColumn,
                max_sequence_length=0,
                learning_rate_fn=None,
                use_safe_embedding_lookup=True):
+    # [FUNCTION DOC]
+    # Initializer. Inputs: categorical_column, max_sequence_length and learning_rate_fn go to the
+    # TPU base initializer; initializer and shared_embedding_collection_name are stored on the
+    # column. shared_embedding_column_creator, combiner and use_safe_embedding_lookup are
+    # accepted but unused here (consumed by the constructor). Returns nothing.
 
     _TPUBaseEmbeddingColumn.__init__(
         self,
@@ -667,33 +824,50 @@ class _TPUSharedEmbeddingColumnV2(_TPUBaseEmbeddingColumn,
     self._shared_embedding_collection_name = shared_embedding_collection_name
 
   def get_combiner(self):
+    # [FUNCTION DOC]
+    # Returns the combiner name used to reduce multiple ids per row.
     return self.combiner
 
   def get_embedding_table_size(self):
+    # [FUNCTION DOC]
+    # Returns a pair: bucket count of the categorical column and the dimension taken from the
+    # shared column creator.
     """Returns num_ids and width."""
     return (self.categorical_column._num_buckets,
             self.shared_embedding_column_creator.dimension)
 
   def get_feature_key_name(self):
+    # [FUNCTION DOC]
+    # Returns the input feature key: the wrapped id column name when weighted, otherwise the
+    # categorical column name.
     """get_feature_key_name."""
     if self.is_categorical_column_weighted():
       return self.categorical_column.categorical_column.name
     return self.categorical_column.name
 
   def get_weight_key_name(self):
+    # [FUNCTION DOC]
+    # Returns the weight feature key if the categorical column is weighted, otherwise nothing.
     """get_weight_key_name."""
     if self.is_categorical_column_weighted():
       return self.categorical_column.weight_feature_key
     return None
 
   def get_embedding_var_name(self):
+    # [FUNCTION DOC]
+    # Returns the shared embedding collection name, used as the shared variable name.
     """get_embedding_var_name."""
     return self._shared_embedding_collection_name
 
   def get_initializer(self):
+    # [FUNCTION DOC]
+    # Returns the stored embedding initializer callable.
     return self._initializer
 
   def is_categorical_column_weighted(self):
+    # [FUNCTION DOC]
+    # Returns true if the categorical column is a weighted categorical column (legacy or v2
+    # class), otherwise false.
     """Check if the categorical column of the embedding column is weighted."""
     if isinstance(
         self.categorical_column,
@@ -705,8 +879,17 @@ class _TPUSharedEmbeddingColumnV2(_TPUBaseEmbeddingColumn,
 
   def _get_dense_tensor_internal(
       self, transformation_cache, state_manager):
+    # [FUNCTION DOC]
+    # Internal dense tensor getter for shared columns. Inputs: transformation_cache and
+    # state_manager. Under TPU inference runs the core lookup on the host via outside
+    # compilation; on CPU delegates to the core implementation. In TPU training mode fetches the
+    # raw feature tensor from the cache, records the shared variable name (flagged shared, no
+    # scope) as a side effect, and returns the tensor.
     if tpu.under_tpu_inference_context():
       def host_computation():
+        # [FUNCTION DOC]
+        # Nested helper: runs the core internal dense lookup on the host (outside compilation)
+        # and returns the dense tensor.
         return fc_lib.SharedEmbeddingColumn._get_dense_tensor_internal(
             self, transformation_cache, state_manager)
 
@@ -731,8 +914,17 @@ class _TPUSharedEmbeddingColumnV2(_TPUBaseEmbeddingColumn,
 
   def get_sequence_dense_tensor(
       self, transformation_cache, state_manager):
+    # [FUNCTION DOC]
+    # Sequence dense tensor getter for shared columns. Inputs: transformation_cache and
+    # state_manager. Under TPU inference runs the core lookup on the host; on CPU delegates to
+    # the core implementation. In TPU training mode gets the id tensor through the internal
+    # getter (which records the shared variable), gets the sequence lengths, squeezes them to
+    # rank one and returns the pair of dense tensor and lengths.
     if tpu.under_tpu_inference_context():
       def host_computation():
+        # [FUNCTION DOC]
+        # Nested helper: runs the core sequence lookup on the host via outside compilation and
+        # returns the tensor and length pair.
         return fc_lib.SharedEmbeddingColumn.get_sequence_dense_tensor(
             self, transformation_cache, state_manager)
 
@@ -758,6 +950,11 @@ class _TPUSharedEmbeddingColumnV2(_TPUBaseEmbeddingColumn,
 
 
 def split_sequence_columns_v2(feature_columns):
+  # [FUNCTION DOC]
+  # Partitions TPU embedding columns into sequence and non-sequence lists, preserving order.
+  # Input: feature_columns, a list of TPU embedding or TPU shared embedding columns. Returns two
+  # lists: sequence columns first, then non-sequence columns. Raises a type error if any element
+  # is not one of the two TPU column classes. No side effects.
   """Split a list of _TPUEmbeddingColumn into sequence and non-sequence columns.
 
   For use in a TPUEstimator model_fn function. E.g.
@@ -797,6 +994,15 @@ def sparse_embedding_aggregate_slice(params,
                                      values_and_values_mask,
                                      combiner='mean',
                                      name='sparse_embedding_aggregate_slice'):
+  # [FUNCTION DOC]
+  # Dense embedding lookup and per-row aggregation. Inputs: params (rank 2 embedding table),
+  # values_and_values_mask (pair of padded id tensor and mask/weight tensor, both batch by
+  # padded index count), combiner (sum or mean, default mean), name (scope name for created ops).
+  # Looks up the embeddings, multiplies by the mask, and sums over the index axis; for mean it
+  # divides by the summed mask clipped to at least one, so empty rows give zeros rather than
+  # not-a-number. A statically unknown batch size is treated as dynamic. Returns a rank 2 tensor
+  # of aggregated vectors. Raises a value error for any other combiner; note the check happens
+  # after the lookup is built. Adds ops to the current graph.
   """Uses XLA's dynamic slice operations to perform embedding lookups.
 
   From third_party/cloud_tpu/models/movielens/tpu_embedding.py
@@ -848,6 +1054,13 @@ def sparse_embedding_aggregate_slice(params,
 
 
 def pad_sparse_embedding_lookup_indices(sparse_indices, padded_size):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the values are reduced modulo the embedding table size, but
+  # the code performs no modulo; it only slices, casts to 32-bit integers and scatters.
+  # Converts a sparse id tensor to statically sized dense tensors. Inputs: sparse_indices (sparse
+  # tensor of ids) and padded_size (number of columns; entries beyond it are dropped). Returns a
+  # pair: the padded 32-bit integer id matrix (batch by padded_size, zeros where absent) and a
+  # float mask of ones at real entries and zeros at padding. Adds ops to the current graph.
   """Creates statically-sized Tensors containing indices and weights.
 
   From third_party/cloud_tpu/models/movielens/tpu_embedding.py
@@ -886,6 +1099,11 @@ def pad_sparse_embedding_lookup_indices(sparse_indices, padded_size):
 
 
 def _check_invalid_cases(embedding_lookup_device):
+  # [FUNCTION DOC]
+  # HELPER: validation used by the device-specific embedding columns.
+  # Input: embedding_lookup_device, an EmbeddingDevice member. Raises a value error if TPU
+  # embedding core lookup is requested during TPU inference, or if CPU lookup is requested while
+  # not in TPU inference (i.e. training). Otherwise returns nothing.
   """Checks for invalid embedding_lookup_device configurations."""
   if (tpu.under_tpu_inference_context() and
       embedding_lookup_device == EmbeddingDevice.TPU_EMBEDDING_CORE):
@@ -900,9 +1118,22 @@ def _check_invalid_cases(embedding_lookup_device):
 
 
 class _TPUDeviceSpecificEmbeddingColumnV2(_TPUEmbeddingColumnV2):
+  # [CLASS DOC]
+  # TPU embedding column that is bound to a chosen lookup device (CPU, TPU tensor core or TPU
+  # embedding core) and a tensor core dense shape. Created by the embedding column factory when a
+  # device is requested. Delegates to the parent for CPU and embedding core paths; for tensor core
+  # it pads sparse ids into dense tensors (on the host at inference, or reading pre-padded inputs
+  # and a mask during training) and aggregates with a dense lookup.
   """TPUEmbeddingColumn which allows serving on TensorCore."""
 
   def __new__(cls, *args, **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the tensor core shape and device are stored on the class rather than the
+    # instance, so creating another column of this class overwrites the values seen by all
+    # others until their initializer runs again.
+    # Constructor. Takes positional and keyword arguments; extracts and removes the optional
+    # tensor_core_shape and embedding_lookup_device keywords, remembers them, and forwards the
+    # rest to the parent constructor. Returns the new column.
     # For __new__, just capture the inference dense shape and call parent.
     if 'tensor_core_shape' in kwargs:
       cls._tensor_core_shape = kwargs['tensor_core_shape']
@@ -913,6 +1144,10 @@ class _TPUDeviceSpecificEmbeddingColumnV2(_TPUEmbeddingColumnV2):
     return _TPUEmbeddingColumnV2.__new__(cls, *args, **kwargs)  # pytype: disable=wrong-keyword-args  # always-use-return-annotations
 
   def __init__(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Initializer. Takes positional and keyword arguments; removes the optional tensor_core_shape
+    # and embedding_lookup_device keywords, stores them on the instance, and forwards the rest to
+    # the parent initializer. Returns nothing.
     # For __init__, just capture the inference dense shape and call parent.
     if 'tensor_core_shape' in kwargs:
       self._tensor_core_shape = kwargs['tensor_core_shape']
@@ -923,12 +1158,24 @@ class _TPUDeviceSpecificEmbeddingColumnV2(_TPUEmbeddingColumnV2):
     _TPUEmbeddingColumnV2.__init__(self, *args, **kwargs)
 
   def __deepcopy__(self, memo):
+    # [FUNCTION DOC]
+    # Deep copy support. Input: memo. Deep copies the constructor arguments and rebuilds a column
+    # of this class, passing the tensor core shape and lookup device along (shared, not copied).
+    # Returns the new column.
     return _TPUDeviceSpecificEmbeddingColumnV2(
         *(copy.deepcopy(a, memo) for a in self.__getnewargs__()),
         tensor_core_shape=self._tensor_core_shape,
         embedding_lookup_device=self._embedding_lookup_device)
 
   def create_state(self, state_manager):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the final fallback comment says TPU_EMBEDDING_CORE but that path is the tensor
+    # core case, where real variables are created through the core column.
+    # Creates column state. Input: state_manager. First validates the device configuration
+    # (may raise a value error). For CPU lookup or when running on CPU, creates the variable via
+    # the core column. For embedding core, uses the parent behavior (records scope only). For
+    # tensor core, creates the variable via the core column. Returns whatever the chosen path
+    # returns.
     _check_invalid_cases(self._embedding_lookup_device)
     # CPU case.
     is_cpu = self._embedding_lookup_device == EmbeddingDevice.CPU
@@ -944,6 +1191,14 @@ class _TPUDeviceSpecificEmbeddingColumnV2(_TPUEmbeddingColumnV2):
     return fc_lib.EmbeddingColumn.create_state(self, state_manager)
 
   def get_dense_tensor(self, transformation_cache, state_manager):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring calls this a private method, but it is the public v2 getter.
+    # Dense tensor getter. Inputs: transformation_cache and state_manager. Validates the device
+    # (value error on invalid combinations). For CPU or embedding core, defers to the parent. For
+    # tensor core: at inference, takes the sparse ids and pads them on the host (outside
+    # compilation) to the second entry of the tensor core shape; in training, reads already
+    # padded ids and the mask feature. Then fetches the embedding weights variable from the
+    # state manager and returns the aggregated dense lookup using the column combiner.
     """Private method that follows get_dense_tensor."""
     _check_invalid_cases(self._embedding_lookup_device)
     # CPU Case.
@@ -964,6 +1219,9 @@ class _TPUDeviceSpecificEmbeddingColumnV2(_TPUEmbeddingColumnV2):
                                                state_manager)
 
       def host_computation():
+        # [FUNCTION DOC]
+        # Nested helper: pads the sparse ids to the tensor core width on the host. Returns the
+        # padded ids and mask.
         return pad_sparse_embedding_lookup_indices(sparse_tensor,
                                                    self._tensor_core_shape[1])
 
@@ -981,6 +1239,16 @@ class _TPUDeviceSpecificEmbeddingColumnV2(_TPUEmbeddingColumnV2):
                                             self.get_combiner())
 
   def _get_dense_tensor(self, inputs, weight_collections=None, trainable=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the trainable flag defaults to nothing, and the weights call combines it with
+    # the column trainable flag using a logical and, which would yield nothing/false semantics if
+    # the caller omits it.
+    # Legacy dense tensor getter. Inputs: inputs (lazy input builder), weight_collections
+    # (optional list, may be mutated to add the global variables collection) and trainable.
+    # Validates the device (value error on invalid combinations). CPU and embedding core defer to
+    # the parent. For tensor core: pads ids on the host at inference or reads pre-padded ids and
+    # mask in training, creates or reuses the embedding weights variable by name (float32,
+    # initialized with the column initializer), and returns the aggregated dense lookup.
     _check_invalid_cases(self._embedding_lookup_device)
     # CPU Case.
     is_cpu = self._embedding_lookup_device == EmbeddingDevice.CPU
@@ -1001,6 +1269,9 @@ class _TPUDeviceSpecificEmbeddingColumnV2(_TPUEmbeddingColumnV2):
       sparse_tensor = inputs.get(self.get_feature_key_name())
 
       def host_computation():
+        # [FUNCTION DOC]
+        # Nested helper: pads the sparse ids to the tensor core width on the host. Returns the
+        # padded ids and mask.
         return pad_sparse_embedding_lookup_indices(sparse_tensor,
                                                    self._tensor_core_shape[1])
 
@@ -1027,9 +1298,21 @@ class _TPUDeviceSpecificEmbeddingColumnV2(_TPUEmbeddingColumnV2):
 
 
 class _TPUSharedDeviceSpecificEmbeddingColumnV2(_TPUSharedEmbeddingColumnV2):
+  # [CLASS DOC]
+  # Shared TPU embedding column bound to a lookup device and tensor core shape. Created by the
+  # shared embedding columns factory when a device is requested. Defers to the parent for CPU and
+  # embedding core; for tensor core it pads ids densely and aggregates against the weights held by
+  # the shared column creator.
   """TPUSharedEmbeddingColumnV2 which allows serving on TensorCore."""
 
   def __new__(cls, *args, **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the tensor core shape and device are stored on the class rather than the
+    # instance, so creating another column of this class overwrites them for all others until
+    # their initializers run.
+    # Constructor. Takes positional and keyword arguments; extracts and removes the optional
+    # tensor_core_shape and embedding_lookup_device keywords, remembers them, and forwards the
+    # rest to the parent constructor. Returns the new column.
     # For __new__, just capture the inference dense shape and call parent.
     if 'tensor_core_shape' in kwargs:
       cls._tensor_core_shape = kwargs['tensor_core_shape']
@@ -1041,6 +1324,10 @@ class _TPUSharedDeviceSpecificEmbeddingColumnV2(_TPUSharedEmbeddingColumnV2):
     return _TPUSharedEmbeddingColumnV2.__new__(cls, *args, **kwargs)  # pytype: disable=wrong-keyword-args  # always-use-return-annotations
 
   def __init__(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Initializer. Takes positional and keyword arguments; removes the optional tensor_core_shape
+    # and embedding_lookup_device keywords, stores them on the instance, and forwards the rest to
+    # the parent initializer. Returns nothing.
     # For __init__, just capture the inference dense shape and call parent.
     if 'tensor_core_shape' in kwargs:
       self._tensor_core_shape = kwargs['tensor_core_shape']
@@ -1051,12 +1338,21 @@ class _TPUSharedDeviceSpecificEmbeddingColumnV2(_TPUSharedEmbeddingColumnV2):
     _TPUSharedEmbeddingColumnV2.__init__(self, *args, **kwargs)
 
   def __deepcopy__(self, memo):
+    # [FUNCTION DOC]
+    # Deep copy support. Input: memo. Deep copies the constructor arguments and rebuilds a column
+    # of this class, passing the tensor core shape and lookup device along. Returns it.
     return _TPUSharedDeviceSpecificEmbeddingColumnV2(
         *(copy.deepcopy(a, memo) for a in self.__getnewargs__()),
         tensor_core_shape=self._tensor_core_shape,
         embedding_lookup_device=self._embedding_lookup_device)
 
   def _get_dense_tensor_internal(self, transformation_cache, state_manager):
+    # [FUNCTION DOC]
+    # Internal dense tensor getter. Inputs: transformation_cache and state_manager. Validates the
+    # device (value error on invalid combinations). CPU and embedding core defer to the parent.
+    # For tensor core: pads sparse ids on the host at inference, or reads pre-padded ids and mask
+    # features in training, then aggregates against the shared creator's embedding weights with
+    # the column combiner and returns the result.
     """Private method that follows _get_dense_tensor_internal."""
     _check_invalid_cases(self._embedding_lookup_device)
     # CPU Case.
@@ -1079,6 +1375,9 @@ class _TPUSharedDeviceSpecificEmbeddingColumnV2(_TPUSharedEmbeddingColumnV2):
                                                state_manager)
 
       def host_computation():
+        # [FUNCTION DOC]
+        # Nested helper: pads the sparse ids to the tensor core width on the host. Returns the
+        # padded ids and mask.
         return pad_sparse_embedding_lookup_indices(sparse_tensor,
                                                    self._tensor_core_shape[1])
 
