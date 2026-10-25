@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Command-line upgrader that converts Python scripts from pre-1.0 TensorFlow API usage to 1.0.
+# Exposes TFAPIChangeSpec, a change specification (renames, keyword renames, argument reorders,
+# warnings) consumed by the generic AST-based upgrader in ast_edits. When run as a main program
+# it parses command-line options (single file or whole tree, output locations, whether to copy
+# other files, report file name), runs the upgrader, writes a report file and prints a summary
+# with the list of errors needing manual attention. Importing the module has no side effects.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,9 +27,23 @@ from tensorflow.tools.compatibility import ast_edits
 
 
 class TFAPIChangeSpec(ast_edits.APIChangeSpec):
+  # [CLASS DOC]
+  # API change specification for the pre-1.0 to 1.0 TensorFlow upgrade. Subclasses the generic
+  # APIChangeSpec from ast_edits and only fills in data attributes: keyword renames per function,
+  # symbol renames, names to turn into calls, argument reorders, warnings and module deprecations.
+  # Instances are passed to the AST code upgrader, which reads these tables while rewriting code.
   """List of maps that describe what changed in the API."""
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor taking no arguments. Populates the specification tables as instance attributes:
+    # function_keyword_renames (function name to old-to-new keyword mapping, e.g. reduction
+    # indices becoming axis), symbol_renames (old symbol name to new name), change_to_function
+    # (set of names to be turned into calls), function_reorders (function name to new positional
+    # keyword order, used to convert positional calls to keyword calls), function_warnings
+    # (function name to a severity and message pair; tf.reverse is flagged as an error) and an
+    # empty module_deprecations mapping. Does not call the parent constructor. Returns nothing,
+    # raises nothing, has no external side effects.
     # Maps from a function name to a dictionary that describes how to
     # map from an old argument keyword to the new argument keyword.
     self.function_keyword_renames = {
