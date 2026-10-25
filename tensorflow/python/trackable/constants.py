@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: shared constants for the trackable, checkpoint and saved-model serialization code.
+# Defines string keys used inside checkpoints (the object graph proto key, the variable value key
+# and the object config JSON key) and the SaveType enumeration. Has no import-time side effects
+# beyond defining these names; the only dependency is the standard enum module.
+
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,5 +36,10 @@ OBJECT_CONFIG_JSON_KEY = "OBJECT_CONFIG_JSON"
 
 @enum.unique
 class SaveType(str, enum.Enum):
+  # [CLASS DOC]
+  # Enumeration of the two serialization targets a Trackable can be asked to save for. It is both a
+  # string and an enum, so members compare equal to their lowercase string values. Members are
+  # SAVEDMODEL (value "savedmodel") and CHECKPOINT (value "checkpoint"); the unique decorator
+  # forbids aliasing of values. Used when objects choose their saveable behavior per save type.
   SAVEDMODEL = "savedmodel"
   CHECKPOINT = "checkpoint"

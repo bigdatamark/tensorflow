@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Core of the trackable system: defines the Trackable base class that checkpoints and saved
+# models traverse, plus its supporting pieces: named (strong and weak) dependency references,
+# initial-value wrappers for restore-on-create variables, a saveable that never restores, and
+# helpers (decorator and context managers) that temporarily disable automatic or manual
+# dependency tracking. Re-exports the checkpoint key constants and the save-type enumeration from
+# the constants module. Import-time side effect: several classes and functions are registered
+# as public internal API symbols through the export decorator.
 """An object-local variable management scheme."""
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
@@ -34,6 +42,11 @@ SaveType = constants.SaveType
 
 @tf_export("__internal__.tracking.TrackableReference", v1=[])
 class TrackableReference(object):
+  # [CLASS DOC]
+  # Immutable (slotted) pair of a local dependency name and the Trackable object it refers to.
+  # Held in the dependency lists of Trackable objects and produced when overriding the checkpoint
+  # dependencies. Behaves like a two-element tuple: iterable as (name, ref), and equal to a plain
+  # pair or another reference with the same name and referent. Exported as an internal API.
   """A named reference to a trackable object for use with the `Trackable` class.
 
   These references mark named `Trackable` dependencies of a `Trackable` object
@@ -47,25 +60,44 @@ class TrackableReference(object):
   __slots__ = ("_name", "_ref")
 
   def __init__(self, name, ref):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: name, the local dependency name (string); ref, the referenced
+    # Trackable object. Stores both in private slots. Returns nothing.
     self._name = name
     self._ref = ref
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Property returning the local dependency name given at construction.
     return self._name
 
   @property
   def ref(self):
+    # [FUNCTION DOC]
+    # Property returning the referenced Trackable object (strongly held in this class).
     return self._ref
 
   def __iter__(self):
+    # [FUNCTION DOC]
+    # Generator that yields the name and then the referenced object, so a reference can be
+    # unpacked like a two-element tuple.
     yield self.name
     yield self.ref
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns a readable string showing the concrete class name, the dependency name and the
+    # referenced object.
     return f"{self.__class__.__name__}(name={self.name}, ref={self.ref})"
 
   def __eq__(self, o):
+    # [FUNCTION DOC]
+    # Equality check. Input o: any object. If o is a tuple, compares it with the (name, ref) pair;
+    # if o is a TrackableReference, compares names and referents; any other type is unequal.
+    # Returns a boolean.
+    # KNOWN ISSUE: defining equality without a hash method makes instances unhashable, so they
+    # cannot be placed in sets or used as mapping keys.
     if isinstance(o, tuple):
       return (self.name, self.ref) == o
     elif isinstance(o, TrackableReference):
@@ -75,16 +107,27 @@ class TrackableReference(object):
 
 
 class WeakTrackableReference(TrackableReference):
+  # [CLASS DOC]
+  # Variant of TrackableReference that keeps only a weak reference to the referenced object, so
+  # the dependency does not keep it alive. The ref property dereferences it and yields nothing
+  # once the object has been garbage collected. Uses no extra slots.
   """TrackableReference that stores weak references."""
   __slots__ = ()
 
   def __init__(self, name, ref):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: name, the dependency name; ref, either a Trackable or an existing weak
+    # reference to one. A plain object is converted into a weak reference before delegating to the
+    # parent constructor. Returns nothing.
     if not isinstance(ref, weakref.ref):
       ref = weakref.ref(ref)
     super(WeakTrackableReference, self).__init__(name=name, ref=ref)
 
   @property
   def ref(self):
+    # [FUNCTION DOC]
+    # Property that dereferences the stored weak reference and returns the live object, or
+    # nothing if it has already been collected.
     return self._ref()
 
 
@@ -95,19 +138,35 @@ ShardInfo = collections.namedtuple("CheckpointInitialValueShardInfo",
 
 @tf_export("__internal__.tracking.CheckpointInitialValueCallable", v1=[])
 class CheckpointInitialValueCallable(object):
+  # [CLASS DOC]
+  # Initializer-like callable that wraps a pending checkpoint restoration position. When called
+  # like a normal variable initializer it produces a CheckpointInitialValue so the variable is
+  # created directly with the checkpointed value (restore-on-create). Exposes the position and
+  # the restore identifier used to order competing restorations.
   """A callable object that returns a CheckpointInitialValue.
 
   See CheckpointInitialValue for more information.
   """
 
   def __init__(self, checkpoint_position):
+    # [FUNCTION DOC]
+    # Constructor. Input: checkpoint_position, the object describing which checkpoint entry to
+    # read the variable value from. Stores it. Returns nothing.
     self._checkpoint_position = checkpoint_position
 
   @property
   def checkpoint_position(self):
+    # [FUNCTION DOC]
+    # Property returning the checkpoint position given at construction.
     return self._checkpoint_position
 
   def __call__(self, shape=None, dtype=None, shard_info=None):
+    # [FUNCTION DOC]
+    # Makes the object usable as a variable initializer. Inputs: shape, the full variable shape
+    # (optional, needed only for sharded values); dtype, accepted for compatibility but ignored;
+    # shard_info, optional description of the shard (offset and shape) to read. Returns a new
+    # CheckpointInitialValue reading the value from the stored checkpoint position. Side effect:
+    # builds restore ops that read the checkpoint.
     # Note that the signature here is for compatibility with normal callable
     # initializers which take shape and dtype. Although dtype isn't used, it
     # will get passed in by a functool.partial_wrapper in places like
@@ -117,11 +176,19 @@ class CheckpointInitialValueCallable(object):
 
   @property
   def restore_uid(self):
+    # [FUNCTION DOC]
+    # Property returning the restore identifier of the stored checkpoint position; larger values
+    # mean the restore was requested later and should win.
     return self._checkpoint_position.restore_uid
 
 
 @tf_export("__internal__.tracking.CheckpointInitialValue", v1=[])
 class CheckpointInitialValue(object):
+  # [CLASS DOC]
+  # Wrapper around the tensor holding a variable's value read from a checkpoint, used as a
+  # variable's initial value. Holds the wrapped tensor (wrapped_value) and the checkpoint position
+  # it came from so the variable can learn the restore identifier and sequence deferred restores.
+  # Convertible to a tensor through the tensor-conversion protocol.
   """Tensor wrapper for managing update UIDs in `Variables`.
 
   When supplied as an initial value, objects of this type let a `Variable`
@@ -135,6 +202,14 @@ class CheckpointInitialValue(object):
   """
 
   def __init__(self, checkpoint_position, shape=None, shard_info=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: checkpoint_position, the position in the checkpoint holding the
+    # variable value; shape, the full variable shape (list of integers), required when shard_info
+    # is given; shard_info, optional shard description with offset and shape sequences. Builds a
+    # shape-and-slice specification string (empty when not sharded) and asks the position for the
+    # value tensor stored under the variable-value key, keeping it as wrapped_value. Returns
+    # nothing. Side effect: creates checkpoint-reading ops. A missing shape with shard_info set
+    # raises a type error from iterating over nothing.
     if shard_info:
       full_shape_str = " ".join("%d" % d for d in shape) + " "
       slice_spec = ":".join(
@@ -147,24 +222,40 @@ class CheckpointInitialValue(object):
     self._checkpoint_position = checkpoint_position
 
   def __tf_tensor__(self, dtype=None, name=None):
+    # [FUNCTION DOC]
+    # Tensor-conversion protocol hook. Inputs dtype and name are accepted for compatibility and
+    # deliberately discarded. Returns the wrapped tensor holding the checkpointed value.
     del dtype
     del name
     return self.wrapped_value
 
   @property
   def checkpoint_position(self):
+    # [FUNCTION DOC]
+    # Property returning the checkpoint position this initial value was read from.
     return self._checkpoint_position
 
 
 class NoRestoreSaveable(saveable_object.SaveableObject):
+  # [CLASS DOC]
+  # Saveable object that writes a tensor to a checkpoint under a given name but does nothing on
+  # restore (its restore step returns a no-op). Used to embed values that are saved but never
+  # read back into the object. Subclass of the generic saveable object with a single save spec.
   """Embeds a tensor in a checkpoint with no restore ops."""
 
   def __init__(self, tensor, name, dtype=None, device=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: tensor, the value to save; name, the checkpoint key; dtype and device,
+    # optional overrides for the save spec. Builds one save spec with an empty slice and passes it
+    # to the parent constructor. Returns nothing.
     spec = saveable_object.SaveSpec(
         tensor, "", name, dtype=dtype, device=device)
     super(NoRestoreSaveable, self).__init__(tensor, [spec], name)
 
   def restore(self, restored_tensors, restored_shapes):
+    # [FUNCTION DOC]
+    # Restore hook. Inputs restored_tensors and restored_shapes are ignored. Returns a no-op
+    # graph operation, so restoring never changes any state.
     return gen_control_flow_ops.no_op()
 
 
@@ -181,6 +272,12 @@ _SlotVariableRestoration = collections.namedtuple(
 
 @tf_export("__internal__.tracking.no_automatic_dependency_tracking", v1=[])
 def no_automatic_dependency_tracking(method):
+  # [FUNCTION DOC]
+  # Decorator factory. Input: method, a method of a Trackable object. Returns a decorated version
+  # (built with the decorator utility so the original is preserved as the target) which, around
+  # each call, turns off attribute-assignment dependency tracking on the instance, calls the
+  # method with all arguments, and always restores the previous tracking value, even if the
+  # method raises. Exceptions from the method propagate. Not thread safe.
   """Disables automatic dependency tracking on attribute assignment.
 
   Use to decorate any method of a Trackable object. Attribute assignment in
@@ -198,6 +295,12 @@ def no_automatic_dependency_tracking(method):
   """
 
   def _method_wrapper(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: inner wrapper created by the no-automatic-dependency-tracking decorator.
+    # Saves the instance's current tracking flag (default enabled), disables tracking, calls the
+    # wrapped method with the given arguments, and restores the flag in a finally step. Returns
+    # the wrapped method's result; exceptions propagate after restoring the flag. Side effect:
+    # temporarily mutates the instance's tracking flag.
     previous_value = getattr(self, "_self_setattr_tracking", True)
     self._self_setattr_tracking = False  # pylint: disable=protected-access
     try:
@@ -212,6 +315,11 @@ def no_automatic_dependency_tracking(method):
 
 @tf_contextlib.contextmanager
 def no_manual_dependency_tracking_scope(obj):
+  # [FUNCTION DOC]
+  # Context manager (generator based). Input: obj, a trackable object. On entry records the
+  # object's current manual-tracking flag (default enabled) and sets it to disabled; yields
+  # control to the body; on exit, even after an exception, restores the previous flag. Yields
+  # nothing useful. Side effect: temporarily mutates the object's manual tracking flag.
   """A context that disables manual dependency tracking for the given `obj`.
 
   Sometimes library methods might track objects on their own and we might want
@@ -244,6 +352,11 @@ def no_manual_dependency_tracking_scope(obj):
 
 @tf_contextlib.contextmanager
 def no_automatic_dependency_tracking_scope(obj):
+  # [FUNCTION DOC]
+  # Context manager (generator based). Input: obj, a trackable object. On entry records the
+  # object's attribute-assignment tracking flag (default enabled) and disables it; yields to the
+  # body; on exit, even after an exception, restores the earlier value. Works like the decorator
+  # version but for a block of code. Side effect: temporarily mutates the object's flag.
   """A context that disables automatic dependency tracking when assigning attrs.
 
   Objects that inherit from Autotrackable automatically creates dependencies
@@ -276,6 +389,14 @@ def no_automatic_dependency_tracking_scope(obj):
 
 @tf_export("__internal__.tracking.Trackable", v1=[])
 class Trackable(object):
+  # [CLASS DOC]
+  # Root base class of everything that can be saved to checkpoints and saved models. Keeps
+  # dependency bookkeeping lazily in attributes prefixed with an internal marker (list and
+  # name-to-object mapping of dependencies, deferred restorations, an update identifier, name-based
+  # restores and legacy saveable factories), created on first use rather than in a constructor.
+  # Provides tracking of named dependencies, restore-on-create variable creation, and the hooks
+  # (children, tensors serialization, saved-model export) that subclasses override. Does not track
+  # attributes automatically; see the auto-tracking subclass for that. Exported as an internal API.
   """Base class for `Trackable` objects without automatic dependencies.
 
   This class has no __setattr__ override for performance reasons. Dependencies
@@ -290,32 +411,52 @@ class Trackable(object):
 
   @property
   def _setattr_tracking(self):
+    # [FUNCTION DOC]
+    # Getter for the attribute-assignment tracking flag. Lazily creates the underlying attribute
+    # as enabled (true) if it does not exist yet, then returns it. Side effect: may set it.
     if not hasattr(self, "_self_setattr_tracking"):
       self._self_setattr_tracking = True
     return self._self_setattr_tracking
 
   @_setattr_tracking.setter
   def _setattr_tracking(self, value):
+    # [FUNCTION DOC]
+    # Setter. Input value: boolean enabling or disabling attribute-assignment tracking. Stores it
+    # in the underlying attribute. Returns nothing.
     self._self_setattr_tracking = value
 
   @property
   def _update_uid(self):
+    # [FUNCTION DOC]
+    # Getter returning the identifier of the latest restore applied to this object.
+    # Raises an attribute error if the trackable bookkeeping has not been initialized yet.
     return self._self_update_uid
 
   @_update_uid.setter
   def _update_uid(self, value):
+    # [FUNCTION DOC]
+    # Setter. Input value: integer restore identifier. Stores it. Returns nothing.
     self._self_update_uid = value
 
   @property
   def _unconditional_checkpoint_dependencies(self):
+    # [FUNCTION DOC]
+    # Returns the raw list of dependency references. Raises an attribute error if bookkeeping has
+    # not been initialized yet.
     return self._self_unconditional_checkpoint_dependencies
 
   @property
   def _unconditional_dependency_names(self):
+    # [FUNCTION DOC]
+    # Returns the raw mapping from dependency names to trackables. Raises an attribute error if
+    # bookkeeping has not been initialized yet.
     return self._self_unconditional_dependency_names
 
   @property
   def _name_based_restores(self):
+    # [FUNCTION DOC]
+    # Returns the set of name-based restore coordinators applied to this object. Raises an
+    # attribute error if bookkeeping has not been initialized yet.
     return self._self_name_based_restores
 
   # Trackable does not do automatic dependency tracking, but uses the
@@ -324,6 +465,13 @@ class Trackable(object):
   # which have __setattr__ overrides).
   @no_automatic_dependency_tracking
   def _maybe_initialize_trackable(self):
+    # [FUNCTION DOC]
+    # Lazily creates the dependency bookkeeping on this object; does nothing if already done
+    # (detected by the presence of the dependency list). Creates the dependency list, the
+    # name-to-object mapping, the deferred-dependency mapping, the update identifier (set to
+    # minus one), the set of name-based restores and the mapping of legacy saveable factories.
+    # Takes no inputs and returns nothing. Raises an assertion error if an update identifier
+    # already exists before initialization. Wrapped so attribute assignments here are not tracked.
     """Initialize dependency management.
 
     Not __init__, since most objects will forget to call it.
@@ -368,6 +516,9 @@ class Trackable(object):
 
   @property
   def _object_identifier(self):
+    # [FUNCTION DOC]
+    # Property returning the constant string "_generic_user_object", the default identifier for
+    # saved-model serialization. Deprecated in favor of the serializable registration name.
     """String used to identify this object in a SavedModel.
 
     THIS FIELD HAS BEEN DEPRECATED IN FAVOR OF THE NAME REGISTERED WITH
@@ -382,10 +533,20 @@ class Trackable(object):
     return "_generic_user_object"
 
   def _no_dependency(self, value):
+    # [FUNCTION DOC]
+    # Hook to mark a value as not to be tracked. Input: value, any object. In this base class
+    # (no automatic tracking) it simply returns the value unchanged; auto-tracking subclasses
+    # override it to wrap the value.
     """If automatic dependency tracking is enabled, ignores `value`."""
     return value
 
   def _name_based_attribute_restore(self, checkpoint):
+    # [FUNCTION DOC]
+    # Restores this object from a legacy name-based checkpoint. Input: checkpoint, the name-based
+    # restore coordinator with a restore identifier and an eager-restore operation. Records the
+    # coordinator in the set of name-based restores; if this object's update identifier is older
+    # than the coordinator's, performs the eager restore for this object and updates the
+    # identifier. Returns nothing. Requires the bookkeeping to be initialized.
     """Restore the object's attributes from a name-based checkpoint."""
     self._self_name_based_restores.add(checkpoint)
     if self._self_update_uid < checkpoint.restore_uid:
@@ -394,6 +555,10 @@ class Trackable(object):
 
   @property
   def _checkpoint_dependencies(self):
+    # [FUNCTION DOC]
+    # Property returning the list of named dependency references to save with this object; the
+    # base version returns the unconditional list. Subclasses may override to add conditional
+    # dependencies.
     """All dependencies of this object.
 
     May be overridden to include conditional dependencies.
@@ -407,6 +572,11 @@ class Trackable(object):
 
   @property
   def _deferred_dependencies(self):
+    # [FUNCTION DOC]
+    # Property returning the mapping from local dependency names to lists of pending checkpoint
+    # positions for dependencies that did not exist yet when a restore was requested. The base
+    # version returns the unconditional mapping. Raises an attribute error if the unconditional
+    # deferred mapping was never created.
     """A dictionary with deferred dependencies.
 
     Stores restorations for other Trackable objects on which this object
@@ -421,6 +591,11 @@ class Trackable(object):
     return self._self_unconditional_deferred_dependencies
 
   def _lookup_dependency(self, name, cached_dependencies=None):
+    # [FUNCTION DOC]
+    # Finds a dependency by local name. Inputs: name (string); cached_dependencies, optional
+    # precomputed mapping of children. If that mapping is non-empty the name is looked up there,
+    # otherwise in the unconditional name mapping. Returns the Trackable or nothing if absent.
+    # Raises an attribute error if bookkeeping is uninitialized and no cache is given.
     """Look up a dependency by name.
 
     May be overridden to include conditional dependencies.
@@ -446,6 +621,17 @@ class Trackable(object):
                                        getter=None,
                                        overwrite=False,
                                        **kwargs_for_getter):
+    # [FUNCTION DOC]
+    # Creates a variable through a getter and tracks it as a dependency, using a pending
+    # checkpoint value as initializer when one exists (restore-on-create). Inputs: name, unique
+    # dependency name; shape; dtype (default float32); initializer; getter, the callable that
+    # actually builds the variable (required in practice); overwrite, if true skips unique-name
+    # checks; extra keyword arguments are passed to the getter. Initializes bookkeeping, and,
+    # when executing eagerly, looks for a simple preloaded restoration which replaces the
+    # initializer unless the given initializer is a checkpoint-initial-value callable with a
+    # later restore identifier. Calls the getter; then, unless overwrite is set with a non-
+    # trackable result, tracks the variable. Returns the new variable. Raises a value error for
+    # duplicate names (from tracking). Side effect: adds a dependency.
     """Restore-on-create for a variable be saved with this `Trackable`.
 
     If the user has requested that this object or another `Trackable` which
@@ -508,6 +694,12 @@ class Trackable(object):
       return new_variable
 
   def _preload_simple_restoration(self, name):
+    # [FUNCTION DOC]
+    # Looks for a queued restoration that can serve as a variable's initial value. Input: name,
+    # the local dependency name. Returns nothing if no restore is queued for the name or if any
+    # queued restore is not a simple single-variable one; otherwise picks the position with the
+    # highest restore identifier and returns a checkpoint-initial-value callable for it. The
+    # queued restoration is not removed.
     """Return a dependency's value for restore-on-create.
 
     Note the restoration is not deleted; if for some reason preload is called
@@ -544,6 +736,17 @@ class Trackable(object):
         checkpoint_position=checkpoint_position)
 
   def _track_trackable(self, trackable, name, overwrite=False):
+    # [FUNCTION DOC]
+    # Declares a named dependency of this object on another Trackable so that checkpoints include
+    # it. Inputs: trackable, the object depended on; name, the local dependency name (string);
+    # overwrite, boolean allowing replacement of an existing different dependency of that name
+    # (default false). Initializes bookkeeping. Raises a type error if trackable is not a
+    # Trackable. If manual tracking is disabled on this object, returns trackable without
+    # recording anything. Otherwise: if a different object is already registered under the name,
+    # raises a value error unless overwrite is set, in which case the existing reference is
+    # replaced in the dependency list; if nothing is registered, appends a new reference and
+    # applies any deferred restores waiting for that name. Always stores the name mapping.
+    # Returns the trackable. Side effect: mutates the dependency list and mapping.
     """Declare a dependency on another `Trackable` object.
 
     Indicates that checkpoints for this object should include variables from
@@ -599,6 +802,13 @@ class Trackable(object):
     return trackable
 
   def _handle_deferred_dependencies(self, name, trackable):
+    # [FUNCTION DOC]
+    # Applies queued restores for a dependency. Inputs: name, the dependency name; trackable,
+    # the object now associated with that name. Initializes bookkeeping on both objects, removes
+    # the deferred restore positions queued under the name and applies them to the trackable in
+    # order of descending restore identifier, then passes all name-based restores of this object
+    # on to the trackable, newest first. Returns nothing. Side effects: removes deferred entries
+    # and triggers restore operations (value assignments) on the trackable.
     """Pop and load any deferred checkpoint restores into `trackable`.
 
     This method does not add a new dependency on `trackable`, but it does
@@ -637,6 +847,10 @@ class Trackable(object):
       trackable._name_based_attribute_restore(name_based_restore)  # pylint: disable=protected-access
 
   def _gather_saveables_for_checkpoint(self):
+    # [FUNCTION DOC]
+    # Deprecated legacy hook used by the old name-based saver. Takes no inputs. Returns the
+    # mapping of checkpoint keys to saveable factories stored on this object (an empty mapping
+    # if none were ever set). Subclasses override it to supply their own saveables.
     """Returns a dictionary of values to checkpoint with this object.
 
     NOTE: This method is deprecated, prefer implementing `_serialize_to_tensors`
@@ -679,6 +893,10 @@ class Trackable(object):
     return getattr(self, "_self_saveable_object_factories", {})
 
   def _serialize_to_tensors(self):
+    # [FUNCTION DOC]
+    # Extension point: should return a mapping from names to the tensors that make up this
+    # object's checkpointed state. The base implementation always raises a not-implemented error,
+    # so only objects with custom resources or ops override it. Takes no inputs.
     """Gathers tensors to save to the checkpoint.
 
     You should only override `_serialize_to_tensors` and `_restore_from_tensors`
@@ -737,6 +955,10 @@ class Trackable(object):
     raise NotImplementedError
 
   def _restore_from_tensors(self, restored_tensors):
+    # [FUNCTION DOC]
+    # Extension point paired with the serialize-to-tensors hook. Input: restored_tensors, a
+    # mapping from the saved names to tensors. Subclasses should assign them and return the
+    # restoring operation; the base implementation always raises a not-implemented error.
     """Restores checkpointed values to this `Trackable`.
 
     Please see the documentation for `Trackable._serialize_to_tensors`.
@@ -751,6 +973,10 @@ class Trackable(object):
     raise NotImplementedError
 
   def _serialize_to_proto(self, object_proto=None, **kwargs):
+    # [FUNCTION DOC]
+    # Saved-model hook for registered serializable classes. Inputs: object_proto, the saved
+    # object message that core types may fill (ignored here); extra keyword arguments (ignored).
+    # The base implementation discards both and returns nothing, meaning no extra metadata is saved.
     """Returns a proto of any type to be saved into the SavedModel.
 
     Trackable classes decorated with `register_serializable` should overwrite
@@ -783,6 +1009,12 @@ class Trackable(object):
                               asset_file_def=None,
                               operation_attributes=None,
                               **kwargs):
+    # [FUNCTION DOC]
+    # Class method hook for loading a registered serializable class from a saved model. Inputs
+    # (all optional and ignored by this default): proto, the stored metadata message; dependencies,
+    # mapping of names to already loaded dependencies; object_proto; export_dir; asset file
+    # definitions; operation attributes; extra keyword arguments. Returns a new instance created
+    # by calling the class constructor with no arguments; the constructor's own errors propagate.
     """Returns a new object restored by the SavedModel.
 
     Trackable classes decorated with `register_serializable` should overwrite
@@ -859,6 +1091,11 @@ class Trackable(object):
     return cls()
 
   def _add_trackable_child(self, name, value):
+    # [FUNCTION DOC]
+    # Used when loading a saved model to reconnect a child to its parent. Inputs: name, the
+    # connection name; value, the child Trackable. Tracks the child under that name, replacing
+    # any existing dependency of the same name. Returns nothing. Raises a type error if value is
+    # not a Trackable. Side effect: updates the dependency bookkeeping.
     """Restores a connection between trackables when loading from SavedModel.
 
     SavedModel stores both the object metadata and its list of children. When
@@ -886,6 +1123,10 @@ class Trackable(object):
     self._track_trackable(value, name, overwrite=True)
 
   def _deserialization_dependencies(self, children):
+    # [FUNCTION DOC]
+    # Declares objects that must be created before this one when loading a saved model. Input:
+    # children, the mapping produced by the trackable-children hook (ignored here). The base
+    # implementation returns an empty mapping, i.e. no extra ordering constraints.
     """Returns a dictionary containing `Trackables` that this object depends on.
 
     Dependencies define the order to serialize and deserialize objects in the
@@ -926,6 +1167,13 @@ class Trackable(object):
                           save_type=SaveType.CHECKPOINT,
                           cache=None,
                           **kwargs):
+    # [FUNCTION DOC]
+    # Returns the children used to build the object graph for checkpoints and saved models.
+    # Inputs: save_type, which target is being saved (default checkpoint); cache, optional
+    # mapping shared across a saved-model export (ignored here); extra keyword arguments
+    # (ignored). Initializes bookkeeping, then returns a new mapping from dependency names to
+    # the tracked objects, built from the checkpoint dependencies. Side effect: lazily creates
+    # bookkeeping attributes. Subclasses override this to define their own children.
     """Returns this object's `Trackable` attributes.
 
     This method is used to build the object graph (or the object hierarchy,
@@ -1032,6 +1280,11 @@ class Trackable(object):
                                    tensor_map,
                                    options,
                                    **kwargs):
+    # [FUNCTION DOC]
+    # Saved-model export hook. Inputs: object_map, mapping from original to copied trackables;
+    # tensor_map, mapping from original to copied tensors; options, the save options; extra
+    # keyword arguments. The base implementation changes nothing and returns an empty list of
+    # copied original tensors; subclasses holding tensors override it and update the maps.
     """Creates a copy of this object's tensors onto SavedModel graph.
 
     Needs to be overridden if the class contains tensors that must be saved
@@ -1061,6 +1314,11 @@ class Trackable(object):
     return []
 
   def _copy_trackable_to_cpu(self, object_map):
+    # [FUNCTION DOC]
+    # Async-checkpoint hook. Input: object_map, mapping from original trackables to their CPU
+    # copies, to be updated in place by overriding classes. The base implementation ignores the
+    # input and always raises a not-implemented error, so objects that must support
+    # asynchronous checkpointing have to override it.
     """Creates a copy of this object onto CPU, also copies values over.
 
     Needs to be overridden if the `Trackable` requires AsyncCheckpoint support.
@@ -1077,6 +1335,10 @@ class Trackable(object):
                               "the Trackable requires AsyncCheckpoint support.")
 
   def _checkpoint_adapter(self, path: str):
+    # [FUNCTION DOC]
+    # Hook returning a checkpoint adapter that customizes how this object is restored. Input:
+    # path, the checkpoint path (string, ignored by default). The base implementation returns
+    # nothing, meaning no adapter is used.
     """Returns a checkpoint adapter for this object.
 
     Needs to be overridden if the `Trackable` requires adapter at restore.
