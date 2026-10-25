@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# HELPER: data module for the TF 1.x to TF 2.0 upgrade script. Defines the warning/error messages
+# (severity plus text) shown when code uses removed modules, and exposes a mapping from dotted
+# module names (tf.contrib and a few submodules, tf.flags, tf.app.flags) to those messages. Severity
+# is error for contrib and flags (no automatic conversion possible) and warning (manual edit
+# required) for the cudnn_rnn, rnn, distribute and seq2seq submodules. The mapping is consumed by
+# the upgrade specification in the sibling compatibility tooling. Only module-level constants are
+# created on import; there are no functions or side effects.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
