@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Library of TPU helper functions (the core of the v1 TPU API). Provides system initialization and
+# shutdown ops, the replicate/shard/batch_parallel/rewrite entry points that wrap a computation in
+# a TPU cluster context, the lower level split compile-and-replicate and compile-and-shard
+# builders, dynamic-shape padding of replica inputs, output post-processing, and graph rewriting
+# for TPU inference. Also defines the padding policy enumeration and the XLA options tuple.
+# Import-time side effects: registers a resource resolver with the automatic-control-dependency
+# machinery, and registers public symbols through the export decorators. Defines module-level
+# attribute names used to mark ops for post-device rewrite and compilation status.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -72,6 +81,11 @@ core = tpu_name_util.core
 
 
 def _tpu_system_device_name(job: Optional[Text]) -> Text:
+  # [FUNCTION DOC]
+  # HELPER: builds device strings for the TPU system ops in this module.
+  # Input: job, an optional job name. Returns the device name of the TPU system device on task
+  # zero: job-qualified when a job is given, otherwise the unqualified default form. No side
+  # effects, no exceptions.
   """Returns the device name for the TPU_SYSTEM device of `job`."""
   if job is None:
     return "/device:TPU_SYSTEM:0"
@@ -86,6 +100,16 @@ def initialize_system(
     compilation_failure_closes_chips: bool = True,
     tpu_cancellation_closes_chips: Optional[bool] = None,
 ) -> core_types.Tensor:
+  # [FUNCTION DOC]
+  # Builds the graph op that initializes the distributed TPU system and yields its topology.
+  # Inputs: embedding_config (optional embedding configuration proto), job (optional job name
+  # holding the TPU devices), compilation_failure_closes_chips (default true) and
+  # tpu_cancellation_closes_chips (optional; nothing means the runtime flag decides, true or false
+  # maps to an explicit setting). Placed on the TPU system device of the job. Without an embedding
+  # config returns the configure op output directly; with one, the embedding configuration op runs
+  # after the topology op and the returned tensor is an identity of the topology that depends on
+  # it. Returns a tensor holding the serialized topology, which must be evaluated in a session.
+  # This only builds graph ops; the system is initialized when they are run.
   """Initializes a distributed TPU system for use with TensorFlow.
 
   Args:
@@ -141,6 +165,11 @@ def initialize_system_for_tpu_embedding(
     embedding_config: embedding_pb2.TPUEmbeddingConfiguration,
     job: Optional[Text] = None,
 ) -> ops.Operation:
+  # [FUNCTION DOC]
+  # Builds the op that configures TPU embedding hardware on an already initialized TPU system.
+  # Inputs: embedding_config (embedding configuration proto, serialized here) and job (optional
+  # job name). The op is placed on the job's TPU system device. Returns that operation.
+  # Do not combine with initialize_system called with an embedding config.
   """Initializes a distributed TPU Embedding system for use with TensorFlow.
 
   The following two are equivalent:
@@ -168,6 +197,10 @@ def initialize_system_for_tpu_embedding(
 
 @tf_export(v1=["tpu.shutdown_system"])
 def shutdown_system(job: Optional[Text] = None) -> ops.Operation:
+  # [FUNCTION DOC]
+  # Builds the op that shuts down the distributed TPU system. Input: job, optional job name used to
+  # pick the TPU system device. Returns the shutdown operation (the docstring omits this); the
+  # system is only shut down when the op is run.
   """Shuts down a running a distributed TPU system.
 
   Args:
@@ -186,6 +219,13 @@ def tpu_replicated_input_resolver(
     op: ops.Operation,
     resource_reads: object_identity.ObjectIdentitySet,
     resource_writes: object_identity.ObjectIdentitySet) -> bool:
+  # [FUNCTION DOC]
+  # HELPER: resolver registered with automatic control dependencies for TPU replicated inputs.
+  # Inputs: op, plus the sets of resources it reads and writes (mutated in place). If the op is a
+  # replicated-input op, both sets are cleared (control dependencies are added on its replicated
+  # inputs instead) and it returns true only if either set was non-empty. For other ops, each
+  # resource that is an output of a replicated-input op is replaced in the sets by the underlying
+  # replicated inputs. Returns true if any set was changed, false otherwise.
   """Replaces TPUReplicatedInput outputs with its inputs in resource_inputs."""
   # Ignore TPUReplicatedInput for ACD purposes since we will be directly adding
   # control deps on the replicated inputs.
@@ -201,6 +241,11 @@ def tpu_replicated_input_resolver(
   # deps when there are multiple calls to `run` in a
   # `tf.function`.
   def replace_with_unreplicated_resources(resource_inputs):
+    # [FUNCTION DOC]
+    # HELPER: rewrites one resource set in place. Removes every resource produced by a
+    # replicated-input op and adds that op's inputs instead. Input: a mutable set of resources.
+    # Returns the (truthy) list of added resources, or else the list of removed ones; both are
+    # empty if nothing changed.
     """Replaces handles in `resource_inputs` with their unreplicated inputs."""
     to_remove = []
     to_add = []
@@ -219,6 +264,10 @@ def tpu_replicated_input_resolver(
 
 @tf_export(v1=["tpu.PaddingSpec"])
 class PaddingSpec(enum.IntEnum):
+  # [CLASS DOC]
+  # Integer enumeration of padding policies for dynamic input shapes in replicate. AUTO (0) pads a
+  # dynamic dimension to the maximum over all replicas; POWER_OF_TWO (1) additionally rounds that
+  # size up to a power of two to limit recompilation. Exported under the v1 TPU namespace.
   """Represents the type of padding policies for tpu.replicate."""
   # By default the policy is set to AUTO, the dynamic input shape dimension will
   # be pad to maximum of all the replicas.
@@ -238,6 +287,10 @@ class XLAOptions(
         ],
     )
 ):
+  # [CLASS DOC]
+  # Immutable named tuple of options passed to the XLA compiler for TPU computations, with fields
+  # for using the SPMD partitioner, enabling the XLA dynamic padder and using the Shardy
+  # partitioner. Created by users and passed to replicate and related functions. Exported publicly.
   """XLA compilation options.
 
   Attributes:
@@ -259,6 +312,10 @@ class XLAOptions(
       enable_xla_dynamic_padder=True,
       use_shardy_partitioner=False,
   ):
+    # [FUNCTION DOC]
+    # Tuple constructor supplying defaults. Inputs: use_spmd_for_xla_partitioning (default true),
+    # enable_xla_dynamic_padder (default true) and use_shardy_partitioner (default false), all
+    # booleans. Returns the new options tuple; no side effects.
     return super(XLAOptions, cls).__new__(
         cls,
         use_spmd_for_xla_partitioning,
@@ -278,6 +335,13 @@ def replicate(
     maximum_shapes: Optional[Any] = None,
     padding_spec: Optional[PaddingSpec] = None,
     xla_options: Optional[XLAOptions] = None) -> List[Any]:
+  # [FUNCTION DOC]
+  # Public wrapper that builds the replicated TPU computation and returns only the outputs. It
+  # forwards all arguments (computation, per-replica inputs, infeed queue, device assignment,
+  # deprecated name, maximum shapes, padding spec, XLA options) to the split compile-and-replicate
+  # builder and returns the second element of its result: the per-replica outputs. Exceptions
+  # (value errors for mismatched input counts or shapes) come from the builder. Traceback
+  # filtering is applied by decorator.
   """Builds a graph operator that runs a replicated TPU computation.
 
   Example for the basic usage that `inputs` has static shape:
@@ -377,6 +441,11 @@ def replicate(
 
 
 def _ceil_to_pow_of_n(x, n):
+  # [FUNCTION DOC]
+  # HELPER: rounding for power-of-two bucketing of dynamic dimensions during padding.
+  # Inputs: x (integer tensor or value) and n (base). Computes, via floating point logarithms, the
+  # smallest power of n that is at least x. Returns a 32-bit integer tensor. Because it uses
+  # float arithmetic it may be imprecise for very large values.
   """Ceil input `x` to power of `n`."""
   x = math_ops.cast(x, dtypes.float32)
   lognx = math_ops.log(x) / math_ops.log(n * 1.0)
@@ -391,6 +460,18 @@ def _pad_all_input(
     padded_shapes: List[Optional[tensor_shape.TensorShape]],
     padding_spec: PaddingSpec
 ) -> Tuple[List[List[Any]], List[dynamic_padding.PaddingMap]]:
+  # [FUNCTION DOC]
+  # HELPER: dynamic-shape preprocessing step for split_compile_and_replicate.
+  # Inputs: inputs (per replica lists of tensors), padded_shapes (per input position, a target
+  # shape or nothing to skip padding) and padding_spec (automatic or power-of-two policy).
+  # Finds, per input position, which dimensions differ or are unknown across replicas; for those
+  # it pads each replica's tensor up to the given maximum, or the cross-replica maximum of the
+  # runtime shape (at least 2 because XLA does not support dynamic size 1), rounded to a power of
+  # two if requested. Real shape values are appended to each replica's inputs, and shape and
+  # padded ops are marked with the post-device-rewrite attribute (mutating the graph ops). Fully
+  # static inputs are padded under a trivially true conditional so shapes stay dynamic.
+  # Returns the padded inputs per replica and the list of padding maps linking padded dimensions
+  # to the arguments that carry their real size.
   """Pad all input tensors given padded_shapes.
 
   The real shape tensors will be concatenated with the padded original inputs.
@@ -519,6 +600,12 @@ def _pad_all_input(
 
 def _flatten_and_filter_composite(maybe_composite, non_composite_output,
                                   composite_output=None):
+  # [FUNCTION DOC]
+  # HELPER: builds masks that mark which flattened components came from composite tensors.
+  # Inputs: maybe_composite (any value), non_composite_output (returned for non-composites) and
+  # composite_output (default nothing; repeated once per flattened component for a composite).
+  # Returns a tuple of repeated composite_output values with one entry per component when the
+  # value is a composite tensor, otherwise non_composite_output unchanged.
   """For an input, replaced the input by a tuple if the input is composite.
 
   If `maybe_composite` is not composite, return the parameter
@@ -572,6 +659,32 @@ def split_compile_and_replicate(
     padding_spec: Optional[PaddingSpec] = None,
     xla_options: Optional[XLAOptions] = None,
 ) -> List[List[core_types.Tensor]]:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the return annotation claims a list of lists of tensors, but the real result is a
+  # two element list (compile status, then per-replica outputs). With zero replicas it returns an
+  # empty list, so the public replicate wrapper, which takes the second element, would then fail
+  # with an index error. The docstring lists only value errors, but type errors are also raised;
+  # in the infeed-queue case the error is built with a stray comma so its message is a tuple.
+  # Core builder behind replicate. Inputs: computation (callable building the per-replica work),
+  # inputs (list of per-replica lists or tuples of values, nothing meaning one replica with no
+  # inputs), infeed_queue, device_assignment, deprecated name (deleted), use_tpu (default true;
+  # false runs on XLA CPU or GPU), maximum_shapes and padding_spec (dynamic shape padding) and
+  # xla_options (default options when nothing).
+  # Steps: builds replicate metadata (topology and device assignment, soft placement flag, step
+  # marker location, partitioner settings); validates input structure, counts and types across
+  # replicas; converts variables to tensors and substitutes a placeholder for nothing values;
+  # checks the computation accepts the arguments; optionally pads dynamic shapes; fans inputs in
+  # with replicated-input ops inside a new cluster context (pivot op, unique cluster name);
+  # sets dynamic dimension sizes; wraps inputs in identity ops; appends infeed dequeue values;
+  # runs the computation with resource variables forced on and partitioners disabled (temporarily
+  # replacing the variable scope's settings, restored afterwards); post-processes flat or nested
+  # outputs; optionally traces tensors with the tensor tracer; and fans outputs out per replica.
+  # Always reports unsupported operations and exits the context. Returns a two element list: the
+  # compilation status tensor or no-op, and per-replica outputs in the structure the computation
+  # returned (or grouped no-ops when it produced no tensors).
+  # Raises a type error if inputs is not a list of lists or tuples or the computation cannot take
+  # the arguments; a value error for unequal input counts or types, or dynamic shapes with infeed.
+  # Side effects: mutates the default graph, variable scope and ops attributes, and logs messages.
   """Builds graph operators that runs compilation and replicated computation.
 
   This is a lower level interface than replicate that returns a separate compile
@@ -858,6 +971,12 @@ def split_compile_and_replicate(
       saved_custom_getter = vscope.custom_getter
 
       def custom_getter(getter, name, *args, **kwargs):
+        # [FUNCTION DOC]
+        # HELPER: variable-scope custom getter installed while the TPU computation is traced.
+        # Inputs: the underlying getter, the variable name, and its positional and keyword
+        # arguments. If a partitioner is passed it is cleared and a warning is logged, since
+        # partitioned variables are unsupported on TPU. Then delegates to the previously installed
+        # custom getter if any, otherwise to the plain getter. Returns the variable it produces.
         """Variables on TPU have a few restrictions."""
         partitioner = kwargs.get("partitioner", None)
         if partitioner is not None:
@@ -971,6 +1090,19 @@ def _postprocess_flat_outputs(
     outputs: Any,
     need_spmd_partitioning: bool
 ) -> Tuple[List[Optional[core_types.Tensor]], List[ops.Operation], List[Any]]:
+  # [FUNCTION DOC]
+  # HELPER: output handling in split_compile_and_replicate when the computation result is flat.
+  # KNOWN ISSUE: the docstring says it validates non-flat outputs, but this is the flat-outputs
+  # variant (the non-flat one is a separate function).
+  # Inputs: outputs (result of the computation: nothing, a single value, or a flat sequence of
+  # tensors and operations) and need_spmd_partitioning (when true no device is forced).
+  # Nothing becomes an empty tuple; composites are flattened to components; a no-op is appended so
+  # fetching any output triggers execution. Values are converted to tensors (on the first core
+  # unless SPMD), raising a value error if conversion fails or if operations are not all after
+  # the tensors. Tensors are wrapped in identity ops tagged as TPU output identity (on their own
+  # device or the first core) so replicated input cannot bypass replication. Returns the new
+  # tensor list, the list of operations (including the added no-op) and the pack template (with
+  # the extra operations trimmed) for repacking outputs.
   """Validates non-flat outputs, add backs device assignments and other attrs.
 
   Args:
@@ -1068,6 +1200,16 @@ def _postprocess_non_flat_outputs(
     outputs: Any,
     need_spmd_partitioning: bool
 ) -> Tuple[List[Optional[core_types.Tensor]], List[ops.Operation], List[Any]]:
+  # [FUNCTION DOC]
+  # HELPER: output handling in split_compile_and_replicate when the computation result is nested.
+  # Inputs: outputs (arbitrary nested structure of tensors, convertible values, composites or
+  # nothing values) and need_spmd_partitioning (when true no device is forced on the identities).
+  # Flattens the structure (expanding composites); nothing values stay nothing; every other value
+  # is converted to a tensor and wrapped in identity ops tagged as TPU output identity, placed on
+  # its own device or the first core unless SPMD is used. Raises a value error if any element is
+  # an operation (not allowed in nested outputs) or cannot be converted to a tensor.
+  # Returns the flat tensor list, an empty operations list, and the original structure as the
+  # pack template.
   """Validates non-flat outputs, add backs device assignments and other attrs.
 
   Args:
@@ -1139,6 +1281,21 @@ def split_compile_and_shard(
     name: Optional[Text] = None,
     xla_options: Optional[XLAOptions] = None,
     ) -> Tuple[ops.Operation, List[core_types.Tensor]]:
+  # [FUNCTION DOC]
+  # Lower level sharding builder returning the compile op separately from the outputs.
+  # Inputs: computation (callable applied to each shard), inputs (list of tensors or nothing),
+  # num_shards (positive integer, default 1), input_shard_axes (per input split axis; nothing
+  # means axis 0 for all), outputs_from_all_shards (a boolean or per-output booleans; true
+  # concatenates outputs across shards, false takes the first shard's value), output_shard_axes
+  # (per-output concatenation axis; nothing means 0), infeed_queue, device_assignment, deprecated
+  # name, xla_options. Each input is converted to a tensor and split into equal pieces along its
+  # axis; the pieces are arranged per shard and passed to split_compile_and_replicate. When the
+  # computation produced no tensors it returns the compile op and a one element list with the
+  # first group no-op. Otherwise outputs are concatenated along their axis (scalars are stacked)
+  # or taken from shard zero.
+  # Raises a value error for non-positive shard count or length mismatches between inputs and
+  # input axes, outputs and output axes, or outputs and the per-output flags; a type error if
+  # inputs is not a list. Returns the pair of compile op and list of output tensors.
   """Shards `computation` for parallel execution.
 
   `inputs` must be a list of Tensors or None (equivalent to an empty list), each
@@ -1302,6 +1459,11 @@ def shard(
     device_assignment: Optional[device_assignment_lib.DeviceAssignment] = None,
     name: Optional[Text] = None,
     xla_options: Optional[XLAOptions] = None) -> List[core_types.Tensor]:
+  # [FUNCTION DOC]
+  # Public sharding wrapper. Forwards all arguments to the split compile-and-shard builder and
+  # returns only its second element, the list of output tensors (concatenated across shards where
+  # requested). Errors (invalid shard counts, axis length mismatches, non-list inputs) come from
+  # the builder. Traceback filtering is applied by decorator.
   """Shards `computation` for parallel execution.
 
   `inputs` must be a list of Tensors or None (equivalent to an empty list), each
@@ -1386,6 +1548,12 @@ def batch_parallel(
     device_assignment: Optional[device_assignment_lib.DeviceAssignment] = None,
     name: Optional[Text] = None,
     xla_options: Optional[XLAOptions] = None):
+  # [FUNCTION DOC]
+  # Convenience wrapper around shard that splits every input along dimension zero and
+  # concatenates every output along dimension zero. Inputs: computation, inputs (list of tensors
+  # or nothing), num_shards (default 1), infeed_queue, device_assignment, deprecated name and
+  # xla_options. Returns the list of output tensors from shard. Raises a value error if the number
+  # of shards is not positive (raised downstream).
   """Shards `computation` along the batch dimension for parallel execution.
 
   Convenience wrapper around shard().
@@ -1448,6 +1616,12 @@ def rewrite(
     device_assignment: Optional[device_assignment_lib.DeviceAssignment] = None,
     name: Optional[Text] = None,
     xla_options: Optional[XLAOptions] = None) -> Any:
+  # [FUNCTION DOC]
+  # Public single-replica entry point. Wraps the given inputs (list of values, or nothing) as the
+  # only replica and calls replicate with the computation, infeed queue, device assignment,
+  # deprecated name and XLA options, then returns the first replica's outputs in the structure the
+  # computation returned (with the special cases of nothing, single value or operation-only
+  # outputs described in the docstring). Errors come from replicate.
   """Rewrites `computation` for execution on a TPU system.
 
   Args:
@@ -1513,6 +1687,11 @@ _DENYLISTED_INFERENCE_OPS = set([
 
 
 def under_tpu_inference_context() -> bool:
+  # [FUNCTION DOC]
+  # Reports whether graph construction is currently inside a TPU inference context. Walks the
+  # control-flow contexts of the default graph (and their outer contexts), then moves to the outer
+  # graph of function graphs, until an inference context is found. Returns true if one is found,
+  # false when the outermost graph is reached. Takes no inputs and has no side effects.
   """Check if it is currently under `_TPUInferenceContext`."""
   graph = ops.get_default_graph()
   while graph:
@@ -1531,6 +1710,10 @@ def under_tpu_inference_context() -> bool:
 
 
 class _TPUInferenceContext(control_flow_ops.XLAControlFlowContext):
+  # [CLASS DOC]
+  # HELPER: control-flow context used by rewrite_for_inference. Marks that ops are being built for
+  # a TPU inference computation and, if enabled, rejects variable-related ops that cannot run
+  # there. Holds a name and a flag for op checking; forwards ops and values to the outer context.
   """A `ControlFlowContext` for nodes inside a TPU inference computation.
 
   The primary role of `_TPUInferenceContext` is to indicate the mode of
@@ -1539,14 +1722,25 @@ class _TPUInferenceContext(control_flow_ops.XLAControlFlowContext):
   """
 
   def __init__(self, name: Text, check_ops: bool = True):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: name (context name) and check_ops (default true; whether to reject
+    # unsupported variable ops). Initializes the base context and stores both. Returns nothing.
     super(_TPUInferenceContext, self).__init__()
     self._name = name
     self._check_ops = check_ops
 
   def AddOp(self, op):
+    # [FUNCTION DOC]
+    # Called when an op is created in this context. Input: the op. Delegates to the internal check
+    # (which may raise) and registers the op with the outer context. Returns nothing.
     self._AddOpInternal(op)
 
   def _AddOpInternal(self, op):
+    # [FUNCTION DOC]
+    # HELPER: shared logic for AddOp and AddInnerOp. Input: the op. If checking is enabled and the
+    # op type is on the deny list of variable ops (read, assign, handle creation, legacy variable
+    # types), raises a not-implemented error explaining it is unsupported on TPU for inference.
+    # Otherwise forwards the op to the outer context, if any. Returns nothing.
     # pylint: disable=protected-access
     if self._check_ops and op.type in _DENYLISTED_INFERENCE_OPS:
       raise NotImplementedError(
@@ -1557,20 +1751,35 @@ class _TPUInferenceContext(control_flow_ops.XLAControlFlowContext):
       self._outer_context.AddInnerOp(op)
 
   def AddValue(self, val):
+    # [FUNCTION DOC]
+    # Called when an external value is used inside the context. Input: the value. Returns the
+    # value unchanged if there is no outer context, otherwise whatever the outer context's
+    # AddValue returns for it.
     result = val
     if self._outer_context:
       result = self._outer_context.AddValue(val)
     return result
 
   def AddInnerOp(self, op):
+    # [FUNCTION DOC]
+    # Called when an op is created in a nested context. Input: the op. Same handling as AddOp:
+    # runs the deny-list check (may raise a not-implemented error) and notifies the outer context.
+    # Returns nothing.
     self._AddOpInternal(op)
 
   @property
   def grad_state(self):
+    # [FUNCTION DOC]
+    # Property required by the control-flow context interface. Always returns nothing because this
+    # context does not take part in gradient loop state.
     return None
 
 
 def validate_inference_rewrite_for_variables(graph: ops.Graph):
+  # [FUNCTION DOC]
+  # Sanity check to run right after rewrite_for_inference. Input: the graph to inspect. Scans all
+  # its operations for a guarantee-constant op; raises a runtime error advising use of the
+  # variable-getter API if none exists. Returns nothing; does not modify the graph.
   """Validates whether rewrite_for_inference() 'worked' for variables.
 
      The rewrite_for_inference() method is supposed to append GuaranteeConstOps
@@ -1605,6 +1814,15 @@ def rewrite_for_inference(
     infeed_queue: Optional[tpu_feed.InfeedQueue] = None,
     device_assignment: Optional[device_assignment_lib.DeviceAssignment] = None,
     name: Optional[Text] = None) -> List[core_types.Tensor]:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the wrapped computation restores the variable scope's custom getter and caching
+  # device only on success; if the computation raises, they are not restored (only the context
+  # exit is in the cleanup path). It also passes name through to rewrite, which ignores it.
+  # Rewrites a computation for TPU inference. Inputs: computation, inputs (list of tensors or
+  # nothing), infeed_queue, device_assignment and name. Wraps the computation so it runs inside an
+  # inference context with a variable getter that adds a guarantee-constant op after each variable
+  # read (with no control dependencies) and a caching device that follows the op device, then
+  # calls rewrite. Returns the list of output tensors.
   """Rewrites `computation` for inference on a TPU system.
 
      Other than 'rewriting' the computation to run on a TPU, if using variables
@@ -1634,11 +1852,20 @@ def rewrite_for_inference(
   """
 
   def guarantee_const_getter(getter, name, *args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: custom variable getter installed during inference rewriting. Calls the underlying
+    # getter with the given name and arguments, outside any control dependencies, and wraps the
+    # resulting value in a guarantee-constant op named after the variable. Returns that tensor.
     with ops.control_dependencies(None):
       return array_ops.guarantee_const(
           getter(name, *args, **kwargs), name=name + "/GuaranteeConst")
 
   def wrapped_computation(*args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: computation passed to rewrite. Enters a new inference context, temporarily installs
+    # the guarantee-constant getter and a device-following caching device on the current variable
+    # scope, calls the user computation with the given arguments, restores the scope settings and
+    # exits the context (always). Returns the computation's result.
     """Execute computation under `_TPUInferenceContext`."""
     context = _TPUInferenceContext(
         name=ops.get_default_graph().unique_name("rewrite_for_inference"))
@@ -1670,6 +1897,11 @@ def rewrite_for_inference(
 
 
 def prune_unconnected_ops_from_xla(prune_graph: ops.Graph):
+  # [FUNCTION DOC]
+  # Removes the TPU replicate attribute from leftover input-less ops (placeholders and variable
+  # handles) whose outputs have no consumers, so that they do not break XLA compilation. Input:
+  # the graph; it and its function graphs are scanned. Logs each pruned op and mutates the ops'
+  # attributes. Returns nothing.
   """Prunes unconnected ops as listed in _UNCONNECTED_OPS_TO_PRUNE.
 
   Args:

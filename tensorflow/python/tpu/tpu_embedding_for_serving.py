@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Mid level TPU embedding API for running embedding lookups on CPU for serving. Defines
+# TPUEmbeddingForServing (exported publicly), which restores tables trained on TPU (including
+# sparse core stacked tables) from checkpoints, and the public serving lookup function plus
+# private helpers that perform dense, sparse and ragged lookups with standard TensorFlow ops.
+# Import-time side effects: registers the public API symbols via the export decorator.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -44,6 +50,13 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export("tpu.experimental.embedding.TPUEmbeddingForServing")
 class TPUEmbeddingForServing(tpu_embedding_base.TPUEmbeddingBase):
+  # [CLASS DOC]
+  # CPU implementation of the TPU embedding mid level API, intended for serving tables that were
+  # trained on TPU. Constructed from a feature configuration and an optimizer (which may be nothing
+  # to skip slot variables), it must be created outside any TPU strategy. Variables are built
+  # lazily, keyed by table name then slot name, and can be restored from regular or sparse core
+  # checkpoints. Lookup is done with standard embedding ops; it is also usable for CPU training.
+  # Exported publicly under the TPU experimental embedding namespace.
   """The TPUEmbedding mid level API running on CPU for serving.
 
   Note: This class is intended to be used for embedding tables that are trained
@@ -96,6 +109,14 @@ class TPUEmbeddingForServing(tpu_embedding_base.TPUEmbeddingBase):
       optimizer: Optional[tpu_embedding_v2_utils._Optimizer],
       experimental_sparsecore_restore_info: Optional[Dict[str, Any]] = None,
   ):  # pylint:disable=protected-access
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: experimental_sparsecore_restore_info is documented as restore information but is
+    # never used or stored by this constructor; it is silently ignored.
+    # Constructor. Inputs: feature_config (nested structure of feature configs), optimizer (an
+    # embedding optimizer, or nothing to avoid slot variables) and the ignored restore info.
+    # Calls the base constructor (validating tables and optimizers), then records the current
+    # distribution strategy. Raises a runtime error if that strategy is a TPU strategy, since
+    # serving on TPU is unsupported. Returns nothing.
     """Creates the TPUEmbeddingForServing mid level API object.
 
     ```python
@@ -135,6 +156,11 @@ class TPUEmbeddingForServing(tpu_embedding_base.TPUEmbeddingBase):
   ) -> Dict[
       tpu_embedding_v2_utils.TableConfig, Dict[str, tf_variables.Variable]
   ]:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring and return annotation say the mapping is keyed by table config,
+    # but the stored mapping is actually keyed by table name (a string).
+    # Property. Builds the variables if needed (eagerly) and returns the mapping from table to a
+    # mapping from "parameters" and slot names to variables.
     """Returns a dict of variables, keyed by `TableConfig`, then by slot name."""
     self._maybe_build()
     return self._variables
@@ -143,6 +169,9 @@ class TPUEmbeddingForServing(tpu_embedding_base.TPUEmbeddingBase):
   def embedding_tables(
       self,
   ) -> Dict[tpu_embedding_v2_utils.TableConfig, tf_variables.Variable]:
+    # [FUNCTION DOC]
+    # Property. Builds the variables if needed, then returns a mapping from each table
+    # configuration (in table order) to its main parameter variable, leaving out slot variables.
     """Returns a dict of embedding tables, keyed by `TableConfig`."""
     self._maybe_build()
     # Only return the tables and not the slot variables.
@@ -152,6 +181,11 @@ class TPUEmbeddingForServing(tpu_embedding_base.TPUEmbeddingBase):
     }
 
   def _maybe_build(self):
+    # [FUNCTION DOC]
+    # HELPER: ensures the variables exist before the properties and lookup use them.
+    # If not yet built, calls build inside an initialization scope so the variable creation runs
+    # eagerly and is excluded from any function graph being traced, guaranteeing one-time
+    # initialization. Takes no inputs, returns nothing.
     if not self._built:
       # This can be called while tracing a function, so we wrap the
       # initialization code with init_scope so it runs eagerly, this means that
@@ -164,6 +198,11 @@ class TPUEmbeddingForServing(tpu_embedding_base.TPUEmbeddingBase):
   # TODO(silkyarora) Update the tests for all TPU embedding to expect this
   # possibly empty information in checkpoints.
   def _maybe_delete_sc_layouts_from_checkpoint(self):
+    # [FUNCTION DOC]
+    # HELPER: keeps checkpoints free of an empty sparse core layout entry.
+    # If the object has the sparse core layouts attribute but its stored layout text is empty
+    # (the checkpoint was not from sparse core training), the attribute is removed so it is not
+    # tracked or saved. Reads the variable value (eager). Returns nothing.
     # Remove the sparse_core_table_layouts from the checkpoint, it is only
     # required for sparsecore.
     if (
@@ -179,12 +218,24 @@ class TPUEmbeddingForServing(tpu_embedding_base.TPUEmbeddingBase):
       )
 
   def build(self):
+    # [FUNCTION DOC]
+    # Builds the variables and slots through the base implementation, then removes the sparse core
+    # layout tracking entry if it turned out to be empty. Takes no inputs, returns nothing.
     """Create variables and slots variables for TPU embeddings."""
     super().build()
     self._maybe_delete_sc_layouts_from_checkpoint()
 
   def _track_restore_info_for_cpu(self) -> None:
+    # [FUNCTION DOC]
+    # HELPER: prepares checkpoint restoration of sparse core table layouts on CPU.
+    # Creates a non-trainable string variable (default empty) under the sparse core layouts
+    # checkpoint key, using a custom getter so the value is restored at creation time, before any
+    # table restore, and stores it as an attribute of this object. Returns nothing.
     def getter(name, shape, dtype, initializer, trainable):
+      # [FUNCTION DOC]
+      # HELPER: custom variable getter used for restore-at-creation.
+      # Ignores the shape argument and creates a variable with unspecified shape from the
+      # initializer, the given name, dtype and trainable flag. Returns the variable.
       del shape
       # _add_variable_with_custom_getter clears the shape sometimes, so we
       # take the global shape from outside the getter.
@@ -198,6 +249,9 @@ class TPUEmbeddingForServing(tpu_embedding_base.TPUEmbeddingBase):
       )
 
     def empty_string(dtype: dtypes.DType):
+      # [FUNCTION DOC]
+      # HELPER: default initializer for the layout variable. Takes a data type and returns a
+      # constant empty string tensor of that type.
       return tf_constant("", dtype=dtype)
 
     # _add_variable_with_custom_getter is used here to restore from checkpoint
@@ -216,6 +270,10 @@ class TPUEmbeddingForServing(tpu_embedding_base.TPUEmbeddingBase):
     )
 
   def _get_sparse_core_table_layouts_str(self) -> bytes:
+    # [FUNCTION DOC]
+    # HELPER: reads the serialized sparse core table layouts. Returns the current value of the
+    # layouts variable as raw bytes (empty if nothing was restored). Needs eager execution; raises
+    # an attribute error if the layouts attribute was never created or was deleted.
     layouts_str = getattr(
         self,
         tpu_embedding_v3_utils.SPARSECORE_LAYOUTS_CHECKPOINT_KEY,
@@ -225,6 +283,12 @@ class TPUEmbeddingForServing(tpu_embedding_base.TPUEmbeddingBase):
   def _trackable_children(
       self, save_type=trackable_base.SaveType.CHECKPOINT, **kwargs: Any
   ):
+    # [FUNCTION DOC]
+    # Override of the trackable children listing. Gets the base children mapping (save_type
+    # selects checkpoint or saved model; extra keyword arguments are passed through). When saving
+    # a saved model, it removes the sparse core layouts entry and any stacked-table trackables,
+    # since they exist only to make sparse core checkpoint restore work. Returns the mapping from
+    # names to trackable objects.
     # Remove the trackables added to make sparsecore checkpoint restore work.
     # These are not required for serializing the model.
     tc = super()._trackable_children(save_type, **kwargs)
@@ -243,6 +307,13 @@ class TPUEmbeddingForServing(tpu_embedding_base.TPUEmbeddingBase):
     return tc
 
   def _create_variables_from_stacked_tables(self):
+    # [FUNCTION DOC]
+    # HELPER: handles tables that came from a sparse core checkpoint. Parses the stored layouts,
+    # groups them by stacked table name, and for each stacked table creates a stacked-table
+    # trackable (tracked on this object under the stacked name so its checkpoint key is read).
+    # Logs one informational message per stacked table. Returns a mapping from table name to the
+    # variables (parameters and slots) obtained from the trackables; empty when no layouts exist.
+    # Raises a parse error if the stored layouts bytes are corrupt.
     sc_layouts = sparse_core_layout_pb2.SparseCoreTableLayouts()
     sc_layouts.ParseFromString(self._get_sparse_core_table_layouts_str())
     stacked_table_name_to_layouts = {}
@@ -273,6 +344,11 @@ class TPUEmbeddingForServing(tpu_embedding_base.TPUEmbeddingBase):
   def _create_variables_and_slots(
       self,
   ) -> Dict[str, Dict[str, tf_variables.Variable]]:
+    # [FUNCTION DOC]
+    # Implements the base hook. Registers the layout restore variable, first creates any variables
+    # recovered from sparse core stacked tables (only a "parameters" entry for these), then for
+    # every remaining table creates trainable parameter and slot variables. Returns a mapping from
+    # table name to a mapping from "parameters" and slot names to variables.
     """Create variables for TPU embeddings.
 
     Returns:
@@ -294,6 +370,13 @@ class TPUEmbeddingForServing(tpu_embedding_base.TPUEmbeddingBase):
   def embedding_lookup(
       self, features: Any, weights: Optional[Any] = None
   ) -> Any:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says inputs are downcast to int32 and weights to float32, but
+    # this method only delegates and performs no casting itself.
+    # Performs the embedding lookup on CPU. Inputs: features (nested structure of dense, sparse or
+    # ragged tensors matching the feature config) and optional weights. Builds variables if needed
+    # via the embedding tables property, then delegates to the module's serving lookup function.
+    # Returns a structure of embedded tensors matching the features; errors come from that function.
     """Apply standard lookup ops on CPU.
 
     Args:
@@ -322,6 +405,13 @@ def _ragged_embedding_lookup_with_reduce(
     weights: ragged_tensor.RaggedTensor,
     combiner: str,
 ) -> core.Tensor:
+  # [FUNCTION DOC]
+  # HELPER: ragged lookup plus weighted reduction for the ragged serving path.
+  # Inputs: table (embedding variable), ragged (ragged ids), weights (ragged weights or nothing,
+  # treated as all ones) and combiner (sum, mean or sqrtn). Looks up embeddings, multiplies by
+  # weights and sums across the second axis; for mean divides by the weight sum, for sqrtn by the
+  # square root of the sum of squared weights (division yields zero when the divisor is zero).
+  # Any other combiner behaves as a plain sum. Returns a dense tensor of combined embeddings.
   """Compute a ragged lookup followed by a reduce on axis 1.
 
   Args:
@@ -359,6 +449,17 @@ def cpu_embedding_lookup(
         tpu_embedding_v2_utils.FeatureConfig, Iterable  # pylint:disable=g-bare-generic
     ],
 ) -> Any:
+  # [FUNCTION DOC]
+  # Public serving lookup: embeds a structure of inputs using tables and feature configs.
+  # Inputs: inputs (nested structure of dense, sparse or ragged tensors), weights (nothing, or a
+  # matching structure whose entries may be nothing), tables (mapping from table config to
+  # variable) and feature_config (nested feature configs; inputs must be a subset of its paths).
+  # Each input is dispatched by type to the dense, sparse or ragged lookup. Returns the outputs
+  # packed in the structure of inputs.
+  # Raises a value error when: input paths are not in the feature config; a weight is given for a
+  # dense input, for a sequence feature, or with a different type than its input; a dense tensor
+  # is given for a sequence feature; or an input has an unsupported type. Mismatched weights
+  # structure raises the usual structure error.
   """Apply standard lookup ops with `tf.tpu.experimental.embedding` configs.
 
   This function is a utility which allows using the
@@ -489,6 +590,15 @@ def _embedding_lookup_for_sparse_tensor(
     table: tf_variables.Variable,
     feature: tpu_embedding_v2_utils.FeatureConfig,
 ) -> tensor.Tensor:
+  # [FUNCTION DOC]
+  # HELPER: sparse-input branch of the serving lookup.
+  # Inputs: inp (sparse ids), weight (sparse weights or nothing), table (embedding variable) and
+  # feature (feature config). For sequence features with no output shape and rank unknown or 2,
+  # truncates to the maximum sequence length and scatters the gathered rows into a dense
+  # batch by sequence by dimension tensor (weights are not applied on this path). Otherwise logs a
+  # warning if a sequence length was set, and uses the plain sparse lookup when weight/index
+  # validation is off and rank is known and at most 2, else the safe sparse lookup, combining with
+  # the table combiner. Returns the embedding tensor.
   """Embedding lookup for sparse tensor based on its feature config.
 
   Args:
@@ -555,6 +665,15 @@ def _embedding_lookup_for_ragged_tensor(
     table: tf_variables.Variable,
     feature: tpu_embedding_v2_utils.FeatureConfig,
 ) -> tensor.Tensor:
+  # [FUNCTION DOC]
+  # HELPER: ragged-input branch of the serving lookup.
+  # Inputs: inp (rank 2 ragged ids), weight (ragged weights or nothing), table and feature config.
+  # Raises a value error if the rank is not 2, or if an output shape is set whose batch size is
+  # neither equal to nor a multiple of the input batch size. With equal batch sizes it does the
+  # weighted combine and reshapes to the output shape plus dimension; with a larger multiple it
+  # ignores weights and combiner, pads or truncates each row to the implied sequence length and
+  # reshapes. Without an output shape, sequence features are padded or truncated to the maximum
+  # length (weights ignored); others are combined. Returns the embedding tensor.
   """Embedding lookup for ragged tensor based on its feature config.
 
   Args:
