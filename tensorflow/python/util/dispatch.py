@@ -1,3 +1,16 @@
+# [MODULE DOC]
+# Type-based and fallback dispatch machinery for TensorFlow's Python APIs (ops). Exposes the
+# fallback system (operation dispatcher base classes, a registry of global dispatchers, a helper
+# that tries each registered dispatcher, and decorators that add a dispatch list to an op) and the
+# type-based system (decorators that register dispatch targets for an API given type signatures,
+# registries of unary/binary/binary-assert elementwise APIs and their handlers, helpers that build
+# native signature/type checkers, and the decorator that adds dispatch support to Python ops).
+# Several functions are exported publicly via the export decorator (experimental dispatch
+# decorators, unregister function, add_dispatch_support, dispatcher base classes).
+# Import-time side effects: defines module-level registries (global dispatcher list, signature
+# registry, elementwise API lists and handler/target tables, instance-checker cache) and registers
+# exported symbols. Relies on the native API dispatcher extension module. Not a helper module;
+# it is core infrastructure used by op definitions throughout the package.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -88,6 +101,12 @@ _GLOBAL_DISPATCHERS = []
 
 @tf_export("__internal__.dispatch.OpDispatcher", v1=[])
 class OpDispatcher(object):
+  # [CLASS DOC]
+  # Abstract base class for fallback dispatchers that override a single TensorFlow op. A
+  # dispatcher is registered on one op and is consulted only when the op's normal implementation
+  # raises a type or value error. Subclasses override the handle method and return the sentinel
+  # NOT_SUPPORTED (a class-level unique object) when they cannot handle the arguments.
+  # Holds no per-instance state in the base class.
   """Abstract base class for TensorFlow operator dispatchers.
 
   Each operation dispatcher acts as an override handler for a single
@@ -101,6 +120,11 @@ class OpDispatcher(object):
   NOT_SUPPORTED = object()
 
   def handle(self, args, kwargs):  # pylint: disable=unused-argument
+    # [FUNCTION DOC]
+    # Default handler hook: inputs are the positional arguments (sequence) and keyword arguments
+    # (mapping) the op was called with. This base version ignores them and always returns the
+    # NOT_SUPPORTED sentinel. Subclasses override it to return a result (or raise) when they can
+    # handle the call. No side effects.
     """Handle this dispatcher's operation with the specified arguments.
 
     If this operation dispatcher can handle the given arguments, then
@@ -117,6 +141,11 @@ class OpDispatcher(object):
     return self.NOT_SUPPORTED
 
   def register(self, op):
+    # [FUNCTION DOC]
+    # Registers this dispatcher on the given op by appending it to the op's fallback dispatcher
+    # list attribute. Input op: a function that already has a fallback dispatch list (added by
+    # add_dispatch_support or generated op wrappers). Raises an assertion error if the op has no
+    # such list. Returns nothing. Side effect: mutates the op's dispatcher list.
     """Register this dispatcher as a handler for `op`.
 
     Args:
@@ -132,19 +161,40 @@ class OpDispatcher(object):
 
 @tf_export("__internal__.dispatch.GlobalOpDispatcher", v1=[])
 class GlobalOpDispatcher(object):
+  # [CLASS DOC]
+  # Abstract base class for fallback dispatchers that apply to every op rather than a single one.
+  # Its handle method receives the op as well as the arguments. Registered instances are kept in
+  # the module-level global dispatcher list. Shares the NOT_SUPPORTED sentinel with the
+  # per-op dispatcher class.
   """Abstract base class for TensorFlow global operator dispatchers."""
 
   NOT_SUPPORTED = OpDispatcher.NOT_SUPPORTED
 
   def handle(self, op, args, kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the base implementation has only a docstring, so it returns nothing (null)
+    # rather than the NOT_SUPPORTED sentinel; a subclass that does not override it would be
+    # treated by the dispatch helper as having handled the op with a null result.
+    # Hook for subclasses. Inputs: the op being called, positional arguments, keyword arguments.
+    # Returns nothing in this base class. No side effects.
     """Handle the specified operation with the specified arguments."""
 
   def register(self):
+    # [FUNCTION DOC]
+    # Adds this dispatcher to the module-level global dispatcher list so it is consulted for all
+    # ops. Takes no inputs, returns nothing. Side effect: mutates global state; registering twice
+    # adds the instance twice.
     """Register this dispatcher as a handler for all ops."""
     _GLOBAL_DISPATCHERS.append(self)
 
 
 def dispatch(op, args, kwargs):
+  # [FUNCTION DOC]
+  # Runs fallback dispatch for an op. Inputs: the op (must have a fallback dispatcher list,
+  # otherwise an attribute error is raised), positional arguments, keyword arguments. First asks
+  # each dispatcher registered on the op, then each global dispatcher, in registration order, and
+  # returns the first result that is not the NOT_SUPPORTED sentinel. Returns NOT_SUPPORTED if
+  # none handles the call. Exceptions raised by handlers propagate. No other side effects.
   """Returns the result from the first successful dispatcher for a given op.
 
   Calls the `handle` method of each `OpDispatcher` that has been registered
@@ -171,6 +221,11 @@ def dispatch(op, args, kwargs):
 
 
 class _TypeBasedDispatcher(OpDispatcher):
+  # [CLASS DOC]
+  # HELPER: implements the legacy dispatch_for_types decorator.
+  # Fallback dispatcher that delegates to an override function when any argument (or element of a
+  # list or tuple argument) is an instance of one of the configured types. State: the tuple of
+  # types and the override function.
   """Dispatcher that handles op if any arguments have a specified type.
 
   Checks the types of the arguments and keyword arguments (including elements
@@ -179,10 +234,18 @@ class _TypeBasedDispatcher(OpDispatcher):
   """
 
   def __init__(self, override_func, types):
+    # [FUNCTION DOC]
+    # Constructor. Stores the override function (called with the original arguments when a match
+    # is found) and the tuple of types to look for. Returns nothing.
     self._types = types
     self._override_func = override_func
 
   def _handles(self, args, kwargs):
+    # [FUNCTION DOC]
+    # HELPER: type-matching predicate for the handle method of this dispatcher.
+    # Inputs: positional arguments and keyword arguments. Returns true if any positional or
+    # keyword value is an instance of the configured types, or is a list or tuple containing such
+    # an element (one level deep only); otherwise false. No side effects.
     for arg in itertools.chain(args, kwargs.values()):
       if (isinstance(arg, self._types) or
           (isinstance(arg, (list, tuple)) and
@@ -191,6 +254,10 @@ class _TypeBasedDispatcher(OpDispatcher):
     return False
 
   def handle(self, args, kwargs):
+    # [FUNCTION DOC]
+    # Calls the override function with the original positional and keyword arguments and returns
+    # its result if any argument matches the configured types; otherwise returns the
+    # NOT_SUPPORTED sentinel. Exceptions from the override function propagate.
     if self._handles(args, kwargs):
       return self._override_func(*args, **kwargs)
     else:
@@ -198,12 +265,20 @@ class _TypeBasedDispatcher(OpDispatcher):
 
 
 def _remove_annotation(sig):
+  # [FUNCTION DOC]
+  # HELPER: normalizes signatures so get_compatible_func can compare them.
+  # Input: a signature object. Returns a copy with all parameter annotations and the return
+  # annotation cleared. Does not modify the input.
   """Removes annotation from a python Signature."""
   parameters = [p.replace(annotation=p.empty) for p in sig.parameters.values()]
   return sig.replace(parameters=parameters, return_annotation=sig.empty)
 
 
 def _get_required_param_names(sig):
+  # [FUNCTION DOC]
+  # HELPER: used by get_compatible_func to compare required arguments.
+  # Input: a signature object. Returns, in order, the names of parameters that have no default
+  # value and are neither variadic positional nor variadic keyword. No side effects.
   """Returns a list of required parameter names from a python Signature."""
   params = []
   for p in sig.parameters.values():
@@ -218,6 +293,15 @@ def _get_required_param_names(sig):
 
 
 def get_compatible_func(op, func):
+  # [FUNCTION DOC]
+  # Adapts func so it can be called with the calling convention of op. Inputs: op, a callable
+  # whose signature is the target; func, the callable to wrap. If the annotation-stripped
+  # signatures are equal, returns func itself. Otherwise requires that the required (no default)
+  # parameter names of both match in order, and that every op parameter missing from func has a
+  # default. Raises an assertion error if either requirement fails. The returned wrapper binds
+  # arguments to op's signature, drops the parameters func lacks, raises an assertion error if
+  # a dropped parameter was given a non-default value, then calls func with the rest and returns
+  # its result.
   """Returns a compatible function.
 
   Args:
@@ -267,6 +351,12 @@ def get_compatible_func(op, func):
     func_missing_params[name] = p
 
   def compatible_func(*args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: wrapper returned by get_compatible_func.
+    # Binds the call arguments to the op's signature (raising a type error if they do not fit),
+    # removes arguments for parameters the wrapped function does not support, raising an assertion
+    # error if any was passed with a non-default value, then calls the wrapped function with the
+    # remaining positional and keyword arguments and returns its result.
     bound = op_signature.bind(*args, **kwargs)
     for name, param in func_missing_params.items():
       if name not in bound.arguments:
@@ -285,6 +375,12 @@ def get_compatible_func(op, func):
 
 # pylint: disable=g-doc-return-or-yield
 def dispatch_for_types(op, *types):
+  # [FUNCTION DOC]
+  # Legacy fallback-dispatch decorator factory. Inputs: op, the function to override, and any
+  # number of types. Returns a decorator that, when applied to a function, builds a compatible
+  # version of it for the op's signature (which may raise an assertion error), registers a
+  # type-based dispatcher on the op, and returns the function unchanged. Side effect: mutates the
+  # op's fallback dispatcher list; raises an assertion error if op has none.
   """Decorator to declare that a Python function overrides an op for a type.
 
   The decorated function is used to override `op` if any of the arguments or
@@ -304,6 +400,10 @@ def dispatch_for_types(op, *types):
   """
 
   def decorator(func):
+    # [FUNCTION DOC]
+    # Decorator returned by dispatch_for_types. Input: the override function. Registers a
+    # type-based dispatcher wrapping it on the captured op and returns the function unchanged.
+    # Raises an assertion error on incompatible signatures or if the op has no dispatch list.
 
     _TypeBasedDispatcher(get_compatible_func(op, func), types).register(op)
     return func
@@ -315,6 +415,10 @@ def dispatch_for_types(op, *types):
 
 
 def add_fallback_dispatch_list(target):
+  # [FUNCTION DOC]
+  # Decorator that gives a function an empty fallback dispatcher list attribute. Input: the
+  # target function. Returns the same function. Raises an assertion error if the function already
+  # has such a list. Side effect: sets an attribute on the function.
   """Decorator that adds a dispatch_list attribute to an op."""
   if hasattr(target, FALLBACK_DISPATCH_ATTR):
     raise AssertionError("%s already has a dispatch list" % target)
@@ -333,6 +437,17 @@ add_dispatch_list = add_fallback_dispatch_list
 
 @tf_export("experimental.dispatch_for_api")
 def dispatch_for_api(api, *signatures):
+  # [FUNCTION DOC]
+  # Public decorator factory for type-based dispatch. Inputs: api, a TensorFlow API function that
+  # supports type-based dispatch; signatures, zero or more mappings from parameter names (or
+  # positions) to type annotations. Raises a value error immediately if the api has no
+  # type-based dispatcher attribute. Builds one native signature checker per signature (these may
+  # raise type or value errors for malformed signatures). Returns a decorator that registers the
+  # dispatch target for each checker (or, with no signatures, for a signature read from the
+  # target's annotations) and records the signatures in the module registry, returning the
+  # (possibly name-scope-wrapped) target. Side effects: mutates the API's native dispatcher and
+  # the signature registry. The docstring's API list placeholder is filled in later by
+  # update_docstrings_with_api_lists.
   """Decorator that overrides the default implementation for a TensorFlow API.
 
   The decorated function (known as the "dispatch target") will override the
@@ -427,6 +542,12 @@ def dispatch_for_api(api, *signatures):
   ]
 
   def decorator(dispatch_target):
+    # [FUNCTION DOC]
+    # Decorator returned by dispatch_for_api. Input: the dispatch target, which must be callable
+    # (otherwise a type error is raised). Wraps it to accept a name argument if the API has one,
+    # checks its signature against the API (value error on mismatch), registers it with the
+    # API's native dispatcher for every signature checker, and records the signatures. Returns
+    # the wrapped target.
     """Decorator that registers the given dispatch target."""
     if not callable(dispatch_target):
       raise TypeError("Expected dispatch_target to be callable; "
@@ -456,6 +577,9 @@ _TYPE_BASED_DISPATCH_SIGNATURES = {}
 
 
 def apis_with_type_based_dispatch():
+  # [FUNCTION DOC]
+  # Takes no inputs. Returns a list of the API functions that have a registered type-based
+  # dispatcher, sorted by module name plus function name. No side effects.
   """Returns a list of TensorFlow APIs that support type-based dispatch."""
   return sorted(
       _TYPE_BASED_DISPATCH_SIGNATURES,
@@ -463,6 +587,11 @@ def apis_with_type_based_dispatch():
 
 
 def type_based_dispatch_signatures_for(cls):
+  # [FUNCTION DOC]
+  # Documentation-generation helper. Input: cls, a class to search for. Scans the signature
+  # registry and returns a mapping from each API to the list of its registered signatures that
+  # mention cls anywhere in their annotations (recursing through generic list and union
+  # annotations). APIs with no matching signature are omitted. No side effects.
   """Returns dispatch signatures that have been registered for a given class.
 
   This function is intended for documentation-generation purposes.
@@ -481,6 +610,11 @@ def type_based_dispatch_signatures_for(cls):
   """
 
   def contains_cls(x):
+    # [FUNCTION DOC]
+    # HELPER: recursive predicate for type_based_dispatch_signatures_for.
+    # Input: a signature mapping, annotation, or any value. Returns true if it is the target
+    # class, or if it is a mapping whose values contain it, or a generic list or union whose type
+    # arguments contain it; otherwise false.
     """Returns true if `x` contains `cls`."""
     if isinstance(x, dict):
       return any(contains_cls(v) for v in x.values())
@@ -506,6 +640,14 @@ def type_based_dispatch_signatures_for(cls):
 # the `name` argument to all TensorFlow APIs that are implemented in Python
 # (so each Python function doesn't need to do it manually).
 def _add_name_scope_wrapper(func, api_signature):
+  # [FUNCTION DOC]
+  # HELPER: lets dispatch targets omit the name parameter of an API.
+  # Inputs: func, the dispatch target; api_signature, signature of the API. If the API has no name
+  # parameter, or func already accepts a name (explicitly or via variadic keywords), returns func
+  # unchanged. Otherwise returns a wrapper that extracts the name from positional or keyword
+  # arguments, runs func inside a name scope when a name was given, and calls func directly
+  # otherwise. The wrapper keeps func's identity via the decorator utility, has its signature
+  # extended with the API's name parameter, and has its decorator marker attribute removed.
   """Wraps `func` to expect a "name" arg, and use it to call `ops.name_scope`.
 
   If `func` already expects a "name" arg, or if `api_signature` does not
@@ -531,6 +673,11 @@ def _add_name_scope_wrapper(func, api_signature):
   name_index = list(api_signature.parameters).index("name")
 
   def wrapped_func(*args, **kwargs):
+    # [FUNCTION DOC]
+    # Wrapper built by _add_name_scope_wrapper. Pulls the name out of the positional arguments
+    # (at the API's name position) or from keyword arguments (defaulting to nothing), then calls
+    # the wrapped function with the remaining arguments, inside a name scope if a name was given.
+    # Returns the wrapped function's result.
     if name_index < len(args):
       name = args[name_index]
       args = args[:name_index] + args[name_index + 1:]
@@ -552,6 +699,12 @@ def _add_name_scope_wrapper(func, api_signature):
 
 @tf_export("experimental.unregister_dispatch_for")
 def unregister_dispatch_for(dispatch_target):
+  # [FUNCTION DOC]
+  # Removes a previously registered dispatch target (mainly for tests). Input: the target
+  # function. Looks it up in the type-based signature registry (unregistering from each API's
+  # native dispatcher and deleting the record) and in the elementwise handler table (recursively
+  # unregistering every generated per-API target and deleting the handler and target records).
+  # Raises a value error if it was found in neither. Returns nothing.
   """Unregisters a function that was registered with `@dispatch_for_*`.
 
   This is primarily intended for testing purposes.
@@ -610,6 +763,10 @@ def unregister_dispatch_for(dispatch_target):
 
 
 def register_dispatchable_type(cls):
+  # [FUNCTION DOC]
+  # Registers a class with the native dispatcher so its instances trigger type-based dispatch.
+  # Input: cls, the class (not a composite tensor or extension type, which are registered
+  # automatically). Returns cls. Side effect: updates native global dispatcher state.
   """Class decorator that registers a type for use with type-based dispatch.
 
   Should *not* be used with subclasses of `CompositeTensor` or `ExtensionType`
@@ -629,6 +786,13 @@ def register_dispatchable_type(cls):
 
 
 def add_type_based_api_dispatcher(target):
+  # [FUNCTION DOC]
+  # Attaches a native API dispatcher to an API function. Input: target, the (possibly decorated)
+  # function. Raises a value error if it already has one. If the unwrapped function takes
+  # variadic positional or keyword arguments, returns target unchanged with no dispatcher
+  # (unsupported, see the bug reference in the code). Otherwise sets the dispatcher attribute on
+  # target (built from the function name, argument names and defaults), creates an empty
+  # signature registry entry for it, and returns target.
   """Adds a PythonAPIDispatcher to the given TensorFlow API function."""
   if hasattr(target, TYPE_BASED_DISPATCH_ATTR):
     raise ValueError(f"{target} already has a type-based API dispatcher.")
@@ -651,6 +815,12 @@ def add_type_based_api_dispatcher(target):
 
 
 def _check_signature(api_signature, func):
+  # [FUNCTION DOC]
+  # HELPER: validates dispatch targets in the decorator from dispatch_for_api.
+  # Inputs: the API's signature and the candidate function. Returns nothing. A function taking
+  # only variadic positional and keyword arguments is accepted without checks. Otherwise raises
+  # a value error unless the parameter counts match and each corresponding parameter has the
+  # same name and kind.
   """Checks that a dispatch target's signature is compatible with an API.
 
   Args:
@@ -682,6 +852,13 @@ def _check_signature(api_signature, func):
 
 
 def _make_signature_checker(api_signature, signature):
+  # [FUNCTION DOC]
+  # HELPER: converts a user type signature into a native checker for dispatch_for_api.
+  # Inputs: api_signature, the API's signature; signature, a mapping from parameter names or
+  # integer positions to type annotations. Raises a type error if signature is not such a
+  # mapping, a value error if a parameter is unknown or is not positional(-or-keyword). Integer
+  # positions within range are converted to names. Returns a native signature checker built from
+  # (parameter index, type checker) pairs.
   """Builds a PySignatureChecker for the given type signature.
 
   Args:
@@ -730,6 +907,12 @@ _is_instance_checker_cache = {}
 
 
 def make_type_checker(annotation):
+  # [FUNCTION DOC]
+  # Builds a native type checker from a type annotation. Supported: unions (several plain types
+  # are merged into one cached instance checker combined with checkers for the other members),
+  # lists (exactly one element type, else assertion error), plain classes (cached instance
+  # checker per class), and the null value (checks the null type). Any other annotation raises a
+  # value error. Side effect: fills the module instance-checker cache.
   """Builds a PyTypeChecker for the given type annotation."""
   if type_annotations.is_generic_union(annotation):
     type_args = type_annotations.get_generic_type_args(annotation)
@@ -773,6 +956,10 @@ def make_type_checker(annotation):
 
 
 def _signature_from_annotations(func):
+  # [FUNCTION DOC]
+  # HELPER: supplies the default signature for dispatch_for_api when none is given.
+  # Input: a function. Returns a mapping from each annotated parameter name to its annotation.
+  # Raises a value error if no parameter is annotated.
   """Builds a dict mapping from parameter names to type annotations."""
   func_signature = tf_inspect.signature(func)
 
@@ -810,6 +997,11 @@ _ASSERT_API_TAG = "ASSERT_API_TAG"
 
 @tf_export("experimental.dispatch_for_unary_elementwise_apis")
 def dispatch_for_unary_elementwise_apis(x_type):
+  # [FUNCTION DOC]
+  # Public decorator factory that overrides all unary elementwise APIs for one argument type.
+  # Input: x_type, a type annotation (class, list or union form). Returns a decorator taking the
+  # handler (a function receiving the API function and the first argument). The docstring's API
+  # list placeholder is filled in later by update_docstrings_with_api_lists.
   """Decorator to override default implementation for unary elementwise APIs.
 
   The decorated function (known as the "elementwise api handler") overrides
@@ -862,6 +1054,12 @@ def dispatch_for_unary_elementwise_apis(x_type):
   """
 
   def decorator(handler):
+    # [FUNCTION DOC]
+    # Decorator returned by the unary elementwise factory. Input: the handler. Raises a value
+    # error if a unary handler is already registered for the same type. Otherwise records the
+    # handler, registers a dispatch target for every currently known unary elementwise API, and
+    # returns the handler. Side effects: mutates the handler registry, target registry and the
+    # APIs' dispatchers.
     if (x_type,) in _ELEMENTWISE_API_HANDLERS:
       raise ValueError("A unary elementwise dispatch handler "
                        f"({_ELEMENTWISE_API_HANDLERS[(x_type,)]}) "
@@ -877,6 +1075,11 @@ def dispatch_for_unary_elementwise_apis(x_type):
 
 @tf_export("experimental.dispatch_for_binary_elementwise_apis")
 def dispatch_for_binary_elementwise_apis(x_type, y_type):
+  # [FUNCTION DOC]
+  # Public decorator factory that overrides all binary elementwise APIs for a pair of argument
+  # types. Inputs: x_type and y_type, type annotations for the first two arguments. Returns a
+  # decorator taking the handler (a function receiving the API function and both arguments). The
+  # docstring's API list placeholder is filled in later by update_docstrings_with_api_lists.
   """Decorator to override default implementation for binary elementwise APIs.
 
   The decorated function (known as the "elementwise api handler") overrides
@@ -920,6 +1123,11 @@ def dispatch_for_binary_elementwise_apis(x_type, y_type):
   """
 
   def decorator(handler):
+    # [FUNCTION DOC]
+    # Decorator returned by the binary elementwise factory. Input: the handler. Raises a value
+    # error if a binary handler is already registered for the same type pair. Otherwise records
+    # the handler, registers a dispatch target for every currently known binary elementwise API,
+    # and returns the handler. Side effects: mutates registries and the APIs' dispatchers.
     if (x_type, y_type) in _ELEMENTWISE_API_HANDLERS:
       raise ValueError("A binary elementwise dispatch handler "
                        f"({_ELEMENTWISE_API_HANDLERS[x_type, y_type]}) "
@@ -935,6 +1143,12 @@ def dispatch_for_binary_elementwise_apis(x_type, y_type):
 
 @tf_export("experimental.dispatch_for_binary_elementwise_assert_apis")
 def dispatch_for_binary_elementwise_assert_apis(x_type, y_type):
+  # [FUNCTION DOC]
+  # Public decorator factory that overrides all binary elementwise assert APIs (such as equality
+  # assertions) for a pair of argument types. Inputs: x_type and y_type, type annotations.
+  # Returns a decorator taking the handler (a function receiving the assert function and both
+  # arguments). The docstring's API list placeholder is filled in later by
+  # update_docstrings_with_api_lists.
   """Decorator to override default implementation for binary elementwise assert APIs.
 
   The decorated function (known as the "elementwise assert handler")
@@ -988,6 +1202,12 @@ def dispatch_for_binary_elementwise_assert_apis(x_type, y_type):
   """
 
   def decorator(handler):
+    # [FUNCTION DOC]
+    # Decorator returned by the assert factory. Input: the handler. The registry key is the type
+    # pair plus an assert tag, so assert handlers do not clash with ordinary binary handlers.
+    # Raises a value error if one is already registered for the key. Otherwise records the
+    # handler, registers a dispatch target for every known binary assert API, and returns the
+    # handler. Side effects: mutates registries and the APIs' dispatchers.
     api_handler_key = (x_type, y_type, _ASSERT_API_TAG)
     if api_handler_key in _ELEMENTWISE_API_HANDLERS:
       raise ValueError("A binary elementwise assert dispatch handler "
@@ -1003,6 +1223,10 @@ def dispatch_for_binary_elementwise_assert_apis(x_type, y_type):
 
 
 def register_unary_elementwise_api(func):
+  # [FUNCTION DOC]
+  # Decorator that marks an op as a unary elementwise API. Input: func. Appends it to the unary
+  # API list and registers a dispatch target for it for every unary handler already registered.
+  # Returns func. Side effects: mutates the list, registry and func's dispatcher.
   """Decorator that registers a TensorFlow op as a unary elementwise API."""
   _UNARY_ELEMENTWISE_APIS.append(func)
   for args, handler in _ELEMENTWISE_API_HANDLERS.items():
@@ -1012,6 +1236,10 @@ def register_unary_elementwise_api(func):
 
 
 def register_binary_elementwise_api(func):
+  # [FUNCTION DOC]
+  # Decorator that marks an op as a binary elementwise API. Input: func. Appends it to the
+  # binary API list and registers a dispatch target for it for every existing handler keyed by
+  # exactly two types. Returns func. Side effects: mutates the list, registry and dispatcher.
   """Decorator that registers a TensorFlow op as a binary elementwise API."""
   _BINARY_ELEMENTWISE_APIS.append(func)
   for args, handler in _ELEMENTWISE_API_HANDLERS.items():
@@ -1021,6 +1249,11 @@ def register_binary_elementwise_api(func):
 
 
 def register_binary_elementwise_assert_api(func):
+  # [FUNCTION DOC]
+  # Decorator that marks an op as a binary elementwise assert API. Input: func. Appends it to
+  # the assert API list and registers a dispatch target for it for every existing handler whose
+  # key carries the assert tag. Returns func. Side effects: mutates the list, registry and
+  # dispatcher.
   """Decorator that registers a TensorFlow op as a binary elementwise assert API.
 
   Different from `dispatch_for_binary_elementwise_apis`, this decorator is used
@@ -1041,17 +1274,33 @@ def register_binary_elementwise_assert_api(func):
 
 
 def unary_elementwise_apis():
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it returns a list, but it returns an immutable tuple
+  # snapshot of the registered unary elementwise APIs. Takes no inputs; no side effects.
   """Returns a list of APIs that have been registered as unary elementwise."""
   return tuple(_UNARY_ELEMENTWISE_APIS)
 
 
 def binary_elementwise_apis():
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it returns a list, but it returns an immutable tuple
+  # snapshot of the registered binary elementwise APIs (assert APIs are not included). Takes no
+  # inputs; no side effects.
   """Returns a list of APIs that have been registered as binary elementwise."""
   return tuple(_BINARY_ELEMENTWISE_APIS)
 
 
 def _add_dispatch_for_unary_elementwise_api(api, x_type,
                                             elementwise_api_handler):
+  # [FUNCTION DOC]
+  # HELPER: glue between unary elementwise handlers and type-based dispatch.
+  # Inputs: api, the unary op; x_type, the type annotation for its first parameter;
+  # elementwise_api_handler, the user handler. Registers (via the type-based decorator) a
+  # generated dispatch target for the api keyed on the first parameter's type. The target
+  # extracts the name argument and first argument, binds any extra arguments into a one-argument
+  # function (or uses the api itself if it only takes the value and name), and calls the handler,
+  # inside a name scope when a name was given. The target is renamed after the api, and recorded
+  # in the elementwise target registry so it can be unregistered. Returns nothing.
   """Registers a unary elementwise handler as a dispatcher for a given API."""
   api_signature = tf_inspect.signature(api)
   x_name = list(api_signature.parameters)[0]
@@ -1063,6 +1312,12 @@ def _add_dispatch_for_unary_elementwise_api(api, x_type,
 
   @dispatch_for_api(api, {x_name: x_type})
   def dispatch_target(*args, **kwargs):
+    # [FUNCTION DOC]
+    # Generated dispatch target for one unary elementwise API. Takes the API's call arguments,
+    # pulls out the name, takes the first argument from positional arguments or (if absent) from
+    # the keyword argument with the first parameter's name (a missing one raises a key error),
+    # then calls the elementwise handler with a one-argument version of the API and the value.
+    # Returns the handler's result.
     args, kwargs, name = _extract_name_arg(args, kwargs, name_index)
     if args:
       x, args = args[0], args[1:]
@@ -1089,6 +1344,15 @@ def _add_dispatch_for_unary_elementwise_api(api, x_type,
 
 def _add_dispatch_for_binary_elementwise_api(api, x_type, y_type,
                                              elementwise_api_handler):
+  # [FUNCTION DOC]
+  # HELPER: glue between binary elementwise handlers and type-based dispatch.
+  # Inputs: api, the binary op (or assert op); x_type and y_type, annotations for its first two
+  # parameters; elementwise_api_handler, the user handler. Registers a generated dispatch target
+  # keyed on both types, which extracts the name, takes the two values from positional or
+  # keyword arguments (missing ones become the null value), binds extra arguments into a
+  # two-argument function (or uses the api directly), and calls the handler, inside a name scope
+  # when a name was given. The target is renamed after the api and recorded in the elementwise
+  # target registry. Returns nothing.
   """Registers a binary elementwise handler as a dispatcher for a given API."""
   api_signature = tf_inspect.signature(api)
   x_name, y_name = list(api_signature.parameters)[:2]
@@ -1099,6 +1363,12 @@ def _add_dispatch_for_binary_elementwise_api(api, x_type, y_type,
 
   @dispatch_for_api(api, {x_name: x_type, y_name: y_type})
   def dispatch_target(*args, **kwargs):
+    # [FUNCTION DOC]
+    # Generated dispatch target for one binary elementwise API. Takes the API's call arguments,
+    # pulls out the name, takes the first two values from positional arguments, falling back to
+    # keyword arguments named after the first two parameters (missing ones become the null
+    # value), then calls the elementwise handler with a two-argument version of the API and both
+    # values. Returns the handler's result.
     args, kwargs, name = _extract_name_arg(args, kwargs, name_index)
     if len(args) > 1:
       x, y, args = args[0], args[1], args[2:]
@@ -1128,6 +1398,10 @@ def _add_dispatch_for_binary_elementwise_api(api, x_type, y_type,
 
 
 def _find_name_index(signature):
+  # [FUNCTION DOC]
+  # HELPER: locates the name parameter for the elementwise dispatch targets.
+  # Input: a signature object. Returns the position of the parameter called name, or -1 if there
+  # is none. No side effects.
   """Returns the index of the `name` parameter, or -1 if it's not present."""
   try:
     return list(signature.parameters).index("name")
@@ -1136,6 +1410,12 @@ def _find_name_index(signature):
 
 
 def _extract_name_arg(args, kwargs, name_index):
+  # [FUNCTION DOC]
+  # HELPER: separates the name argument in the elementwise dispatch targets.
+  # Inputs: positional arguments, keyword arguments, and the name position (negative if the API
+  # has no name). Returns a triple of the positional arguments without the name, the keyword
+  # arguments, and the name value (null if absent). Side effect: removes the name entry from the
+  # passed keyword mapping in place when taken from keywords.
   """Extracts the parameter `name` and returns `(args, kwargs, name_value)`."""
   if name_index < 0:
     name_value = None
@@ -1148,6 +1428,12 @@ def _extract_name_arg(args, kwargs, name_index):
 
 
 def update_docstrings_with_api_lists():
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring lists three decorators, but the code also updates the docstring
+  # of the binary elementwise assert decorator.
+  # Takes no inputs, returns nothing. Replaces the API list placeholder in the docstrings of the
+  # unary, binary, binary assert and dispatch_for_api decorators with the registered APIs.
+  # Intended to be called once after all ops are registered; a second call finds no placeholder.
   """Updates the docstrings of dispatch decorators with API lists.
 
   Updates docstrings for `dispatch_for_api`,
@@ -1167,6 +1453,13 @@ def update_docstrings_with_api_lists():
 
 
 def _update_docstring_with_api_list(target, api_list):
+  # [FUNCTION DOC]
+  # HELPER: used by update_docstrings_with_api_lists.
+  # Inputs: target, a function whose docstring contains the API list placeholder; api_list, a
+  # list of API functions (or a mapping whose keys are the APIs). For each API with a canonical
+  # exported name, adds a sorted bullet line showing the public name and parameter names. Side
+  # effect: rewrites the target's docstring in place, replacing the placeholder with the lines.
+  # Fails with an attribute error if the target has no docstring.
   """Replaces `<<API_LIST>>` in target.__doc__ with the given list of APIs."""
   lines = []
   for func in api_list:
@@ -1187,6 +1480,16 @@ def _update_docstring_with_api_list(target, api_list):
 ################################################################################
 @tf_export("__internal__.dispatch.add_dispatch_support", v1=[])
 def add_dispatch_support(target=None, iterable_parameters=None):
+  # [FUNCTION DOC]
+  # Public decorator (usable bare or with arguments) that makes a Python API support both
+  # dispatch systems. Inputs: target, the function to wrap (omit to get a decorator back);
+  # iterable_parameters, optional list or tuple of parameter names that may receive one-shot
+  # iterables (anything else raises a type error). The wrapper first tries type-based dispatch
+  # (converting iterable parameters to lists), then calls the original function, and if that
+  # raises a type or value error tries the fallback dispatchers, returning their result or
+  # re-raising the original error. Tracebacks are filtered. Returns the wrapper, or a decorator
+  # when no target was given. Side effects: gives the wrapper a fallback list and, when supported,
+  # a native dispatcher registered in the signature registry.
   """Decorator that adds a dispatch handling wrapper to a TensorFlow Python API.
 
   This wrapper adds the decorated function as an API that can be overridden
@@ -1237,6 +1540,11 @@ def add_dispatch_support(target=None, iterable_parameters=None):
     raise TypeError("iterable_parameters should be a list or tuple of string.")
 
   def decorator(dispatch_target):
+    # [FUNCTION DOC]
+    # Decorator built by add_dispatch_support. Input: the function to make dispatchable. Looks up
+    # the position of each iterable parameter among the function's argument names (a missing name
+    # raises a value error), builds the dispatching wrapper, attaches the fallback list and the
+    # native type-based dispatcher, and returns the wrapper.
 
     # Get the name & index for each iterable parameter.
     if iterable_parameters is None:
@@ -1249,6 +1557,12 @@ def add_dispatch_support(target=None, iterable_parameters=None):
 
     @traceback_utils.filter_traceback
     def op_dispatch_handler(*args, **kwargs):
+      # [FUNCTION DOC]
+      # The wrapper that replaces the API. Takes the API's call arguments. If a native dispatcher
+      # exists, converts iterable parameters to lists and asks it to dispatch, returning its
+      # result unless it signals not implemented. Otherwise calls the original function; on a
+      # type or value error asks the fallback dispatchers and returns their result, or re-raises
+      # the original error if none handles the call. Traceback frames are filtered on errors.
       """Call `dispatch_target`, performing dispatch when appropriate."""
 
       # Type-based dispatch system (dispatch v2):
@@ -1286,6 +1600,12 @@ def add_dispatch_support(target=None, iterable_parameters=None):
 
 
 def replace_iterable_params(args, kwargs, iterable_params):
+  # [FUNCTION DOC]
+  # Materializes one-shot iterables so dispatch can inspect them without consuming them.
+  # Inputs: positional arguments, keyword arguments, and a list of (name, index) pairs. For each
+  # pair, converts the positional value at that index to a list if present, else the keyword
+  # value of that name if present. Returns a pair of the new positional tuple and the keyword
+  # mapping. Side effect: the keyword mapping is modified in place.
   """Returns (args, kwargs) with any iterable parameters converted to lists.
 
   Args:
