@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test module for resetting a whole server target and its effect on sessions and variables.
+# One test case, split out of the main server library tests because starting multiple servers
+# with different configurations in one file was flaky.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +28,9 @@ from tensorflow.python.training import server_lib
 
 
 class SameVariablesClearTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the reset of a server target with no container names (clears all
+  # containers) while multiple sessions share variables on that server. No shared fixtures.
 
   # Verifies behavior of tf.Session.reset().
   # TODO(b/34465411): Starting multiple servers with different configurations
@@ -31,6 +38,13 @@ class SameVariablesClearTest(test.TestCase):
   # "server_lib_test.py" when this is no longer the case.
   @test_util.run_deprecated_v1
   def testSameVariablesClear(self):
+    # [FUNCTION DOC]
+    # Scenario: a local server is started and a graph with two matrix variables and their
+    # product is built. Two sessions to the same target both compute the product after
+    # initialization and must agree (the single value 4). Then the whole target is reset: the
+    # old session must fail with an aborted error. A new session finds the variables
+    # uninitialized (failed-precondition error); after re-initializing them the product is again
+    # 4. Finally the session is closed. Graph-mode (deprecated v1) test.
     server = server_lib.Server.create_local_server()
 
     # Creates a graph with 2 variables.

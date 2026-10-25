@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Defines SessionManager (exported in the v1 API as the train session manager), a training helper
+# that creates a session on a given master, restores variables from a checkpoint (running any
+# loaded-SavedModel initializers first), or initializes the model, runs the optional local init
+# operation, and checks model readiness. It also offers recovery and wait-for-session flows used
+# by processes that wait for another process to initialize the model. Private helpers: a name
+# formatter for error messages, a checkpoint restore routine, a readiness checker and a simple
+# countdown timer. Import-time side effect: only the public-API export registration.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,6 +38,11 @@ from tensorflow.python.util.tf_export import tf_export
 
 
 def _maybe_name(obj) -> str:
+  # [FUNCTION DOC]
+  # HELPER: Formats operation names for error messages in the session manager.
+  # Input: obj, any object or nothing/null. Returns the text None for null, the object's name
+  # attribute if it has one, or a placeholder text naming the object's type otherwise. No side
+  # effects.
   """Returns object name if it has one, or a message otherwise.
 
   This is useful for names that apper in error messages.
@@ -49,6 +62,13 @@ def _maybe_name(obj) -> str:
 def _restore_checkpoint_and_maybe_run_saved_model_initializers(
     sess: session.Session, saver: saver_lib.Saver, path: str
 ):
+  # [FUNCTION DOC]
+  # HELPER: Used by the session manager's checkpoint restore step.
+  # Inputs: sess (a session), saver (a saver object) and path (checkpoint path string). First
+  # runs every operation in the graph collection of saved-model initializers, if any, because
+  # resources loaded from a SavedModel are not restored by the saver. Then restores the
+  # checkpoint at the path through the saver (so checkpoint values win over SavedModel values).
+  # Returns nothing; errors from running the initializers or restoring propagate.
   """Restores checkpoint values and SavedModel initializers if found."""
   # NOTE: All references to SavedModel refer to SavedModels loaded from the
   # load_v2 API (which does not require the `sess` argument).
@@ -73,6 +93,13 @@ def _restore_checkpoint_and_maybe_run_saved_model_initializers(
 
 @tf_export(v1=["train.SessionManager"])
 class SessionManager:
+  # [CLASS DOC]
+  # Training helper that creates sessions and brings the model to a usable state: restoring from
+  # the latest (or an explicit) checkpoint, or initializing with an init operation and function,
+  # then running the local init operation and checking readiness. Holds the local init operation,
+  # readiness operations, the graph, the recovery wait interval, the last used master target and
+  # the local init run options and feed values. Used by the chief process (prepare session) and
+  # by other processes (wait for session, recover session). Exported in the v1 API only.
   """Training helper that restores from checkpoint and creates session.
 
   This class is a small wrapper that takes care of session creation and
@@ -126,6 +153,14 @@ class SessionManager:
       local_init_run_options: "distribute_lib.RunOptions" = None,
       local_init_feed_dict=None,
   ):
+    # [FUNCTION DOC]
+    # Constructor. Inputs (all optional): local_init_op (operation run after every new session),
+    # ready_op (operation whose empty string-vector result means ready), ready_for_local_init_op
+    # (operation gating the local init), graph (defaults to the current default graph),
+    # recovery_wait_secs (seconds between readiness polls, default 30), local_init_run_options
+    # and local_init_feed_dict (passed when running the local init). Stores them and sets the
+    # target to nothing. Raises a ValueError if a ready-for-local-init operation is given
+    # without a local init operation.
     """Creates a SessionManager.
 
     The `local_init_op` is an `Operation` that is run always after a new session
@@ -193,6 +228,22 @@ class SessionManager:
       max_wait_secs=7200,
       config=None,
   ) -> Tuple[session.Session, bool]:
+    # [FUNCTION DOC]
+    # HELPER: Shared by prepare_session and recover_session.
+    # KNOWN ISSUE: The session is created before the check that both a checkpoint directory and
+    # a checkpoint file were not given, so on that ValueError the new session is leaked
+    # unclosed.
+    # KNOWN ISSUE: With waiting enabled and a recovery wait of zero seconds, the elapsed wait
+    # never grows, so the loop can poll forever regardless of the maximum wait.
+    # Inputs: master (target string), saver, checkpoint_dir, checkpoint_filename_with_path,
+    # wait_for_checkpoint, max_wait_secs (default 7200) and config. Records the master as the
+    # target, initializes a distribution strategy's system (for example a TPU) if the current
+    # strategy supports it, and creates a session on the graph. Without a saver or without a
+    # checkpoint location, returns the session and false. With an explicit file, restores from
+    # it. With a directory, polls for a checkpoint state (sleeping the recovery interval, only
+    # if waiting is requested and the limit has not passed), restores the latest checkpoint and
+    # tells the saver about the earlier checkpoints. Returns a pair of session and whether it
+    # was restored. Raises a ValueError if both locations are given.
     """Creates a `Session`, and tries to restore a checkpoint.
 
 
@@ -269,6 +320,17 @@ class SessionManager:
       init_feed_dict=None,
       init_fn=None,
   ) -> session.Session:
+    # [FUNCTION DOC]
+    # Creates a session and makes sure the model is ready. Inputs: master (target string),
+    # optional init_op, saver, checkpoint_dir, checkpoint_filename_with_path, wait_for_checkpoint,
+    # max_wait_secs, config, init_feed_dict (feed values for the init op) and init_fn (callable
+    # taking the session). First tries to restore a checkpoint; if that does not happen, raises
+    # a RuntimeError when there is no init op, init function or local init op, otherwise runs
+    # the init op then the init function. Then runs the local init op (if its readiness gate
+    # passes) and finally checks readiness. Returns the ready session. Raises a RuntimeError if
+    # the local init gate or the model readiness check fails, and a ValueError if both
+    # checkpoint locations are given. Side effects: creates a session, may run operations,
+    # logs information.
     """Creates a `Session`. Makes sure the model is ready to be used.
 
     Creates a `Session` on 'master'. If a `saver` object is passed in, and
@@ -360,6 +422,15 @@ class SessionManager:
       max_wait_secs=7200,
       config=None,
   ) -> Tuple[session.Session, bool]:
+    # [FUNCTION DOC]
+    # Creates a session and recovers the model from a checkpoint if possible. Inputs are the
+    # same as the restore step: master, saver, checkpoint_dir, checkpoint_filename_with_path,
+    # wait_for_checkpoint, max_wait_secs and config. Always attempts to run the local init op
+    # (subject to its readiness gate), even if no checkpoint was restored. Returns a pair of
+    # the session and a flag that is true only when a checkpoint was restored, the local init
+    # succeeded and the model is ready; in all other cases the flag is false and the reason is
+    # logged. Raises a ValueError if both checkpoint locations are given. Never initializes the
+    # model with an init op.
     """Creates a `Session`, recovering if possible.
 
     Creates a new session on 'master'.  If the session is not initialized
@@ -419,6 +490,16 @@ class SessionManager:
   def wait_for_session(
       self, master: str, config=None, max_wait_secs=float("Inf")
   ) -> Optional[session.Session]:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: The docstring says the result may be nothing if a timeout is exceeded, but
+    # the code never returns nothing: it either returns a ready session or raises.
+    # KNOWN ISSUE: A local variable is named as milliseconds but holds seconds.
+    # Inputs: master (target string), config (optional), max_wait_secs (default unlimited; a
+    # null value is treated as unlimited). Records the target, then repeatedly creates a
+    # session, tries the local init op and checks readiness; returns the first session that is
+    # ready. Not-ready sessions are closed quietly. If the time left minus the recovery wait is
+    # negative, raises a deadline-exceeded error; otherwise logs and sleeps for the recovery
+    # interval and retries. Blocks the calling thread.
     """Creates a new `Session` and waits for model to be ready.
 
     Creates a new `Session` on 'master'.  Waits for the model to be
@@ -478,6 +559,10 @@ class SessionManager:
       time.sleep(self._recovery_wait_secs)
 
   def _safe_close(self, sess: session.Session):
+    # [FUNCTION DOC]
+    # HELPER: Used when discarding not-ready sessions.
+    # Input: sess, a session. Closes it and silently swallows any exception (deliberately not
+    # logged). Returns nothing.
     """Closes a session without raising an exception.
 
     Just like sess.close() but ignores exceptions.
@@ -496,6 +581,11 @@ class SessionManager:
     # pylint: enable=broad-except
 
   def _model_ready(self, sess: session.Session) -> Tuple[bool, Optional[str]]:
+    # [FUNCTION DOC]
+    # HELPER: Readiness check for the model itself.
+    # Input: sess, a session. Evaluates the ready operation through the shared readiness
+    # checker. Returns a pair: true with nothing if ready (or no ready op was given), otherwise
+    # false with a reason text.
     """Checks if the model is ready or not.
 
     Args:
@@ -511,6 +601,11 @@ class SessionManager:
   def _model_ready_for_local_init(
       self, sess: session.Session
   ) -> Tuple[bool, Optional[str]]:
+    # [FUNCTION DOC]
+    # HELPER: Gate check before running the local init operation.
+    # Input: sess, a session. Evaluates the ready-for-local-init operation through the shared
+    # readiness checker. Returns a pair: true with nothing if ready (or no such op was given),
+    # otherwise false with a reason text.
     """Checks if the model is ready to run local_init_op.
 
     Args:
@@ -528,6 +623,13 @@ class SessionManager:
   def _try_run_local_init_op(
       self, sess: session.Session
   ) -> Tuple[bool, Optional[str]]:
+    # [FUNCTION DOC]
+    # HELPER: Shared by prepare_session, recover_session and wait_for_session.
+    # Input: sess, a session. If there is no local init operation, returns true with nothing.
+    # Otherwise checks the local-init readiness gate; if it passes, runs the local init
+    # operation with the stored feed values and run options (logging before and after) and
+    # returns true with nothing; if it fails returns false with the reason text. Side effect:
+    # runs operations in the session.
     """Tries to run _local_init_op, if not None, and is ready for local init.
 
     Args:
@@ -555,6 +657,15 @@ class SessionManager:
 def _ready(
     op: ops.Operation, sess: session.Session, msg
 ) -> Tuple[bool, Optional[str]]:
+  # [FUNCTION DOC]
+  # HELPER: Readiness checker used by the session manager's two readiness gates.
+  # Inputs: op (the readiness operation or nothing/null), sess (a session) and msg (text logged
+  # as a warning on unexpected errors). With no op, returns true and nothing. Otherwise runs it:
+  # a null result, an integer (32-bit) typed result or an empty result counts as ready (the
+  # integer case is for backward compatibility); a non-empty result is read as names of
+  # uninitialized variables and returns false with a text listing them. A failed-precondition
+  # error whose message mentions uninitialized things returns false with that message; any other
+  # failed-precondition error is logged as a warning and re-raised. Other errors propagate.
   """Checks if the model is ready or not, as determined by op.
 
   Args:
@@ -594,14 +705,24 @@ def _ready(
 
 
 class _CountDownTimer:
+  # [CLASS DOC]
+  # HELPER: Private timer used by the wait-for-session flow to bound total waiting time.
+  # Remembers its creation time and a duration in seconds (using slots for its two fields) and
+  # reports how much of the duration is left.
   """A timer that tracks a duration since creation."""
 
   __slots__ = ["_start_time_secs", "_duration_secs"]
 
   def __init__(self, duration_secs):
+    # [FUNCTION DOC]
+    # HELPER: Starts the countdown. Input: duration_secs, number of seconds (may be infinite).
+    # Records the current wall-clock time and the duration. Returns nothing.
     self._start_time_secs = time.time()
     self._duration_secs = duration_secs
 
   def secs_remaining(self):
+    # [FUNCTION DOC]
+    # HELPER: Returns the number of seconds left of the duration since creation, never below
+    # zero. No side effects.
     diff = self._duration_secs - (time.time() - self._start_time_secs)
     return max(0, diff)

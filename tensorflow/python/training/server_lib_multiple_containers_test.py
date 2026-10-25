@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test module for session reset with multiple resource containers on a local gRPC server.
+# Contains one test case, kept in its own file because starting several servers with different
+# configurations in one test file was flaky. Runs under the standard TensorFlow test main.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +28,9 @@ from tensorflow.python.training import server_lib
 
 
 class MultipleContainersTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering resetting selected containers on a server through the session reset
+  # call. No shared fixtures.
 
   # Verifies behavior of tf.Session.reset() with multiple containers using
   # tf.container.
@@ -32,6 +39,13 @@ class MultipleContainersTest(test.TestCase):
   # "server_lib_test.py" when this is no longer the case.
   @test_util.run_deprecated_v1
   def testMultipleContainers(self):
+    # [FUNCTION DOC]
+    # Scenario: two variables are created in two different named containers (test0 and test1)
+    # and a local server is started. After initializing and checking values (1.0 and 2.0), only
+    # container test0 is reset on the server. Expected: the old session running the second
+    # variable fails with an aborted error; a new session to the same target finds the first
+    # variable uninitialized (failed-precondition error) while the second variable is still
+    # valid with value 2.0. Graph-mode (deprecated v1) test.
     with ops.container("test0"):
       v0 = variables.Variable(1.0, name="v0")
     with ops.container("test1"):

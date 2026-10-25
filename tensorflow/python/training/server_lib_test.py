@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Main test module for the server library (the training server, cluster spec and server
+# definition handling). Contains three test cases: one running real local gRPC servers
+# (sessions, resets, large tensors, cancellation, config, restarts, session-state isolation),
+# one checking server definition protocol buffers built from cluster specs, and one checking
+# cluster spec conversions, accessors, truthiness and equality. Other server tests that need
+# several differently configured servers live in sibling files because they were flaky here.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -39,12 +46,24 @@ from tensorflow.python.training import server_lib
 
 
 class GrpcServerTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case exercising real in-process gRPC servers through sessions. Shared fixture: every
+  # test instance creates one local server in its constructor and reuses it as the cached
+  # server; tests that need a different server or a port clash create their own.
 
   def __init__(self, methodName="runTest"):  # pylint: disable=invalid-name
+    # [FUNCTION DOC]
+    # Constructor. Input: methodName, the name of the test method this instance runs (default
+    # the standard run-test name). Calls the base constructor, then starts a local single-task
+    # gRPC server and stores it as the cached server shared by this instance's test. Side
+    # effect: one server per test instance is started when the test suite is loaded.
     super(GrpcServerTest, self).__init__(methodName)
     self._cached_server = server_lib.Server.create_local_server()
 
   def testRunStep(self):
+    # [FUNCTION DOC]
+    # Scenario: in a fresh graph, builds a product of two small constant matrices and runs it
+    # in a session connected to the cached server. Expected: the result is the single value 4.
     server = self._cached_server
     with ops.Graph().as_default():
       with session.Session(server.target) as sess:
@@ -55,6 +74,10 @@ class GrpcServerTest(test.TestCase):
       # TODO(mrry): Add `server.stop()` and `server.join()` when these work.
 
   def testMultipleSessions(self):
+    # [FUNCTION DOC]
+    # Scenario: builds a matrix product graph and runs it in two simultaneous sessions
+    # connected to the cached server, then closes both. Expected: both sessions return the
+    # single value 4.
     server = self._cached_server
     with ops.Graph().as_default():
       c = constant_op.constant([[2, 1]])
@@ -73,6 +96,13 @@ class GrpcServerTest(test.TestCase):
 
   # Verifies various reset failures.
   def testResetFails(self):
+    # [FUNCTION DOC]
+    # Scenario: creates a variable in a named container and one in the default container.
+    # Expected: resetting a non-existent target raises a not-found error; resetting a target
+    # with no server listening, with a very short operation timeout in the config, raises a
+    # deadline-exceeded error; resetting the cached server with a container name that matches
+    # nothing leaves both variables valid (values 1.0 and 2.0 before and after, using a new
+    # session after the reset).
     with ops.Graph().as_default():
       # Creates variable with container name.
       with ops.container("test0"):
@@ -106,6 +136,11 @@ class GrpcServerTest(test.TestCase):
       self.assertAllEqual(2.0, sess.run(v1))
 
   def _useRPCConfig(self):
+    # [FUNCTION DOC]
+    # HELPER: Supplies the session configuration used by the large-tensor, cancellation and
+    # timeout tests.
+    # Returns a session configuration whose RPC options force the gRPC transport even when the
+    # client and master are in the same process. No inputs, no side effects.
     """Return a `tf.compat.v1.ConfigProto` that ensures we use the RPC stack for tests.
 
     This configuration ensures that we continue to exercise the gRPC
@@ -123,6 +158,10 @@ class GrpcServerTest(test.TestCase):
     )
 
   def testLargeConstant(self):
+    # [FUNCTION DOC]
+    # Scenario: embeds a large (10000 by 3000 float32) constant in the graph and fetches its
+    # shape through a session forced to use the RPC stack. Expected: the shape equals the
+    # original dimensions, showing large graphs can be sent to the server.
     server = self._cached_server
     with session.Session(server.target, config=self._useRPCConfig()) as sess:
       const_val = np.empty([10000, 3000], dtype=np.float32)
@@ -132,6 +171,9 @@ class GrpcServerTest(test.TestCase):
       self.assertAllEqual([10000, 3000], sess.run(shape_t))
 
   def testLargeFetch(self):
+    # [FUNCTION DOC]
+    # Scenario: fetches a large (10000 by 3000) tensor filled with 0.5 over the RPC stack.
+    # Expected: the fetched array equals the locally built array of the same value and shape.
     server = self._cached_server
     with session.Session(server.target, config=self._useRPCConfig()) as sess:
       c = array_ops.fill([10000, 3000], 0.5)
@@ -140,6 +182,10 @@ class GrpcServerTest(test.TestCase):
       self.assertAllEqual(expected_val, sess.run(c))
 
   def testLargeFeed(self):
+    # [FUNCTION DOC]
+    # Scenario: feeds a large (10000 by 3000) array filled with 0.5 into a placeholder and
+    # computes its minimum and maximum over the RPC stack. Expected: both equal 0.5, showing
+    # large feeds are transmitted intact.
     server = self._cached_server
     with session.Session(server.target, config=self._useRPCConfig()) as sess:
       feed_val = np.empty([10000, 3000], dtype=np.float32)
@@ -152,6 +198,11 @@ class GrpcServerTest(test.TestCase):
       self.assertEqual(0.5, max_val)
 
   def testCloseCancelsBlockingOperation(self):
+    # [FUNCTION DOC]
+    # Scenario: a queue is filled with one element and drained once, then a background thread
+    # runs a dequeue on the now empty queue (it blocks). After a short sleep the session is
+    # closed. Expected: the blocked dequeue fails with a cancelled error whose message mentions
+    # the session close, and the thread finishes.
     server = self._cached_server
     with ops.Graph().as_default():
       sess = session.Session(server.target, config=self._useRPCConfig())
@@ -164,6 +215,10 @@ class GrpcServerTest(test.TestCase):
       sess.run(dequeue_t)
 
       def blocking_dequeue():
+        # [FUNCTION DOC]
+        # HELPER: Thread body for the close-cancels-blocking-operation test.
+        # Runs a dequeue on the empty queue and asserts that it raises a cancelled error
+        # mentioning the session close. No inputs, returns nothing.
         with self.assertRaisesRegex(
             errors_impl.CancelledError, "Session::Close"
         ):
@@ -176,6 +231,10 @@ class GrpcServerTest(test.TestCase):
       blocking_thread.join()
 
   def testInteractiveSession(self):
+    # [FUNCTION DOC]
+    # Scenario: opens an interactive session on the cached server (the native layer warns that
+    # an option is unsupported but ignores it), evaluates a constant and closes the session.
+    # Expected: the value 42.0 is returned.
     server = self._cached_server
     # Session creation will warn (in C++) that the place_pruned_graph option
     # is not supported, but it should successfully ignore it.
@@ -185,6 +244,11 @@ class GrpcServerTest(test.TestCase):
     sess.close()
 
   def testSetConfiguration(self):
+    # [FUNCTION DOC]
+    # Scenario: builds a session config limiting GPU memory fraction to 0.1 and creates
+    # (without starting) a server first through the local-server factory and then from an
+    # explicit server definition with the config override. Expected: in both cases the server's
+    # definition holds that memory fraction in its default session config.
     config = config_pb2.ConfigProto(
         gpu_options=config_pb2.GPUOptions(per_process_gpu_memory_fraction=0.1)
     )
@@ -211,11 +275,24 @@ class GrpcServerTest(test.TestCase):
     )
 
   def testRestartedMaster(self):
+    # [FUNCTION DOC]
+    # Scenario: two master servers (old and new) share the same master task name and use the
+    # cached server as worker. A session on the old master and a session on the new master are
+    # created, each with a cluster definition naming its master and the worker, and each is
+    # checked to list both CPU devices. A constant doubled on the worker runs through the new
+    # session. Expected: the new session returns 2.0, and the old session then fails with an
+    # aborted error saying the session handle is not found (its worker session was collected
+    # because the new master has a different incarnation). Both sessions are closed at the end.
     master_old = server_lib.Server.create_local_server()
     master_new = server_lib.Server.create_local_server()
     worker = self._cached_server
 
     def get_cluster_def(master, worker):
+      # [FUNCTION DOC]
+      # HELPER: Builds the cluster definition used by the restarted-master test.
+      # Inputs: master and worker, two servers. Returns a cluster definition with a master job
+      # and a worker job, each with one task whose address is the server's target with the
+      # transport prefix removed.
       cluster_def = cluster_pb2.ClusterDef()
       job = cluster_def.job.add()
       job.name = "master"
@@ -226,6 +303,10 @@ class GrpcServerTest(test.TestCase):
       return cluster_def
 
     def check_session_devices(sess):
+      # [FUNCTION DOC]
+      # HELPER: Assertion helper for the restarted-master test.
+      # Input: sess, a session. Lists the session's devices and asserts that the CPU devices of
+      # task zero of both the master and worker jobs are present. Returns nothing.
       # Make sure we have the correct set of cluster devices
       devices = sess.list_devices()
       device_names = set(d.name for d in devices)
@@ -271,12 +352,19 @@ class GrpcServerTest(test.TestCase):
     sess_new.close()
 
   def testInvalidHostname(self):
+    # [FUNCTION DOC]
+    # Scenario: creates a server whose only task address has a host but no port. Expected: an
+    # invalid-argument error whose message mentions the port.
     with self.assertRaisesRegex(errors_impl.InvalidArgumentError, "port"):
       _ = server_lib.Server(
           {"local": ["localhost"]}, job_name="local", task_index=0
       )
 
   def testTimeoutRaisesException(self):
+    # [FUNCTION DOC]
+    # Scenario: runs a dequeue on an empty queue with a one second timeout in the run options,
+    # once with a default session and once with a session forced to use the RPC stack.
+    # Expected: both raise a deadline-exceeded error.
     server = self._cached_server
     with ops.Graph().as_default():
       q = data_flow_ops.FIFOQueue(1, [dtypes.float32])
@@ -295,12 +383,20 @@ class GrpcServerTest(test.TestCase):
           )
 
   def testTwoServersSamePort(self):
+    # [FUNCTION DOC]
+    # Scenario: tries to start a second server bound to the same address as the cached server.
+    # Expected: creation fails with an unknown error.
     # Starting a server with the same target as the cached server should fail.
     server = self._cached_server
     with self.assertRaises(errors_impl.UnknownError):
       _ = server_lib.Server({"local_2": [server.target[len("grpc://") :]]})
 
   def testExtendAfterQueueRunners(self):
+    # [FUNCTION DOC]
+    # Scenario: in a session on the cached server, creates an input producer queue, then adds a
+    # non-trainable variable, initializes variables, starts the queue runners and assigns a new
+    # value to the variable (extending the graph after queue runners started). Expected: all
+    # steps succeed without error; the only explicit assertion is that the queue exists.
     server = self._cached_server
     with session.Session(server.target) as sess:
       input_queue = input_ops.input_producer(
@@ -317,6 +413,16 @@ class GrpcServerTest(test.TestCase):
       sess.run(var.assign(3.0))
 
   def testIsolateSessionState(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: A comment in the body says that initially all variables are initialized, but
+    # the assertions expect failed-precondition errors, i.e. they are uninitialized.
+    # Scenario: a variable with a feedable initial value and unchecked shape is used from four
+    # sessions on the cached server: two sharing session state and two with isolated state.
+    # Expected: initially every session fails with a failed-precondition error. Initializing in
+    # one sharing session makes the value visible to the other sharing session only. A shape
+    # change through the other sharing session is also shared. Initializing in an isolated
+    # session affects only that session, and isolated sessions may hold different values and
+    # shapes for the same variable.
     server = self._cached_server
 
     with ops.Graph().as_default():
@@ -377,6 +483,12 @@ class GrpcServerTest(test.TestCase):
       self.assertAllEqual([19, 86], isolate_sess_1.run(v))
 
   def testShapeChangingIsolateState(self):
+    # [FUNCTION DOC]
+    # Scenario: in separate graphs, variables with the same name are created. With shared
+    # session state: a vector variable is first uninitialized (failed-precondition error), then
+    # initialized to 1,2,3; a later graph reading the same-named variable sees 1,2,3 and can
+    # re-initialize it to 4,5,6. With isolated session state: a scalar variable of the same
+    # name is independent, fails when uninitialized and can be initialized to 37.
     server = self._cached_server
     sharing_config = config_pb2.ConfigProto(isolate_session_state=False)
     isolate_config = config_pb2.ConfigProto(isolate_session_state=True)
@@ -406,8 +518,16 @@ class GrpcServerTest(test.TestCase):
 
 
 class ServerDefTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering server definition protocol buffers assembled from cluster definitions
+  # produced by a cluster spec, including the round trip back through a cluster spec. No shared
+  # fixtures.
 
   def testLocalServer(self):
+    # [FUNCTION DOC]
+    # Scenario: builds a one-task job named local and a server definition for task zero over
+    # grpc. Expected: the definition matches the expected text proto, and converting its cluster
+    # definition to a cluster spec and back yields an equal cluster definition.
     cluster_def = server_lib.ClusterSpec(
         {"local": ["localhost:2222"]}
     ).as_cluster_def()
@@ -430,6 +550,10 @@ class ServerDefTest(test.TestCase):
     self.assertProtoEquals(cluster_def, cluster_spec.as_cluster_def())
 
   def testTwoProcesses(self):
+    # [FUNCTION DOC]
+    # Scenario: a job with two tasks and a server definition for task one. Expected: the
+    # definition matches the expected text proto with both tasks, and the cluster definition
+    # survives a round trip through a cluster spec unchanged.
     cluster_def = server_lib.ClusterSpec(
         {"local": ["localhost:2222", "localhost:2223"]}
     ).as_cluster_def()
@@ -453,6 +577,11 @@ class ServerDefTest(test.TestCase):
     self.assertProtoEquals(cluster_def, cluster_spec.as_cluster_def())
 
   def testTwoJobs(self):
+    # [FUNCTION DOC]
+    # Scenario: a cluster with a two-task parameter-server job and a three-task worker job,
+    # and a server definition for worker task two. Expected: the definition matches the
+    # expected text proto (jobs in sorted order) and the cluster definition round-trips
+    # through a cluster spec unchanged.
     cluster_def = server_lib.ClusterSpec({
         "ps": ["ps0:2222", "ps1:2222"],
         "worker": ["worker0:2222", "worker1:2222", "worker2:2222"],
@@ -480,6 +609,11 @@ class ServerDefTest(test.TestCase):
     self.assertProtoEquals(cluster_def, cluster_spec.as_cluster_def())
 
   def testDenseAndSparseJobs(self):
+    # [FUNCTION DOC]
+    # Scenario: a dense parameter-server job and a worker job defined sparsely with task
+    # indices zero and two, and a server definition for worker task two. Expected: the
+    # definition matches the expected text proto (the missing index one is absent) and the
+    # cluster definition round-trips through a cluster spec unchanged.
     cluster_def = server_lib.ClusterSpec({
         "ps": ["ps0:2222", "ps1:2222"],
         "worker": {0: "worker0:2222", 2: "worker2:2222"},
@@ -507,8 +641,14 @@ class ServerDefTest(test.TestCase):
 
 
 class ClusterSpecTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the cluster spec class: string form, equivalence of the dictionary,
+  # protocol buffer and spec input forms, accessors, truthiness and equality. No shared fixtures.
 
   def testStringConversion(self):
+    # [FUNCTION DOC]
+    # Scenario: a two-job cluster spec converted to a string. Expected: the text shows the
+    # class name and the jobs sorted by name with their address lists.
     cluster_spec = server_lib.ClusterSpec(
         {"ps": ["ps0:1111"], "worker": ["worker0:3333", "worker1:4444"]}
     )
@@ -520,6 +660,10 @@ class ClusterSpecTest(test.TestCase):
     self.assertEqual(expected_str, str(cluster_spec))
 
   def testProtoDictDefEquivalences(self):
+    # [FUNCTION DOC]
+    # Scenario: a dense two-job cluster spec. Expected: its cluster definition, and the ones
+    # from a spec built from the spec, from its cluster definition and from its dictionary
+    # form, all match the same expected text proto.
     cluster_spec = server_lib.ClusterSpec({
         "ps": ["ps0:2222", "ps1:2222"],
         "worker": ["worker0:2222", "worker1:2222", "worker2:2222"],
@@ -547,6 +691,11 @@ class ClusterSpecTest(test.TestCase):
     )
 
   def testProtoDictDefEquivalencesWithStringTaskIndex(self):
+    # [FUNCTION DOC]
+    # Scenario: a worker job given as a dictionary whose task index is the text one instead of
+    # an integer. Expected: the index is converted to an integer, and all four construction
+    # routes (direct, from spec, from cluster definition, from dictionary form) match the same
+    # expected text proto.
     cluster_spec = server_lib.ClusterSpec(
         {"ps": ["ps0:2222", "ps1:2222"], "worker": {"1": "worker1:2222"}}
     )
@@ -571,6 +720,10 @@ class ClusterSpecTest(test.TestCase):
     )
 
   def testProtoDictDefEquivalencesWithZeroWorker(self):
+    # [FUNCTION DOC]
+    # Scenario: a cluster where the worker job has an empty task list. Expected: the worker job
+    # still appears (with no tasks) in the cluster definition, and all four construction routes
+    # match the same expected text proto.
     cluster_spec = server_lib.ClusterSpec(
         {"ps": ["ps0:2222", "ps1:2222"], "worker": []}
     )
@@ -595,6 +748,13 @@ class ClusterSpecTest(test.TestCase):
     )
 
   def testClusterSpecAccessors(self):
+    # [FUNCTION DOC]
+    # Scenario: a spec with a two-task job, a three-task job and a sparse job (indices zero and
+    # three). Expected: the dictionary form equals the original input; task counts are 2, 3 and
+    # 2; task addresses are returned for valid indices; task index lists are 0 and 1, 0 to 2,
+    # and 0 and 3; and the job task lists are dense lists, with the sparse job padded by null
+    # values between indices. Unknown jobs raise value errors for counts, addresses, indices
+    # and job tasks, and an undefined task index in the sparse job raises a value error.
     original_dict = {
         "ps": ["ps0:2222", "ps1:2222"],
         "worker": ["worker0:2222", "worker1:2222", "worker2:2222"],
@@ -638,12 +798,20 @@ class ClusterSpecTest(test.TestCase):
       cluster_spec.job_tasks("unknown")
 
   def testEmptyClusterSpecIsFalse(self):
+    # [FUNCTION DOC]
+    # Scenario: a spec built from an empty dictionary. Expected: it evaluates as false.
     self.assertFalse(server_lib.ClusterSpec({}))
 
   def testNonEmptyClusterSpecIsTrue(self):
+    # [FUNCTION DOC]
+    # Scenario: a spec with one job and one task. Expected: it evaluates as true.
     self.assertTrue(server_lib.ClusterSpec({"job": ["host:port"]}))
 
   def testEq(self):
+    # [FUNCTION DOC]
+    # Scenario: pairs of cluster specs. Expected: two empty specs are equal; two specs with the
+    # same single job are equal; a spec given as an index-keyed dictionary equals one given as
+    # a list with the same address.
     self.assertEqual(server_lib.ClusterSpec({}), server_lib.ClusterSpec({}))
     self.assertEqual(
         server_lib.ClusterSpec({"job": ["host:2222"]}),
@@ -655,6 +823,10 @@ class ClusterSpecTest(test.TestCase):
     )
 
   def testNe(self):
+    # [FUNCTION DOC]
+    # Scenario: pairs of cluster specs that differ. Expected: they compare as not equal when
+    # one is empty, when job names differ, when an address differs, and when the same
+    # addresses appear in a different task order.
     self.assertNotEqual(
         server_lib.ClusterSpec({}),
         server_lib.ClusterSpec({"job": ["host:2223"]}),

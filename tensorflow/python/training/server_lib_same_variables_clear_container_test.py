@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test module for resetting one named container at a time across two local gRPC servers whose
+# default container names differ. One test case, split out of the main server library tests
+# because multiple servers with different configurations in one file were flaky.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +27,9 @@ from tensorflow.python.training import server_lib
 
 
 class SameVariablesClearContainerTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering session reset by container name when two servers (jobs local0 and
+  # local1) each own the variables placed through their own target. No shared fixtures.
 
   # Verifies behavior of tf.Session.reset() with multiple containers using
   # default container names as defined by the target name.
@@ -30,6 +37,14 @@ class SameVariablesClearContainerTest(test.TestCase):
   # in the same test is flaky. Move this test case back into
   # "server_lib_test.py" when this is no longer the case.
   def testSameVariablesClearContainer(self):
+    # [FUNCTION DOC]
+    # Scenario: starts two grpc servers with different job names (so different resource
+    # containers) and, in a fresh graph, creates two variables with the same name, one run on
+    # each server's session. Initializes both and checks values 1.0 and 2.0. Resets container
+    # local0 on the first server: evaluating the first variable must then raise a
+    # failed-precondition error, and after re-initializing it the second variable still reads
+    # 2.0. Then resets container local1 on the second server: the second variable must fail with
+    # a failed-precondition error while the first variable still reads 1.0.
     # Starts two servers with different names so they map to different
     # resource "containers".
     server0 = server_lib.Server(

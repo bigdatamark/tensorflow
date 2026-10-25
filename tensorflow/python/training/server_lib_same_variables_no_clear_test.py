@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test module checking that variables placed on a local gRPC server persist across separate
+# sessions connected to the same server when nothing is reset. One test case, split out of the
+# main server library tests because multiple servers in one file were flaky.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +28,9 @@ from tensorflow.python.training import server_lib
 
 
 class SameVariablesNoClearTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering state sharing between successive sessions of one server without any
+  # reset. No shared fixtures.
 
   # Verifies behavior of multiple variables with multiple sessions connecting to
   # the same server.
@@ -33,6 +40,12 @@ class SameVariablesNoClearTest(test.TestCase):
   @test_util.run_v1_only(
       "This exercises tensor lookup via names which is not supported in V2.")
   def testSameVariablesNoClear(self):
+    # [FUNCTION DOC]
+    # Scenario: starts a local server. In a first session, creates two matrix variables, their
+    # product, initializes them and checks the product is the single value 4. After that session
+    # closes, a second session to the same server looks up the variables by tensor name in the
+    # default graph, builds a new product and must also get 4, showing variable state survived
+    # across sessions. Runs only in v1 graph mode because it looks up tensors by name.
     server = server_lib.Server.create_local_server()
 
     with session.Session(server.target) as sess_1:
