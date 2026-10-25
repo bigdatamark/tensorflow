@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Command-line entry point of the TensorFlow 1.x to 2.0 upgrade script. Parses arguments (single
+# file or whole tree, in-place option, report file, mode, import rename options), chooses the
+# default or safety change spec, builds the generic AST code upgrader, runs it on python or
+# notebook files, then writes a summary plus detailed report to a file and prints it. Defines the
+# mode name constants and the default import rename setting. Running the file as a script calls
+# the main function; importing it has no side effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,6 +40,13 @@ _IMPORT_RENAME_DEFAULT = False
 
 
 def process_file(in_filename, out_filename, upgrader):
+  # [FUNCTION DOC]
+  # Converts one file with the given upgrader, choosing the method by file extension.
+  # Inputs: in_filename, path of the file to read; out_filename, path to write the result; upgrader,
+  # the code upgrader object. A python file goes through the upgrader directly; a notebook file goes
+  # through the notebook helper module. Returns a tuple of files processed count, report text and
+  # list of error messages. Raises a not-implemented error for any other extension. Writes the
+  # output file as a side effect.
   """Process a file of type `.py` or `.ipynb`."""
 
   if in_filename.endswith(".py"):
@@ -49,6 +63,20 @@ def process_file(in_filename, out_filename, upgrader):
 
 
 def main():
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the option for copying other files uses a boolean type conversion, so any
+  # non-empty value (even false) is read as true. Also, in single-file mode the issue count of the
+  # summary uses only the errors of that file, and the files processed value is forced to 1.
+  # Script entry point; takes no arguments and returns nothing. Reads command-line options: input
+  # and output file, input and output tree, copy-other-files flag, in-place flag, import rename and
+  # compat v1 import opt-outs, report file name (default report.txt), mode (default or safety) and
+  # print-all flag. Picks the safety spec in safety mode, otherwise the default spec configured
+  # with the import rename and compat v1 upgrade options. Single-file mode requires an output file
+  # unless in place, and rejects both together; tree mode likewise needs an output tree. Both
+  # raise a value error on bad combinations. With neither input given, prints help. If a report
+  # was produced, counts issues, writes the summary and detailed log to the report file and prints
+  # to standard output (everything with print-all, otherwise only the summary), then a pointer to
+  # the report file. Side effects: converted files and the report file are written.
   parser = argparse.ArgumentParser(
       formatter_class=argparse.RawDescriptionHelpFormatter,
       description="""Convert a TensorFlow Python file from 1.x to 2.0
