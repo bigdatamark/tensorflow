@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Marks the raw-decoding, tensor-parsing, tensor-serialization and string-to-number ops as not
+# differentiable. Import-time side effect: registers those op names in the global gradient
+# registry as having no gradient. Exposes nothing.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Feature configuration objects for the example-parsing functions (parse_example and friends).
+# Defines the public feature specs (variable-length, ragged, sparse, fixed-length and
+# fixed-length-sequence features, all immutable named tuples), plus internal machinery: a
+# parameter collector that turns a mapping of feature specs into the raw lists the parsing ops
+# need, and helpers that assemble sparse and ragged tensors from the raw parse outputs.
+# Import-time side effects: the public feature classes are registered for API export.
+# A TODO at the top records a planned refactor to move validation and dispatch into the feature
+# classes themselves.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -43,6 +52,9 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export("io.VarLenFeature", v1=["VarLenFeature", "io.VarLenFeature"])
 class VarLenFeature(collections.namedtuple("VarLenFeature", ["dtype"])):
+  # [CLASS DOC]
+  # Immutable feature spec with a single field, the data type, asking the parser to return the
+  # feature as a sparse tensor of variable length. Created by users and passed in a feature mapping.
   """Configuration for parsing a variable-length input feature.
 
   Fields:
@@ -56,6 +68,11 @@ class RaggedFeature(
     collections.namedtuple(
         "RaggedFeature",
         ["dtype", "value_key", "partitions", "row_splits_dtype", "validate"])):
+  # [CLASS DOC]
+  # Immutable feature spec (fields: dtype, value key, partitions, row-splits dtype, validate flag)
+  # asking the parser to build a ragged tensor. Nested named tuples (row splits, row lengths, row
+  # starts, row limits, value row ids, uniform row length) describe each partition; a class-level
+  # tuple lists the allowed partition types. Construction goes through a validating constructor.
   """Configuration for passing a RaggedTensor input feature.
 
   `value_key` specifies the feature key for a variable-length list of values;
@@ -188,6 +205,15 @@ class RaggedFeature(
 
   @classmethod
   def _validate_and_recreate_partition(cls, partition, partition_types):
+    # [FUNCTION DOC]
+    # HELPER: used by the ragged feature constructor to make partitions robust to pickling.
+    # KNOWN ISSUE: the docstring says it returns an object "or raises a type error" and describes
+    # recreating by cast; in fact types are matched by comparing the textual names of the types,
+    # so a same-named class from another module would be accepted and converted.
+    # Inputs: partition, a partition object; partition_types, tuple of allowed partition classes.
+    # Output: the partition itself if it is an instance of an allowed type; otherwise, a new
+    # object of the allowed type whose type name matches (copying the length for the uniform
+    # row length kind, the key for others). Raises a type error if nothing matches.
     """Validates and recreates a partition object using the provided types.
 
     Args:
@@ -224,6 +250,15 @@ class RaggedFeature(
               partitions=(),
               row_splits_dtype=dtypes.int32,
               validate=False):
+    # [FUNCTION DOC]
+    # Validating constructor of the ragged feature spec.
+    # Inputs: dtype (converted to a data type; must be 64-bit int, 32-bit float or string);
+    # value_key, optional non-empty string; partitions, list or tuple of partition objects
+    # (default empty), each re-created to the allowed type if needed; row_splits_dtype, 32 or
+    # 64-bit integer type (default 32-bit); validate, boolean (default false).
+    # Output: the new immutable feature spec with partitions stored as a tuple.
+    # Raises a value error for a bad value_key, dtype or row_splits_dtype, and a type error for
+    # non-sequence partitions, bad partition entries or non-boolean validate.
     if value_key is not None:
       if not isinstance(value_key, str):
         raise ValueError(
@@ -268,6 +303,10 @@ class SparseFeature(
     collections.namedtuple(
         "SparseFeature",
         ["index_key", "value_key", "dtype", "size", "already_sorted"])):
+  # [CLASS DOC]
+  # Immutable feature spec (fields: index key or keys, value key, dtype, size, already-sorted flag)
+  # describing how a sparse tensor is assembled from several example features: index features give
+  # coordinates and the value feature gives values.
   """Configuration for parsing a sparse input feature from an `Example`.
 
   Note, preferably use `VarLenFeature` (possibly in combination with a
@@ -334,6 +373,11 @@ class SparseFeature(
   """
 
   def __new__(cls, index_key, value_key, dtype, size, already_sorted=False):
+    # [FUNCTION DOC]
+    # Creates the sparse feature spec. Inputs: index_key, a string or list of strings; value_key,
+    # string; dtype, value data type; size, int or list of ints for the dense shape;
+    # already_sorted, boolean default false. No validation is done here; returns the new
+    # immutable spec.
     return super(SparseFeature, cls).__new__(
         cls, index_key, value_key, dtype, size, already_sorted)
 
@@ -341,6 +385,9 @@ class SparseFeature(
 @tf_export("io.FixedLenFeature", v1=["io.FixedLenFeature", "FixedLenFeature"])
 class FixedLenFeature(collections.namedtuple(
     "FixedLenFeature", ["shape", "dtype", "default_value"])):
+  # [CLASS DOC]
+  # Immutable feature spec (fields: shape, dtype, default value) asking the parser to return a
+  # dense tensor of a fixed shape; a default value lets missing features be tolerated.
   """Configuration for parsing a fixed-length input feature.
 
   To treat sparse input as dense, provide a `default_value`; otherwise,
@@ -354,6 +401,9 @@ class FixedLenFeature(collections.namedtuple(
   """
 
   def __new__(cls, shape, dtype, default_value=None):
+    # [FUNCTION DOC]
+    # Creates the fixed-length feature spec. Inputs: shape of the data, dtype, and an optional
+    # default value (default none). No validation here; returns the new immutable spec.
     return super(FixedLenFeature, cls).__new__(
         cls, shape, dtype, default_value)
 
@@ -363,6 +413,10 @@ class FixedLenFeature(collections.namedtuple(
 class FixedLenSequenceFeature(collections.namedtuple(
     "FixedLenSequenceFeature",
     ["shape", "dtype", "allow_missing", "default_value"])):
+  # [CLASS DOC]
+  # Immutable feature spec (fields: shape, dtype, allow-missing flag, default value) for sequence
+  # data parsed into a dense tensor whose first dimension has variable length and is padded
+  # across a batch.
   """Configuration for parsing a variable-length input feature into a `Tensor`.
 
   The resulting `Tensor` of parsing a single `SequenceExample` or `Example` has
@@ -389,11 +443,20 @@ class FixedLenSequenceFeature(collections.namedtuple(
   """
 
   def __new__(cls, shape, dtype, allow_missing=False, default_value=None):
+    # [FUNCTION DOC]
+    # Creates the sequence feature spec. Inputs: shape (dimensions after the variable first one),
+    # dtype, allow_missing boolean default false, and optional scalar default value used for
+    # padding. No validation here; returns the new immutable spec.
     return super(FixedLenSequenceFeature, cls).__new__(
         cls, shape, dtype, allow_missing, default_value)
 
 
 class _ParseOpParams:
+  # [CLASS DOC]
+  # HELPER: internal accumulator of the raw lists consumed by the generated parsing ops.
+  # Holds parallel lists for sparse, dense and ragged features (keys, types, dense shapes and
+  # defaults, ragged value and split types). Built either directly or via a factory from a feature
+  # mapping; derived read-only properties provide shape protos, default vectors and a feature count.
   """Raw parameters used by `gen_parsing_ops`.
 
   Attributes:
@@ -441,6 +504,11 @@ class _ParseOpParams:
                ragged_keys=None,
                ragged_value_types=None,
                ragged_split_types=None):
+    # [FUNCTION DOC]
+    # Initializes all lists from optional arguments (each defaults to empty; dense defaults to an
+    # ordered mapping; dense shapes default to a scalar shape per dense key). Types are converted
+    # to data types and shapes to shape objects, then consistency is validated.
+    # Raises a value error (from validation) if list lengths disagree or key sets overlap.
     # Note: we use an OrderedDict for dense_defaults, to ensure consistent
     # graph construction order for _e2e_test.
     dense_defaults = (
@@ -469,6 +537,13 @@ class _ParseOpParams:
 
   @classmethod
   def from_features(cls, features, types):
+    # [FUNCTION DOC]
+    # Factory: builds a parameter collector from a mapping of feature keys to feature specs.
+    # Inputs: features, mapping (may be empty or null) from string keys to specs; types, allowed
+    # spec classes. Keys are processed in sorted order for determinism, each spec is added to the
+    # matching lists, and the result is validated. Output: the populated collector.
+    # Raises a value error for a spec not of an allowed type, an invalid spec, overlapping key
+    # sets, or mismatched lengths.
     """Builds _ParseOpParams for a given set of features and allowed types.
 
     Args:
@@ -499,20 +574,34 @@ class _ParseOpParams:
 
   @property
   def dense_shapes_as_proto(self):
+    # [FUNCTION DOC]
+    # Property: the dense shapes converted to shape protocol buffer messages, as a list.
     return [shape.as_proto() for shape in self.dense_shapes]
 
   @property
   def num_features(self):
+    # [FUNCTION DOC]
+    # Property: total count of dense, sparse and ragged keys.
     return len(self.dense_keys) + len(self.sparse_keys) + len(self.ragged_keys)
 
   @property
   def dense_defaults_vec(self):
+    # [FUNCTION DOC]
+    # Property: list of default-value tensors, one per dense key, in key order. Creates tensors
+    # (graph or eager constants) on each access; may raise errors from tensor conversion.
     return [
         self._make_dense_default(k, s, t)
         for k, s, t in zip(self.dense_keys, self.dense_shapes, self.dense_types)
     ]
 
   def _make_dense_default(self, key, shape, dtype):
+    # [FUNCTION DOC]
+    # Builds the default tensor for one dense feature. Inputs: key (string), shape, dtype.
+    # If the shape has an unknown first dimension (padding case), the default must be a scalar:
+    # a missing default becomes empty string or zero; a given default is converted and reshaped
+    # to a scalar, so non-scalar defaults raise an error. Otherwise, a missing default becomes an
+    # empty tensor; a non-tensor default is converted and reshaped to the shape; tensor defaults are
+    # returned unchanged. Output: a tensor. Creates constants/ops as a side effect.
     """Construct the default value tensor for a specified dense feature.
 
     Args:
@@ -551,6 +640,10 @@ class _ParseOpParams:
     return default_value
 
   def _add_feature(self, key, feature):
+    # [FUNCTION DOC]
+    # HELPER: dispatcher that routes a feature spec to the adder for its class.
+    # Inputs: key string, feature spec. Mutates the lists. Raises a value error for an
+    # unrecognized spec type.
     """Adds the specified feature to this ParseOpParams."""
     if isinstance(feature, VarLenFeature):
       self._add_varlen_feature(key, feature)
@@ -566,6 +659,9 @@ class _ParseOpParams:
       raise ValueError(f"Invalid feature {key}:{feature}.")
 
   def _add_varlen_feature(self, key, feature):
+    # [FUNCTION DOC]
+    # HELPER: registers a variable-length feature as a sparse key. Raises a value error if the
+    # spec has no dtype; otherwise mutates the sparse lists.
     """Adds a VarLenFeature."""
     if not feature.dtype:
       raise ValueError(
@@ -573,6 +669,9 @@ class _ParseOpParams:
     self._add_sparse_key(key, feature.dtype)
 
   def _add_sparse_key(self, key, dtype):
+    # [FUNCTION DOC]
+    # HELPER: appends a sparse key and dtype if new; if the key exists with the same dtype it is
+    # a no-op; a different dtype raises a value error. Mutates the sparse lists.
     """Adds a sparse key & dtype, checking for duplicates."""
     if key in self.sparse_keys:
       original_dtype = self.sparse_types[self.sparse_keys.index(key)]
@@ -584,6 +683,10 @@ class _ParseOpParams:
       self.sparse_types.append(dtype)
 
   def _add_sparse_feature(self, key, feature):
+    # [FUNCTION DOC]
+    # HELPER: registers the index keys (as 64-bit ints, in sorted order) and the value key of a
+    # sparse feature as sparse keys. Raises a value error if index key, value key or dtype is
+    # missing, or on a conflicting dtype. Logs a warning when there are several index keys.
     """Adds a SparseFeature."""
 
     if not feature.index_key:
@@ -605,6 +708,12 @@ class _ParseOpParams:
     self._add_sparse_key(feature.value_key, feature.dtype)
 
   def _add_fixed_len_feature(self, key, feature):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring's Raises section is truncated mid-sentence ("or if not all").
+    # In fact it raises a value error when dtype or shape is missing, when the first dimension is
+    # unknown (suggesting the sequence feature), or when the shape is not fully defined.
+    # HELPER: registers a fixed-length feature: appends key, shape and dtype to the dense lists and
+    # stores the default value when one is given.
     """Adds a FixedLenFeature.
 
     Args:
@@ -638,6 +747,10 @@ class _ParseOpParams:
       self.dense_defaults[key] = feature.default_value
 
   def _add_fixed_len_sequence_feature(self, key, feature):
+    # [FUNCTION DOC]
+    # HELPER: registers a sequence feature in the dense lists. Raises a value error if dtype or
+    # shape is missing. If missing values are allowed, the default entry is set to null; an explicit
+    # default value then overrides it.
     """Adds a FixedLenSequenceFeature.
 
     Args:
@@ -663,6 +776,10 @@ class _ParseOpParams:
       self.dense_defaults[key] = feature.default_value
 
   def _add_ragged_key(self, key, value_type, split_type):
+    # [FUNCTION DOC]
+    # HELPER: appends a ragged key with its value and split types, or does nothing for an
+    # identical repeat. Raises a value error if the key exists with a different value type or
+    # split type.
     """Adds a ragged key & dtype, checking for duplicates.
 
     Args:
@@ -689,6 +806,10 @@ class _ParseOpParams:
       self.ragged_split_types.append(split_type)
 
   def _add_ragged_feature(self, key, feature):
+    # [FUNCTION DOC]
+    # HELPER: registers a ragged feature: its value key (or the feature key when none is given)
+    # with the feature dtype, and each non-uniform partition key as 64-bit integers, all using the
+    # feature's row-splits dtype. Raises a value error on conflicting types.
     """Adds a RaggedFeature.
 
     Args:
@@ -707,6 +828,13 @@ class _ParseOpParams:
                              feature.row_splits_dtype)
 
   def _validate(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: in the dense-versus-ragged overlap check, the error is built with a trailing
+    # comma after the first message string, so the exception receives two separate arguments
+    # instead of one joined message.
+    # HELPER: consistency check run after construction. Verifies that every parallel list has the
+    # length of its keys, and that dense, sparse and ragged key sets are pairwise disjoint.
+    # Raises a value error describing the mismatch or intersection. Returns nothing.
     """Validates the features in this ParseOpParams.
 
     Raises:
@@ -755,6 +883,15 @@ class _ParseOpParams:
 
 
 def _construct_tensors_for_composite_features(features, tensor_dict):
+  # [FUNCTION DOC]
+  # HELPER: post-processing step of the parsing functions that merges raw parse outputs.
+  # Inputs: features, mapping from key to feature spec; tensor_dict, mapping from key to raw
+  # tensors. Works on a copy. Sparse features become one sparse tensor merged from index and value
+  # tensors; ragged features become ragged tensors by applying partitions from innermost to
+  # outermost (using the batched variant for ragged inputs, collapsing and restoring a double
+  # batch dimension when ragged rank exceeds one). Other keys are copied. Updates are applied after
+  # all are built and keys not in features are dropped. Output: new mapping; input not mutated.
+  # Raises key errors if needed tensors are missing.
   """Creates tensors for SparseFeatures and RaggedFeatures.
 
   Constructs new dict based on `tensor_dict`.
@@ -847,6 +984,13 @@ def _construct_tensors_for_composite_features(features, tensor_dict):
 
 def _add_ragged_partition(values, partition, tensor_dict, row_splits_dtype,
                           validate):
+  # [FUNCTION DOC]
+  # HELPER: wraps values into a ragged tensor (or reshaped dense tensor) using one partition.
+  # Inputs: values; partition spec; tensor_dict of raw tensors; row_splits_dtype; validate flag.
+  # A uniform-row-length partition yields a uniform ragged tensor for ragged values, else reshapes
+  # to rows of that length. Other partitions cast the keyed tensor to the splits dtype and build
+  # from splits, lengths, starts, limits or value row ids. Raises a value error for unknown
+  # partition types; a missing key raises a key error.
   """Creates a RaggedTensor from a values tensor and a partition tensor.
 
   Args:
@@ -892,6 +1036,15 @@ def _add_ragged_partition(values, partition, tensor_dict, row_splits_dtype,
 
 def _add_batched_ragged_partition(rt, partition, tensor_dict, feature_key,
                                   validate, outer_splits=None):
+  # [FUNCTION DOC]
+  # HELPER: batched counterpart of the single-example partition helper.
+  # Inputs: rt, batched ragged tensor; partition spec; tensor_dict; feature_key for messages;
+  # validate flag; outer_splits, optional row splits of a collapsed outer batch dimension.
+  # Uniform row length reshapes values and adjusts splits. Otherwise the keyed batched partition
+  # tensor is cast to the splits dtype, optionally checked against outer_splits (assertion added
+  # when validating, run before building), offset by the starting rows of each batch item, and used
+  # to build ragged tensors per kind. Output: new ragged tensor. Raises a value error for an
+  # unknown partition type.
   """Adds a batched ragged partition tensor to a batched ragged tensor.
 
   Args:
@@ -976,6 +1129,13 @@ def _build_ragged_tensors(serialized_shape,
                           ragged_values,
                           ragged_row_splits,
                           ragged_inner_splits=None):
+  # [FUNCTION DOC]
+  # HELPER: finishes ragged outputs of a raw parse op.
+  # Inputs: serialized_shape, static shape of the parsed input; ragged_values and ragged_row_splits,
+  # parallel lists of tensors; ragged_inner_splits, optional list used first to wrap values for
+  # sequence examples. Output: list of ragged tensors; for a scalar input (rank 0) the values
+  # (possibly inner-wrapped) are returned without outer splits, otherwise outer splits are applied
+  # too. No validation is done on the splits.
   """Builds RaggedTensors from the outputs of a parse op.
 
   This function takes the results of parsing a serialized batch of

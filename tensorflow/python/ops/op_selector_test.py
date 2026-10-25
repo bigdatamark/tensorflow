@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit tests for the op_selector module: iterability check, graph uniqueness checks, list
+# conversion of ops and tensors, generating/consuming op lookup and the backward graph walk.
+# Run as a test binary through the platform test main entry point.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,8 +26,15 @@ from tensorflow.python.platform import test
 
 
 class SelectTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the op_selector helpers. The fixture builds a small graph of constants and
+  # add ops (a through h) stored as attributes, with a control dependency on one add op.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Builds the shared graph: constants a, b, d; adds c (a+b), e and f (c+d), g (c+a) and h
+    # (f+g, with a control dependency on c), with some inside nested name scopes. Stores the
+    # graph and tensors on the test instance.
     self.graph = ops_lib.Graph()
     with self.graph.as_default():
       self.a = constant_op.constant([1., 1.], shape=[2], name="a")
@@ -39,11 +50,17 @@ class SelectTest(test.TestCase):
             self.h = math_ops.add(self.f, self.g, name="h")
 
   def test_is_iterable(self):
+    # [FUNCTION DOC]
+    # Checks that a list is reported iterable and an integer is not.
     """Test for is_iterable."""
     self.assertTrue(op_selector.is_iterable([0, 1, 2]))
     self.assertFalse(op_selector.is_iterable(3))
 
   def test_unique_graph(self):
+    # [FUNCTION DOC]
+    # Builds two graphs with two constants each. Expects the graph check to pass for same-graph
+    # tensors and raise a value error across graphs, and the unique-graph lookup to return the
+    # shared graph or raise a value error for mixed graphs.
     """Test for check_graphs and get_unique_graph."""
     g0 = ops_lib.Graph()
     with g0.as_default():
@@ -65,6 +82,10 @@ class SelectTest(test.TestCase):
       op_selector.get_unique_graph([a0, b0, a1, b1])
 
   def test_unique_graph_func_graph(self):
+    # [FUNCTION DOC]
+    # Creates an outer graph and an inner function graph forced to share the same graph key, with
+    # one constant in each. Expects the unique-graph lookup to succeed and return the inner graph
+    # (the key of the result equals the shared key).
     """Test for get_unique_graph with FuncGraph."""
     outer = ops_lib.Graph()
     with outer.as_default():
@@ -78,6 +99,9 @@ class SelectTest(test.TestCase):
     self.assertEqual(unique_graph._graph_key, inner._graph_key)
 
   def test_make_list_of_op(self):
+    # [FUNCTION DOC]
+    # Checks that converting a graph with two constants gives two ops, and that a tuple of two
+    # ops converts to a list of length two.
     """Test for make_list_of_op."""
     g0 = ops_lib.Graph()
     with g0.as_default():
@@ -89,6 +113,10 @@ class SelectTest(test.TestCase):
     self.assertEqual(len(op_selector.make_list_of_op((a0.op, b0.op))), 2)
 
   def test_make_list_of_t(self):
+    # [FUNCTION DOC]
+    # Graph with two constants and their sum. Expects three tensors from the whole graph, two from
+    # a tuple of two tensors, and two when a tuple mixing tensors and an op is converted with
+    # ops ignored.
     """Test for make_list_of_t."""
     g0 = ops_lib.Graph()
     with g0.as_default():
@@ -105,6 +133,9 @@ class SelectTest(test.TestCase):
             (a0, a0.op, b0), ignore_ops=True)), 2)
 
   def test_get_generating_consuming(self):
+    # [FUNCTION DOC]
+    # Graph of two constants feeding an add. Expects two generating ops for the inputs, one
+    # consuming op (the add) for them, one generating op for the sum, and no consumers for the sum.
     """Test for get_generating_ops and get_consuming_ops."""
     g0 = ops_lib.Graph()
     with g0.as_default():
@@ -117,6 +148,11 @@ class SelectTest(test.TestCase):
     self.assertEqual(op_selector.get_consuming_ops([c0]), [])
 
   def test_backward_walk_ops(self):
+    # [FUNCTION DOC]
+    # Runs the backward walk from h on the fixture graph with different options and checks the
+    # resulting op sets: with a restricted allowed set, predicate excluding c and a stop tensor f
+    # only h is found; non-inclusive gives empty; without the stop tensor d, f, h appear; without
+    # the predicate a, b, c, d, f, h; with no restrictions everything except e (a, b, c, d, f, g, h).
     seed_ops = [self.h.op]
     # Include all ops except for self.g.op
     within_ops = [
