@@ -1,3 +1,17 @@
+# [MODULE DOC]
+# Public XLA client module for Python. It re-exports everything from the jax-provided jaxlib XLA
+# client (wildcard import, plus the private native module, the primitive type enum and the shape
+# class), and adds: the builder and op classes (XlaBuilder, XlaOp) and the ops and profiler
+# submodules from sibling modules; a table mapping XLA primitive types to numpy dtypes and the
+# reverse table keyed by dtype string, with a lookup helper; lightweight pure-Python stand-ins for
+# several XLA protocol buffers (precision config, result accuracy, op metadata, padding config,
+# dot / convolution / gather / scatter dimension numbers, replica group) that are plain objects
+# with fixed attribute slots; and helpers that build those objects from compact specifications
+# (padding configs, dot and convolution dimension numbers, replica groups, shapes from numpy
+# values, source-location metadata, and padding values from a padding type). Also re-binds
+# a few names (FftType, ShapeIndex, ResultAccuracyMode) from the ops module.
+# Import-time side effects: imports jax, numpy and ml_dtypes, and builds the module-level tables.
+# Not a helper module; it is a user-facing API surface that depends on jax's jaxlib.
 # Copyright 2017 The OpenXLA Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -77,11 +91,22 @@ DTYPE_TO_XLA_ELEMENT_TYPE = {
 
 
 def dtype_to_etype(dtype):
+  # [FUNCTION DOC]
+  # Looks up the XLA primitive element type for a given dtype.
+  # Input: dtype, anything numpy accepts as a dtype (name, type object or dtype). It is converted
+  # to a numpy dtype and then to its string form to index the module's reverse table.
+  # Returns the matching primitive type enum value. Raises a key error if the dtype has no entry
+  # in the table. No side effects.
   """Convenience function for reading DTYPE_TO_XLA_ELEMENT_TYPE."""
   return DTYPE_TO_XLA_ELEMENT_TYPE[str(np.dtype(dtype))]
 
 
 class PrecisionConfig:
+  # [CLASS DOC]
+  # Plain Python stand-in for the XLA precision config protocol buffer. Uses fixed attribute slots
+  # (no per-instance dictionary). Holds a single attribute: the list of per-operand precision
+  # values. The nested alias Precision exposes the native precision enum for convenience.
+  # Instances are created with no arguments and then filled in by callers.
   """Python representation of a xla.PrecisionConfig protobuf."""
 
   __slots__ = ('operand_precision',)
@@ -89,6 +114,8 @@ class PrecisionConfig:
   Precision = ops.PrecisionConfig_Precision  # pylint: disable=invalid-name
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor with no parameters; creates an empty list of operand precisions. Returns nothing.
     self.operand_precision = []
 
 
@@ -98,11 +125,18 @@ ResultAccuracyMode = ops.ResultAccuracy_Mode
 
 
 class ResultAccuracy:
+  # [CLASS DOC]
+  # Plain Python stand-in for the XLA result accuracy protocol buffer, with fixed attribute slots:
+  # mode, absolute tolerance, relative tolerance and units-in-the-last-place tolerance. Created
+  # with no arguments and then modified by the caller.
   """Python representation of a xla.ResultAccuracy protobuf."""
 
   __slots__ = ('mode', 'atol', 'rtol', 'ulps')
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor with no parameters; sets the mode to the default accuracy mode from the ops
+    # module, absolute and relative tolerances to zero as floats, and ulps to integer zero.
     self.mode = ops.ResultAccuracy_Mode.DEFAULT
     self.atol = 0.0
     self.rtol = 0.0
@@ -110,6 +144,11 @@ class ResultAccuracy:
 
 
 class OpMetadata:
+  # [CLASS DOC]
+  # Plain Python stand-in for the XLA op metadata protocol buffer, with fixed attribute slots:
+  # op type, op name, source file, source start and end line and source start and end column.
+  # Used to attach source-location information to ops, e.g. as built by the helper that
+  # inspects the call stack.
   """Python representation of a xla.OpMetadata protobuf."""
 
   __slots__ = ('op_type', 'op_name', 'source_file', 'source_line',
@@ -117,6 +156,10 @@ class OpMetadata:
 
   def __init__(self, op_type='', op_name='', source_file='', source_line=0,
                source_end_line=0, source_column=0, source_end_column=0):
+    # [FUNCTION DOC]
+    # Constructor storing the given metadata fields unchanged as attributes. All parameters are
+    # optional: op type, op name and source file default to empty strings; source line, end line,
+    # column and end column default to zero. No validation is performed; returns nothing.
     self.op_type = op_type
     self.op_name = op_name
     self.source_file = source_file
@@ -127,6 +170,16 @@ class OpMetadata:
 
 
 def current_source_info_metadata(op_type=None, op_name=None, skip_frames=1):
+  # [FUNCTION DOC]
+  # HELPER: builds source-location metadata for ops from the caller's position in the stack.
+  # Inputs: op_type and op_name, optional values stored in the result (default to the null value,
+  # not empty strings); skip_frames, how many stack levels to go up from this function's own frame
+  # (default 1, meaning the immediate caller of this function, since index 0 is this function).
+  # Returns an OpMetadata whose source file is the base name of that frame's file and whose
+  # source line, end line, column and end column come from the frame position information when
+  # the interpreter provides it; otherwise only the line number is filled in.
+  # Raises an index error if the stack is shallower than skip_frames. Inspects the call stack,
+  # which is comparatively slow.
   """Helper for use in source mapping that returns an OpMetadata object."""
   frame = inspect.stack()[skip_frames]
   filename = os.path.basename(frame.filename)
@@ -141,9 +194,22 @@ def current_source_info_metadata(op_type=None, op_name=None, skip_frames=1):
 
 
 def shape_from_pyval(pyval, layout: Sequence[int] | None = None):
+  # [FUNCTION DOC]
+  # Computes the XLA shape that describes a value made of numpy arrays, possibly nested in tuples.
+  # Inputs: pyval, a numpy array (anything with a dtype and a shape) or a tuple of such values
+  # (nested tuples allowed); layout, optional sequence of ints giving the minor-to-major layout
+  # applied to array shapes (default none, meaning the default layout).
+  # Returns a tuple shape for a tuple value (built from the element shapes) or an array shape
+  # otherwise. Raises a not-implemented error if a layout is given and a tuple is encountered.
+  # No side effects.
   """Returns a Shape that describes a tuple-tree of Numpy arrays."""
 
   def convert(pyval):
+    # [FUNCTION DOC]
+    # HELPER: recursive worker of shape_from_pyval. Takes a value (array or tuple of values) and
+    # returns its shape: a tuple shape from converting each element for tuples, otherwise an array
+    # shape with the enclosing call's layout. Raises a not-implemented error when a layout was
+    # given and the value is a tuple. Uses the layout of the enclosing function.
     if isinstance(pyval, tuple):
       if layout is not None:
         raise NotImplementedError(
@@ -157,6 +223,10 @@ def shape_from_pyval(pyval, layout: Sequence[int] | None = None):
 
 
 class PaddingType(enum.Enum):
+  # [CLASS DOC]
+  # Enumeration of the two standard convolution/window padding modes: VALID (no padding, value 1)
+  # and SAME (pad so output size is the input size divided by the stride rounded up, value 2).
+  # Consumed by the padding computation helper in this module.
   VALID = 1
   SAME = 2
 
@@ -164,6 +234,17 @@ class PaddingType(enum.Enum):
 def window_padding_type_to_pad_values(
     padding_type, lhs_dims, rhs_dims, window_strides
 ):
+  # [FUNCTION DOC]
+  # Converts a padding mode into explicit padding amounts for a windowed operation such as a
+  # convolution or pooling.
+  # Inputs: padding_type, either a PaddingType value or a case-insensitive string "VALID"/"SAME";
+  # lhs_dims, sequence of input (operand) dimension sizes; rhs_dims, sequence of filter (window)
+  # dimension sizes; window_strides, sequence of strides. All sequences are per spatial dimension.
+  # Returns a list with one (low, high) pair of ints per entry of window_strides: for VALID all
+  # pairs are (0, 0); for SAME the total padding per dimension is chosen so the output size is
+  # the ceiling of input size over stride (never negative), split with the smaller half first.
+  # Raises a type error if padding_type is neither a string nor a PaddingType, and a value error
+  # for an unknown string or an unexpected value. No side effects.
   """Maps PaddingType or string to pad values (list of pairs of ints)."""
   if not isinstance(padding_type, (str, PaddingType)):
     msg = 'padding_type must be str or PaddingType, got {}.'
@@ -195,6 +276,10 @@ def window_padding_type_to_pad_values(
 
 
 class PaddingConfigDimension:
+  # [CLASS DOC]
+  # Plain Python stand-in for the XLA padding config dimension protocol buffer, with fixed
+  # attribute slots: low edge padding, high edge padding and interior padding (all integers, with
+  # class-level annotations). Created without arguments, then filled in.
   """Python representation of a xla.PaddingConfigDimension protobuf."""
 
   __slots__ = ('edge_padding_low', 'edge_padding_high', 'interior_padding')
@@ -204,23 +289,38 @@ class PaddingConfigDimension:
   interior_padding: int
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor with no parameters; sets low edge, high edge and interior padding to zero.
     self.edge_padding_low = 0
     self.edge_padding_high = 0
     self.interior_padding = 0
 
 
 class PaddingConfig:
+  # [CLASS DOC]
+  # Plain Python stand-in for the XLA padding config protocol buffer, with a single fixed
+  # attribute slot: the list of per-dimension padding descriptions (PaddingConfigDimension
+  # objects). Normally created by the helper that builds it from integer triples.
   """Python representation of a xla.PaddingConfig protobuf."""
 
   __slots__ = ('dimensions',)
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor with no parameters; creates an empty list of dimensions. Returns nothing.
     self.dimensions = []
 
 
 def make_padding_config(
     padding_config: PaddingConfig | Sequence[tuple[int, int, int]],
 ) -> PaddingConfig:
+  # [FUNCTION DOC]
+  # Builds a padding config from a compact description.
+  # Input: padding_config, either an existing PaddingConfig (returned as is, not copied) or a
+  # sequence of triples of integers (edge padding low, edge padding high, interior padding), one
+  # per dimension.
+  # Returns a PaddingConfig with one dimension entry per triple (in order). Raises a value or type
+  # error from unpacking if an item is not a triple of three values. The input is not modified.
   """Create PaddingConfig proto from list of triples of integers.
 
   Args:
@@ -244,6 +344,11 @@ def make_padding_config(
 
 
 class DotDimensionNumbers:
+  # [CLASS DOC]
+  # Plain Python stand-in for the XLA dot dimension numbers protocol buffer, with fixed attribute
+  # slots holding four lists of dimension indices: left and right contracting dimensions and left
+  # and right batch dimensions. Created without arguments and filled in by the caller or by the
+  # helper that builds it from a nested tuple.
   """Python representation of a xla.DotDimensionNumbers protobuf."""
 
   __slots__ = (
@@ -254,6 +359,9 @@ class DotDimensionNumbers:
   )
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor with no parameters; sets all four dimension lists (left/right contracting and
+    # left/right batch) to empty lists. Returns nothing.
     self.lhs_contracting_dimensions = []
     self.rhs_contracting_dimensions = []
     self.lhs_batch_dimensions = []
@@ -266,6 +374,14 @@ def make_dot_dimension_numbers(
         | tuple[tuple[list[int], list[int]], tuple[list[int], list[int]]]
     ),
 ) -> DotDimensionNumbers:
+  # [FUNCTION DOC]
+  # Builds dot dimension numbers from a specification.
+  # Input: dimension_numbers, either a nested tuple or list of the form ((left contracting,
+  # right contracting), (left batch, right batch)) where each element is a list of ints, or an
+  # already-built DotDimensionNumbers (any other kind of value is returned unchanged).
+  # Returns a new DotDimensionNumbers filled from the nested pairs when given a list or tuple,
+  # otherwise the input object itself. Raises a value error if the sequence cannot be unpacked
+  # into that shape. No other side effects.
   """Builds a DotDimensionNumbers object from a specification.
 
   Args:
@@ -290,6 +406,11 @@ def make_dot_dimension_numbers(
 
 
 class ConvolutionDimensionNumbers:
+  # [CLASS DOC]
+  # Plain Python stand-in for the XLA convolution dimension numbers protocol buffer, with fixed
+  # attribute slots: input batch, input feature and input spatial dimensions; kernel input
+  # feature, kernel output feature and kernel spatial dimensions; output batch, output feature
+  # and output spatial dimensions. Scalars are integers; the spatial entries are lists of ints.
   """Python representation of a xla.ConvolutionDimensionNumbers protobuf."""
 
   __slots__ = (
@@ -305,6 +426,9 @@ class ConvolutionDimensionNumbers:
   )
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor with no parameters; sets all scalar dimension indices to zero and all three
+    # spatial dimension lists to empty lists. Returns nothing.
     self.input_batch_dimension = 0
     self.input_feature_dimension = 0
     self.input_spatial_dimensions = []
@@ -322,6 +446,20 @@ def make_convolution_dimension_numbers(
     ),
     num_spatial_dimensions: int,
 ) -> ConvolutionDimensionNumbers:
+  # [FUNCTION DOC]
+  # Builds convolution dimension numbers from an optional specification.
+  # Inputs: dimension_numbers, one of: the null value (use the default layout: batch first,
+  # feature second, spatial dimensions after, kernel output feature first and kernel input
+  # feature second); a tuple of three strings (input spec, kernel spec, output spec) with one
+  # character per dimension where N is batch, C is feature, I and O are kernel input and output
+  # feature, and any other distinct characters label spatial dimensions; or an existing
+  # ConvolutionDimensionNumbers (returned as is). num_spatial_dimensions, integer count used
+  # only for the default case.
+  # Returns a ConvolutionDimensionNumbers. For the string form, spatial dimension indices of the
+  # kernel are listed in kernel order, and the input and output spatial dimensions are sorted by
+  # the position of their label in the kernel spec. Raises a value error if a required character
+  # (N, C, I or O) is missing from a spec string. Strings of other tuple sizes raise a value
+  # error from unpacking. No other side effects.
   """Builds a ConvolutionDimensionNumbers object from a specification.
 
   Args:
@@ -390,6 +528,11 @@ def make_convolution_dimension_numbers(
 
 
 class GatherDimensionNumbers:
+  # [CLASS DOC]
+  # Plain Python stand-in for the XLA gather dimension numbers protocol buffer, with fixed
+  # attribute slots: offset dims, collapsed slice dims, start index map (lists of ints) and
+  # index vector dim (an int). It lacks the operand batching and start-indices batching fields
+  # that newer versions of the native structure have.
   """Python representation of a xla.GatherDimensionNumbers protobuf."""
 
   __slots__ = (
@@ -400,6 +543,9 @@ class GatherDimensionNumbers:
   )
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor with no parameters; sets the three lists to empty and the index vector
+    # dimension to zero. Returns nothing.
     self.offset_dims = []
     self.collapsed_slice_dims = []
     self.start_index_map = []
@@ -407,6 +553,11 @@ class GatherDimensionNumbers:
 
 
 class ScatterDimensionNumbers:
+  # [CLASS DOC]
+  # Plain Python stand-in for the XLA scatter dimension numbers protocol buffer, with fixed
+  # attribute slots: update window dims, inserted window dims, scatter dims to operand dims (lists
+  # of ints) and index vector dim (an int). It lacks the input batching and scatter indices
+  # batching fields that newer versions of the native structure have.
   """Python representation of a xla.ScatterDimensionNumbers protobuf."""
 
   __slots__ = (
@@ -417,6 +568,9 @@ class ScatterDimensionNumbers:
   )
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor with no parameters; sets the three lists to empty and the index vector
+    # dimension to zero. Returns nothing.
     self.update_window_dims = []
     self.inserted_window_dims = []
     self.scatter_dims_to_operand_dims = []
@@ -424,21 +578,38 @@ class ScatterDimensionNumbers:
 
 
 class ReplicaGroup:
+  # [CLASS DOC]
+  # Plain Python stand-in for the XLA replica group protocol buffer, with one fixed attribute
+  # slot: the list of replica ids that form the group.
   """Python representation of a xla.ReplicaGroup protobuf."""
 
   __slots__ = ('replica_ids',)
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor with no parameters; creates an empty list of replica ids. Returns nothing.
     self.replica_ids = []
 
 
 def _make_replica_group_proto(replica_group):
+  # [FUNCTION DOC]
+  # HELPER: converts one group of replica ids into a ReplicaGroup object for make_replica_groups.
+  # Input: replica_group, any iterable of integer replica ids. Returns a new ReplicaGroup whose
+  # ids are the items of the iterable in order. No other side effects.
   replica_group_proto = ReplicaGroup()
   replica_group_proto.replica_ids.extend(replica_group)
   return replica_group_proto
 
 
 def make_replica_groups(replica_groups):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: has no docstring and its name does not say that the null value is mapped to an
+  # empty list, which is a special value in the XLA API meaning no explicit replica groups.
+  # Converts a collection of replica groups into a list of ReplicaGroup objects.
+  # Input: replica_groups, either the null value or an iterable of iterables of integer replica
+  # ids. Returns an empty list for the null value, otherwise a list with one ReplicaGroup per
+  # inner group, in order. The outer iterable is consumed once (copied to a list). Raises a type
+  # error if an element is not iterable. No other side effects.
   if replica_groups is None:
     replica_groups_protos = []  # special value for XLA API
   else:

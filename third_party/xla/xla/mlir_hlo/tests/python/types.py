@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test script for the Python API that accesses MHLO types. Each test function is decorated with a
+# runner that creates an MLIR context, registers the mhlo dialect, runs the test and returns it.
+# Because the decorator runs the test at import time, executing the script performs all tests.
+# Currently it covers the token type: it is constructed and its textual form is checked.
 # Copyright 2021 The OpenXLA Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +26,12 @@ from mlir.dialects import mhlo
 
 
 def run(f):
+  # [FUNCTION DOC]
+  # HELPER: decorator used by the tests in this file to execute each test inside an MLIR context.
+  # Takes a test function f with no arguments. Creates a fresh MLIR context, registers the mhlo
+  # dialect in it, calls f while the context is active, then returns f unchanged. Because it is
+  # used as a decorator, each test runs once at import time. Exceptions (assertion failures)
+  # from f propagate to the caller; the context is released on exit.
   with ir.Context() as context:
     mhlo.register_mhlo_dialect(context)
     f()
@@ -29,6 +40,9 @@ def run(f):
 
 @run
 def test_token_type():
+  # [FUNCTION DOC]
+  # Test: gets the mhlo token type and asserts it is not null and prints as the mhlo token
+  # type text. Takes no arguments, returns nothing; fails with an assertion error otherwise.
   token_type = mhlo.TokenType.get()
   assert token_type is not None
   assert str(token_type) == "!mhlo.token"

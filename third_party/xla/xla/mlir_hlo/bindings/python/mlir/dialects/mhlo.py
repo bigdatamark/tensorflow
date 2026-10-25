@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Python package module for the "mhlo" MLIR dialect bindings. It re-exports, via wildcard imports,
+# the generated operation classes (from the generated ops module) and the native extension symbols
+# (from the compiled MLIR HLO library, e.g. the function that registers the mhlo dialect in a
+# context and the mhlo type and attribute wrappers). Import-time effect: loading the native
+# extension. Defines no logic of its own.
 # Copyright 2020 The OpenXLA Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

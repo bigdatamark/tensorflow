@@ -1,3 +1,20 @@
+# [MODULE DOC]
+# Command-line tool (and importable library) that rewrites an HLO text test file so that every
+# test case is preceded by automatically generated FileCheck expectations. For each test case
+# (cases are separated by lines made of a double slash followed by five or more dashes) it strips
+# existing check/run directives, runs a user-supplied HLO optimizer program on the case through a
+# temporary file, converts the optimizer's textual output into FileCheck directive comments
+# (label check for module and function declarations, next-line checks for instructions, with
+# instruction and function names replaced by regular expression captures), and writes the
+# directives followed by the original case. Run directives found in the cases are moved to the top
+# of the output, below a banner comment saying the assertions were generated. Test cases may be
+# processed in parallel by a thread pool. Output goes to standard output, or the input file is
+# overwritten when in-place mode is requested; the file name "-" means standard input/output.
+# Contents: the directive comment enumeration, helper functions for whitespace and function
+# declaration checks, the optimizer runner, a stream splitting helper, the check line generator,
+# the test case writer class, argument parsing, and the entry point. No import-time side effects
+# other than computing module constants (script name, banner, regular expressions).
+# Standalone tool; not a helper module, although the entire logic is reusable by tests.
 #!/usr/bin/env python3
 # Copyright 2025 The OpenXLA Authors.
 #
@@ -127,6 +144,12 @@ _DIRECTIVE_MAX_STRING_LENGTH: int = len("CHECK-LABEL")
 
 
 class DirectiveComment(enum.Enum):
+  # [CLASS DOC]
+  # Enumeration of the LLVM test directive comment kinds that this tool recognizes: the check
+  # directive and its variants (count, dag, empty, label, next, not, same), the comment directive
+  # and the run directive. Member names use underscores where the textual directive uses dashes.
+  # Provides parsing from text, detection of the directive on a line of text, and formatting of
+  # a line that carries the directive. Used by the stream splitter and the check generator.
   """LLVM directive comments.
 
   See relevant LLVM documentation pages:
@@ -146,6 +169,10 @@ class DirectiveComment(enum.Enum):
   RUN = 9
 
   def __str__(self) -> str:
+    # [FUNCTION DOC]
+    # Returns the textual form of the directive as it appears in test files: the member name with
+    # underscores replaced by dashes (for example the label variant of the check directive).
+    # No side effects.
     # Note: `DirectiveComment.padding_width` makes use of the fact that
     # `len(str(self)) == len(self.name)` to avoid an unnecessary `str.replace()`
     # operation. If that assumption ever ceases to hold in all cases, update
@@ -154,10 +181,18 @@ class DirectiveComment(enum.Enum):
 
   @property
   def is_check(self) -> bool:
+    # [FUNCTION DOC]
+    # Property: true when this member is one of the check directive variants (name starts with the
+    # word CHECK), false for the comment and run directives. No side effects.
     return self.name.startswith("CHECK")
 
   @property
   def padding_width(self) -> int:
+    # [FUNCTION DOC]
+    # Property: number of padding spaces needed after the directive so that the text of all check
+    # variants lines up. It is the length of the longest check name minus the length of this
+    # member name for check directives, and zero for the comment and run directives.
+    # Relies on the textual form having the same length as the member name. No side effects.
     # Note: This uses the fact that `len(str(self)) == len(self.name)` to avoid
     # an unnecessary `str.replace()` operation. If that assumption ever ceases
     # to hold in all cases, replace `len(self.name)` with `len(str(self))`.
@@ -165,25 +200,53 @@ class DirectiveComment(enum.Enum):
 
   @property
   def line_prefix(self) -> str:
+    # [FUNCTION DOC]
+    # Property: the text placed at the start of a generated line for this directive: a double
+    # slash comment marker, the directive text, a colon, a space, and the alignment padding.
+    # No side effects.
     return f"// {self}: {' ' * self.padding_width}"
 
   @classmethod
   def parse(cls, check_string: str) -> DirectiveComment:
+    # [FUNCTION DOC]
+    # Class method. Converts the textual directive name (dashes allowed in place of underscores,
+    # e.g. the label variant of the check directive) into the corresponding enumeration member.
+    # Input: check_string, the directive name without a colon. Returns the member. Raises a key
+    # error if the name is not a known directive. No side effects.
     """Parses a string representation of a DirectiveComment."""
     return cls[check_string.replace("-", "_")]
 
   @classmethod
   def extract_from_line(cls, line: str) -> Optional[DirectiveComment]:
+    # [FUNCTION DOC]
+    # Class method. Detects whether a line of text is a comment starting with one of the known
+    # directives (optional leading spaces, a double slash, optional spaces, the directive and a
+    # colon). Input: line, one line of text. Returns the directive member, or the null value when
+    # the line does not start with a directive. No side effects.
     """Returns the FileCheck/RUN directive, if any, used by a line of text."""
     match = _DIRECTIVE_REGEX_MATCHER.match(line)
     return None if match is None else cls.parse(match.group(1))
 
   def format_line(self, line_text: str) -> str:
+    # [FUNCTION DOC]
+    # Builds a complete test file line for this directive. Input: line_text, the text to place after
+    # the directive. Returns the aligned directive prefix followed by the text and a newline.
+    # No side effects.
     """Formats a comment containing this directive and the specified text."""
     return f"{self.line_prefix}{line_text}\n"
 
 
 def _format_function_declaration_file_check(line_text: str) -> str:
+  # [FUNCTION DOC]
+  # HELPER: creates the check line for a function (or module section header) declaration line
+  # when generating expectations in HloFileCheckLines.
+  # Input: line_text, the text of the first line of a section, expected to start with optional
+  # keyword words followed by a percent sign and a function name and then a space and an opening
+  # parenthesis or brace. Returns a check line: the label variant of the directive when the name
+  # has no numeric suffix after a final dot (an explicit symbol name to be matched verbatim),
+  # otherwise the plain check variant (a numbered auto-generated name). The keywords and name
+  # are kept; the remainder of the line is dropped. Raises a value error if the line does not
+  # match the expected declaration pattern. No other side effects.
   """Returns a FileCheck line checking for a function declaration."""
   match = _FUNCTION_DECLARATION_REGEX.match(line_text)
 
@@ -216,6 +279,19 @@ def optimize_hlo(
     optimizer_args: ListOrTuple[str],
     expand_to_input: str = _DEFAULT_INPUT_FILE_EXPANSION_TOKEN,
 ) -> Iterator[str]:
+  # [FUNCTION DOC]
+  # Runs an external HLO optimizer program on one test case and returns its standard output.
+  # Inputs: input_stream, an iterator over lines of the test case; optimizer_path, the program to
+  # run; optimizer_args, list or tuple of arguments, in which every occurrence of the expansion
+  # token is replaced with the path of a temporary file holding the test case; expand_to_input,
+  # the token (default is the two-character brace placeholder).
+  # Returns an in-memory text stream with the decoded standard output of the program (despite the
+  # declared iterator type, a text stream object, iterable by line). Runs synchronously and
+  # eagerly: the process has finished when the function returns.
+  # Side effects: creates and removes a temporary file with the suffix hlo, starts a subprocess
+  # with captured output. Raises ChildProcessError if the program exits with a nonzero status;
+  # the message holds the full command, the program's standard error indented, and the input file
+  # contents with line numbers (or a note that the file is empty).
   """Passes `input_stream` through an optimizer; output is another stream.
 
   Args:
@@ -280,6 +356,13 @@ def optimize_hlo(
 
 
 class IterateByCategory(Generic[_T]):
+  # [CLASS DOC]
+  # Generic helper that lets several consumers read different sub-streams out of one input
+  # iterator. A selector function, called on each item, decides which buffer (a double-ended
+  # queue), or tuple of buffers, receives the item, or the null value to discard it. Consumers
+  # ask for the next item of a particular buffer; items belonging to other buffers are stashed in
+  # those buffers while reading ahead in the input. State: the input iterator and the selector.
+  # Not thread safe. Used by HloStreamSplitter.
   """Sorts each element of an input stream into arbitrarily many output streams.
   """
 
@@ -291,6 +374,10 @@ class IterateByCategory(Generic[_T]):
           Union[collections.deque[_T], tuple[collections.deque[_T], ...], None],
       ],
   ):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: input_stream, the iterator of items to categorize; select_buffer, a
+    # callback taking an item and returning one buffer, a tuple of buffers, or the null value
+    # (drop the item). Stores both; reads nothing yet. Returns nothing.
     self._input_stream: Iterator[_T] = input_stream
     self._select_buffer: Callable[
         [_T],
@@ -298,6 +385,16 @@ class IterateByCategory(Generic[_T]):
     ] = select_buffer
 
   def next_in_buffer(self, target_buffer: collections.deque[_T]) -> _T:
+    # [FUNCTION DOC]
+    # Returns the next item belonging to one particular buffer. If that buffer is not empty its
+    # oldest item is removed and returned. Otherwise the input is read forward: dropped items are
+    # skipped, items for other buffers are appended to those buffers, and the first item that
+    # belongs to the target buffer is returned (an item selected for several buffers, as a tuple,
+    # is also appended to the other buffers of the tuple).
+    # Input: target_buffer, the queue identifying the sub-stream. Raises StopIteration when the
+    # buffer and the input are both exhausted, and a type error if the selector returns something
+    # other than a queue, a tuple of queues or the null value. Side effect: consumes the input
+    # and fills other buffers.
     """Returns the next item in the sub-stream corresponding to `target_buffer`.
 
     Args:
@@ -352,6 +449,10 @@ class IterateByCategory(Generic[_T]):
   def iterate_over_buffer(
       self, target_buffer: collections.deque[_T]
   ) -> Iterator[_T]:
+    # [FUNCTION DOC]
+    # Generator over one sub-stream. Input: target_buffer, the queue identifying the sub-stream.
+    # Yields items of that sub-stream one at a time (reading ahead in the input as needed) until
+    # the next-item function signals exhaustion, then ends. Side effects as for next_in_buffer.
     while True:
       try:
         yield self.next_in_buffer(target_buffer)
@@ -360,6 +461,12 @@ class IterateByCategory(Generic[_T]):
 
 
 class HloStreamSplitter:
+  # [CLASS DOC]
+  # Removes check and run directive lines from a stream of test file lines. Lines that are not
+  # directives (excluding the generated banner comment line, which is dropped to avoid
+  # duplicating it) form the "non-directive" stream. Directive kinds listed at construction are
+  # also recorded and can be read back as separate streams; other directives are discarded.
+  # Built on IterateByCategory so the sub-streams can be consumed independently.
   """Splits out CHECK/RUN directives into separate streams.
 
   Strips away CHECK/RUN directives, optionally splitting them into their own
@@ -369,6 +476,12 @@ class HloStreamSplitter:
   def __init__(self,
                input_stream: Iterator[str],
                record_directives: Optional[set[DirectiveComment]] = None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: input_stream, iterator of text lines; record_directives, optional set
+    # of directive kinds whose lines should be kept in their own streams (default none, meaning
+    # all directives are simply discarded). Creates an empty queue for the non-directive lines
+    # and one queue per recorded directive, and wires them to a category iterator using the
+    # selector method. Reads nothing yet. Returns nothing.
     if record_directives is None:
       record_directives = set()
 
@@ -384,9 +497,17 @@ class HloStreamSplitter:
     )
 
   def non_directive_lines(self) -> Iterator[str]:
+    # [FUNCTION DOC]
+    # Returns an iterator over the lines that are not directives (and are not the generated banner
+    # comment), in original order. Consuming it may buffer directive lines read ahead.
     return self._splitter.iterate_over_buffer(self._non_directive_lines)
 
   def directive_history(self, directive: DirectiveComment) -> Iterator[str]:
+    # [FUNCTION DOC]
+    # Returns an iterator over the lines of one recorded directive kind, in original order, with
+    # each line complete (including the directive text). Input: directive, a directive member that
+    # was listed in record_directives at construction. Raises a key error with an explanatory
+    # message if it was not. Consuming it may buffer other lines read ahead.
     try:
       directive_history_lines = self._directive_histories[directive]
     except KeyError as e:
@@ -400,6 +521,11 @@ class HloStreamSplitter:
   def _select_buffer(
       self, line: str
   ) -> Union[collections.deque[str], tuple[collections.deque[str], ...], None]:
+    # [FUNCTION DOC]
+    # HELPER: selector callback given to the category iterator. Input: line, one text line.
+    # Returns the queue of non-directive lines for ordinary lines, the null value (drop) for the
+    # banner comment line or for a directive kind that is not being recorded, and the queue of
+    # recorded lines for a recorded directive kind. No side effects.
     directive = DirectiveComment.extract_from_line(line)
 
     if directive is None:
@@ -410,6 +536,12 @@ class HloStreamSplitter:
 
 
 def _fix_whitespace(input_stream: Iterator[str]) -> Iterator[str]:
+  # [FUNCTION DOC]
+  # HELPER: normalizes the text of a test case before it is sent to the optimizer and echoed back.
+  # Input: input_stream, iterator of text lines. Yields the lines with all blank (whitespace-only)
+  # lines removed, a single blank line inserted between sections (sections were separated by one
+  # or more blank lines), no leading blank line, and every line indented by at least four spaces
+  # re-indented to exactly two spaces (other lines unchanged). Lazy generator, no side effects.
   """Fixes indentation; trims redundant empty lines."""
   before_first_section: bool = True
   at_section_boundary: bool = True
@@ -430,6 +562,18 @@ def _fix_whitespace(input_stream: Iterator[str]) -> Iterator[str]:
 
 
 class HloFileCheckLines:
+  # [CLASS DOC]
+  # Converts the textual HLO output of an optimizer into FileCheck directive lines. It is an
+  # iterable wrapper over an input line iterator: iterating yields the check lines. Pipeline: (1)
+  # prefix each non-empty line with a check directive (label check for the module line, a
+  # function-style check for the first line of each following section, next-line checks for the
+  # rest), turning closing braces into an end-of-scope marker; (2) replace symbol names (names
+  # after a percent sign) by regular expression captures, remembering earlier captures so later
+  # references use the captured value; local symbols are forgotten at the end of each function
+  # while function names persist. Label checks keep names verbatim. Class constants hold the
+  # regular expressions and the marker line. State: input stream, section flags, a counter of
+  # normalized names used for disambiguation, and local and global replacement caches.
+  # Single-use: the instance holds state and should be iterated once.
   """Generates FileCheck comments from HLO IR."""
 
   _MODULE_REGEX: re.Pattern[str] = re.compile(
@@ -450,6 +594,11 @@ class HloFileCheckLines:
   )
 
   def __init__(self, input_stream: Iterator[str]):
+    # [FUNCTION DOC]
+    # Constructor. Input: input_stream, iterator over the lines of optimized HLO text. Stores it
+    # and initializes the bookkeeping: first-line and section-break flags (both true), the table
+    # counting how often each normalized name was used, and empty global and local symbol
+    # replacement caches. Reads nothing yet. Returns nothing.
     """HloFileCheckLines constructor."""
     self._input_stream: Iterator[str] = input_stream
     self._on_first_line: bool = True
@@ -459,6 +608,11 @@ class HloFileCheckLines:
     self._local_symbol_replacement_cache: dict[str, str] = dict()
 
   def __iter__(self) -> Iterator[str]:
+    # [FUNCTION DOC]
+    # Returns an iterator (generator) over the generated FileCheck lines: the input is first
+    # prefixed with check directives and then has its symbol names replaced by captures. Lazy;
+    # consumes the input stream and mutates the instance's caches and counters, so iterating twice
+    # does not restart cleanly.
     """Converts HLO instructions to FileCheck directives where applicable."""
     return self._replace_symbol_names_with_regex_captures(
         self._prefix_lines_with_check_directives(self._input_stream)
@@ -467,6 +621,15 @@ class HloFileCheckLines:
   def _prefix_lines_with_check_directives(
       self, input_stream: Iterator[str]
   ) -> Iterator[str]:
+    # [FUNCTION DOC]
+    # HELPER: first stage of the check generation pipeline. Input: input_stream, iterator over
+    # lines of HLO text. Yields lines: blank lines are dropped and multiple ones collapse to one
+    # blank separator between sections (none at the very start); a line that is only a closing
+    # brace becomes the end-of-function-scope marker (a comment directive line); the module header
+    # line becomes a label check; the first line of any other section becomes a function
+    # declaration check (via the module-level declaration helper, which raises a value error if the
+    # line does not look like a declaration); all other lines become next-line checks.
+    # Mutates the section flags of the instance. Lazy generator.
     """Prepends "// CHECK-XXX:" directives to HLO instructions."""
     for line in input_stream:
       stripped_line = line.strip()
@@ -509,6 +672,14 @@ class HloFileCheckLines:
       self,
       input_stream: Iterator[str],
   ) -> Iterator[str]:
+    # [FUNCTION DOC]
+    # HELPER: second stage of the check generation pipeline. Input: input_stream, iterator over
+    # lines (check lines produced by the first stage). Yields the lines with symbol names inside
+    # check lines that contain an assignment or function declaration replaced by captures, via the
+    # replacer callback; other lines pass through unchanged. The end-of-scope marker line is
+    # swallowed (not yielded) and clears the local symbol cache. Label checks are treated as
+    # verbatim and lines without an assignment sign (declarations) as global scope.
+    # Mutates the replacement caches. Lazy generator.
     """Replaces HLO instruction & function names with FileCheck regex captures.
 
     Replaces explicit symbol names in FileCheck directives with regex
@@ -553,6 +724,17 @@ class HloFileCheckLines:
       is_verbatim: bool,
       is_global: bool,
   ) -> str:
+    # [FUNCTION DOC]
+    # HELPER: substitution callback used with regular expression replacement in the second
+    # pipeline stage. Inputs: match, the match for one symbol name; is_verbatim, whether the name
+    # sits in a label check and must be kept as written; is_global, whether the name is a function
+    # (global scope, remembered for the whole file) rather than an instruction (local scope).
+    # Returns the replacement text. A name already seen in the local cache, or else the global
+    # cache, is replaced by its stored reference (a capture reference). For a first occurrence the
+    # function returns the declaring capture (a double-bracket capture of any run of non-space
+    # characters, with a dollar marker for globals, named from a unique version of the symbol) and
+    # stores the reference form for later uses; verbatim names are stored and returned unchanged.
+    # Side effects: updates the local or global cache and the name counter.
     """A symbol-name replacement function for use in `re.sub`.
 
     Args:
@@ -594,6 +776,16 @@ class HloFileCheckLines:
     return declaration_replacement
 
   def _generate_unique_name(self, symbol_name: str) -> str:
+    # [FUNCTION DOC]
+    # HELPER: gives each replaced symbol a distinct capture variable name for _replacer.
+    # KNOWN ISSUE: uniqueness is not guaranteed; a suffixed result is never checked against names
+    # produced earlier, so a symbol literally named like an earlier suffixed result (for example
+    # a name ending in an underscore and a number) can receive a duplicate capture name.
+    # Derives a capture variable name from a symbol name. Input: symbol_name, the original
+    # name. Replaces every character that is not a letter, digit or underscore with an underscore,
+    # and when that normalized name was already handed out earlier, appends an underscore and the
+    # number of previous uses. Returns the unique capture name. Side effect: increments the
+    # per-normalized-name usage counter.
     """Translates a symbol name to a unique FileCheck capture name.
 
     Replaces all characters other than letters, numbers, and underscores with
@@ -628,6 +820,17 @@ class HloFileCheckLines:
 
 
 class TestCheckWriter:
+  # [CLASS DOC]
+  # KNOWN ISSUE: the class name starts with "Test", so test collectors such as pytest may try to
+  # collect it as a test class (it has a constructor, so they emit a warning and skip it).
+  # Main engine of the tool: transforms HLO test files by running an optimizer on each test case
+  # and inserting generated FileCheck directives above it. Holds the optimizer program and
+  # arguments, the expansion token, an optional worker count, and a thread pool that exists only
+  # while the instance is used as a context manager (with block). Without the context manager,
+  # or with a worker count of one, test cases are processed one after another; otherwise they are
+  # processed concurrently with results kept in order. Offers splitting and joining of test
+  # cases, a per-case transformation helper, the annotation operations, and file printing and
+  # in-place overwriting. Constants define the delimiter pattern and delimiter text.
   """Rewrites each test case in an HLO file, optionally overwriting the file."""
 
   _TEST_CASE_DELIMITER_REGEX: re.Pattern[str] = re.compile(r"^// *-{5,}\n?$")
@@ -641,6 +844,13 @@ class TestCheckWriter:
       worker_count: Optional[int] = None,
       expand_to_input: str = _DEFAULT_INPUT_FILE_EXPANSION_TOKEN,
   ):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: optimizer_path, program to run; optimizer_args, list or tuple of its
+    # arguments (copied into a list); worker_count, optional number of worker threads (null means
+    # let the pool decide when the context manager is entered, one disables parallelism);
+    # expand_to_input, the token replaced by the temporary test case path (default brace
+    # placeholder). Raises a value error if worker_count is given and is less than one.
+    # Creates no pool yet. Returns nothing.
     """TestCheckWriter constructor.
 
     Args:
@@ -669,6 +879,11 @@ class TestCheckWriter:
     self._context_manager_active: bool = False
 
   def __enter__(self) -> TestCheckWriter:
+    # [FUNCTION DOC]
+    # Context manager entry. Marks the instance as active and, unless the worker count is exactly
+    # one, creates a thread pool (with the given worker count, or a default size when it is the
+    # null value). Returns the instance itself. Raises a runtime error if the instance is already
+    # inside a with block. Side effect: starts worker threads.
     """Context manager setup.
 
     Initializes `self._worker_pool` if `self._worker_count` is either `None`
@@ -693,6 +908,16 @@ class TestCheckWriter:
     return self
 
   def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring and design present this as cleanup, but when the body raised
+    # ChildProcessError (the optimizer failed) this writes the message to standard error and
+    # returns true, suppressing the exception; the main entry point then returns normally and the
+    # process exits with a success status even though no output was produced. Also the pool is
+    # closed but never joined or terminated.
+    # Context manager exit. Inputs: the exception type, value and traceback (null values when no
+    # exception). Closes and drops the worker pool if one exists and marks the instance inactive.
+    # Returns true only for ChildProcessError (after printing its text to standard error);
+    # returns false for everything else so other exceptions propagate.
     """Context manager cleanup.
 
     Closes the worker pool if it exists.
@@ -723,6 +948,13 @@ class TestCheckWriter:
   def split_test_cases(
       self, test_file: Iterator[str]
   ) -> Iterator[Iterator[str]]:
+    # [FUNCTION DOC]
+    # Generator that splits the lines of a test file into test cases. Input: test_file, iterator
+    # over lines. Delimiter lines (double slash, optional spaces, at least five dashes, optional
+    # newline) are consumed and not included in any case. Yields one in-memory text stream per test
+    # case, rewound to the start, in order; the last one is yielded at the end (so there is always
+    # at least one, possibly empty, stream, and a trailing delimiter produces a trailing empty
+    # case). Lazy; reads the input while iterating.
     """Splits an HLO test file into test cases delimited by "// -----" lines."""
     output_stream = io.StringIO()
     for line in test_file:
@@ -742,6 +974,15 @@ class TestCheckWriter:
       ],
       num_outputs: int = 1,
   ) -> Union[Iterator[str], tuple[Iterator[str], ...]]:
+    # [FUNCTION DOC]
+    # Concatenates per-test-case output streams back into whole-file streams. Inputs: test_cases,
+    # iterator over test cases, each either one line iterator (single output) or a tuple of line
+    # iterators (multiple outputs); num_outputs, how many streams each case has (default 1, must be
+    # at least 1). Returns one line iterator if num_outputs is one, otherwise a tuple of that many
+    # iterators. The first output stream gets the delimiter text (blank line, delimiter line,
+    # blank line) between cases; additional streams get no delimiter. Raises a value error if
+    # num_outputs is less than one. Delegates to the unary or n-ary joiner; the casts are only
+    # for type checkers.
     """Concatenates the output stream(s) from each test case in `test_cases`.
 
     Args:
@@ -793,6 +1034,10 @@ class TestCheckWriter:
       test_cases: Iterator[Iterator[str]],
       delimiter: str,
   ) -> Iterator[str]:
+    # [FUNCTION DOC]
+    # HELPER: single-output joiner for join_test_cases. Inputs: test_cases, iterator over line
+    # iterators; delimiter, text yielded between cases. Generator yielding the lines of each case
+    # in order, with the delimiter lines before every case except the first. Lazy.
     """Concatenates the streams in `test_cases`, delimited by `delimiter`."""
     # Wrap the delimiter in an `io.StringIO` for line-by-line access.
     delimiter_stream = io.StringIO(delimiter)
@@ -812,6 +1057,13 @@ class TestCheckWriter:
       test_cases: Iterator[tuple[Iterator[str], ...]],
       delimiters: ListOrTuple[str],
   ) -> tuple[Iterator[str], ...]:
+    # [FUNCTION DOC]
+    # HELPER: multi-output joiner for join_test_cases. Inputs: test_cases, iterator over tuples of
+    # N line iterators; delimiters, list or tuple of N delimiter strings, one per output position.
+    # Returns a tuple of N rewound in-memory text streams; output i holds the concatenation of the
+    # i-th stream of every case, with delimiter i inserted before every case except the first.
+    # Unlike the unary joiner this is eager: it consumes all cases (and thus runs all
+    # transformations) before returning. Side effect: consumes the test case iterators.
     """Joins each output[i] from all `test_cases`, delimited by `delimiters[i]`.
 
     Given an iterator to tuples of iterators, this function concatenates along
@@ -872,6 +1124,15 @@ class TestCheckWriter:
       ],
       num_outputs: int = 1,
   ) -> Union[Iterator[str], tuple[Iterator[str], ...]]:
+    # [FUNCTION DOC]
+    # Applies a transformation to every test case of a file and joins the results. Inputs:
+    # test_file, iterator over file lines; transformation, callback taking one test case's line
+    # iterator and returning a line iterator or a tuple of them; num_outputs, number of streams
+    # the callback returns (default 1, at least 1). The file is split into cases; the callback is
+    # applied to each case, sequentially when there is no worker pool, otherwise concurrently with
+    # results returned in input order. Returns what join_test_cases returns for the results (one
+    # iterator or a tuple of num_outputs iterators). Raises a value error for an invalid
+    # num_outputs; exceptions from the callback surface while the output is consumed.
     """Applies `transformation` to each test case in `test_file`.
 
     Args:
@@ -917,6 +1178,15 @@ class TestCheckWriter:
   def annotate_test_case(
       self, test_case: Iterator[str]
   ) -> tuple[Iterator[str], Iterator[str]]:
+    # [FUNCTION DOC]
+    # Transforms one test case: runs it through the optimizer and prepends the generated
+    # expectations. Input: test_case, iterator over its lines. Steps: strip check and run
+    # directives (recording the run directives), normalize whitespace, duplicate the stream, send
+    # one copy through the optimizer runner (this runs the external program immediately and can
+    # raise ChildProcessError), and convert its output to check lines. Returns a pair: first an
+    # iterator yielding the check lines, one blank line and then the normalized original test
+    # case; second an iterator over the stripped run directive lines (to be hoisted to the top
+    # of the file). Side effects: temporary file and subprocess via the optimizer runner.
     """Transforms a test case, inserting FileCheck directives above it.
 
     Args:
@@ -952,6 +1222,13 @@ class TestCheckWriter:
     return transformed_test_case, run_directives
 
   def annotate_test_file(self, test_file: Iterator[str]) -> Iterator[str]:
+    # [FUNCTION DOC]
+    # Transforms a whole test file. Input: test_file, iterator over its lines. Annotates each
+    # test case with per-case two-output processing, then returns an iterator that yields the
+    # generated banner comment line, all hoisted run directive lines, a blank line, and then the
+    # annotated test cases separated by delimiter lines. Because the two outputs are joined
+    # eagerly, all optimizer runs occur before it returns. Can raise ChildProcessError (when an
+    # optimizer run fails); uses the worker pool if active.
     """Inserts FileCheck directives above each test case in an HLO test file.
 
     Args:
@@ -981,6 +1258,16 @@ class TestCheckWriter:
       transformation: Optional[Callable[[Iterator[str]], Iterator[str]]] = None,
       output_stream: io.TextIOBase = cast(io.TextIOBase, sys.stdout),
   ) -> None:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the default for output_stream is evaluated once, when the class is defined, so
+    # it is the standard output object at import time; redirecting standard output later is not
+    # honored unless a stream is passed explicitly.
+    # Reads a file (or standard input), transforms it and writes the result to a stream.
+    # Inputs: file_path, path to read, or the single dash for standard input; transformation,
+    # optional callback taking an iterator of lines and returning an iterator of lines (default is
+    # annotate_test_file); output_stream, text stream to write to (default standard output).
+    # Returns nothing. Side effects: reads the file, writes the transformed lines to the stream;
+    # may raise a file error if the path cannot be opened, or whatever the transformation raises.
     """Reads from `file_path`, applies a transformation, and prints to `stdout`.
 
     Args:
@@ -1009,6 +1296,15 @@ class TestCheckWriter:
       file_path: str,
       transformation: Optional[Callable[[Iterator[str]], Iterator[str]]] = None,
   ) -> None:
+    # [FUNCTION DOC]
+    # Transforms a file in place. Inputs: file_path, the file to rewrite; transformation, optional
+    # callback from line iterator to line iterator (default annotate_test_file). The transformed
+    # text is first written to a new temporary file (not deleted automatically, created in the
+    # default temporary directory), and only after the transformation completes is it moved over
+    # the original, so a failure during transformation leaves the original untouched (but leaks
+    # the temporary file). The move may copy across file systems and the temporary file's
+    # permissions replace those of the original. Returns nothing. Can raise file errors or
+    # whatever the transformation raises.
     """Transforms the contents of `file_path`, overwriting the file.
 
     Args:
@@ -1036,6 +1332,17 @@ class TestCheckWriter:
 def parse_args(
     string_args: Optional[ListOrTuple[str]] = None,
 ) -> argparse.Namespace:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the help text for the expansion option contains a grammar slip ("will be expand")
+  # and the description says "an specified" file; cosmetic only.
+  # Parses the command-line arguments of this tool. Input: string_args, optional list or tuple
+  # of argument strings (default: the process arguments without the program name). Defines the
+  # positional test file (a path or a single dash), the in-place flag (short and long forms,
+  # default false), the expansion token option (default brace placeholder), the optimizer command
+  # positional and zero or more optimizer arguments. Returns the parsed namespace with attributes
+  # test_file, in_place, expand_to_input, opt_cmd and opt_args. If in-place mode is requested while
+  # reading standard input it prints a warning to standard error and turns the flag off. The
+  # argument parser may print usage and exit the process on invalid input or on a help request.
   """Parses the command-line arguments passed into this script."""
   if string_args is None:
     string_args = sys.argv[1:]
@@ -1104,6 +1411,13 @@ def parse_args(
 
 
 def main() -> None:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: when the optimizer fails the writer's context manager swallows the error after
+  # printing it, so this function returns normally and the process exits with status zero.
+  # Entry point of the tool. Takes no parameters and returns nothing. Parses the command line,
+  # creates a writer for the optimizer command and arguments (with the chosen expansion token),
+  # enters it as a context manager and either rewrites the file in place or prints the result to
+  # standard output. Side effects: file reads and writes, subprocesses, standard output/error.
   args = parse_args()
 
   with TestCheckWriter(

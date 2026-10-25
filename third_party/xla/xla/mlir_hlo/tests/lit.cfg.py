@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Configuration file for the LLVM "lit" test runner for the MLIR HLO tests directory. When lit
+# loads it, the module sets the suite name, declares that only files with the MLIR extension are
+# tests, runs them through the shell test format, sets the test source root to this directory,
+# adds substitutions for the PATH and shared library extension, copies a few environment
+# variables, fixes tool directories on Windows, installs default LLVM substitutions, appends the
+# LLVM tools directory to PATH and registers the mlir-hlo-opt and mlir-runner tools plus a
+# library directory substitution. It relies on a lit-provided global configuration object and
+# lit-populated attributes, so it is only meaningful when executed by lit. Not a helper module.
 """Lit configuration to drive test in this repo."""
 # Copyright 2020 The OpenXLA Authors.
 # Licensed under the Apache License, Version 2.0 (the "License");

@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Smoke test script for the MHLO Python bindings. When run (at import time, no functions), it
+# creates an MLIR context, registers the mhlo dialect, parses a small module containing a dynamic
+# shaped add operation, checks that the module and the first operation of the function were
+# produced, and prints a confirmation message. Failed checks raise assertion errors.
 # Copyright 2021 The OpenXLA Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
