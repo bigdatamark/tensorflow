@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# Functional control-flow and higher-order operations: the fold-left, fold-right and scan
+# operations over tensors unpacked along the first dimension (each in a v1 and a v2 flavour that
+# differ in exported name and in how back_prop false is deprecated), plus thin wrappers around the
+# generated functional ops: If (conditional), Gradient (symbolic gradient of a function), While and
+# For (loops, with a For-to-While rewrite for devices where For is unsupported). The fold and scan
+# operations build graph-mode while loops over tensor arrays; the If, While, For and Gradient
+# wrappers accept legacy Defun functions or concrete functions. Also re-exports the remote call op.
+# Import-time side effects: registers the public symbols with the API export machinery and the
+# dispatch system.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -48,6 +58,21 @@ def foldl(fn,
           back_prop=True,
           swap_memory=False,
           name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: When fn is not callable the error message reads the name attribute of fn, so a
+  # non-callable object without that attribute (for example a number) raises an attribute error
+  # instead of the documented TypeError.
+  # KNOWN ISSUE: The docstring's shape sentence has an unbalanced quote and, when no initializer is
+  # given, the first element seeds the accumulator and the loop starts at the second element.
+  # Left fold (v1 API): applies fn(accumulator, element) to the slices of elems taken along the
+  # first dimension, from first to last, and returns the final accumulator (not the intermediate
+  # ones). Inputs: fn callable; elems tensor or nested structure of tensors with matching first
+  # dimension; initializer optional starting accumulator (default: first element is used);
+  # parallel_iterations number of loop iterations allowed in parallel; back_prop whether the loop is
+  # differentiable; swap_memory whether to swap tensors between GPU and CPU; name optional scope name.
+  # Raises TypeError for a non-callable fn. Side effects: in graph mode it temporarily sets the
+  # caching device of the current variable scope to each op's device (if unset) and restores it to
+  # none afterwards; it adds a while loop and tensor arrays to the graph.
   """foldl on the list of tensors unpacked from `elems` on dimension 0.
 
   This foldl operator repeatedly applies the callable `fn` to a sequence
@@ -101,6 +126,10 @@ def foldl(fn,
         f"{fn.__name__} is not callable. Please provide a callable function.")
 
   def create_ta(elem):
+    # [FUNCTION DOC]
+    # HELPER: Local helper of foldl. Wraps one tensor in a fixed-size tensor array of the length n
+    # (taken from the enclosing scope) with shape inference on, unstacked along the first dimension,
+    # and returns that tensor array.
     return tensor_array_ops.TensorArray(
         dtype=elem.dtype, size=n, dynamic_size=False,
         infer_shape=True).unstack(elem)
@@ -138,6 +167,10 @@ def foldl(fn,
       i = constant_op.constant(0)
 
     def compute(i, a):
+      # [FUNCTION DOC]
+      # HELPER: Loop body of foldl. Reads element i from every tensor array, applies fn to the
+      # accumulator and that element structure, and returns the incremented counter with the new
+      # accumulator.
       elem_i = nest.map_structure(lambda elem: elem.read(i), elems_ta)
       a = fn(a, elem_i)
       return [i + 1, a]
@@ -176,6 +209,12 @@ def foldl_v2(fn,
              back_prop=True,
              swap_memory=False,
              name=None):
+  # [FUNCTION DOC]
+  # Left fold (v2 API, exported as tf.foldl). Forwards every argument unchanged to the v1 foldl and
+  # returns its result, so behaviour, inputs, outputs and exceptions are identical: sequential
+  # application of fn from the first to the last slice of elems along the first dimension, returning
+  # the final accumulator, raising TypeError for a non-callable fn. The decorators additionally add
+  # dispatch support and emit a one-time deprecation warning when back_prop is false.
   """foldl on the list of tensors unpacked from `elems` on dimension 0.
 
   This foldl operator repeatedly applies the callable `fn` to a sequence
@@ -244,6 +283,18 @@ def foldr(fn,
           back_prop=True,
           swap_memory=False,
           name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: The docstring says that without an initializer the first element seeds the
+  # accumulator, but the code seeds it with the last element (index n minus one) because it folds
+  # from last to first.
+  # KNOWN ISSUE: When fn is not callable the error message reads the name attribute of fn, so a
+  # non-callable object without that attribute raises an attribute error instead of TypeError.
+  # Right fold (v1 API): applies fn(accumulator, element) to the slices of elems along the first
+  # dimension from last to first and returns the final accumulator. Inputs: fn callable; elems tensor
+  # or nested structure of tensors; initializer optional starting accumulator; parallel_iterations,
+  # back_prop, swap_memory control the underlying while loop; name optional scope name. Raises
+  # TypeError for a non-callable fn. Side effects: in graph mode temporarily sets the variable
+  # scope's caching device (restored to none afterwards) and adds a while loop and tensor arrays.
   """foldr on the list of tensors unpacked from `elems` on dimension 0.
 
   This foldr operator repeatedly applies the callable `fn` to a sequence
@@ -297,6 +348,10 @@ def foldr(fn,
         f"{fn.__name__} is not callable. Please provide a callable function.")
 
   def create_ta(elem):
+    # [FUNCTION DOC]
+    # HELPER: Local helper of foldr. Wraps one tensor in a fixed-size tensor array of the length n
+    # (from the enclosing scope) with shape inference on, unstacked along the first dimension, and
+    # returns that tensor array.
     return tensor_array_ops.TensorArray(
         dtype=elem.dtype, size=n, dynamic_size=False,
         infer_shape=True).unstack(elem)
@@ -334,6 +389,10 @@ def foldr(fn,
       a = initializer
 
     def compute(i, a):
+      # [FUNCTION DOC]
+      # HELPER: Loop body of foldr. Decrements the counter first, reads that element from every
+      # tensor array, applies fn to the accumulator and the element structure, and returns the
+      # decremented counter with the new accumulator.
       i -= 1
       elem = nest.map_structure(lambda elem: elem.read(i), elems_ta)
       a_out = fn(a, elem)
@@ -373,6 +432,11 @@ def foldr_v2(fn,
              back_prop=True,
              swap_memory=False,
              name=None):
+  # [FUNCTION DOC]
+  # Right fold (v2 API, exported as tf.foldr). Forwards every argument unchanged to the v1 foldr and
+  # returns its result: sequential application of fn from the last to the first slice of elems along
+  # the first dimension, returning the final accumulator, raising TypeError for a non-callable fn.
+  # The decorators add dispatch support and a one-time deprecation warning when back_prop is false.
   """foldr on the list of tensors unpacked from `elems` on dimension 0.
 
   This foldr operator repeatedly applies the callable `fn` to a sequence
@@ -443,6 +507,22 @@ def scan(fn,
          infer_shape=True,
          reverse=False,
          name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: The docstring text mentions python2 tuple-unpacking lambdas that are no longer
+  # valid syntax; only the single-argument form works.
+  # KNOWN ISSUE: When fn is not callable the error message reads the name attribute of fn, so a
+  # non-callable object without that attribute raises an attribute error instead of TypeError.
+  # Scan (v1 API): like a fold but returns every intermediate accumulator, stacked along a new first
+  # dimension. Inputs: fn callable taking (accumulator, element structure) and returning a structure
+  # matching the initializer (or elems when there is none); elems tensor or nested structure whose
+  # tensors share their first dimension; initializer optional starting accumulator (default: first
+  # element, or last when reverse is true, which is then also written as the first output);
+  # parallel_iterations, back_prop, swap_memory control the while loop; infer_shape false disables
+  # output shape consistency checks; reverse scans from last to first; name optional scope name.
+  # Returns the structure of stacked outputs whose static first dimension is set from the inputs.
+  # Raises TypeError for a non-callable fn or mismatching output structure, and ValueError for
+  # mismatched structure lengths or incompatible static first dimensions. Side effects: in graph
+  # mode temporarily sets the variable scope's caching device; adds a while loop and tensor arrays.
   """scan on the list of tensors unpacked from `elems` on dimension 0.
 
   See also `tf.map_fn`.
@@ -544,6 +624,9 @@ def scan(fn,
   input_flatten = lambda x: nest.flatten(x) if input_is_sequence else [x]
 
   def input_pack(x):
+    # [FUNCTION DOC]
+    # HELPER: Local helper of scan. Re-packs a flat list of values into the structure of elems when
+    # elems is a nested structure, otherwise returns the single value in the list.
     return nest.pack_sequence_as(elems, x) if input_is_sequence else x[0]
 
   if initializer is None:
@@ -555,6 +638,9 @@ def scan(fn,
     output_flatten = lambda x: nest.flatten(x) if output_is_sequence else [x]
 
     def output_pack(x):
+      # [FUNCTION DOC]
+      # HELPER: Local helper of scan. Re-packs a flat list into the structure of the initializer when
+      # it is a nested structure, otherwise returns the single value in the list.
       return (nest.pack_sequence_as(initializer, x)
               if output_is_sequence else x[0])
 
@@ -624,6 +710,14 @@ def scan(fn,
       ]
 
     def compute(i, a_flat, tas):
+      # [FUNCTION DOC]
+      # HELPER: Loop body of scan.
+      # KNOWN ISSUE: The docstring lists a value-type error as an exception; the structure check
+      # actually raises a value error (and a type error for a type mismatch), never a value-type one.
+      # Reads element i from each input tensor array, applies fn to the packed accumulator and
+      # elements, checks the output has the same structure as the initializer (or elems if none),
+      # writes the flattened outputs into the output tensor arrays at index i, and returns the next
+      # counter (decrement when reverse, otherwise increment), the new flat accumulator and arrays.
       """The loop body of scan.
 
       Args:
@@ -708,6 +802,11 @@ def scan_v2(fn,
             infer_shape=True,
             reverse=False,
             name=None):
+  # [FUNCTION DOC]
+  # Scan (v2 API, exported as tf.scan). Forwards every argument unchanged to the v1 scan and returns
+  # its result: the stacked intermediate accumulators from applying fn along the first dimension of
+  # elems, optionally in reverse, with the same exceptions. The decorators add dispatch support and a
+  # one-time deprecation warning when back_prop is false.
   """scan on the list of tensors unpacked from `elems` on dimension 0.
 
   The simplest version of `scan` repeatedly applies the callable `fn` to a
@@ -814,6 +913,14 @@ def scan_v2(fn,
 
 # pylint: disable=invalid-name
 def If(cond, inputs, then_branch, else_branch, name=None):
+  # [FUNCTION DOC]
+  # Builds a functional conditional op: runs then_branch on the inputs when cond is true, otherwise
+  # else_branch. cond is a scalar tensor (non-boolean values are converted: nonzero or non-empty
+  # means true); inputs is a list of tensors; the branches are legacy graph functions or concrete
+  # functions with the same output structure; name is optional. Returns the list of output tensors
+  # (for concrete functions the outputs are re-packed so composite tensors, such as sparse tensors,
+  # are restored). Raises an error from the structure check when the two branches' outputs have
+  # different structures. Side effect: adds an If op to the current graph.
   r"""output = Cond(inputs) ?
 
   then_branch(inputs) : else_branch(inputs).
@@ -859,6 +966,11 @@ def If(cond, inputs, then_branch, else_branch, name=None):
 
 
 def Gradient(inputs, f, name=None):
+  # [FUNCTION DOC]
+  # Adds a symbolic-gradient op for the legacy graph function f. inputs is a list of N plus M
+  # tensors: the N inputs of f followed by M upstream gradients for its outputs. Returns a list of N
+  # tensors, the gradients with respect to the inputs. The output types are taken from the input
+  # argument types of f's definition. name is optional. Side effect: adds an op to the current graph.
   r"""Computes the gradient function for function f via backpropagation.
 
   Args:
@@ -883,6 +995,11 @@ def Gradient(inputs, f, name=None):
 
 
 def _GetInputDtypes(func):
+  # [FUNCTION DOC]
+  # HELPER: Used by While and the loop-body wrappers to compare function signatures.
+  # Returns the list of input types of func without captured inputs: the declared input types for a
+  # legacy graph function, otherwise the dtypes of the leading non-captured inputs of a concrete
+  # function (the function type is assumed, not verified, to avoid a circular import).
   """Returns the input dtypes of func, excluding dtypes for captured inputs."""
   if isinstance(func, function._DefinedFunction):  # pylint: disable=protected-access
     return func.declared_input_types
@@ -897,10 +1014,20 @@ def _GetInputDtypes(func):
 
 
 def _LoopBodyCaptureWrapper(func):
+  # [FUNCTION DOC]
+  # HELPER: Used by While and For to support loop bodies with captured inputs.
+  # Returns a new legacy graph function named after func with a wrapper suffix, taking the same
+  # input types as func. The wrapper calls func and appends the extra (captured) arguments to its
+  # result so they are carried through the loop unchanged.
   """Returns a wrapper for `func` that handles loop-carried captured inputs."""
 
   @function.Defun(*_GetInputDtypes(func), func_name="%s_Wrapper" % func.name)
   def Wrapper(*args):
+    # [FUNCTION DOC]
+    # HELPER: Body of the generated wrapper function. Calls func with the arguments, then returns
+    # the result with the extra captured arguments appended: only the extra arguments if func
+    # returned an operation, a one-element result plus extras for a single tensor, or the sequence
+    # result extended by the extras for list or tuple results (keeping its type).
     """A wrapper that handles loop-carried captured inputs."""
     result = func(*args)
     extra_args = tuple(function.get_extra_args())
@@ -920,6 +1047,17 @@ def _LoopBodyCaptureWrapper(func):
 
 # pylint: disable=invalid-name,protected-access
 def While(input_, cond, body, name=None, hostmem=None):
+  # [FUNCTION DOC]
+  # Builds a functional while loop: repeats body on the loop variables while cond is true. input_ is
+  # the list of initial loop tensors; cond and body are graph functions with identical input types
+  # (cond must not capture inputs); name is optional; hostmem is an optional list of indices of
+  # inputs that live in host memory. If body captures inputs, they are appended to the loop variables
+  # via wrapper functions and sliced off the result. Returns the list of final loop tensors. Raises
+  # ValueError if cond has captured inputs or the signatures of cond and body differ. Side effects:
+  # adds a While op (and wrapper functions) to the graph and, when hostmem is given, sets attributes
+  # marking the listed inputs and outputs as host memory on the created op.
+  # KNOWN ISSUE: The docstring's Returns section describes the result twice; it is simply the list
+  # of loop output tensors.
   r"""output = input; While (Cond(output)) { output = Body(output) }.
 
   Args:
@@ -966,6 +1104,10 @@ def While(input_, cond, body, name=None, hostmem=None):
 
     @function.Defun(*cond_dtypes, func_name="%s_Wrapper" % cond.name)
     def CondWrapper(*args):
+      # [FUNCTION DOC]
+      # HELPER: Condition wrapper used by While when the body has captured inputs. Accepts the
+      # loop variables plus the carried captured values and calls cond on only the leading loop
+      # variables, returning its result.
       """A wrapper that handles loop-carried captured inputs."""
       return cond(*args[:len(body_input_types)])
 
@@ -1009,6 +1151,18 @@ def _ForUsingWhile(start,
                    forbody,
                    name=None,
                    hostmem=None):
+  # [FUNCTION DOC]
+  # HELPER: Implements For via While (see the explanatory comment above the function).
+  # Computes the iteration count as the ceiling of the absolute distance between limit and start
+  # divided by the absolute step, using float division because XLA on TPUs lacks integer division;
+  # defines a condition function (counter below count) and a body function that calls forbody with
+  # start plus counter times delta, wraps non-tuple results, and increments the counter. Runs a While
+  # over the counter, count, start, delta and the user inputs (the first four marked as host memory,
+  # user host-memory indices shifted by four) and returns the final user tensors with the four
+  # bookkeeping tensors sliced off. Inputs: start, limit, delta scalars; inputs list; forbody graph
+  # function; name optional; hostmem optional index list.
+  # KNOWN ISSUE: The float32 based count can be off by one for very large ranges where integers are
+  # not exactly representable.
   """Helper to implement a For loop using a While."""
   # To support negative delta (e.g., range(100, 0, -3)), we iterate
   # over the range(n) and use iter * delta + start as the real
@@ -1031,6 +1185,9 @@ def _ForUsingWhile(start,
 
   @function.Defun(*body_sig, func_name=cond_name)
   def WhileCond(i, n, *args):
+    # [FUNCTION DOC]
+    # HELPER: Loop condition for _ForUsingWhile. Ignores the extra arguments and returns whether
+    # the counter is less than the iteration count.
     del args
     return i < n
 
@@ -1038,6 +1195,11 @@ def _ForUsingWhile(start,
 
   @function.Defun(*body_sig, func_name=body_name)
   def WhileBody(i, n, start, delta, *args):
+    # [FUNCTION DOC]
+    # HELPER: Loop body for _ForUsingWhile. Calls the for body with the real index (start plus
+    # counter times delta) and the remaining arguments, normalizes an operation result to an empty
+    # tuple and a single tensor to a one-element tuple, and returns the incremented counter, the
+    # unchanged count, start and delta, followed by the body results.
     """A While wrapper for forbody that handles loop-carried captured inputs."""
     for_result = forbody(start + i * delta, *args)
     # Nullary functions return an Operation. Normal functions can't do this
@@ -1072,6 +1234,15 @@ def For(start,
         name=None,
         hostmem=None,
         rewrite_with_while=None):
+  # [FUNCTION DOC]
+  # Builds a functional for loop: out = inputs, then for each index from start up to (not including)
+  # limit in steps of delta, out = body(index, out). start, limit, delta are scalar 32-bit integer
+  # tensors; inputs is a list of loop tensors; body is a graph function taking the index followed by
+  # the loop tensors; name is optional; hostmem lists input indices held in host memory (shifted by
+  # three for the loop parameters when attributes are set); rewrite_with_while, when true, delegates
+  # to the While based implementation. If body captures inputs they are carried through wrapper
+  # functions and sliced off the result. Returns the list of final loop tensors. Side effects: adds a
+  # For op to the graph and sets host-memory attributes on the op when hostmem is given.
   r"""out = input; for i in range(start, limit, delta) out = body(i, out).
 
   Args:

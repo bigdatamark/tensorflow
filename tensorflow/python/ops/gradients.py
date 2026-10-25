@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: Public facade module that re-exports gradient-related symbols from their implementation modules.
+# Defines no logic of its own. It re-exports the symbolic gradient and hessian functions, the
+# aggregation-method and unconnected-gradients enumerations, the eager gradient tape, the forward-mode
+# accumulator, the custom-gradient decorator and the eager function module, so that users can reach all
+# of them through one import location. Importing it only triggers the imports of those modules; the
+# unused-import lint warnings are deliberately disabled because the imports exist only to re-export.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

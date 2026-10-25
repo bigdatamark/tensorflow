@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Numerical gradient checker for functions, usable in eager mode and (through a session) in graph
+# mode. Compares the theoretical Jacobian of a function with respect to each argument, computed with
+# the gradient function machinery, to a numeric Jacobian computed by central finite differences.
+# Public API: compute_gradient (exported as the v2 test compute_gradient) returns lists of theoretical
+# and numeric Jacobians, and max_error computes the largest elementwise gap between two lists of
+# arrays. Other functions are private helpers; sparse gradients are densified and complex values are
+# treated as pairs of reals. Import-time side effect: API export registration only.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,6 +41,10 @@ from tensorflow.python.util.tf_export import tf_export
 
 
 def _product(t):
+  # [FUNCTION DOC]
+  # HELPER: Size computation for the Jacobian builders in this module.
+  # Returns an integer unchanged; for an iterable of dimension sizes returns their product (one when
+  # empty).
   if isinstance(t, int):
     return t
   else:
@@ -43,6 +55,11 @@ def _product(t):
 
 
 def _eval_indexed_slices(a):
+  # [FUNCTION DOC]
+  # HELPER: Normalizes eager sparse gradients before they are densified.
+  # If the argument is an indexed-slices object and eager execution is on, returns a value-form
+  # indexed slices whose indices and values are lists of numpy arrays and whose dense shape is kept;
+  # any other argument is returned unchanged. No side effects.
   """Converts IndexedSlices to IndexedSlicesValue with numpy indices/values.
 
   When eager execution is enabled, converts IndexedSlices
@@ -65,6 +82,14 @@ def _eval_indexed_slices(a):
 
 
 def _to_numpy(a):
+  # [FUNCTION DOC]
+  # HELPER: Converts values to numpy for comparison and feeding.
+  # Eager tensors are converted directly; graph tensors are evaluated in the default session (which
+  # must exist); an indexed-slices value is scattered (values added at their indices) into a dense
+  # zero array of its dense shape, with assertions that value and index counts match and each index is
+  # in range; anything else is returned unchanged.
+  # KNOWN ISSUE: The dense array is created with numpy default float dtype regardless of the slices'
+  # dtype, so the original dtype of the values is not preserved.
   """Converts Tensors, EagerTensors, and IndexedSlicesValue to numpy arrays.
 
   Args:
@@ -94,6 +119,13 @@ def _to_numpy(a):
 
 
 def _prepare(f, xs_dtypes, xs_shapes):
+  # [FUNCTION DOC]
+  # HELPER: Makes a function callable with plain numeric data in both execution modes.
+  # KNOWN ISSUE: The docstring Returns section is empty; actually it returns a callable. In eager mode
+  # the callable converts each argument to a tensor and calls f. In graph mode it creates placeholders
+  # from the dtype and shape lists, calls f once to build the graph, captures the default session
+  # (which must exist) and returns a callable that converts arguments to numpy and runs the output in
+  # that session with the placeholders fed. Side effect (graph mode): adds placeholders and ops.
   """Return a function that executes 'f'.
 
     In TF 2.x, this is the same as `f`.
@@ -110,6 +142,9 @@ def _prepare(f, xs_dtypes, xs_shapes):
   if context.executing_eagerly():
 
     def decorated_eager(*xs_data):
+      # [FUNCTION DOC]
+      # HELPER: Eager-mode wrapper from _prepare. Converts every positional argument to a tensor and
+      # returns the result of calling the wrapped function on them.
       return f(*map(ops.convert_to_tensor, xs_data))
 
     return decorated_eager
@@ -121,6 +156,10 @@ def _prepare(f, xs_dtypes, xs_shapes):
   sess = ops.get_default_session()
 
   def decorated_graph(*xs_data):
+    # [FUNCTION DOC]
+    # HELPER: Graph-mode wrapper from _prepare. Converts the positional arguments to numpy arrays,
+    # feeds them to the placeholders and runs the prebuilt output in the captured session, returning
+    # the evaluated numpy result.
     xs_data = [_to_numpy(a) for a in xs_data]
     return sess.run(y, feed_dict=dict(zip(xs, xs_data)))
 
@@ -128,6 +167,15 @@ def _prepare(f, xs_dtypes, xs_shapes):
 
 
 def _compute_theoretical_jacobian(f, y_shape, y_dtype, xs, param):
+  # [FUNCTION DOC]
+  # HELPER: Theoretical half of the v2 gradient checker.
+  # Builds the Jacobian of f(xs) with respect to xs[param] by backpropagation: for each element of
+  # the flattened output it feeds a one-hot upstream gradient to the gradient function of f for the
+  # chosen argument, converts the result to numpy (densifying sparse gradients) and stores it as one
+  # row, then resets that upstream element. A null gradient leaves its row zero. Inputs: function f,
+  # result shape and dtype, list of input tensors, index param. Returns a real 2-d array with y_size
+  # rows and x_size columns (complex treated as two reals). If the output is empty it runs the
+  # gradient once and raises ValueError for a wrong shape or any nonzero value. Logs at verbose level.
   """Computes the theoretical Jacobian for f regarding xs[param].
 
   One can think of the relation among f, xs and y as y = f(xs).
@@ -200,6 +248,14 @@ def _compute_theoretical_jacobian(f, y_shape, y_dtype, xs, param):
 
 
 def _compute_numeric_jacobian(f, y_size, y_dtype, xs, param, delta):
+  # [FUNCTION DOC]
+  # HELPER: Numeric (finite difference) half of the v2 gradient checker.
+  # Converts all inputs to numpy, then for every real element of xs[param] perturbs it in place by
+  # plus and minus delta (restoring the original value afterwards), evaluates f for both, and stores
+  # the difference divided by twice delta as a column. Inputs: function f, number of output elements,
+  # output dtype, list of input tensors, argument index, delta. Returns a real 2-d array with y_size
+  # rows and x_size columns; complex dtypes double the corresponding dimension. Side effects: runs f
+  # many times and logs the result at verbose level.
   """Computes the numeric Jacobian for f regarding xs[param].
 
   One can think of the relation among f, xs and y as y = f(xs).
@@ -258,6 +314,11 @@ def _compute_numeric_jacobian(f, y_size, y_dtype, xs, param, delta):
 
 
 def _compute_gradient(f, y_shape, y_dtype, xs, param, delta):
+  # [FUNCTION DOC]
+  # HELPER: Per-argument worker of compute_gradient.
+  # Asserts that the argument dtype and the output dtype are supported float or complex types
+  # (assertion error with a message otherwise), then returns a pair of the theoretical and numeric
+  # Jacobians of f with respect to xs[param] for the given perturbation delta.
   """Computes the theoretical and numerical jacobian."""
   x = xs[param]
   t = x.dtype
@@ -278,6 +339,11 @@ def _compute_gradient(f, y_shape, y_dtype, xs, param, delta):
 
 
 def _compute_gradient_list(f, xs, delta):
+  # [FUNCTION DOC]
+  # HELPER: List-level worker of compute_gradient.
+  # Converts each input to a tensor, evaluates f once to learn the output shape and dtype, then
+  # computes the theoretical and numeric Jacobian for every argument. Returns a tuple of two tuples:
+  # all theoretical Jacobians (one per argument) and all numeric Jacobians.
   """Compute gradients for a list of x values."""
   # convert xs to tensors so that dtype and shape have uniform types
   xs = [ops.convert_to_tensor(x) for x in xs]
@@ -295,6 +361,13 @@ def _compute_gradient_list(f, xs, delta):
 
 @tf_export("test.compute_gradient", v1=[])
 def compute_gradient(f, x, delta=None):
+  # [FUNCTION DOC]
+  # Public v2 entry point (exported as the test compute_gradient API). Computes theoretical and
+  # numeric Jacobians of the function f at the point given by x, a list or tuple of values convertible
+  # to tensors (one per argument of f). delta is optional and defaults to one over 1024, a binary
+  # exactly representable step. Returns a pair of sequences with one 2-d array per argument.
+  # Raises ValueError if x is not a list or tuple, or if the output is empty but the gradient is
+  # nonzero. KNOWN ISSUE: The docstring says the pair holds lists, but the code returns tuples.
   """Computes the theoretical and numeric Jacobian of `f`.
 
   With y = f(x), computes the theoretical and numeric Jacobian dy/dx.
@@ -346,6 +419,11 @@ def compute_gradient(f, x, delta=None):
 
 
 def max_error(grad1, grad2):
+  # [FUNCTION DOC]
+  # Computes the largest absolute elementwise difference between corresponding arrays of two
+  # sequences (for example theoretical and numeric Jacobians), pairing them in order and skipping
+  # pairs where both are empty. Returns the maximum as a number (zero if nothing was compared). Pure
+  # function; arrays are expected to be numpy arrays of equal shape within each pair.
   """Computes maximum elementwise gap.
 
   Computes the maximum elementwise gap between two lists of tensors of the same
