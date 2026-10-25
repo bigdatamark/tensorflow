@@ -1,3 +1,18 @@
+# [MODULE DOC]
+# Python front end for TensorFlow lookup tables (the tf.lookup namespace and the older v1 table
+# helpers). It defines the abstract LookupInterface and the initializable table base class, the
+# immutable StaticHashTable (plus its v1 variants and the legacy HashTable alias), table
+# initializers (from key and value tensors, or from text files with selectable key and value
+# columns), hasher specifications for out-of-vocabulary bucketing, the wrapper tables that map
+# unknown keys to hash buckets (IdTableWithHashBuckets, StaticVocabularyTable), the mutable
+# mutable table classes (MutableHashTable and DenseHashTable) and
+# convenience constructors such as index_table_from_file and index_to_string_table_from_tensor.
+# Tables wrap resource handles created by the generated lookup kernels and are trackable, so they
+# can be saved in checkpoints and SavedModels.
+# Import-time side effects: imports the lookup gradient registrations, re-exports every symbol of
+# the generated lookup op module through a wildcard import, and registers exports with the public
+# API decorators and a SavedModel serialization registration for StaticHashTable.
+# Not a helper module; it is a public API module.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -52,6 +67,11 @@ from tensorflow.python.util.tf_export import tf_export
 @tf_export(v1=["initialize_all_tables"])
 @deprecated(None, "Use `tf.tables_initializer` instead.")
 def initialize_all_tables(name="init_all_tables"):
+  # [FUNCTION DOC]
+  # Deprecated v1 alias of the tables initializer function. Takes an optional operation name
+  # (default "init_all_tables") and returns whatever the tables initializer returns: a grouped
+  # operation initializing every table registered in the default graph, or a no-op if none.
+  # Side effects: only the deprecation warning emitted by the decorator, plus graph op creation.
   """Returns an Op that initializes all tables of the default graph.
 
   Args:
@@ -66,6 +86,11 @@ def initialize_all_tables(name="init_all_tables"):
 
 @tf_export(v1=["initializers.tables_initializer", "tables_initializer"])
 def tables_initializer(name="init_all_tables"):
+  # [FUNCTION DOC]
+  # Collects every op stored in the default graph's table-initializer collection. If there are
+  # any, returns a single grouped operation (named by the optional name argument, default
+  # "init_all_tables") that runs them all; otherwise returns a no-op with that name.
+  # Reads graph collection state only; creates one graph op; raises nothing itself.
   """Returns an Op that initializes all tables of the default graph.
 
   Args:
@@ -109,6 +134,11 @@ def tables_initializer(name="init_all_tables"):
 
 
 def check_table_dtypes(table, key_dtype, value_dtype):
+  # [FUNCTION DOC]
+  # HELPER: validation helper used by table initializers before importing data into a table.
+  # Compares the base dtype of key_dtype and value_dtype against the table's own key and value
+  # dtypes. Returns nothing. Raises a type error naming expected and received dtypes if the key
+  # dtype mismatches, or if the value dtype mismatches (key is checked first). No side effects.
   """Check that the given key_dtype and value_dtype matches the table dtypes.
 
   Args:
@@ -129,9 +159,17 @@ def check_table_dtypes(table, key_dtype, value_dtype):
 
 
 class LookupInterface(resource.TrackableResource):
+  # [CLASS DOC]
+  # Abstract base for all lookup tables. A trackable resource that records the key and value
+  # dtypes and declares the table API (name, size, lookup, subscript access). Concrete subclasses
+  # supply the resource creation and the operations. Instances are not created directly.
   """Represent a lookup table that persists across different steps."""
 
   def __init__(self, key_dtype, value_dtype):
+    # [FUNCTION DOC]
+    # Stores the key and value dtypes (each converted to a canonical dtype object from anything
+    # dtype-like) and then runs the trackable-resource base constructor. Both arguments required.
+    # Raises a type error if either is not convertible to a dtype. Returns nothing.
     """Construct a lookup table interface.
 
     Args:
@@ -143,43 +181,77 @@ class LookupInterface(resource.TrackableResource):
     super(LookupInterface, self).__init__()
 
   def _create_resource(self):
+    # [FUNCTION DOC]
+    # HELPER: abstract hook for subclasses that create the underlying table resource handle.
+    # Always raises a not-implemented error in this base class.
     raise NotImplementedError
 
   @property
   def key_dtype(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the table's key dtype as a dtype object.
     """The table key dtype."""
     return self._key_dtype
 
   @property
   def value_dtype(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the table's value dtype as a dtype object.
     """The table value dtype."""
     return self._value_dtype
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the code returns the NotImplementedError class instead of raising it, so
+    # accessing the property on the base class silently yields an exception type, not a name.
+    # Subclasses override this property to return the real table name.
     """The name of the table."""
     return NotImplementedError
 
   def size(self, name=None):
+    # [FUNCTION DOC]
+    # Abstract method: would return the number of entries in the table. Takes an optional op
+    # name. Always raises a not-implemented error here; subclasses override it.
     """Compute the number of elements in this table."""
     raise NotImplementedError
 
   def lookup(self, keys, name=None):
+    # [FUNCTION DOC]
+    # Abstract method: would return the values for the given keys. Takes the keys and an
+    # optional op name. Always raises a not-implemented error here; subclasses override it.
     """Looks up `keys` in a table, outputs the corresponding values."""
     raise NotImplementedError
 
   def __getitem__(self, keys):
+    # [FUNCTION DOC]
+    # Subscript syntax sugar: calls the lookup method with the given keys (no op name) and
+    # returns its result. Raises whatever lookup raises.
     """Looks up `keys` in a table, outputs the corresponding values."""
     return self.lookup(keys)
 
 
 class InitializableLookupTableBase(LookupInterface):
+  # [CLASS DOC]
+  # Base class for read-only lookup tables that are filled once by a table initializer. Holds the
+  # initializer, a scalar default tensor returned for missing keys, the resource handle and the
+  # initialization op. Provides size and lookup (supporting dense, sparse and ragged keys) on top
+  # of the generated lookup kernels. Subclasses must implement resource creation.
   """Initializable lookup table interface.
 
   An initializable lookup tables persist across different steps.
   """
 
   def __init__(self, default_value, initializer):
+    # [FUNCTION DOC]
+    # Builds the table: takes the default value (anything convertible to a scalar tensor of the
+    # initializer's value dtype) and the initializer (supplies key and value dtypes and the
+    # initialization op). Tracks the initializer if it is trackable, creates the resource handle
+    # inside the init scope, and builds the initialization op (also inside the init scope when
+    # in graph mode within a control-flow context, otherwise directly).
+    # Raises a value error if the default value is not a scalar. Returns nothing.
+    # Side effects: creates graph or eager ops and the table resource, and may register the
+    # initialization op in the graph's table-initializer collection through the initializer.
     """Construct a table object from a table reference.
 
     If requires a table initializer object (subclass of `TableInitializerBase`).
@@ -207,14 +279,22 @@ class InitializableLookupTableBase(LookupInterface):
       self._init_op = self._initialize()
 
   def _initialize(self):
+    # [FUNCTION DOC]
+    # HELPER: asks the stored initializer to build the table's initialization op for this table
+    # and returns that op (nothing else is done).
     return self._initializer.initialize(self)
 
   @property
   def default_value(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the scalar tensor used for keys absent from the table.
     """The default value of the table."""
     return self._default_value
 
   def size(self, name=None):
+    # [FUNCTION DOC]
+    # Returns a scalar int64 tensor with the number of entries, using the table-size kernel on
+    # the resource handle inside a name scope derived from the optional op name and table name.
     """Compute the number of elements in this table.
 
     Args:
@@ -227,6 +307,16 @@ class InitializableLookupTableBase(LookupInterface):
       return gen_lookup_ops.lookup_table_size_v2(self.resource_handle)
 
   def lookup(self, keys, name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says a type error is raised when default_value mismatches the
+    # table types, but only the keys dtype is checked here (default value was already converted
+    # to the value dtype at construction).
+    # Looks up keys (dense tensor, sparse tensor or ragged tensor; the flat values are used for
+    # sparse and ragged) and returns the stored values, or the default value for missing keys.
+    # The result has the same structure as the input: sparse in gives sparse (same indices and
+    # dense shape), ragged in gives ragged (same row partition), dense in gives dense with the
+    # keys' static shape. Optional name sets the op name scope.
+    # Raises a type error if the keys dtype differs from the table key dtype.
     """Looks up `keys` in a table, outputs the corresponding values.
 
     The `default_value` is used for keys not present in the table.
@@ -272,9 +362,14 @@ class InitializableLookupTableBase(LookupInterface):
 
 
 class InitializableLookupTableBaseV1(InitializableLookupTableBase):
+  # [CLASS DOC]
+  # Graph-mode (v1) flavor of the initializable table base: adds the initializer property that
+  # exposes the initialization op so v1 sessions can run it. No other changes.
 
   @property
   def initializer(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the op that initializes the table (to be run in a v1 session).
     return self._init_op
 
 
@@ -282,6 +377,12 @@ class InitializableLookupTableBaseV1(InitializableLookupTableBase):
     predicate=lambda obj: isinstance(obj, StaticHashTable))
 @tf_export("lookup.StaticHashTable", v1=[])
 class StaticHashTable(InitializableLookupTableBase):
+  # [CLASS DOC]
+  # Immutable hash table: keys and values come from an initializer and cannot change after
+  # initialization. Holds the initializer, default value, anonymity flag, shared name used to
+  # share the underlying resource between kernels, the op name and the value shape. Supports
+  # export of all contents, SavedModel registration (serialized as nothing; restored as a
+  # restored resource) and trackable child attachment. Created with an initializer and default.
   """A generic hash table that is immutable once initialized.
 
   Example usage:
@@ -315,6 +416,17 @@ class StaticHashTable(InitializableLookupTableBase):
                default_value,
                name=None,
                experimental_is_anonymous=False):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring claims a HashTable object is returned, but a constructor
+    # returns nothing; and the table is initialized during construction, not left non-initialized.
+    # Stores the initializer and default value, and the anonymous flag. If not anonymous, takes
+    # the initializer's shared name, generating a unique one from a random UUID if it is empty,
+    # so the resource can be shared across kernels. Sets the op name (default "hash_table"),
+    # then runs the base constructor (which converts the default to a scalar tensor, creates the
+    # resource and builds the initialization op) and records the default value's shape.
+    # Inputs: initializer, default_value, optional name, optional anonymous flag (default false).
+    # Raises a value error if the default value is not a scalar. Side effects: creates ops and
+    # a table resource.
     """Creates a non-initialized `HashTable` object.
 
     Creates a table, the type of its keys and values are specified by the
@@ -354,6 +466,12 @@ class StaticHashTable(InitializableLookupTableBase):
     self._value_shape = self._default_value.get_shape()
 
   def _create_resource(self):
+    # [FUNCTION DOC]
+    # HELPER: creates the hash table resource for this table. Uses the anonymous-table kernel
+    # when anonymous, otherwise the named kernel with the shared name; both use the initializer's
+    # key and value dtypes and the table op name. In graph mode remembers the last component of
+    # the created op's name as the table name; in eager mode the table name is cleared.
+    # Returns the resource handle.
     if self._is_anonymous:
       table_ref = gen_lookup_ops.anonymous_hash_table(
           key_dtype=self._initializer.key_dtype,
@@ -373,9 +491,16 @@ class StaticHashTable(InitializableLookupTableBase):
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Read-only property: the table's graph op name (last path component), or nothing in eager
+    # mode.
     return self._table_name
 
   def export(self, name=None):
+    # [FUNCTION DOC]
+    # Exports the whole table contents using the export kernel. Optional name for the op scope.
+    # Returns a pair (keys tensor, values tensor); the values tensor's static shape is set to the
+    # keys' shape extended with the per-entry value shape. No exceptions raised by this code.
     """Returns tensors of all keys and values in the table.
 
     Args:
@@ -394,20 +519,36 @@ class StaticHashTable(InitializableLookupTableBase):
     return exported_keys, exported_values
 
   def _serialize_to_proto(self, **unused_kwargs):
+    # [FUNCTION DOC]
+    # HELPER: SavedModel registration hook. Ignores all keyword arguments and returns nothing,
+    # meaning no extra proto data is stored for the table.
     return None
 
   def _add_trackable_child(self, name, value):
+    # [FUNCTION DOC]
+    # HELPER: SavedModel loading hook. Sets the attribute with the given name to the given value
+    # and, if the value is trackable, also registers it as a tracked dependency under that name.
+    # Returns nothing.
     setattr(self, name, value)
     if isinstance(value, trackable_base.Trackable):
       self._track_trackable(value, name)  # pylint:disable=protected-access
 
   @classmethod
   def _deserialize_from_proto(cls, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: SavedModel loading hook. Defines a local restored-resource subclass whose resource
+    # type is "RestoredStaticHashTable" and delegates to its deserialization with the given
+    # keyword arguments, returning the restored object.
 
     class _RestoredStaticHashTable(resource.RestoredResource):  # pylint: disable=protected-access
+      # [CLASS DOC]
+      # HELPER: local restored-resource type used when loading a saved StaticHashTable; it only
+      # overrides the reported resource type name.
 
       @classmethod
       def _resource_type(cls):
+        # [FUNCTION DOC]
+        # HELPER: returns the constant resource type name used by the loader.
         return "RestoredStaticHashTable"
 
     return _RestoredStaticHashTable._deserialize_from_proto(**kwargs)  # pylint: disable=protected-access
@@ -415,6 +556,9 @@ class StaticHashTable(InitializableLookupTableBase):
 
 @tf_export(v1=["lookup.StaticHashTable"])
 class StaticHashTableV1(StaticHashTable):
+  # [CLASS DOC]
+  # Graph-mode (v1) variant of the static hash table, exported under the v1 lookup namespace.
+  # Adds the initializer property exposing the initialization op for session-based running.
   """A generic hash table that is immutable once initialized.
 
   When running in graph mode, you must evaluate the tensor returned by
@@ -468,21 +612,35 @@ class StaticHashTableV1(StaticHashTable):
 
   @property
   def initializer(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the op that initializes the table (for v1 sessions).
     return self._init_op
 
 
 # For backwards compatibility. This will be removed in TF 2.0.
 class HashTable(StaticHashTableV1):
+  # [CLASS DOC]
+  # HELPER: backwards-compatibility alias class for the v1 static hash table; adds the legacy
+  # init property. Not exported publicly here.
 
   @property
   def init(self):
+    # [FUNCTION DOC]
+    # HELPER: legacy accessor; returns the initializer property, i.e. the initialization op.
     return self.initializer
 
 
 class TableInitializerBase(trackable_base.Trackable):
+  # [CLASS DOC]
+  # Abstract base for table initializers. Stores key and value dtypes, exposes them, declares
+  # the initialize method that subclasses implement to build the initialization op, and
+  # computes a default shared name (unique per call in eager mode, empty in graph mode).
   """Base class for lookup table initializers."""
 
   def __init__(self, key_dtype, value_dtype):
+    # [FUNCTION DOC]
+    # Records the key and value dtypes after converting each to a canonical dtype object.
+    # Raises a type error if either is not dtype-like. Returns nothing.
     """Construct a table initializer object.
 
     Args:
@@ -494,20 +652,30 @@ class TableInitializerBase(trackable_base.Trackable):
 
   @property
   def key_dtype(self):
+    # [FUNCTION DOC]
+    # Read-only property: the key dtype the target table must have.
     """The expected table key dtype."""
     return self._key_dtype
 
   @property
   def value_dtype(self):
+    # [FUNCTION DOC]
+    # Read-only property: the value dtype the target table must have.
     """The expected table value dtype."""
     return self._value_dtype
 
   def initialize(self, table):
+    # [FUNCTION DOC]
+    # Abstract method: subclasses build and return the op that fills the given table. Always
+    # raises a not-implemented error here.
     """Returns the table initialization op."""
     raise NotImplementedError
 
   @property
   def _shared_name(self):
+    # [FUNCTION DOC]
+    # HELPER: supplies the shared name for the table resource. Empty string in graph mode; in
+    # eager mode a unique id string, so separate tables do not accidentally share a resource.
     """Returns a shared name to be used by the table."""
     shared_name = ""
     if context.executing_eagerly():
@@ -520,6 +688,10 @@ class TableInitializerBase(trackable_base.Trackable):
 
 @tf_export("lookup.KeyValueTensorInitializer")
 class KeyValueTensorInitializer(TableInitializerBase):
+  # [CLASS DOC]
+  # Initializer that fills a table from a keys tensor and a values tensor of equal leading size.
+  # Holds the converted key and value tensors and a name (made unique in eager mode). The
+  # table's dtypes are those of the tensors.
   """Table initializers given `keys` and `values` tensors.
 
   >>> keys_tensor = tf.constant(['a', 'b', 'c'])
@@ -535,6 +707,13 @@ class KeyValueTensorInitializer(TableInitializerBase):
   """
 
   def __init__(self, keys, values, key_dtype=None, value_dtype=None, name=None):
+    # [FUNCTION DOC]
+    # Converts keys and values (tensors or python arrays) to tensors, honoring the optional
+    # key_dtype and value_dtype hints. In graph mode inside a control-flow context the
+    # conversion runs in the init scope so the tensors live outside the loop or conditional.
+    # Stores the name (default "key_value_init"; a unique id is appended in eager mode) and then
+    # calls the base constructor with the resulting tensors' dtypes. Returns nothing.
+    # Raises whatever tensor conversion raises for incompatible input.
     """Constructs a table initializer object based on keys and values tensors.
 
     Args:
@@ -565,6 +744,11 @@ class KeyValueTensorInitializer(TableInitializerBase):
                                                     self._values.dtype)
 
   def initialize(self, table):
+    # [FUNCTION DOC]
+    # Checks that the stored keys and values dtypes match the table, then builds the bulk-import
+    # op that loads the keys and values into the table's resource inside a name scope. Adds the
+    # op to the graph's table-initializer collection and returns it.
+    # Raises a type error on dtype mismatch.
     """Initializes the given `table` with `keys` and `values` tensors.
 
     Args:
@@ -588,6 +772,10 @@ class KeyValueTensorInitializer(TableInitializerBase):
 
 @tf_export("lookup.TextFileIndex")
 class TextFileIndex:
+  # [CLASS DOC]
+  # Constants namespace for text-file initializers: WHOLE_LINE (minus two) selects the entire
+  # line text, LINE_NUMBER (minus one) selects the zero-based line number; non-negative values
+  # select a delimited column. Never instantiated; holds only class-level constants.
   """The key and value content to get from each line.
 
   This class defines the key and value used for `tf.lookup.TextFileInitializer`.
@@ -608,6 +796,11 @@ class TextFileIndex:
 
 @tf_export("lookup.TextFileInitializer")
 class TextFileInitializer(TableInitializerBase):
+  # [CLASS DOC]
+  # Initializer that fills a table from a text file, one entry per line. Key and value come
+  # from a column index, the line number or the whole line. Holds the file name (tracked as an
+  # asset so it is bundled on export), key/value indices, optional vocabulary size, delimiter,
+  # name and a value offset. Computes a deterministic shared name from these settings.
   r"""Table initializers from a text file.
 
   This initializer assigns one entry in the table for each line in the file.
@@ -673,6 +866,15 @@ class TextFileInitializer(TableInitializerBase):
                delimiter="\t",
                name=None,
                value_index_offset=0):
+    # [FUNCTION DOC]
+    # Validates and stores the settings. Inputs: filename (string or scalar string tensor, must
+    # be non-empty unless a tensor), key and value dtypes, key_index and value_index (an index
+    # of at least minus two: whole line, line number, or column), optional vocab_size (must be
+    # positive if given), delimiter (default tab), op name, and value_index_offset (added to
+    # extracted values, default zero). Wraps the file name as a tracked asset.
+    # Raises a value error for an empty file name, indices below minus two, a line-number index
+    # with a non-int64 dtype, a whole-line index with a dtype that is neither integer nor
+    # string, or a non-positive vocab size. Returns nothing.
     """Constructs a table initializer object to populate from a text file.
 
     It generates one key-value pair per line. The type of table key and
@@ -758,6 +960,13 @@ class TextFileInitializer(TableInitializerBase):
     super(TextFileInitializer, self).__init__(key_dtype, value_dtype)
 
   def initialize(self, table):
+    # [FUNCTION DOC]
+    # Checks the table dtypes against this initializer, converts the tracked file name to a
+    # string tensor, and builds the op that loads the table from the text file with the stored
+    # key index, value index, vocab size (minus one if unknown), delimiter and offset.
+    # Adds the op to the table-initializer collection and, in graph mode with a constant file
+    # name, adds the file name to the asset-file-path collection. Returns the op.
+    # Raises a type error on dtype mismatch.
     """Initializes the table from a text file.
 
     Args:
@@ -788,6 +997,13 @@ class TextFileInitializer(TableInitializerBase):
 
   @property
   def _shared_name(self):
+    # [FUNCTION DOC]
+    # HELPER: shared-name provider used when the table resource is created.
+    # KNOWN ISSUE: overrides the base shared-name property but never makes it unique in eager
+    # mode; identical settings always share one resource.
+    # Builds a deterministic shared name from the original file name argument, the
+    # vocab size (only when set), key index, value index and offset (only when non-zero), so
+    # tables built from identical settings share a resource. Returns the name string.
     if self._vocab_size:
       # Keep the shared_name:
       # <table_type>_<filename>_<vocab_size>_<key_index>_<value_index>_<offset>
@@ -814,6 +1030,9 @@ class TextFileInitializer(TableInitializerBase):
 
 
 class TextFileStringTableInitializer(TextFileInitializer):
+  # [CLASS DOC]
+  # Convenience text-file initializer for id-to-string tables: keys are int64 (default: line
+  # number) and values are strings (default: whole line).
   """Table initializer for `int64` IDs to string tables from a text file."""
 
   def __init__(self,
@@ -823,6 +1042,12 @@ class TextFileStringTableInitializer(TextFileInitializer):
                vocab_size=None,
                delimiter="\t",
                name="text_file_string_table_init"):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says a type error is raised for an empty file name or wrong
+    # dtypes, but the parent constructor actually raises value errors.
+    # Delegates to the text-file initializer with key dtype int64 and value dtype string, passing
+    # file name, key column index (default line number), value column index (default whole line),
+    # optional vocab size, delimiter (default tab) and op name. Returns nothing.
     """Constructs an initializer for an id-to-string table from a text file.
 
     It populates a table that its key and value types are int64 and string,
@@ -865,6 +1090,9 @@ class TextFileStringTableInitializer(TextFileInitializer):
 
 
 class TextFileIdTableInitializer(TextFileInitializer):
+  # [CLASS DOC]
+  # Convenience text-file initializer for string-to-id tables: keys default to the whole line
+  # (dtype configurable, string by default) and values are int64 line numbers by default.
   """Table initializer for string to `int64` IDs tables from a text file."""
 
   def __init__(self,
@@ -875,6 +1103,13 @@ class TextFileIdTableInitializer(TextFileInitializer):
                delimiter="\t",
                name="text_file_id_table_init",
                key_dtype=dtypes.string):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says a type error is raised for an empty file name or wrong
+    # dtypes, but the parent constructor actually raises value errors.
+    # Delegates to the text-file initializer with the given key dtype (default string) and value
+    # dtype int64. Inputs: file name, key column index (default whole line), value column index
+    # (default line number), optional vocab size, delimiter (default tab), op name. Returns
+    # nothing.
     """Constructs an initializer for an string-to-id table from a text file.
 
     It populates a table that its key and value types are string and int64,
@@ -918,6 +1153,10 @@ class TextFileIdTableInitializer(TextFileInitializer):
 
 
 class HasherSpec(collections.namedtuple("HasherSpec", ["hasher", "key"])):
+  # [CLASS DOC]
+  # Immutable pair describing the hash function for out-of-vocabulary buckets: the hasher name
+  # ("fasthash", "stronghash" or "legacy") and an optional key (used only by the strong hash).
+  # Declares no extra slots.
   """A structure for the spec of the hashing function to use for hash buckets.
 
   `hasher` is the name of the hashing function to use (eg. "fasthash",
@@ -936,6 +1175,9 @@ FastHashSpec = HasherSpec("fasthash", None)  # pylint: disable=invalid-name
 
 
 class StrongHashSpec(HasherSpec):
+  # [CLASS DOC]
+  # Hasher spec for the keyed strong hash: the hasher name is fixed to "stronghash" and the key
+  # must be a pair of integers. Construction validates the key.
   """A structure to specify a key of the strong keyed hash spec.
 
   The strong hash requires a `key`, which is a list of 2 unsigned integer
@@ -948,6 +1190,12 @@ class StrongHashSpec(HasherSpec):
   __slots__ = ()
 
   def __new__(cls, key):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the class text says the key numbers must be unsigned, but the check accepts
+    # any integer types including negative values.
+    # Creates the spec. Input: key, a sequence of exactly two integers. Raises a value error if
+    # its length is not two, and a type error if either element is not an integral type.
+    # Returns a new spec with hasher name "stronghash" and that key.
     if len(key) != 2:
       raise ValueError(f"`key` must have size 2, received {len(key)}")
 
@@ -959,12 +1207,22 @@ class StrongHashSpec(HasherSpec):
 
 
 def _as_string(tensor):
+  # [FUNCTION DOC]
+  # HELPER: converts keys to strings before hashing into buckets. Returns the tensor unchanged
+  # if its base dtype is string, otherwise returns the string-converted tensor from the
+  # as-string op.
   if dtypes.string == tensor.dtype.base_dtype:
     return tensor
   return string_ops.as_string(tensor)
 
 
 class IdTableWithHashBuckets(LookupInterface):
+  # [CLASS DOC]
+  # Wrapper that gives a string-or-int64 to int64 id table out-of-vocabulary handling: unknown
+  # keys are hashed into a configurable number of extra buckets whose ids follow the base
+  # table's size. Holds the optional wrapped table, bucket count, hasher spec and table name.
+  # With no wrapped table every key is bucketed. Delegates resource creation, initialization and
+  # handle to the wrapped table.
   r"""String to Id table wrapper that assigns out-of-vocabulary keys to buckets.
 
   For example, if an instance of `IdTableWithHashBuckets` is initialized with a
@@ -1019,6 +1277,15 @@ class IdTableWithHashBuckets(LookupInterface):
                hasher_spec=FastHashSpec,
                name=None,
                key_dtype=None):
+    # [FUNCTION DOC]
+    # Validates and stores the configuration. Inputs: table (optional wrapped table, key dtype
+    # int64 or string and value dtype int64), num_oov_buckets, hasher_spec (default fast hash),
+    # name, key_dtype (defaults to the table's key dtype, or string without a table).
+    # Trailing slashes are stripped from the name; the stored table name is its last path part.
+    # Raises a type error for unsupported table key dtype, integer/non-integer mismatch between
+    # the lookup and table key dtypes, non-int64 table values, a key dtype that is neither
+    # integer nor string, or a hasher spec of the wrong type. Raises a value error if there is
+    # no table and bucket count is not positive. Returns nothing.
     """Construct a `IdTableWithHashBuckets` object.
 
     Args:
@@ -1077,11 +1344,17 @@ class IdTableWithHashBuckets(LookupInterface):
     super(IdTableWithHashBuckets, self).__init__(key_dtype, dtypes.int64)
 
   def _create_resource(self):
+    # [FUNCTION DOC]
+    # HELPER: delegates to the wrapped table's resource creation; returns nothing if there is
+    # no wrapped table.
     if self._table is not None:
       return self._table._create_resource()  # pylint: disable=protected-access
     return None
 
   def _initialize(self):
+    # [FUNCTION DOC]
+    # HELPER: returns the wrapped table's initialization op, or a no-op named init when there is
+    # no wrapped table.
     if self._table is not None:
       return self._table._initialize()  # pylint: disable=protected-access
     with ops.name_scope(None, "init"):
@@ -1089,6 +1362,9 @@ class IdTableWithHashBuckets(LookupInterface):
 
   @property
   def initializer(self):
+    # [FUNCTION DOC]
+    # Read-only property: the wrapped table's existing initialization op, or a new no-op when
+    # there is no wrapped table.
     if self._table is not None:
       return self._table._init_op  # pylint: disable=protected-access
     with ops.name_scope(None, "init"):
@@ -1097,19 +1373,29 @@ class IdTableWithHashBuckets(LookupInterface):
   @property
   @deprecated("2018-12-15", "Use `initializer` instead.")
   def init(self):
+    # [FUNCTION DOC]
+    # Deprecated alias of the initializer property; returns the same op and emits a deprecation
+    # warning.
     return self.initializer
 
   @property
   def resource_handle(self):
+    # [FUNCTION DOC]
+    # Read-only property: the wrapped table's resource handle, or nothing without a table.
     if self._table is not None:
       return self._table.resource_handle
     return None
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Read-only property: the table name (last path component), possibly nothing.
     return self._table_name
 
   def size(self, name=None):
+    # [FUNCTION DOC]
+    # Returns an int64 tensor: the wrapped table's size (zero without a table) plus the number
+    # of out-of-vocabulary buckets. Optional op name.
     """Compute the number of elements in this table."""
     with ops.name_scope(name, "%s_Size" % self.name):
       if self._table:
@@ -1119,6 +1405,11 @@ class IdTableWithHashBuckets(LookupInterface):
       return tsize + self._num_oov_buckets
 
   def _get_string_to_hash_bucket_fn(self, hasher_spec):
+    # [FUNCTION DOC]
+    # HELPER: maps a hasher spec to the string-hashing function to use. Fast hash gives the fast
+    # bucket op, legacy gives the legacy op, strong hash gives the strong op bound to the spec's
+    # key. Raises a type error if the argument is not a hasher spec, and a value error for an
+    # unknown hasher name. Returns the callable.
     """Returns the string_to_hash_bucket op to use based on `hasher_spec`."""
     if not isinstance(hasher_spec, HasherSpec):
       raise TypeError("`hasher_spec` must be of type HasherSpec, got "
@@ -1134,6 +1425,15 @@ class IdTableWithHashBuckets(LookupInterface):
         f"Found unknown hasher {hasher_spec.hasher} in `hasher_spec`")
 
   def lookup(self, keys, name=None):
+    # [FUNCTION DOC]
+    # Maps keys to ids. Keys may be dense, sparse or ragged (flat values used). Keys are cast
+    # to int64 when the wrapped table has int64 keys. With zero buckets, returns the wrapped
+    # table's lookup result. Otherwise hashes the string form of every key into a bucket using
+    # the configured hasher, and, if a wrapped table exists, uses the table id when the key is
+    # present (id differs from the table default) and the bucket id offset by the table size
+    # otherwise. Output keeps the input structure (sparse, ragged or dense).
+    # Raises a type error if the keys dtype differs from the table's lookup key dtype or the
+    # hasher spec is invalid. Optional op name.
     """Looks up `keys` in the table, outputs the corresponding values.
 
     It assigns out-of-vocabulary keys to buckets based in their hashes.
@@ -1189,6 +1489,13 @@ class IdTableWithHashBuckets(LookupInterface):
 
 @tf_export("lookup.StaticVocabularyTable", v1=[])
 class StaticVocabularyTable(LookupInterface):
+  # [CLASS DOC]
+  # Immutable string-or-int64 to int64 id table with out-of-vocabulary handling: keys found in
+  # the vocabulary (loaded by an initializer into an internal hash table with default minus one)
+  # get their id; other keys are hashed with the fast fingerprint hash into a fixed number of
+  # buckets whose ids start after the vocabulary size. Without an initializer all keys are
+  # bucketed. Holds the internal table, bucket count and table name; delegates resource
+  # creation, initialization and handle to the internal table.
   r"""String to Id table that assigns out-of-vocabulary keys to hash buckets.
 
   For example, if an instance of `StaticVocabularyTable` is initialized with a
@@ -1261,6 +1568,16 @@ class StaticVocabularyTable(LookupInterface):
                lookup_key_dtype=None,
                name=None,
                experimental_is_anonymous=False):
+    # [FUNCTION DOC]
+    # Validates arguments and builds the internal hash table. Inputs: initializer (optional
+    # table initializer with int64 or string keys and int64 values), num_oov_buckets (must be
+    # positive), lookup_key_dtype (defaults to the initializer key dtype, or string without an
+    # initializer), name (trailing slashes stripped), and the anonymous flag (default false).
+    # Raises a value error if the bucket count is not positive; raises a type error for an
+    # unsupported initializer key dtype, integer/non-integer mismatch, non-int64 initializer
+    # values, or a lookup key dtype that is neither integer nor string.
+    # Side effects: tracks the initializer if trackable, creates a hash table with default minus
+    # one (which creates a resource and an initialization op). Returns nothing.
     """Construct a `StaticVocabularyTable` object.
 
     Args:
@@ -1330,11 +1647,16 @@ class StaticVocabularyTable(LookupInterface):
     super(StaticVocabularyTable, self).__init__(lookup_key_dtype, dtypes.int64)
 
   def _create_resource(self):
+    # [FUNCTION DOC]
+    # HELPER: delegates to the internal table's resource creation; nothing if no internal table.
     if self._table is not None:
       return self._table._create_resource()  # pylint: disable=protected-access
     return None
 
   def _initialize(self):
+    # [FUNCTION DOC]
+    # HELPER: returns the internal table's initialization op, or a new no-op named init when
+    # there is no internal table.
     if self._table is not None:
       return self._table._initialize()  # pylint: disable=protected-access
     with ops.name_scope(None, "init"):
@@ -1342,15 +1664,22 @@ class StaticVocabularyTable(LookupInterface):
 
   @property
   def resource_handle(self):
+    # [FUNCTION DOC]
+    # Read-only property: the internal table's resource handle, or nothing without a table.
     if self._table is not None:
       return self._table.resource_handle
     return None
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Read-only property: the table name (last path component), possibly nothing.
     return self._table_name
 
   def size(self, name=None):
+    # [FUNCTION DOC]
+    # Returns an int64 tensor: the internal table's size (zero without a table) plus the number
+    # of out-of-vocabulary buckets. Optional op name.
     """Compute the number of elements in this table."""
     with ops.name_scope(name, "%s_Size" % self.name):
       if self._table:
@@ -1360,6 +1689,13 @@ class StaticVocabularyTable(LookupInterface):
       return tsize + self._num_oov_buckets
 
   def lookup(self, keys, name=None):
+    # [FUNCTION DOC]
+    # Maps keys (dense, sparse or ragged; flat values used) to int64 ids. Keys are cast to int64
+    # when the internal table has int64 keys. Every key is hashed (string form) into a bucket
+    # with the fast hash; if an internal table exists, keys present in it get their stored id
+    # and the rest get the bucket id offset by the table size; without a table the bucket id is
+    # the result. Output keeps the input structure. Raises a type error if the keys dtype
+    # differs from the table's lookup key dtype. Optional op name.
     """Looks up `keys` in the table, outputs the corresponding values.
 
     It assigns out-of-vocabulary keys to buckets based in their hashes.
@@ -1410,9 +1746,15 @@ class StaticVocabularyTable(LookupInterface):
 
 @tf_export(v1=["lookup.StaticVocabularyTable"])
 class StaticVocabularyTableV1(StaticVocabularyTable):
+  # [CLASS DOC]
+  # Graph-mode (v1) variant of the static vocabulary table: adds the initializer property
+  # exposing the initialization op for session-based running.
 
   @property
   def initializer(self):
+    # [FUNCTION DOC]
+    # Read-only property: the internal table's initialization op, or a new no-op when there is
+    # no internal table.
     if self._table is not None:
       return self._table._init_op  # pylint: disable=protected-access
     with ops.name_scope(None, "init"):
@@ -1429,6 +1771,20 @@ def index_table_from_file(vocabulary_file=None,
                           key_column_index=TextFileIndex.WHOLE_LINE,
                           value_column_index=TextFileIndex.LINE_NUMBER,
                           delimiter="\t"):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring tells the caller to run the table initializer in a session, but
+  # in eager mode the table is already initialized at construction; and key_dtype must be a
+  # dtype object (its integer property is read directly), not any dtype-like value.
+  # Builds a file-based vocabulary lookup table. Inputs: vocabulary_file (required, non-empty
+  # path or constant string tensor), num_oov_buckets (non-negative, default zero), vocab_size
+  # (optional, must be at least one), default_value (id for unknown keys when there are no
+  # buckets, default minus one), hasher_spec, key_dtype (integer or string, default string),
+  # name, key and value column indices and delimiter.
+  # Creates a static hash table fed by a text-file id initializer (integer keys are read as
+  # int64) inside name scopes. If the bucket count is positive, wraps it in an out-of-vocabulary
+  # bucket table. Returns the resulting table.
+  # Raises a value error for a missing or empty vocabulary file, negative bucket count or
+  # non-positive vocab size, and a type error for a key dtype that is neither integer nor string.
   """Returns a lookup table that converts a string tensor into int64 IDs.
 
   This operation constructs a lookup table to convert tensor of strings into
@@ -1547,6 +1903,17 @@ def index_table_from_tensor(vocabulary_list,
                             hasher_spec=FastHashSpec,
                             dtype=dtypes.string,
                             name=None):
+  # [FUNCTION DOC]
+  # Builds a vocabulary lookup table from an in-memory list or tensor of keys, the id being the
+  # position in the list. Inputs: vocabulary_list (required, one-dimensional, convertible to a
+  # tensor), num_oov_buckets (non-negative, default zero), default_value (default minus one),
+  # hasher_spec, dtype of lookup keys (integer or string, default string) and name.
+  # Integer keys are cast to int64. Creates a static hash table from a key-value tensor
+  # initializer (ids from a range cast to int64) and, if the bucket count is positive, wraps it
+  # in an out-of-vocabulary bucket table. Returns the table.
+  # Raises a value error if the list is missing, the bucket count is negative or the list
+  # dtype disagrees with the requested dtype; raises a type error if dtype is neither integer
+  # nor string.
   """Returns a lookup table that converts a string tensor into int64 IDs.
 
   This operation constructs a lookup table to convert tensor of strings into
@@ -1648,6 +2015,13 @@ def index_to_string_table_from_file(vocabulary_file,
                                     key_column_index=TextFileIndex.LINE_NUMBER,
                                     value_column_index=TextFileIndex.WHOLE_LINE,
                                     delimiter="\t"):
+  # [FUNCTION DOC]
+  # Builds a table mapping int64 indices to strings from a vocabulary file. Inputs:
+  # vocabulary_file (required, non-empty), vocab_size (optional, at least one), default_value
+  # (string for unknown indices, default "UNK"), name, key and value column indices (defaults:
+  # line number and whole line) and delimiter. Creates a text-file id-to-string initializer
+  # and returns a static hash table over it. Raises a value error for an empty file or invalid
+  # vocab size.
   """Returns a lookup table that maps a `Tensor` of indices into strings.
 
   This operation constructs a lookup table to map int64 indices into string
@@ -1736,6 +2110,12 @@ def index_to_string_table_from_file(vocabulary_file,
 def index_to_string_table_from_tensor(vocabulary_list,
                                       default_value="UNK",
                                       name=None):
+  # [FUNCTION DOC]
+  # Builds a table mapping int64 indices to strings from an in-memory string list. Inputs:
+  # vocabulary_list (required, one-dimensional strings), default_value (default "UNK") and name.
+  # Converts the list to a string tensor, uses its positions (as int64) as keys, and returns a
+  # static hash table fed by a key-value tensor initializer. Raises a value error if the list is
+  # missing.
   """Returns a lookup table that maps a `Tensor` of indices into strings.
 
   This operation constructs a lookup table to map int64 indices into string
@@ -1798,6 +2178,12 @@ def index_to_string_table_from_tensor(vocabulary_list,
 @tf_export("lookup.experimental.MutableHashTable")
 @saveable_compat.legacy_saveable_name("table")
 class MutableHashTable(LookupInterface):
+  # [CLASS DOC]
+  # Mutable hash table: entries can be inserted, removed, looked up and exported at any time;
+  # it is not initialized from an initializer. Holds the default value tensor (scalar or
+  # per-entry vector), key and value dtypes, name, checkpoint flag, anonymity flag and optional
+  # shared name. Supports checkpointing through trackable tensor serialization, plus a nested
+  # saveable for legacy checkpoints, and can copy itself to CPU for checkpoint saving.
   """A generic mutable hash table implementation.
 
   Data can be inserted by calling the `insert` method and removed by calling the
@@ -1833,6 +2219,17 @@ class MutableHashTable(LookupInterface):
                name="MutableHashTable",
                checkpoint=True,
                experimental_is_anonymous=False):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it returns a table object and raises a value error when
+    # checkpoint is true and no name is given; a constructor returns nothing and no such check
+    # exists in the code (the name has a default).
+    # Creates an empty mutable table. Inputs: key and value dtypes, default_value (converted to a
+    # tensor of the value dtype; its shape decides scalar or vector values), name (default
+    # "MutableHashTable"), checkpoint flag (default true) and anonymous flag (default false).
+    # Not anonymous: in eager mode a unique shared name is generated (which can leak memory per
+    # the source comment); otherwise none, so node-name sharing is used when checkpointing.
+    # Side effects: creates the table resource, and if checkpointing builds a saveable object
+    # and, in graph mode, adds it to the graph's saveable-objects collection.
     """Creates an empty `MutableHashTable` object.
 
     Creates a table, the type of its keys and values are specified by key_dtype
@@ -1883,6 +2280,12 @@ class MutableHashTable(LookupInterface):
         ops.add_to_collection(ops.GraphKeys.SAVEABLE_OBJECTS, saveable)
 
   def _create_resource(self):
+    # [FUNCTION DOC]
+    # HELPER: creates the mutable table resource. Chooses the anonymous or named kernel, and the
+    # scalar-value or vector-value (value shape from the default value) variant, based on the
+    # anonymity flag and the default value's rank. Named tables use node-name sharing when
+    # checkpointing without an explicit shared name. Records the table name (last component of
+    # the op name in graph mode, nothing in eager mode) and returns the resource handle.
     if self._is_anonymous:
       if self._default_value.get_shape().ndims == 0:
         table_ref = gen_lookup_ops.anonymous_mutable_hash_table(
@@ -1924,9 +2327,14 @@ class MutableHashTable(LookupInterface):
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Read-only property: the table's op name (last path component), nothing in eager mode.
     return self._table_name
 
   def size(self, name=None):
+    # [FUNCTION DOC]
+    # Returns a scalar int64 tensor with the number of entries, computed on the device holding
+    # the table resource. Optional op name.
     """Compute the number of elements in this table.
 
     Args:
@@ -1940,6 +2348,11 @@ class MutableHashTable(LookupInterface):
         return gen_lookup_ops.lookup_table_size_v2(self.resource_handle)
 
   def remove(self, keys, name=None):
+    # [FUNCTION DOC]
+    # Deletes the given keys (a tensor of any shape with the table's key dtype) and their
+    # values; absent keys are ignored. Optional op name. Returns the removal operation (or
+    # nothing useful in eager mode). Raises a type error if the keys dtype differs from the
+    # table's key dtype. Mutates table state when run.
     """Removes `keys` and its associated values from the table.
 
     If a key is not present in the table, it is silently ignored.
@@ -1966,6 +2379,13 @@ class MutableHashTable(LookupInterface):
     return op
 
   def lookup(self, keys, dynamic_default_values=None, name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says a type error is raised for mismatched key types, but the
+    # keys are converted to the key dtype so the error comes from tensor conversion.
+    # Looks up keys (anything convertible to the key dtype, any shape) and returns values with
+    # the keys' shape plus the value shape. Missing keys get dynamic_default_values if provided
+    # (matching the default's shape or the result's shape, giving per-key defaults), else the
+    # table's default value. Runs on the device holding the table. Optional op name.
     """Looks up `keys` in a table, outputs the corresponding values.
 
     The `default_value` is used for keys not present in the table.
@@ -2009,6 +2429,11 @@ class MutableHashTable(LookupInterface):
     return values
 
   def insert(self, keys, values, name=None):
+    # [FUNCTION DOC]
+    # Inserts or overwrites entries. Inputs: keys and values (convertible to the table's key and
+    # value dtypes; values must match the keys' shape plus value shape) and an optional op name.
+    # Returns the insertion operation. Conversion errors surface as type errors. Mutates the
+    # table when run.
     """Associates `keys` with `values`.
 
     Args:
@@ -2036,6 +2461,9 @@ class MutableHashTable(LookupInterface):
     return op
 
   def export(self, name=None):
+    # [FUNCTION DOC]
+    # Exports every entry using the export kernel on the table's device. Optional op name.
+    # Returns a pair (all keys tensor, all values tensor). No static shape is set on the values.
     """Returns tensors of all keys and values in the table.
 
     Args:
@@ -2053,11 +2481,17 @@ class MutableHashTable(LookupInterface):
     return exported_keys, exported_values
 
   def _serialize_to_tensors(self):
+    # [FUNCTION DOC]
+    # HELPER: checkpoint hook. Exports the table and returns a mapping from the names for keys
+    # and for values to the exported key and value tensors.
     """Implements checkpointing protocols for `Trackable`."""
     tensors = self.export()
     return {"-keys": tensors[0], "-values": tensors[1]}
 
   def _restore_from_tensors(self, restored_tensors):
+    # [FUNCTION DOC]
+    # HELPER: checkpoint hook. Takes a mapping holding restored keys and values tensors and
+    # bulk-imports them into the table on its device; returns the import operation.
     """Implements checkpointing protocols for `Trackable`."""
     with ops.name_scope("%s_table_restore" % self._name):
       with ops.colocate_with(self.resource_handle):
@@ -2067,6 +2501,10 @@ class MutableHashTable(LookupInterface):
             restored_tensors["-values"])
 
   def _copy_trackable_to_cpu(self, object_map):
+    # [FUNCTION DOC]
+    # HELPER: checkpoint hook. Given a mapping from original objects to their copies, creates a
+    # new table with the same configuration for this object if none exists yet, then copies
+    # this table's contents into that copy. Mutates the mapping. Returns nothing.
     """Implements checkpointing protocols for `Trackable`."""
     if self not in object_map:
       # If self is not already populated in object map, instantiate the copy
@@ -2085,9 +2523,18 @@ class MutableHashTable(LookupInterface):
 
     # This class is needed for `MutableHashTable(checkpoint=True)`.
   class _Saveable(BaseSaverBuilder.SaveableObject):
+    # [CLASS DOC]
+    # HELPER: legacy saveable object used when a checkpointed mutable table is saved or restored
+    # through the old saver; it saves the exported keys and values as two named specs.
+    # KNOWN ISSUE: the docstring below names DenseHashTable, but this class belongs to
+    # MutableHashTable (copy and paste error).
     """SaveableObject implementation for DenseHashTable."""
 
     def __init__(self, table, name, table_name=None):
+      # [FUNCTION DOC]
+      # HELPER: builds two save specs from the table's exported keys and values, named with the
+      # given name plus keys and values suffixes, remembers the table name (defaults to the
+      # name) and calls the saveable base constructor. Exports the table, creating ops.
       tensors = table.export()
       specs = [
           BaseSaverBuilder.SaveSpec(tensors[0], "", name + "-keys"),
@@ -2098,6 +2545,9 @@ class MutableHashTable(LookupInterface):
       super(MutableHashTable._Saveable, self).__init__(table, specs, name)
 
     def restore(self, restored_tensors, restored_shapes):
+      # [FUNCTION DOC]
+      # HELPER: restores the table from a pair (keys, values) of restored tensors by bulk
+      # import on the table's device. The shapes argument is ignored. Returns the import op.
       del restored_shapes  # unused
       # pylint: disable=protected-access
       with ops.name_scope("%s_table_restore" % self.table_name):
@@ -2110,6 +2560,12 @@ class MutableHashTable(LookupInterface):
 @tf_export("lookup.experimental.DenseHashTable")
 @saveable_compat.legacy_saveable_name("table")
 class DenseHashTable(LookupInterface):
+  # [CLASS DOC]
+  # Mutable open-addressing hash table with faster operations and larger memory use than the
+  # mutable hash table. Needs two reserved keys (empty and deleted) that may never be inserted,
+  # removed or looked up. Holds default value, dtypes, reserved keys, initial bucket count, name,
+  # checkpoint and anonymity flags. Supports insert (or assign), erase, remove, lookup, size,
+  # export, checkpoint hooks and a nested saveable for legacy checkpoints.
   """A mutable hash table with faster lookups and higher memory usage.
 
   Data can be inserted by calling the `insert` method and removed by calling the
@@ -2154,6 +2610,17 @@ class DenseHashTable(LookupInterface):
                name="MutableDenseHashTable",
                checkpoint=True,
                experimental_is_anonymous=False):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it returns a table object and raises a value error when
+    # checkpoint is true and no name is given; a constructor returns nothing and no such check
+    # exists in the code (the name has a default).
+    # Creates an empty dense table. Inputs: key and value dtypes, default_value (converted to a
+    # tensor of the value dtype), empty_key and deleted_key (reserved keys, converted to the key
+    # dtype when the resource is created), initial_num_buckets (optional; the kernel default is
+    # large), name (default "MutableDenseHashTable"), checkpoint flag (default true) and anonymous
+    # flag (default false). Not anonymous: in eager mode a unique shared name is generated (can
+    # leak memory per the source comment). Side effects: creates the table resource and, if
+    # checkpointing, a saveable object added to the saveable-objects collection in graph mode.
     """Creates an empty `DenseHashTable` object.
 
     Creates a table, the type of its keys and values are specified by key_dtype
@@ -2220,6 +2687,11 @@ class DenseHashTable(LookupInterface):
         ops.add_to_collection(ops.GraphKeys.SAVEABLE_OBJECTS, saveable)
 
   def _create_resource(self):
+    # [FUNCTION DOC]
+    # HELPER: converts the empty and deleted keys to tensors of the key dtype and creates the
+    # dense table resource using the anonymous or named kernel (named tables use node-name
+    # sharing when checkpointing without a shared name). Records the table name (last component
+    # of the op name in graph mode, nothing in eager mode). Returns the resource handle.
     empty_key = ops.convert_to_tensor(
         self._empty_key, dtype=self._key_dtype, name="empty_key")
     deleted_key = ops.convert_to_tensor(
@@ -2254,9 +2726,14 @@ class DenseHashTable(LookupInterface):
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Read-only property: the table's op name (last path component), nothing in eager mode.
     return self._table_name
 
   def size(self, name=None):
+    # [FUNCTION DOC]
+    # Returns a scalar int64 tensor with the number of entries, computed on the device holding
+    # the table resource. Optional op name.
     """Compute the number of elements in this table.
 
     Args:
@@ -2270,6 +2747,10 @@ class DenseHashTable(LookupInterface):
         return gen_lookup_ops.lookup_table_size_v2(self.resource_handle)
 
   def lookup(self, keys, name=None):
+    # [FUNCTION DOC]
+    # Looks up keys (anything convertible to the key dtype, any shape) and returns values with
+    # the keys' shape plus the value shape; missing keys get the table default value. Runs on the
+    # table's device. Optional op name. Conversion problems surface as type errors.
     """Looks up `keys` in a table, outputs the corresponding values.
 
     The `default_value` is used for keys not present in the table.
@@ -2296,6 +2777,10 @@ class DenseHashTable(LookupInterface):
     return values
 
   def insert_or_assign(self, keys, values, name=None):
+    # [FUNCTION DOC]
+    # Inserts or overwrites entries. Inputs: keys and values (convertible to the table dtypes;
+    # values must match keys' shape plus value shape) and an optional op name. Returns the
+    # insertion operation. Conversion errors surface as type errors. Mutates the table when run.
     """Associates `keys` with `values`.
 
     Args:
@@ -2323,6 +2808,9 @@ class DenseHashTable(LookupInterface):
       return op
 
   def insert(self, keys, values, name=None):
+    # [FUNCTION DOC]
+    # Alias of insert_or_assign: passes keys, values and the optional name through and returns
+    # the insertion operation.
     """Associates `keys` with `values`.
 
     Args:
@@ -2342,6 +2830,11 @@ class DenseHashTable(LookupInterface):
     return self.insert_or_assign(keys, values, name)
 
   def erase(self, keys, name=None):
+    # [FUNCTION DOC]
+    # Deletes the given keys (tensor with the table's key dtype) and their values; absent keys
+    # are ignored. Optional op name. Returns the removal operation. Raises a type error if the
+    # keys dtype differs from the table's key dtype. Mutates the table when run. Unlike lookup,
+    # keys are not converted, so a plain python list is not accepted.
     """Removes `keys` and its associated values from the table.
 
     If a key is not present in the table, it is silently ignored.
@@ -2369,6 +2862,9 @@ class DenseHashTable(LookupInterface):
     return op
 
   def remove(self, keys, name=None):
+    # [FUNCTION DOC]
+    # Alias of erase: passes keys and the optional name through and returns the removal
+    # operation; raises a type error on key dtype mismatch.
     """Removes `keys` and its associated values from the table.
 
     If a key is not present in the table, it is silently ignored.
@@ -2387,6 +2883,9 @@ class DenseHashTable(LookupInterface):
     return self.erase(keys, name)
 
   def export(self, name=None):
+    # [FUNCTION DOC]
+    # Exports every entry using the export kernel on the table's device. Optional op name.
+    # Returns a pair (all keys tensor, all values tensor).
     """Returns tensors of all keys and values in the table.
 
     Args:
@@ -2405,11 +2904,17 @@ class DenseHashTable(LookupInterface):
     return exported_keys, exported_values
 
   def _serialize_to_tensors(self):
+    # [FUNCTION DOC]
+    # HELPER: checkpoint hook. Exports the table and returns a mapping from the names for keys
+    # and for values to the exported key and value tensors.
     """Implements checkpointing interface in `Trackable`."""
     tensors = self.export()
     return {"-keys": tensors[0], "-values": tensors[1]}
 
   def _restore_from_tensors(self, restored_tensors):
+    # [FUNCTION DOC]
+    # HELPER: checkpoint hook. Takes a mapping holding restored keys and values tensors and
+    # bulk-imports them into the table on its device; returns the import operation.
     """Implements checkpointing interface in `Trackable`."""
     with ops.name_scope("%s_table_restore" % self._name):
       with ops.colocate_with(self.resource_handle):
@@ -2419,6 +2924,10 @@ class DenseHashTable(LookupInterface):
             restored_tensors["-values"])
 
   def _copy_trackable_to_cpu(self, object_map):
+    # [FUNCTION DOC]
+    # HELPER: checkpoint hook. Given a mapping from original objects to their copies, creates a
+    # new table with the same configuration for this object if none exists yet, then copies
+    # this table's contents into that copy. Mutates the mapping. Returns nothing.
     """Implements checkpointing protocols for `Trackable`."""
     if self not in object_map:
       # If self is not already populated in object map, instantiate the copy
@@ -2440,9 +2949,16 @@ class DenseHashTable(LookupInterface):
 
   # This class is needed for `DenseHashTable(checkpoint=True)`.
   class _Saveable(BaseSaverBuilder.SaveableObject):
+    # [CLASS DOC]
+    # HELPER: legacy saveable object used when a checkpointed dense table is saved or restored
+    # through the old saver; it saves the exported keys and values as two named specs.
     """SaveableObject implementation for DenseHashTable."""
 
     def __init__(self, table, name, table_name=None):
+      # [FUNCTION DOC]
+      # HELPER: builds two save specs from the table's exported keys and values, named with the
+      # given name plus keys and values suffixes, remembers the table name (defaults to the
+      # name) and calls the saveable base constructor. Exports the table, creating ops.
       tensors = table.export()
       specs = [
           BaseSaverBuilder.SaveSpec(tensors[0], "", name + "-keys"),
@@ -2453,6 +2969,9 @@ class DenseHashTable(LookupInterface):
       super(DenseHashTable._Saveable, self).__init__(table, specs, name)
 
     def restore(self, restored_tensors, restored_shapes):
+      # [FUNCTION DOC]
+      # HELPER: restores the table from a pair (keys, values) of restored tensors by bulk
+      # import on the table's device. The shapes argument is ignored. Returns the import op.
       del restored_shapes  # unused
       # pylint: disable=protected-access
       with ops.name_scope("%s_table_restore" % self.table_name):
