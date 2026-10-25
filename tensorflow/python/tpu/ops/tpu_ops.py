@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Python wrappers for TPU operations. Re-exports everything from the generated TPU op module and
+# adds friendlier wrappers: cross-replica sum, all-to-all and collective permute across replicas,
+# infeed dequeue ops with infeed data type validation, and enqueue/send ops for TPU embedding
+# (integer, sparse, sparse tensor, ragged tensor and arbitrary tensor batches, and gradients).
+# Import-time side effects: marks the replicated input op as not differentiable; registers
+# gradient functions for the all-to-all, collective permute, cross replica sum and TPU embedding
+# activations ops; exports the cross replica sum function under the version one tpu namespace; and
+# replaces the documentation text of the embedding wrappers with the generated op documentation.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,6 +39,10 @@ ops.NotDifferentiable("TPUReplicatedInput")
 
 
 def _create_default_group_assignment():
+  # [FUNCTION DOC]
+  # HELPER: supplies the default replica grouping for cross-replica collectives.
+  # Reads the shard count from the current TPU context; if unset, logs a warning and assumes one.
+  # Returns a list holding a single group listing all replica indices from zero.
   num_shards = tpu_function.get_tpu_context().number_of_shards
   if num_shards is None:
     logging.warning(
@@ -46,6 +59,13 @@ def all_to_all(x,
                split_count,
                group_assignment=None,
                name=None):
+  # [FUNCTION DOC]
+  # Adds an all-to-all op that splits the local tensor along one dimension, sends the pieces to
+  # the replicas of its group, and concatenates received pieces along another dimension.
+  # Inputs: x (local tensor), concat_dimension and split_dimension (dimension numbers),
+  # split_count (number of pieces, equal to the group size), group_assignment (optional list of
+  # replica groups; defaults to one group of all replicas), name (optional op name).
+  # Returns the resulting tensor. Side effect: adds a graph op.
   """Exchange data across TPU replicas.
 
   Args:
@@ -75,6 +95,10 @@ def all_to_all(x,
 
 @ops.RegisterGradient("AllToAll")
 def _all_to_all_grad(op, grad):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient function for the all-to-all op.
+  # Inputs: the forward op and the incoming gradient. Returns a list with another all-to-all of
+  # the gradient with split and concat dimensions swapped, and nothing for the group assignment.
   # The gradient of a all-to-all is also a all-to-all but the
   # split_dimension and concat_dimension is swapped.
   # The gradient with respect to group_assignment is None.
@@ -90,6 +114,11 @@ def _all_to_all_grad(op, grad):
 
 @tf_export(v1=["tpu.cross_replica_sum"])
 def cross_replica_sum(x, group_assignment=None, name=None):
+  # [FUNCTION DOC]
+  # Adds an op summing the tensor across TPU replicas within each group. Inputs: x (local
+  # tensor), group_assignment (optional list of replica groups; defaults to one group of all
+  # replicas, with a warning if the shard count is unknown), name (optional). Returns the summed
+  # tensor. Exported in the version one tpu namespace.
   """Sum the input tensor across replicas according to group_assignment.
 
   Args:
@@ -109,6 +138,11 @@ def cross_replica_sum(x, group_assignment=None, name=None):
 
 
 def collective_permute(x, source_target_pairs, name=None):
+  # [FUNCTION DOC]
+  # Adds an op that sends each replica's tensor to another replica. Inputs: x (local tensor),
+  # source_target_pairs (list of source and target replica id pairs; each id at most once per
+  # column), name (optional). Replicas that are not a target receive zeros. Returns the permuted
+  # tensor.
   """Permute the input tensor across replicas given source_target_pairs.
 
   For each source_target_pair <a, b>, we send replica a's input to replica b.
@@ -136,6 +170,10 @@ def collective_permute(x, source_target_pairs, name=None):
 
 @ops.RegisterGradient("CollectivePermute")
 def _collective_permute_grad(op, grad):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient function for collective permute. Reverses the source and target
+  # columns of the pairs input and permutes the gradient with them. Returns a list with that
+  # result and nothing for the pairs input.
   # The gradient of a collective permute operation is also a collective
   # permute, but with source/target pairs reversed. The gradient with respect
   # to input argument `source_target_pairs` is `None`.
@@ -145,6 +183,10 @@ def _collective_permute_grad(op, grad):
 
 @ops.RegisterGradient("CrossReplicaSum")
 def _cross_replica_sum_grad(op, grad):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient function for cross replica sum. Returns a list with another
+  # cross replica sum of the gradient using the same group assignment, and nothing for the
+  # group assignment input.
   # The gradient of a cross replica sum is also a cross-replica sum.
   # The gradient with respect to group_assignment is None.
   return [gen_tpu_ops.cross_replica_sum(grad, op.inputs[1]), None]
@@ -159,6 +201,15 @@ _SUPPORTED_INFEED_DTYPES = frozenset([
 
 @ops.RegisterGradient("TPUEmbeddingActivations")
 def _embedding_activations_grad(activations_op, grad_wrt_activations):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient function for TPU embedding activations.
+  # Inputs: the activations op and the gradient with respect to its output. Looks up the graph
+  # collection of per-table gradient slots named by the op's table id and stores an identity of the
+  # gradient at the op's lookup id. Raises a runtime error if the collection is empty (gradients
+  # requested outside training mode), if the lookup id is out of range, or if the slot is already
+  # filled (duplicate gradient computations; the message includes the earlier creation traceback).
+  # Returns a list of float zero tensors, one shaped like each input of the op.
+  # Side effect: mutates the graph collection.
   """Saves the gradient of embedding activations ops in a graph collection."""
   g = ops.get_default_graph()
   table_id = activations_op.get_attr("table_id")
@@ -202,6 +253,11 @@ def _embedding_activations_grad(activations_op, grad_wrt_activations):
 
 
 def infeed_dequeue(dtype, shape, name=None):
+  # [FUNCTION DOC]
+  # Adds a placeholder op for one tensor fed through the TPU infeed. Inputs: dtype (element
+  # type), shape (tensor shape), name (optional). Raises a type error if the data type is not in
+  # the supported infeed set (boolean, several integer types, bfloat16, float32, complex64).
+  # Returns the tensor produced by the op.
   """A placeholder op for a value that will be fed into the computation.
 
   Args:
@@ -227,6 +283,10 @@ def infeed_dequeue(dtype, shape, name=None):
 
 # pylint: disable=redefined-outer-name
 def infeed_dequeue_tuple(dtypes, shapes, name=None):
+  # [FUNCTION DOC]
+  # Adds a placeholder op for a tuple of tensors fed together through the TPU infeed. Inputs:
+  # dtypes (list of element types), shapes (list of shapes), name (optional). Raises a type
+  # error naming the first type not in the supported infeed set. Returns the list of tensors.
   """A placeholder op for values fed into the TPU simultaneously as a tuple.
 
   Args:
@@ -259,6 +319,12 @@ def send_tpu_embedding_gradients(inputs,
                                  config,
                                  learning_rates=None,
                                  name=None):
+  # [FUNCTION DOC]
+  # Adds an op that sends embedding activation gradients to the TPU embedding layer so tables
+  # are updated. Inputs: inputs (list of gradient tensors), config (serialized embedding
+  # configuration), learning_rates (optional list of dynamic learning rates; empty when not
+  # given), name (optional). Returns the created operation. The function documentation is later
+  # replaced by the generated op documentation.
   """A placeholder op for feeding per-sample gradients to the embedding layer.
 
   Args:
@@ -295,6 +361,11 @@ def enqueue_tpu_embedding_integer_batch(batch,
                                         device_ordinal,
                                         mode_override=None,
                                         name=None):
+  # [FUNCTION DOC]
+  # Adds an op enqueueing a batch of embedding ids (one rank one tensor per table) to the TPU.
+  # Inputs: batch, device_ordinal (target core), mode_override (optional; defaults to the
+  # unspecified mode so the configured mode is used), name (optional). Returns the created
+  # operation. The documentation is later replaced by the generated op documentation.
   """A placeholder op for enqueueing embedding IDs to the TPU.
 
   Args:
@@ -333,6 +404,13 @@ def enqueue_tpu_embedding_sparse_batch(sample_indices,
                                        combiners=None,
                                        mode_override=None,
                                        name=None):
+  # [FUNCTION DOC]
+  # Adds an op enqueueing sparse embedding input to the TPU. Inputs: sample_indices (rank one
+  # tensors giving the example and feature position of each value), embedding_indices (table
+  # indices), aggregation_weights (per-value weights), device_ordinal (target core), combiners
+  # (optional per-table normalization, sum by default in the op), mode_override (optional;
+  # defaults to unspecified), name (optional). Returns the created operation.
+  # The documentation is later replaced by the generated op documentation.
   """A placeholder op for enqueueing embedding IDs to the TPU.
 
   Args:
@@ -393,6 +471,13 @@ def enqueue_tpu_embedding_sparse_tensor_batch(sample_indices,
                                               combiners=None,
                                               mode_override=None,
                                               name=None):
+  # [FUNCTION DOC]
+  # Adds an op enqueueing sparse tensor embedding input to the TPU. Inputs: sample_indices (rank
+  # two index tensors), embedding_indices, aggregation_weights, table_ids (table per input),
+  # device_ordinal, max_sequence_lengths (optional; none treated as all non-sequence),
+  # num_features (optional), combiners (optional), mode_override (optional; defaults to
+  # unspecified), name (optional). Returns the created operation.
+  # The documentation is later replaced by the generated op documentation.
   """A placeholder op for enqueueing embedding IDs to the TPU.
 
   Args:
@@ -473,6 +558,14 @@ def enqueue_tpu_embedding_ragged_tensor_batch(sample_splits,
                                               combiners=None,
                                               mode_override=None,
                                               name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring lists the supported override modes as including training, while
+  # the other enqueue wrappers document the train mode; the two spellings disagree.
+  # Adds an op enqueueing ragged tensor embedding input to the TPU. Inputs: sample_splits (row
+  # split tensors), embedding_indices, aggregation_weights, table_ids, device_ordinal,
+  # max_sequence_lengths (optional), num_features (optional), combiners (optional),
+  # mode_override (optional; defaults to unspecified), name (optional). Returns the created
+  # operation. The documentation is later replaced by the generated op documentation.
   """A placeholder op for enqueueing embedding IDs to the TPU.
 
   Args:
@@ -549,6 +642,13 @@ def enqueue_tpu_embedding_arbitrary_tensor_batch(sample_indices_or_row_splits,
                                                  combiners=None,
                                                  mode_override=None,
                                                  name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring lists the training mode name while the integer batch wrapper
+  # documents the train mode; the two spellings disagree.
+  # Adds an op enqueueing embedding input of arbitrary shape to the TPU, given either rank two
+  # sample indices or rank one row splits per input. Inputs: sample_indices_or_row_splits,
+  # embedding_indices, aggregation_weights, device_ordinal, combiners (optional), mode_override
+  # (optional; defaults to unspecified), name (optional). Returns the created operation.
   """A placeholder op for enqueueing embedding IDs to the TPU.
 
   Args:

@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: packaging script for the standalone cloud-tpu-client pip distribution.
+# Importing or running it immediately calls the setuptools setup routine with package metadata
+# (name, description, classifiers, Apache license, keywords) and pinned dependencies on the Google
+# API client and oauth2client. The version is read from the cloud_tpu_client version module with
+# dashes removed. It has no functions; running it as part of a build creates distribution artifacts.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

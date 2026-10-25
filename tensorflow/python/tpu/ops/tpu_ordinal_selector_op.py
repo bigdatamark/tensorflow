@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Placeholder module intended for operations that select which TPU core to run on. It currently
+# contains only a docstring: no functions, classes or import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

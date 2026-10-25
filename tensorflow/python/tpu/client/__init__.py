@@ -1,3 +1,7 @@
+# [PACKAGE DOC]
+# Cloud TPU client package. Re-exports the package version string from the version module and the
+# Client class from the client module, which talks to the Cloud TPU service to query and manage
+# TPU nodes. Importing it has no side effects beyond importing those submodules.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

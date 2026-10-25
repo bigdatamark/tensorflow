@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Command-line tool that captures a Cloud TPU profile or monitors a TPU. Defines flags for the
+# cloud project, zone, TPU name, profiler service address, worker list, log directory, duration,
+# tracing retries, host tracer level, monitoring level and number of queries (two are deprecated
+# and ignored). Resolves the TPU service address (from the flag or a cluster resolver), then
+# either prints monitoring samples or writes a trace to the log directory. Exits the process on
+# invalid usage. Import-time side effect: flag definitions. Run as a script it starts the app.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -80,6 +87,11 @@ flags.DEFINE_boolean('display_timestamp', True, 'Deprecated.')
 
 
 def get_workers_list(cluster_resolver):
+  # [FUNCTION DOC]
+  # Input: a TPU cluster resolver. Gets its cluster spec and, for every task index of the worker
+  # job, takes the task address and rewrites the TPU port 8470 to the profiler port 8466.
+  # Returns the addresses joined by commas. Raises an unavailable error when the cluster spec is
+  # empty (client not running in the cloud environment).
   """Returns a comma separated list of TPU worker host:port pairs.
 
   Gets cluster_spec from cluster_resolver. Use the worker's task indices to
@@ -110,6 +122,12 @@ def get_workers_list(cluster_resolver):
 
 
 def monitoring_helper(service_addr, duration_ms, monitoring_level, num_queries):
+  # [FUNCTION DOC]
+  # HELPER: monitoring loop of the profiler command-line tool.
+  # Inputs: service_addr (profiler service address), duration_ms (length of each sample),
+  # monitoring_level (one or two), num_queries (number of samples). Exits the process with a
+  # message if the level is outside one to two. Otherwise queries the profiler service for each
+  # sample and prints the result. Returns nothing.
   """Helper function to print monitoring results.
 
   Helper function to print monitoring results for num_queries times.
@@ -130,10 +148,26 @@ def monitoring_helper(service_addr, duration_ms, monitoring_level, num_queries):
 
 
 def run_main():
+  # [FUNCTION DOC]
+  # HELPER: script entry point. Starts the absl application runner with the main function,
+  # which parses flags and exits the process when done.
   app.run(main)
 
 
 def main(unused_argv=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the monitoring message prints the raw duration flag (possibly zero) rather than
+  # the effective duration used. The deprecated flags are never read. When both address flags are
+  # set only a warning is logged.
+  # Main routine of the profiler tool; the argument is ignored. Sets logging to info, prints the
+  # TensorFlow and profiler versions, and exits if TensorFlow is older than 2.2.0 or neither the
+  # service address nor the TPU name is given. Resolves the service address (from the flag, or via
+  # a TPU cluster resolver, exiting if the TPU cannot be found) and normalizes it to the profiler
+  # port without the grpc prefix. The worker list comes from its flag or the resolver. A
+  # non-positive duration becomes 1000 ms. With a positive monitoring level it prints monitoring
+  # samples. Otherwise requires the log directory (creating it if needed) and captures a trace,
+  # passing profiler options (host tracer level) only for TensorFlow 2.3.0 or newer; exits
+  # quietly if the service is unavailable. Returns nothing.
   logging.set_verbosity(logging.INFO)
   tf_version = versions.__version__
   print('TensorFlow version %s detected' % tf_version)

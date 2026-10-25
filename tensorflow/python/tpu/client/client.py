@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Cloud TPU client: resolves a TPU name to network endpoints and queries TPU state, health,
+# symptoms, runtime version and accelerator type, either through the Cloud TPU API or, for direct
+# grpc addresses, without the API. Also can wait for health and switch the TPU software version.
+# Exposes the Client class plus private helpers for environment variables and GCE metadata.
+# Import-time side effects: tries to import the optional Google API client and oauth2client
+# libraries (recording whether they are installed) and defines two boolean command-line flags,
+# runtime_oom_exit and hbm_oom_exit, which control whether recent OOM symptoms mark the TPU as
+# not recoverable.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -51,6 +60,9 @@ _VERSION_SWITCHER_ENDPOINT = 'http://{}:8475/requestversion'
 
 
 def _utcnow():
+  # [FUNCTION DOC]
+  # HELPER: time source for OOM age checks, separated so tests can replace it.
+  # Takes nothing and returns the current UTC time as a naive datetime. No side effects.
   """A wrapper function around datetime.datetime.utcnow.
 
   This function is created for unit testing purpose. It's not easy to do
@@ -63,10 +75,18 @@ def _utcnow():
 
 
 def _environment_discovery_url():
+  # [FUNCTION DOC]
+  # HELPER: reads the optional API discovery URL override for the client.
+  # Returns the value of the discovery URL environment variable, or nothing if it is not set.
   return os.environ.get(_DISCOVERY_SERVICE_URL_ENV_VARIABLE)
 
 
 def _gce_metadata_endpoint():
+  # [FUNCTION DOC]
+  # HELPER: builds the base URL of the GCE metadata server for metadata requests.
+  # Uses the metadata host environment variable if set and non-empty, else the metadata IP
+  # environment variable, else the default metadata host name. Returns the host prefixed with
+  # the http scheme.
   endpoint = os.environ.get(_GCE_METADATA_ENDPOINT_ENV_VARIABLE)
   if not endpoint:
     endpoint = os.environ.get(
@@ -76,6 +96,11 @@ def _gce_metadata_endpoint():
 
 
 def _request_compute_metadata(path):
+  # [FUNCTION DOC]
+  # HELPER: fetches one value from the GCE metadata server (project id, zone, local ip).
+  # Input: path, the metadata path relative to the version one compute metadata root. Sends an
+  # HTTP request with the Google metadata flavor header and returns the response body as text.
+  # Side effect: network access; network errors from the HTTP library propagate to the caller.
   req = urllib.request.Request(
       '%s/computeMetadata/v1/%s' % (_gce_metadata_endpoint(), path),
       headers={'Metadata-Flavor': 'Google'})
@@ -84,6 +109,11 @@ def _request_compute_metadata(path):
 
 
 def _environment_var_to_network_endpoints(endpoints):
+  # [FUNCTION DOC]
+  # HELPER: parses a comma separated list of TPU addresses into endpoint records.
+  # Input: endpoints, a string of addresses, each optionally prefixed with the grpc scheme and
+  # optionally followed by a colon and port. Yields, per address, a mapping with the ip address
+  # and the port (the default TPU port when none is given). No side effects.
   """Yields a dict with ip address and port."""
   for endpoint in endpoints.split(','):
     grpc_prefix = 'grpc://'
@@ -101,6 +131,10 @@ def _environment_var_to_network_endpoints(endpoints):
 
 
 def _get_tpu_node_config():
+  # [FUNCTION DOC]
+  # HELPER: reads the TPU configuration from the TPU config environment variable.
+  # Returns the parsed JSON mapping if the variable is set and non-empty, otherwise nothing.
+  # Raises a JSON decoding error if the variable holds invalid JSON.
   tpu_config_env = os.environ.get(_DEFAULT_TPUCONFIG_VARIABLE)
   if tpu_config_env:
     return json.loads(tpu_config_env)
@@ -108,6 +142,11 @@ def _get_tpu_node_config():
 
 
 def _get_tpu_name(tpu):
+  # [FUNCTION DOC]
+  # HELPER: determines the TPU name for the client.
+  # Input: tpu, an explicit name (returned as is if non-empty). Otherwise checks the GKE
+  # endpoints environment variable and then the TPU name environment variable, in that order,
+  # returning the first one present. Returns nothing if none is available.
   if tpu:
     return tpu
 
@@ -118,12 +157,21 @@ def _get_tpu_name(tpu):
 
 
 def _as_text(s):
+  # [FUNCTION DOC]
+  # HELPER: converts bytes to text. Input: a byte string or any other value. Byte strings are
+  # decoded as UTF-8; anything else is returned unchanged.
   if isinstance(s, bytes):
     return s.decode('utf-8')
   return s
 
 
 class Client:
+  # [CLASS DOC]
+  # Client for the Cloud TPU API used to resolve a TPU name to network endpoints and to query
+  # its state, health, symptoms, runtime version and accelerator type. It stores the TPU name,
+  # whether the API is used (false when the name is a direct grpc address), an optional service
+  # object, credentials, project, zone and discovery URL. Created with a name or from
+  # environment variables; usable as a context manager, which does nothing on entry or exit.
   """Client for working with the Cloud TPU API.
 
   This client is intended to be used for resolving tpu name to ip addresses.
@@ -139,6 +187,15 @@ class Client:
                credentials='default',
                service=None,
                discovery_url=None):
+    # [FUNCTION DOC]
+    # Creates a client. Inputs (all optional): tpu (name, grpc address, or a single-item list;
+    # falls back to environment variables and the TPU config), zone, project (auto-detected from
+    # GCE metadata when missing and the API is used; also may come from the TPU config),
+    # credentials (default means application default credentials), service (prebuilt API object
+    # to use instead of building one), discovery_url (API discovery override; the environment
+    # variable takes precedence). Raises a value error for an empty list or when no name can be
+    # found, and a not-implemented error for a list of more than one TPU. Side effect: may call
+    # the GCE metadata server.
     if isinstance(tpu, list):
       if not tpu:
         raise ValueError('At least one TPU must be specified.')
@@ -183,10 +240,18 @@ class Client:
       self._discovery_url = _environment_discovery_url() or discovery_url
 
   def _symptom_msg(self, msg):
+    # [FUNCTION DOC]
+    # HELPER: formats log messages about TPU symptoms. Input: message text. Returns it prefixed
+    # with the symptom label.
     """Return the structured Symptom message."""
     return 'Symptom: ' + msg
 
   def _oom_event(self, symptoms):
+    # [FUNCTION DOC]
+    # HELPER: supports the recoverable check. Input: symptoms, a list of symptom records (may be
+    # empty or nothing). Scans from newest to oldest for out-of-memory records and returns true,
+    # after logging a warning, if one was created within the last ninety seconds; otherwise false.
+    # Creation times are parsed as UTC timestamps without fractional seconds.
     """Check if a runtime OOM event is reported."""
     if not symptoms:
       return False
@@ -209,6 +274,11 @@ class Client:
     return False
 
   def _hbm_oom_event(self, symptoms):
+    # [FUNCTION DOC]
+    # HELPER: supports the recoverable check. Same as the runtime out-of-memory check but for
+    # high-bandwidth-memory out-of-memory symptoms. Input: list of symptom records (may be empty
+    # or nothing). Returns true, after logging a warning, if one was created within the last
+    # ninety seconds; otherwise false.
     """Check if a HBM OOM event is reported."""
     if not symptoms:
       return False
@@ -231,6 +301,13 @@ class Client:
     return False
 
   def _tpu_service(self):
+    # [FUNCTION DOC]
+    # HELPER: obtains the Cloud TPU API object for other methods.
+    # Returns the user-supplied service if one was given; otherwise builds a fresh version one
+    # TPU API object (using application default credentials unless credentials were given, and
+    # the discovery URL if configured, with discovery caching off). Raises a runtime error if the
+    # Google API client libraries are not installed. Side effect: may contact credential and
+    # discovery services.
     """Creates a new Cloud TPU API object.
 
     This works around an issue where the underlying HTTP connection sometimes
@@ -267,11 +344,19 @@ class Client:
           'tpu', 'v1', credentials=credentials, cache_discovery=False)
 
   def _full_name(self):
+    # [FUNCTION DOC]
+    # HELPER: builds the fully qualified API resource name of the TPU node from the project,
+    # zone and TPU name. Returns the string; no side effects.
     """Returns the full Cloud name for this TPU."""
     return 'projects/%s/locations/%s/nodes/%s' % (
         self._project, self._zone, self._tpu)
 
   def _fetch_cloud_tpu_metadata(self):
+    # [FUNCTION DOC]
+    # HELPER: retrieves the TPU node description from the Cloud TPU API for the other getters.
+    # Returns the metadata mapping. Any exception from building the service or executing the
+    # request is not distinguished: request failures are converted to a value error mentioning
+    # the TPU name (the original error text is included). Side effect: network access.
     """Returns the TPU metadata object from the TPU Get API call."""
     service = self._tpu_service()
     try:
@@ -283,6 +368,10 @@ class Client:
                        'constructor. Exception: %s' % (self._tpu, e))
 
   def _get_tpu_property(self, key):
+    # [FUNCTION DOC]
+    # HELPER: shared accessor for single TPU metadata fields. Input: key, the field name.
+    # When the API is in use, fetches the metadata and returns the field (nothing if missing);
+    # for direct grpc addresses returns nothing without any network access.
     if self._use_api:
       metadata = self._fetch_cloud_tpu_metadata()
       return metadata.get(key)
@@ -290,12 +379,25 @@ class Client:
     return None
 
   def __enter__(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: returns nothing, so binding the context manager to a name yields nothing
+    # rather than the client; the class docs recommend context manager use but it adds nothing.
+    # Context manager entry: only sets an internal open flag that is never read.
     self._open = True
 
   def __exit__(self, type, value, traceback):  # pylint: disable=redefined-builtin
+    # [FUNCTION DOC]
+    # Context manager exit: ignores the exception information and does nothing; exceptions
+    # raised inside the block are not suppressed.
     del type, value, traceback
 
   def recoverable(self):
+    # [FUNCTION DOC]
+    # Reports whether training can eventually resume on this TPU. Queries the state and the
+    # symptoms (network calls when the API is used). Returns false if the state is terminated or
+    # preempted, if the runtime-OOM exit flag is on and a recent runtime OOM symptom exists, or if
+    # the HBM-OOM exit flag is on and a recent HBM OOM symptom exists; otherwise true. May log
+    # warnings; may raise the value error from metadata lookup failures.
     """Returns true if the TPU is in a state where training should eventually resume.
 
     If false the TPU is in a unrecoverable state and should be recreated.
@@ -311,18 +413,32 @@ class Client:
     return True
 
   def symptoms(self):
+    # [FUNCTION DOC]
+    # Returns the list of symptom records reported for the TPU, or nothing when none are present
+    # or the API is not used. Network access when the API is in use.
     """Return Cloud TPU Symptoms of the TPU."""
     return self._get_tpu_property('symptoms')
 
   def state(self):
+    # [FUNCTION DOC]
+    # Returns the TPU state string (for example ready or preempted) from the API, or nothing when
+    # the API is not used or the field is missing. Network access when the API is in use.
     """Return state of the TPU."""
     return self._get_tpu_property('state')
 
   def health(self):
+    # [FUNCTION DOC]
+    # Returns the TPU health string from the API, or nothing when the API is not used or the
+    # field is missing. Network access when the API is in use.
     """Return health of the TPU."""
     return self._get_tpu_property('health')
 
   def runtime_version(self):
+    # [FUNCTION DOC]
+    # Returns the TPU software (TensorFlow) version. With the API, reads the version field of
+    # the metadata. For direct grpc addresses, asks the version switcher service on the first
+    # endpoint and returns its current version; returns nothing if that service answers not
+    # found, and re-raises other HTTP errors. Network access in both cases.
     """Return runtime version of the TPU."""
 
     if not self._use_api:
@@ -343,22 +459,38 @@ class Client:
     return self._get_tpu_property('tensorflowVersion')
 
   def accelerator_type(self):
+    # [FUNCTION DOC]
+    # Returns the accelerator type string from the API metadata, or nothing when the API is not
+    # used or the field is missing. Network access when the API is in use.
     """Return accelerator type of the TPU."""
     return self._get_tpu_property('acceleratorType')
 
   def api_available(self):
+    # [FUNCTION DOC]
+    # Returns true when the Cloud TPU API is used (the TPU was not given as a direct grpc
+    # address), false otherwise. No side effects.
     """Return if the Cloud TPU API is available, if not certain features will not work."""
     return self._use_api
 
   def name(self):
+    # [FUNCTION DOC]
+    # Returns the TPU name as text (the grpc address itself if no name was given). No side effects.
     """Return the name of the tpu, or the ip address if name is not provided."""
     return self._tpu
 
   def get_local_ip(self):
+    # [FUNCTION DOC]
+    # Returns the internal IP address of the VM running this code, read from the GCE metadata
+    # server. Network access; fails if not running on Google Cloud.
     """Return the local ip address of the Google Cloud VM the workload is running on."""
     return _request_compute_metadata('instance/network-interfaces/0/ip')
 
   def network_endpoints(self):
+    # [FUNCTION DOC]
+    # Returns a list of endpoint mappings (ip address and port). For direct grpc addresses they
+    # are parsed from the name without network access. With the API, fetches metadata, raises a
+    # runtime error unless the state is ready, and returns the network endpoints list if present,
+    # else a single endpoint built from the top-level ip address and port fields.
     """Return a list of tpu endpoints."""
     if not self._use_api:
       return list(_environment_var_to_network_endpoints(self._tpu))
@@ -373,6 +505,14 @@ class Client:
       return [{'ipAddress': response['ipAddress'], 'port': response['port']}]
 
   def wait_for_healthy(self, timeout_s=1200, interval=30):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: without the API the health is always nothing, so this never succeeds and ends
+    # with the timeout error. Also the deadline is checked only before sleeping, so the wait may
+    # end slightly before the full timeout.
+    # Polls the health until it equals healthy. Inputs: timeout_s (seconds to wait, default 1200)
+    # and interval (seconds between polls, default 30). Logs a warning on each poll and on
+    # success, sleeps between polls, and raises a runtime error when the next poll would pass
+    # the deadline. Returns nothing.
     """Wait for TPU to become healthy or raise error if timeout reached.
 
     Args:
@@ -396,6 +536,16 @@ class Client:
     logging.warning('TPU "%s" is healthy.', self.name())
 
   def configure_tpu_version(self, version, restart_type='always'):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the result check at the end is dead code: the worker function returns nothing,
+    # so the results are always empty-valued and the result method is never called; errors still
+    # surface because iterating the executor results re-raises them. Also generic Exception
+    # types are raised.
+    # Switches the software version of every TPU worker. Inputs: version (software version
+    # string) and restart_type (always by default, or only if needed). Gets the endpoints (see
+    # that method for its errors), then in parallel sends a request to each worker's version
+    # switcher service. Raises a generic exception when a worker answers not found (version not
+    # available) or fails otherwise. Returns nothing. Side effect: reconfigures remote TPUs.
     """Configure TPU software version.
 
     Args:
@@ -406,6 +556,12 @@ class Client:
     """
 
     def configure_worker(worker):
+      # [FUNCTION DOC]
+      # HELPER: per-worker task for the version switch, run in a thread pool.
+      # Input: worker, an endpoint mapping with its ip address. Sends an empty-bodied request to
+      # the worker's version switcher with the version and restart type. Returns nothing.
+      # Raises a generic exception with a version-unavailable message on a not-found response and
+      # a generic failure message on other HTTP errors.
       """Configure individual TPU worker.
 
       Args:

@@ -1,3 +1,8 @@
+# [PACKAGE DOC]
+# TPU profiler package exposing trace event classes. Star-imports the profiler analysis protocol
+# buffer messages and the trace event protocol buffer messages, then removes every public symbol
+# except Trace, Resource, Device and TraceEvent from the module namespace using the undocumented
+# symbol removal utility. Import-time side effect: that pruning of the module namespace.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

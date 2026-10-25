@@ -1,3 +1,7 @@
+# [PACKAGE DOC]
+# Experimental TPU package. Its only content is an import of the TPU strategy utility module,
+# kept so that module's experimental symbols are loaded and reachable from this package.
+# Import-time side effect: importing that module.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

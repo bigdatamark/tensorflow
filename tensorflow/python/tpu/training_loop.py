@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Library for building training loops that run on TPUs. Exposes two public builders: a general
+# while-style loop that threads loop-carried tensors through a condition and body function, and
+# a repeat helper that runs a body a fixed number of times on top of it. Both support optionally
+# feeding values from a TPU infeed queue into the body, and both must be called while building a
+# TPU computation (for example inside a TPU rewrite or replicate context) when infeed is used.
+# When the tensor tracer is enabled, the loop body outputs are additionally traced.
+# No import-time side effects beyond imports.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,6 +41,22 @@ def while_loop(condition: Callable[..., Any],
                inputs: Optional[List[Any]] = None,
                infeed_queue: Optional[tpu_feed.InfeedQueue] = None,
                name: Any = None) -> Any:
+  # [FUNCTION DOC]
+  # Builds a TPU training loop as a graph while-loop with a single parallel iteration.
+  # Inputs: condition (callable taking the loop-carried tensors and returning a boolean scalar),
+  # body (callable taking the loop-carried tensors, plus infeed tuple elements when an infeed
+  # queue is given, and returning updated tensors followed by optional operations), inputs
+  # (optional list of initial values, converted to tensors; none means empty), infeed_queue
+  # (optional infeed queue whose dequeue ops are appended to the body arguments), name (ignored).
+  # Behavior: validates argument counts of body and condition up front, wraps both (adds a dummy
+  # loop-carried zero when there are no inputs, runs dequeue ops, checks outputs are tensors then
+  # operations with types matching the inputs, adds control dependencies on operations and
+  # dequeues, and applies tensor tracing when enabled).
+  # Returns the final values of the loop-carried tensors.
+  # Raises a type error when the body or condition cannot accept the inputs, or when output types
+  # differ from input types; raises a value error when outputs are not tensors followed by
+  # operations, or when infeed is used outside a TPU shard context.
+  # Side effects: adds operations to the default graph and sets the shard count on the infeed queue.
   """Builds a training loop for TPUs.
 
   The set of loop-carried tensors corresponds to `inputs`.  Both
@@ -94,12 +118,25 @@ def while_loop(condition: Callable[..., Any],
       )
 
   def condition_wrapper(*inputs):
+    # [FUNCTION DOC]
+    # HELPER: adapts the user condition for while_loop in the TPU training loop builder.
+    # Takes the loop-carried values, drops the dummy value used for arity-zero loops, and returns
+    # the result of the user condition. No side effects.
     # Discards the dummy output added for arity-0 loops.
     if input_arity == 0:
       inputs = []
     return condition(*inputs)
 
   def body_wrapper(*inputs):
+    # [FUNCTION DOC]
+    # HELPER: adapts the user body for while_loop in the TPU training loop builder.
+    # Takes the loop-carried values (dummy value dropped for arity-zero loops), appends infeed
+    # dequeue ops when a queue exists (requires a TPU shard context, else raises a value error),
+    # calls the user body, normalizes outputs to a list, checks tensors precede operations (value
+    # error otherwise) and that output types match input types (type error otherwise). Adds the
+    # dequeues to the operations, creates a dummy zero output if no tensors, groups tensors with
+    # control dependencies on the operations, and optionally traces outputs with the tensor tracer.
+    # Returns the new loop-carried tensors. Side effects: adds graph operations, sets shard count.
     """Wrapper around `body` that handles infeed queues and control deps."""
     inputs = list(inputs)
 
@@ -185,6 +222,17 @@ def repeat(
     inputs: Optional[List[core_types.TensorLike]] = None,
     infeed_queue: Optional[tpu_feed.InfeedQueue] = None,
     name: Any = None) -> List[core_types.TensorLike]:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it returns the final values of the loop-carried tensors, but
+  # when the body has no loop-carried values it returns the single underlying operation instead
+  # of a list, and the docstring says value error on a type error while type errors propagate
+  # from the underlying loop builder.
+  # Builds a TPU loop that runs the body a fixed number of times by prepending a counter to the
+  # loop-carried values and using the general loop builder. Inputs: n (iteration count), body
+  # (callable taking and returning loop-carried values), inputs (optional initial values), infeed_queue
+  # (optional), name (passed through, ignored). Returns the final values with the counter removed,
+  # or the operation of the lone counter output when there are no other values.
+  # Side effects: adds graph operations.
   """Builds a training loop that executes a fixed number of iterations.
 
   The set of loop-carried tensors correspond to `inputs`.
@@ -206,16 +254,28 @@ def repeat(
     ValueError: if there is a type error.
   """
   def _convert_to_list(xs):
+    # [FUNCTION DOC]
+    # HELPER: normalizes body results and inputs inside the repeat loop builder.
+    # Returns the argument as a list: a list or tuple is copied into a list, anything else is
+    # wrapped in a one-element list.
     if not isinstance(xs, (list, tuple)):
       return [xs]
     else:
       return list(xs)
 
   def cond(i, *args):
+    # [FUNCTION DOC]
+    # HELPER: loop condition for the repeat loop builder.
+    # Takes the counter and ignores the remaining loop values; returns whether the counter is
+    # still below the iteration count.
     del args
     return i < n
 
   def body_wrapper(i, *args):
+    # [FUNCTION DOC]
+    # HELPER: loop body for the repeat loop builder.
+    # Takes the counter and the remaining loop values, calls the user body on the remaining values
+    # and returns a list with the incremented counter followed by the body results (as a list).
     return [i + 1] + _convert_to_list(body(*args))
 
   inputs = [0] if inputs is None else [0] + _convert_to_list(inputs)
