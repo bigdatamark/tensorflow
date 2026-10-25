@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# KNOWN ISSUE: the license header in this file has a corrupted word ("maxlengthations"
+# instead of "limitations"); it is only a comment typo and has no runtime effect.
+# Ragged-tensor implementations of the bincount family of ops. Importing the module
+# registers, through the API dispatch mechanism, a ragged handler for the dense
+# bincount API and one for the sparse bincount API, so that the public functions accept
+# ragged inputs. It also defines validate_ragged_weights, a helper that checks or
+# fabricates the weights tensor passed to the underlying kernels. The kernels used are
+# the ragged and dense bincount ops and the ragged/dense sparse-output count ops.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,6 +46,23 @@ def bincount(arr: ragged_tensor.RaggedTensor,
              name=None,
              axis=None,
              binary_output=False):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says only an invalid-argument error is raised for negative
+  # values, but this code also raises a value error itself when both weights and
+  # binary_output are given, or when axis is not 0, -1 or nothing. The docstring also
+  # says a vector is returned, but with axis -1 a 2-D dense result is produced.
+  # Dispatch handler for the dense bincount API when the input is a ragged tensor.
+  # Inputs: arr (ragged tensor of counted values; non-integer dtypes are cast to 32-bit
+  # integers), weights (optional ragged tensor with identical row splits), minlength and
+  # maxlength (optional bounds on output length), dtype (output dtype when no weights),
+  # name (optional scope name, default "bincount"), axis (nothing or 0 flattens all
+  # dimensions; -1 counts per row; other values rejected) and binary_output (emit 1
+  # instead of counts). The output size is max value plus one (zero for an empty input),
+  # raised to minlength and capped at maxlength. For axis 0 nested ragged dimensions are
+  # peeled until a dense values tensor remains and a dense bincount kernel runs; for
+  # axis -1 with a ragged input the ragged bincount kernel is used with the row splits.
+  # Returns the count tensor. Raises a value error for the argument problems above;
+  # kernels raise invalid-argument errors for negative values. No other side effects.
   """Counts the number of occurrences of each value in an integer array.
 
   If `minlength` and `maxlength` are not given, returns a vector with length
@@ -195,6 +221,20 @@ def sparse_bincount(values: ragged_tensor.RaggedTensor,
                     maxlength=None,
                     binary_output=False,
                     name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring mentions that dense and sparse tensors are accepted, but
+  # this handler is registered only for ragged inputs. Also, for axis 0 with a nested
+  # ragged input only one ragged level is stripped, so the second validation may fail.
+  # Dispatch handler for the sparse bincount API with a ragged input.
+  # Inputs: values (ragged tensor of integers), weights (optional ragged tensor with the
+  # same row splits), axis (0 or -1; nothing is treated as 0, other values raise a value
+  # error), minlength and maxlength (optional output length bounds; absent means no
+  # bound), binary_output (emit 1 instead of counts; cannot combine with weights, which
+  # raises a value error) and name (optional scope name).
+  # With axis 0 the values are flattened one level first. The ragged or dense
+  # sparse-output count kernel then produces indices, values and dense shape.
+  # Returns a sparse tensor built from them. Kernels raise invalid-argument errors on
+  # negative values. No other side effects.
   """Count the number of times an integer value appears in a tensor.
 
   This op takes an N-dimensional `Tensor`, `RaggedTensor`, or `SparseTensor`,
@@ -376,6 +416,16 @@ def sparse_bincount(values: ragged_tensor.RaggedTensor,
 
 
 def validate_ragged_weights(values, weights, dtype=None):
+  # [FUNCTION DOC]
+  # HELPER: weights preparation for the ragged bincount handlers in this module.
+  # Inputs: values (ragged tensor being counted), weights (ragged tensor or nothing) and
+  # dtype (optional dtype for the placeholder). If weights is nothing, returns an empty
+  # constant tensor, of the given dtype if provided, else of the flat values dtype of
+  # values. Otherwise weights must be a ragged tensor, else a value error is raised. If
+  # its row splits are not the very same object as those of values, an equality
+  # assertion on the row splits is added (failing at run time with an invalid-argument
+  # error if they differ) and the flat values of weights are returned through an
+  # identity op under that dependency. Returns the weights' flat values tensor.
   """Validates the passed weight tensor or creates an empty one."""
   if weights is None:
     if dtype:

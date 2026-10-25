@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Unit tests for the ragged constant factory. Verifies the resulting shape, dtype, ragged
+# rank and inner shape for scalars and nested lists of dimension 0 to 4 (including numpy
+# array contents and empty lists), the error messages for invalid combinations of
+# arguments, and two private helpers of the factory module (finding scalar and maximum
+# nesting depth, and computing the default inner shape). Also defines a local function
+# normalizing numpy arrays inside nested lists. Run via the standard test main; no
+# import-time side effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,6 +36,9 @@ from tensorflow.python.platform import googletest
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedConstOpTest(test_util.TensorFlowTestCase,
                         parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests the ragged constant factory in graph and eager modes: successful construction,
+  # error cases, and the two private depth/inner-shape helper functions. No shared fixtures.
 
   @parameterized.parameters(
       #=========================================================================
@@ -178,6 +189,16 @@ class RaggedConstOpTest(test_util.TensorFlowTestCase,
                       inner_shape=None,
                       expected_shape=None,
                       expected_dtype=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring claims the test checks an evaluated list equals the input,
+    # but it compares the tensor with a normalized (numpy-free) copy of the input, and for
+    # empty expected shapes it replaces the expected value by a zero array of that shape.
+    # Parameterized success test. Inputs: pylist (scalar, nested list or numpy content),
+    # optional dtype, ragged_rank, inner_shape, expected_shape (tuple) and expected_dtype.
+    # Builds the ragged constant, then asserts: the dtype when given, the inferred dtype
+    # when expected, the ragged rank when given (a dense result counts as rank zero), the
+    # flat values' inner shape when given, the full static shape when expected, and finally
+    # that the tensor's values equal the normalized input list.
     """Tests that `ragged_const(pylist).eval().tolist() == pylist`.
 
     Args:
@@ -296,6 +317,14 @@ class RaggedConstOpTest(test_util.TensorFlowTestCase,
                            inner_shape=None,
                            exception=None,
                            message=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: one parameter case (inner shape of two on a flat list, expecting a type
+    # error) gives no message, so the regular-expression argument is a null value.
+    # Parameterized failure test. Inputs: pylist, optional dtype, ragged_rank, inner_shape,
+    # the expected exception class and a message pattern. Calls the ragged constant factory
+    # and asserts it raises the expected exception with a matching message. Cases cover
+    # incompatible ragged rank/inner shape, negative rank, mixed nesting depths, excess empty
+    # nesting, and inconsistent inner value shapes.
     """Tests that `ragged_const()` raises an expected exception."""
     self.assertRaisesRegex(
         exception,
@@ -335,6 +364,12 @@ class RaggedConstOpTest(test_util.TensorFlowTestCase,
                                   max_depth=None,
                                   exception=None,
                                   message=None):
+    # [FUNCTION DOC]
+    # Parameterized test of the private scalar/max-depth helper in the ragged factory module.
+    # Inputs: pylist, expected scalar_depth (nothing when the list holds no scalars),
+    # expected max_depth, and optionally an exception class and message pattern. When an
+    # exception is given, asserts the helper raises it with a matching message (mixed scalar
+    # nesting depths). Otherwise asserts the helper returns the expected pair of depths.
     """Tests for the _find_scalar_and_max_depth helper function."""
     if exception is not None:
       self.assertRaisesRegex(exception, message,
@@ -385,6 +420,11 @@ class RaggedConstOpTest(test_util.TensorFlowTestCase,
                                            inner_shape=None,
                                            exception=None,
                                            message=None):
+    # [FUNCTION DOC]
+    # Parameterized test of the private default-inner-shape helper in the ragged factory
+    # module. Inputs: pylist, ragged_rank, and either an expected inner_shape or an exception
+    # class plus message pattern. Asserts the helper returns the expected inner shape for the
+    # given ragged rank, or raises the expected error (inconsistent inner value shapes).
     """Tests for the _default_inner_shape_for_pylist helper function."""
     if exception is not None:
       self.assertRaisesRegex(
@@ -398,6 +438,15 @@ class RaggedConstOpTest(test_util.TensorFlowTestCase,
 
 
 def _normalize_pylist(item):
+  # [FUNCTION DOC]
+  # HELPER: normalizes expected values for testRaggedConst.
+  # KNOWN ISSUE: the conditional in the final comprehension re-checks the type of the
+  # whole item (always a list or array at that point) instead of each element, so it is
+  # always true and the else branch is dead; the element check happens inside the recursive
+  # call instead, which still gives the right result.
+  # Input: item (scalar, list, or numpy array possibly nested). Non-list, non-array items
+  # are returned unchanged. Otherwise returns a new list in which every numpy array at any
+  # depth has been turned into a list. The input is not modified.
   """Convert all (possibly nested) np.arrays contained in item to list."""
   # convert np.arrays in current level to list
   if not isinstance(item, (list, np.ndarray)):

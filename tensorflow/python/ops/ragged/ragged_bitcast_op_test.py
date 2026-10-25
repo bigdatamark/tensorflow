@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Unit tests for the ragged bitcast op (reinterpreting a ragged tensor's element bits as
+# another dtype). Covers same-size casts (including signed/unsigned reinterpretation),
+# casts to a larger dtype (which fold an inner dimension of size equal to the size ratio
+# away) and casts to a smaller dtype (which add an inner dimension), plus an error case
+# for a ragged inner dimension. Run via the standard test main; no import-time side effects.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +31,11 @@ from tensorflow.python.platform import googletest
 
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedSplitOpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # KNOWN ISSUE: the class is named as a split-op test, but it actually tests the ragged
+  # bitcast op; the name is a leftover.
+  # Test case for the ragged bitcast op, run in both graph and eager modes. Tests are
+  # parameterized with input and expected output ragged values; no shared fixtures.
 
   @parameterized.parameters([
       #=========================================================================
@@ -90,6 +101,12 @@ class RaggedSplitOpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
           )),
   ])  # pyformat: disable
   def testBitcast(self, descr, inputs, outputs, name=None):
+    # [FUNCTION DOC]
+    # Parameterized success test. Inputs: descr (case label), inputs (ragged value to cast),
+    # outputs (expected ragged result, whose dtype is the target dtype) and optional name.
+    # Cases: int32 to int32, int32 to uint32 and back, int32 pairs to int64, and int64 to a
+    # pair of int32. Runs the bitcast and asserts the result dtype, ragged rank and values
+    # equal the expected output.
     result = ragged_array_ops.bitcast(inputs, outputs.dtype, name)
     self.assertEqual(result.dtype, outputs.dtype)
     self.assertEqual(result.ragged_rank, outputs.ragged_rank)
@@ -114,6 +131,11 @@ class RaggedSplitOpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
                        exception,
                        message,
                        name=None):
+    # [FUNCTION DOC]
+    # Parameterized failure test. Inputs: descr (label), inputs (ragged value), cast_to_dtype
+    # (target dtype), exception (expected error class), message (expected message pattern)
+    # and optional name. Scenario: casting to a larger dtype when the innermost dimension
+    # is itself ragged. Expects a value error saying the flat values need rank at least 2.
     with self.assertRaisesRegex(exception, message):
       result = ragged_array_ops.bitcast(inputs, cast_to_dtype, name)
       self.evaluate(result)

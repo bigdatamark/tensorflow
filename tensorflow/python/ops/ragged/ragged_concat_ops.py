@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Concatenation and stacking of ragged (and mixed ragged/dense) tensors. Exposes the ragged
+# handler for the generic concat API, and the public ragged stack function (also exported
+# under the ragged namespace and registered as a handler for the generic stack API). Both
+# delegate to one shared engine that unifies inputs to a common ragged rank and handles
+# axis 0 by joining flat values and row splits, axis 1 by joining and then permuting rows,
+# and higher axes by recursing on the values. Private helpers at the bottom adjust ragged
+# rank, merge row splits and copy static shapes. Import-time side effects: dispatch and
+# export registration for the two public functions.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,6 +40,18 @@ from tensorflow.python.util.tf_export import tf_export
 
 @dispatch.dispatch_for_api(array_ops.concat)
 def concat(values: typing.List[ragged_tensor.RaggedOrDense], axis, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says only a value error is raised, but a non-integer axis
+  # raises a type error (see the tests), and a mismatch of ranks can also surface as an
+  # invalid-argument error at run time. A single non-list input is accepted, undocumented.
+  # Dispatch handler for the generic concat API when any input is ragged. Inputs: values (a
+  # list or tuple of ragged or dense tensors of equal rank and dtype; a single non-list
+  # value is wrapped into a one-element list), axis (a statically known integer, negative
+  # allowed if rank is known) and name (optional scope name, default "RaggedConcat").
+  # Delegates to the shared stack/concat engine in concatenate mode and returns the
+  # concatenated tensor (a ragged tensor, or the input itself when there is just one, or a
+  # dense tensor if all inputs are dense and the last axis is joined). Raises value errors
+  # for an empty list, out-of-bounds axis, or rank mismatch. No side effects.
   """Concatenates potentially ragged tensors along one dimension.
 
   Given a list of tensors with the same rank `K` (`K >= axis`), returns a
@@ -76,6 +97,15 @@ def concat(values: typing.List[ragged_tensor.RaggedOrDense], axis, name=None):
 def stack(values: typing.List[ragged_tensor.RaggedOrDense],
           axis=0,
           name=None):
+  # [FUNCTION DOC]
+  # Public ragged stack (also registered as the handler of the generic stack API). Inputs:
+  # values (list or tuple of dense or ragged tensors with equal rank and dtype; a single
+  # non-list value is wrapped into a list), axis (statically known integer, default 0;
+  # negative allowed if rank is known) and name (optional scope name, default
+  # "RaggedConcat"). Delegates to the shared engine in stack mode, which adds a new
+  # dimension at axis. Returns a ragged tensor of rank one higher than the inputs (a dense
+  # vector result is possible for dense rank-0 inputs, as documented). Raises value errors
+  # for an empty list, out-of-bounds axis or rank mismatch. No side effects.
   """Stacks a list of rank-`R` tensors into one rank-`(R+1)` `RaggedTensor`.
 
   Given a list of tensors or ragged tensors with the same rank `R`
@@ -125,6 +155,18 @@ def stack(values: typing.List[ragged_tensor.RaggedOrDense],
 
 
 def _ragged_stack_concat_helper(rt_inputs, axis, stack_values):
+  # [FUNCTION DOC]
+  # HELPER: shared engine behind the public ragged concat and stack functions.
+  # Inputs: rt_inputs (list of dense or ragged tensors), axis (integer, negative values are
+  # resolved against the output rank) and stack_values (true to stack, false to
+  # concatenate). Steps: reject an empty list with a value error; convert inputs to tensors
+  # and match their row-splits dtypes; return the only input unchanged when concatenating
+  # a single tensor; check all ranks agree; special case stacking vectors on axis 0 by
+  # building a ragged tensor from row lengths; delegate to the dense stack/concat when all
+  # inputs are dense and the last axis is used; otherwise turn dense inputs into ragged ones,
+  # raise all to the same ragged rank, and dispatch to the axis-0 or axis-1 routine, or for
+  # higher axes recurse on the inner values after asserting identical row splits.
+  # Returns a ragged (or dense) tensor.
   """Helper function to concatenate or stack ragged tensors.
 
   Args:
@@ -208,6 +250,13 @@ def _ragged_stack_concat_helper(rt_inputs, axis, stack_values):
 
 
 def _ragged_stack_concat_axis_0(rt_inputs, stack_values):
+  # [FUNCTION DOC]
+  # HELPER: axis-0 case of the ragged stack/concat engine.
+  # Inputs: rt_inputs (ragged tensors of equal rank and ragged rank) and stack_values (true
+  # to stack, false to concatenate). Concatenates the flat values of all inputs, and
+  # concatenates the row splits of each ragged dimension with offsets adjusted. When
+  # stacking, prepends one more splits level derived from the row counts of the inputs.
+  # Returns the resulting ragged tensor, built without validation.
   """Helper function to concatenate or stack ragged tensors along axis 0.
 
   Args:
@@ -243,6 +292,15 @@ def _ragged_stack_concat_axis_0(rt_inputs, stack_values):
 
 
 def _ragged_stack_concat_axis_1(rt_inputs, stack_values):
+  # [FUNCTION DOC]
+  # HELPER: axis-1 case of the ragged stack/concat engine.
+  # Inputs: rt_inputs (ragged tensors of equal rank and ragged rank) and stack_values (true
+  # to stack, false to concatenate). Asserts that every input has the same number of rows
+  # as the first (a runtime invalid-argument error with a descriptive message otherwise),
+  # concatenates the inputs along axis 0, then gathers rows in an interleaved order so that
+  # row i of every input becomes adjacent. When stacking, new splits group one row per
+  # input; when concatenating, interior splits are dropped to merge adjacent rows. Static
+  # row shapes are copied onto the new splits. Returns the resulting ragged tensor.
   """Helper function to concatenate or stack ragged tensors along axis 1.
 
   Args:
@@ -301,6 +359,15 @@ def _ragged_stack_concat_axis_1(rt_inputs, stack_values):
 
 
 def _copy_row_shape(rt_inputs, splits):
+  # [FUNCTION DOC]
+  # HELPER: static-shape propagation for the axis-1 stack/concat routine.
+  # KNOWN ISSUE: the shape is set once per input inside a loop, using the row count of each
+  # input plus one; but for stacking, the splits length is rows times inputs plus one, so
+  # the set shape appears to describe the wrong length (it only works when the static
+  # values are consistent or merged by the shape check).
+  # Inputs: rt_inputs (list of ragged tensors) and splits (a row-splits tensor, mutated).
+  # For each input with a statically known number of rows, sets the static shape of splits
+  # to a one-dimensional shape with that row count plus one. Returns nothing.
   """Sets splits.shape to [rt[shape[0]+1] for each rt in rt_inputs."""
   for rt in rt_inputs:
     if rt.shape[0] is not None:
@@ -308,6 +375,13 @@ def _copy_row_shape(rt_inputs, splits):
 
 
 def _increase_ragged_rank_to(rt_input, ragged_rank, row_splits_dtype):
+  # [FUNCTION DOC]
+  # HELPER: rank unification for the ragged stack/concat engine.
+  # Inputs: rt_input (dense or ragged tensor), ragged_rank (target ragged rank, integer) and
+  # row_splits_dtype (dtype for any newly created row splits). If the target is positive,
+  # converts a dense input to a ragged one, and recursively converts its values until the
+  # ragged rank reaches the target. Returns the (possibly new) ragged tensor; an already
+  # sufficient input is returned unchanged.
   """Adds ragged dimensions to `rt_input` so it has the desired ragged rank."""
   if ragged_rank > 0:
     if not ragged_tensor.is_ragged(rt_input):
@@ -321,6 +395,12 @@ def _increase_ragged_rank_to(rt_input, ragged_rank, row_splits_dtype):
 
 
 def _concat_ragged_splits(splits_list):
+  # [FUNCTION DOC]
+  # HELPER: joins row-splits vectors when concatenating ragged tensors along axis 0.
+  # Input: splits_list (non-empty list of row-splits tensors, each starting at zero). Keeps
+  # the first fully; for each later one drops its leading zero and shifts it by the running
+  # total of the previous final values. Returns one concatenated row-splits tensor. No side
+  # effects; an empty list would fail with an index error.
   """Concatenates a list of RaggedTensor splits to form a single splits."""
   pieces = [splits_list[0]]
   splits_offset = splits_list[0][-1]

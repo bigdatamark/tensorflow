@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Unit tests for the ragged concat op. Covers concatenation of two or three inputs of
+# various ranks and ragged ranks along positive and negative axes, mixtures of dense and
+# ragged inputs, a single input, static and runtime error conditions (empty input list,
+# bad axis type, out-of-bounds axis, incompatible shapes, negative axis with unknown rank)
+# and passing a single tensor instead of a list. Run via the standard test main; no
+# import-time side effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,8 +37,17 @@ from tensorflow.python.platform import googletest
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedConcatOpTest(test_util.TensorFlowTestCase,
                          parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests the ragged concat op in graph and eager modes, using a shared helper that turns
+  # nested-list inputs into ragged or dense tensors.
 
   def _rt_inputs_to_tensors(self, rt_inputs, ragged_ranks=None):
+    # [FUNCTION DOC]
+    # HELPER: builds test input tensors for the concat tests.
+    # Inputs: rt_inputs (sequence of nested lists) and ragged_ranks (optional sequence, one
+    # per input; nothing means infer). An entry of zero yields a dense constant, any other
+    # entry a ragged constant with that ragged rank (nothing infers it). Returns a list of
+    # tensors.
     if ragged_ranks is None:
       ragged_ranks = [None] * len(rt_inputs)
     return [  # pylint: disable=g-long-ternary
@@ -229,6 +245,12 @@ class RaggedConcatOpTest(test_util.TensorFlowTestCase,
                        ragged_ranks=None,
                        expected_ragged_rank=None,
                        expected_shape=None):
+    # [FUNCTION DOC]
+    # Parameterized success test. Inputs: descr (label), rt_inputs (sequence of nested lists),
+    # axis, expected (expected nested list), optional ragged_ranks (per-input ragged rank, zero
+    # meaning dense), optional expected_ragged_rank and optional expected_shape (static shape
+    # list). Builds the tensors, concatenates along the axis, optionally asserts the result's
+    # ragged rank and static shape, and asserts the values equal the expected result.
     rt_inputs = self._rt_inputs_to_tensors(rt_inputs, ragged_ranks)
     concatenated = ragged_concat_ops.concat(rt_inputs, axis)
     if expected_ragged_rank is not None:
@@ -270,6 +292,15 @@ class RaggedConcatOpTest(test_util.TensorFlowTestCase,
                       error,
                       message=None,
                       ragged_ranks=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the last parameter case supplies no message, so the expected message
+    # defaults to nothing and the regular-expression assertion is given a null pattern;
+    # that case may not verify the message at all.
+    # Parameterized test of errors raised at graph-construction time. Inputs: rt_inputs,
+    # axis, error (expected exception class or tuple of classes), optional message pattern
+    # and optional ragged_ranks. Cases: empty input list, non-integer axis, axis out of
+    # bounds on both sides, and rows-count mismatch of dense inputs. Asserts concatenation
+    # raises the expected error.
     rt_inputs = self._rt_inputs_to_tensors(rt_inputs, ragged_ranks)
     self.assertRaisesRegex(error, message, ragged_concat_ops.concat, rt_inputs,
                            axis)
@@ -288,6 +319,13 @@ class RaggedConcatOpTest(test_util.TensorFlowTestCase,
   ])
   def testRuntimeError(self, rt_inputs, axis, error, message,
                        ragged_ranks=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the ragged_ranks parameter is accepted but never used, and the test
+    # silently passes (returns early) in eager mode.
+    # Parameterized graph-mode test of errors raised at run time. Wraps the inputs in
+    # placeholders with unknown shape, concatenates along the axis (here axis 1 of ragged
+    # inputs with different row counts), then evaluates and expects an invalid-argument error
+    # whose message says the input tensors have incompatible shapes.
     if context.executing_eagerly():
       return
     rt_inputs = [
@@ -298,6 +336,10 @@ class RaggedConcatOpTest(test_util.TensorFlowTestCase,
       self.evaluate(concatenated)
 
   def testNegativeAxisWithUnknownRankError(self):
+    # [FUNCTION DOC]
+    # Graph-mode only (returns immediately in eager mode). Scenario: two placeholders of
+    # unknown rank concatenated along axis -1. Expects a value error saying a negative axis
+    # needs a statically known rank.
     if context.executing_eagerly():
       return
     rt_inputs = [
@@ -310,6 +352,9 @@ class RaggedConcatOpTest(test_util.TensorFlowTestCase,
         ragged_concat_ops.concat, rt_inputs, -1)
 
   def testSingleTensorInput(self):
+    # [FUNCTION DOC]
+    # Scenario: a single ragged tensor passed directly instead of in a list. Action: concat
+    # along axis 0. Expects the tensor back unchanged.
     """Tests ragged_concat with a single tensor input.
 
     Usually, we pass a list of values in for rt_inputs.  However, you can

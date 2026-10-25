@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Unit tests for the ragged boolean mask op. Exercises masking of uniform, ragged and mixed
+# data with uniform, ragged and mixed masks across several ranks, the documented examples,
+# and error conditions (unknown mask rank, wrong mask dtype, incompatible shapes, differing
+# ragged splits, scalar mask). Run via the standard test main; no import-time side effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +34,9 @@ from tensorflow.python.platform import googletest
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedBooleanMaskOpTest(test_util.TensorFlowTestCase,
                               parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests the ragged boolean mask op in graph and eager modes. Defines short class constants
+  # for true and false so data and mask lines up visually in the parameter tables.
   # Define short constants for true & false, so the data & mask can be lined
   # up in the examples below.  This makes it easier to read the examples, to
   # see which values should be kept vs. masked.
@@ -237,10 +245,25 @@ class RaggedBooleanMaskOpTest(test_util.TensorFlowTestCase,
               [[[1], [4, 6]], [[7, 9], []]])),
   ])  # pyformat: disable
   def testBooleanMask(self, descr, data, mask, expected):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the parameter table contains two identical duplicate cases (data shape
+    # 3x2x2 with mask shape 3, and data shape 4 x ragged x 2 with mask shape 4), so they
+    # run twice without adding coverage.
+    # Parameterized test. Inputs: descr (case label), data (nested list or ragged tensor),
+    # mask (boolean nested list or ragged tensor) and expected (expected result). Applies the
+    # ragged boolean mask and asserts equality with the expected result. Cases cover the
+    # docstring examples, uniform/ragged/mixed data and masks, and ranks up to four.
     actual = ragged_array_ops.boolean_mask(data, mask)
     self.assertAllEqual(actual, expected)
 
   def testErrors(self):
+    # [FUNCTION DOC]
+    # Checks error handling of the boolean mask op. In graph mode only, a placeholder mask of
+    # unknown rank gives a value error. In both modes: an integer mask raises a type error;
+    # a ragged integer mask raises a value error about conversion to boolean; a mask whose
+    # shape is incompatible raises a value error; ragged data and mask with different splits
+    # raise an invalid-argument error; and a scalar mask raises a value error (for plain and
+    # ragged data).
     if not context.executing_eagerly():
       self.assertRaisesRegex(ValueError,
                              r'mask\.shape\.ndims must be known statically',
