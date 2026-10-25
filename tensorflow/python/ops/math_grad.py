@@ -1,3 +1,17 @@
+# [MODULE DOC]
+# Gradient (backprop) functions for the math operators defined in math_ops: reductions (sum, mean,
+# min, max, prod, euclidean norm), segment and sparse-segment reductions, unary elementwise math
+# (exp, log, trig, hyperbolic, special functions such as erf, gamma family, bessel family),
+# binary elementwise math (add, sub, mul, div, pow, min/max, atan2, xlogy family), matrix products
+# (dense, sparse, batched), complex-number ops, casts and cumulative ops.
+# Each gradient function takes the forward operation and the incoming gradient(s) with respect to
+# its output(s) and returns the gradient(s) with respect to each input (None for inputs that are not
+# differentiable). They are attached to op type names by the gradient registry decorator, and a
+# few op types are declared non-differentiable. Importing the module therefore has the import-time
+# side effect of populating the global gradient registry; nothing is exported for direct use except
+# the broadcast-gradient helper. Broadcast-aware helpers at the top reduce gradients back to the
+# shapes of broadcasting binary-op inputs, and several functions honor the optional per-op list of
+# input indices whose gradients are not needed.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,18 +46,31 @@ from tensorflow.python.ops import special_math_ops
 
 @ops.RegisterGradient("ArgMax")
 def _ArgMaxGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for the ArgMax op. The op is not differentiable: both arguments (the
+  # incoming gradient and the op) are discarded and a list of two null values is returned, one for
+  # the input tensor and one for the dimension argument. No side effects.
   del op, grad
   return [None, None]
 
 
 @ops.RegisterGradient("ArgMin")
 def _ArgMinGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for the ArgMin op. The op is not differentiable: arguments are discarded and
+  # a list of two null values is returned (input tensor, dimension). No side effects.
   del op, grad
   return [None, None]
 
 
 @ops.RegisterGradient("EuclideanNorm")
 def _EuclideanNormGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for the EuclideanNorm reduction op. Inputs: the forward op (input tensor and
+  # reduction axes) and the gradient of the reduced output. If the op did not keep reduced
+  # dimensions, both the output and the gradient are reshaped to the kept-dims shape so they broadcast
+  # against the input. Returns a pair: the input divided by the output divided by the gradient (that
+  # is, input times gradient over norm) and a null value for the axes. No side effects.
   """Gradient for EuclideanNorm."""
 
   output = op.outputs[0]
@@ -58,6 +85,17 @@ def _EuclideanNormGrad(op: ops.Operation, grad):
 
 
 def SmartBroadcastGradientArgs(x, y, grad=None):
+  # [FUNCTION DOC]
+  # HELPER: used by the gradient functions of broadcasting binary ops to learn how to sum gradients back.
+  # Variant of the broadcast-gradient-args op that avoids creating a dynamic op when shapes are
+  # partially known. Inputs: x and y, the two operands of a broadcasting binary op; grad is
+  # deprecated and ignored. In graph mode with both operands being symbolic tensors, it tries to
+  # infer statically which axes were broadcast; if inference fails (unknown rank or data-dependent
+  # dimensions) or in eager mode it falls back to the dynamic broadcast-gradient-args op.
+  # Returns two triples, one per operand: the dynamic shape tensor of the operand, the axes to sum
+  # over (a list or tensor), and a flag saying whether a reduction is needed at all (always true on the
+  # dynamic fallback; on the static path true when there are axes or the operand has lower rank than
+  # the other). Creates shape ops in the current graph; raises nothing itself.
   """Version of `BroadcastGradientArgs` optimized for partially-known shapes.
 
   Args:
@@ -95,6 +133,14 @@ def SmartBroadcastGradientArgs(x, y, grad=None):
 
 
 def _InferGradientReductionAxes(x_shape, y_shape):
+  # [FUNCTION DOC]
+  # HELPER: static-shape part of SmartBroadcastGradientArgs.
+  # Given the static shapes of the two operands of a broadcasting op, computes which axes of the
+  # broadcast result each operand was stretched along. Right-aligns the shapes, treating missing
+  # leading dimensions as size one; an axis is recorded for the operand whose dimension is one while the
+  # other's is not. Returns a pair of lists of axes, or a pair of null values if either rank is
+  # unknown or a dimension where both could be broadcast is unknown (decision is data dependent).
+  # Pure function, no side effects.
   """Infers the sets of axes that might have been broadcasted."""
   x_rank = x_shape.rank
   y_rank = y_shape.rank
@@ -125,6 +171,12 @@ def _InferGradientReductionAxes(x_shape, y_shape):
 
 
 def _ReduceGradientArg(grad, shape_axes_must_reduce):
+  # [FUNCTION DOC]
+  # HELPER: reduces the gradient for one operand of a broadcasting binary op.
+  # Input: the gradient (may be null) and a triple of shape, axes and must-reduce flag as produced by
+  # the broadcast-args helper. If the gradient is present and a reduction is needed, sums it over the
+  # axes keeping dimensions (which helps later optimizations when axes are unknown) and reshapes
+  # to the operand's shape. Returns the possibly reduced gradient, or the input unchanged.
   """Reduces gradients of one of the arguments of a broadcasting binary op."""
   shape, axes, must_reduce = shape_axes_must_reduce
   if grad is not None and must_reduce:
@@ -137,6 +189,12 @@ def _ReduceGradientArg(grad, shape_axes_must_reduce):
 
 
 def _ReduceGradientArgs(x, y, gx, gy):
+  # [FUNCTION DOC]
+  # HELPER: reduces the gradients of both operands of a broadcasting binary op to operand shapes.
+  # Inputs: the two operands x and y and their raw gradients gx and gy (either may be null). If at
+  # least one gradient is present, computes the broadcast reduction info once and applies it to each
+  # gradient. Returns the pair of gradients shaped like x and y respectively. Returns inputs untouched
+  # if both gradients are null.
   """Reduces gradients of both arguments of a broadcasting binary op."""
   if gx is not None or gy is not None:
     bx, by = SmartBroadcastGradientArgs(x, y)
@@ -149,16 +207,38 @@ _EMPTY_TUPLE = ()
 
 
 def _IsScalar(x):
+  # [FUNCTION DOC]
+  # HELPER: small predicate for the fast paths of binary-op gradients.
+  # Returns true if the tensor's static shape tuple is the shared empty tuple object, i.e. the tensor is
+  # statically known to be a scalar. It relies on identity of the shape tuple rather than equality, so
+  # it returns false for unknown shapes. Uses a protected tensor method; no side effects.
   return x._shape_tuple() is _EMPTY_TUPLE  # pylint: disable=protected-access
 
 
 def _SafeShapeDiv(x, y):
+  # [FUNCTION DOC]
+  # HELPER: used by the Sum gradient to compute tile multiples.
+  # Elementwise integer division of x by y for non-negative shapes, where a zero divisor is
+  # replaced by one so that zero divided by zero yields zero. Inputs are shapes (tuples or tensors) of
+  # non-negative integers; returns the floor-division result. No side effects.
   """Divides `x / y` assuming `x, y >= 0`, treating `0 / 0 = 0`."""
   return x // math_ops.maximum(y, 1)
 
 
 @ops.RegisterGradient("Sum")
 def _SumGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for the Sum reduction op. Inputs: the forward op (input tensor, reduction
+  # axes, keep_dims attribute) and the gradient of the output. Returns a list: the gradient expanded
+  # back to the input shape, and null for the axes.
+  # Fast path when the input rank is known and the axes are constant: if all dimensions are
+  # reduced, the gradient is reshaped to all ones (using a per-context cache of ones-shape
+  # constants in eager mode) and tiled to the input shape (static or dynamic). In graph mode with a
+  # fully known shape, the kept-dims shape and the tile multiples are computed once by constant
+  # evaluation and cached in a per-graph cache, then used to reshape and tile.
+  # General path: dynamic input shape; if keep_dims was false, reshape the gradient to the kept-dims
+  # shape (computed colocated with the shape op), then broadcast to the input shape.
+  # Side effects: reads and writes the per-graph reduced-shape cache and the eager context cache.
   """Gradient for Sum."""
   # Fast path for when reducing to a scalar and ndims is known: adds only
   # Reshape and Tile ops (and possibly a Shape).
@@ -200,6 +280,11 @@ def _SumGrad(op: ops.Operation, grad):
 
           # Compute and cache `output_shape_kept_dims` and `tile_scaling`.
           def EvaluateAsTuple(t):
+            # [FUNCTION DOC]
+            # HELPER: nested in the Sum gradient to turn a shape-like value into a plain tuple.
+            # Input t is either a tensor or an already concrete sequence. For tensors it tries to constant-fold
+            # the value and asserts that folding succeeded (an assertion error is raised otherwise); other
+            # values are used as-is. Returns the values as a tuple of numbers. No other side effects.
             if tensor_util.is_tf_type(t):
               value = tensor_util.try_evaluate_constant(t)
               assert value is not None
@@ -230,6 +315,12 @@ def _SumGrad(op: ops.Operation, grad):
 
 
 def _MinOrMaxGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation for the Min and Max gradients.
+  # Inputs: forward op (input, axes, keep_dims) and output gradient. Reshapes the output and
+  # gradient to the kept-dims shape if reductions dropped dimensions, marks which input elements equal
+  # the reduced result, counts the selected elements per reduction group, and divides the gradient
+  # evenly among tied elements. Returns a list: gradient shaped like the input and null for the axes.
   """Gradient for Min or Max. Amazingly it's precisely the same code."""
   input_shape = array_ops.shape(op.inputs[0])
   y = op.outputs[0]
@@ -252,17 +343,30 @@ def _MinOrMaxGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Max")
 def _MaxGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for the Max reduction op; simply delegates to the shared min-or-max gradient
+  # helper with the same op and gradient and returns its result (input gradient, null for axes).
   """Gradient for Max."""
   return _MinOrMaxGrad(op, grad)
 
 
 @ops.RegisterGradient("Min")
 def _MinGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for the Min reduction op; delegates to the shared min-or-max gradient helper
+  # and returns its result (input gradient, null for axes). No side effects.
   return _MinOrMaxGrad(op, grad)
 
 
 @ops.RegisterGradient("Mean")
 def _MeanGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for the Mean reduction op. Computes the Sum gradient and divides it by the
+  # number of elements averaged per output element. If input and output shapes are fully static the
+  # factor is the input size divided (integer division, minimum divisor one) by the output size and
+  # embedded as a constant; otherwise it is the product of the input dimensions along the reduced
+  # axes, with negative axes wrapped by the rank. Returns a pair: the scaled input gradient and a null
+  # value for the axes.
   """Gradient for Mean."""
   sum_grad = _SumGrad(op, grad)[0]
   input_shape = op.inputs[0]._shape_tuple()  # pylint: disable=protected-access
@@ -284,6 +388,14 @@ def _MeanGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Prod")
 def _ProdGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for the Prod reduction op. Handles zeros in the input by avoiding division:
+  # the gradient of each element is the product of all other elements in its reduction group, computed
+  # as the product of an exclusive forward cumulative product and an exclusive reverse cumulative
+  # product after transposing the reduced axes to the front and flattening to two dimensions. Shape
+  # related ops are pinned to the CPU. Complex values use conjugates. The result is multiplied by the
+  # broadcast output gradient, transposed back and reshaped. Returns the input gradient and a null
+  # value for the axes. Side effect: places some ops on the first CPU device.
   """Gradient for Prod."""
   # The gradient can be expressed by dividing the product by each entry of the
   # input tensor, but this approach can't deal with zeros in the input.
@@ -333,12 +445,20 @@ def _ProdGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("SegmentSum")
 def _SegmentSumGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for SegmentSum. Gathers the output gradient by the segment ids so each input
+  # row receives the gradient of its segment. Returns the pair of the data gradient and a null value
+  # for segment ids.
   """Gradient for SegmentSum."""
   return array_ops.gather(grad, op.inputs[1]), None
 
 
 @ops.RegisterGradient("SegmentMean")
 def _SegmentMeanGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for SegmentMean. Builds a tensor of ones shaped like the data, sums it per
+  # segment to get segment sizes, divides the output gradient by the sizes and gathers the result by
+  # segment id. Returns the data gradient and a null value for segment ids.
   """Gradient for SegmentMean."""
   data_rank = array_ops.rank(op.inputs[0])
   segment_ids_shape = array_ops.shape(op.inputs[1])
@@ -352,6 +472,13 @@ def _SegmentMeanGrad(op: ops.Operation, grad):
 
 
 def _SparseSegmentReduceGradV2(op, grad, norm=None):
+  # [FUNCTION DOC]
+  # HELPER: shared by the sparse segment sum/mean/sqrt-n gradients when the sparse gradient attribute is set.
+  # Inputs: the forward op (data, indices, segment ids), the output gradient and norm, which is null
+  # for sum, or the text "mean" or "sqrtn". Asserts that norm has one of those values. Picks the matching
+  # version-2 sparse segment gradient kernel, calls it with the dense first dimension of the data,
+  # and returns a sparse indexed-slices gradient made of the gradient values, the sorted unique
+  # indices and the dense shape of the data.
   """Sparse gradient for SparseSegment(Sum|Mean|SqrtN)[WithNumSegments]."""
   assert norm is None or norm == "mean" or norm == "sqrtn"
   indices = op.inputs[1]
@@ -373,6 +500,10 @@ def _SparseSegmentReduceGradV2(op, grad, norm=None):
 
 
 def _GetOpAttrOrNone(op, name):
+  # [FUNCTION DOC]
+  # HELPER: safe attribute lookup for gradient functions.
+  # Returns the attribute of the op with the given name, or a null value if the op has no such
+  # attribute (the lookup error is swallowed). No other side effects.
   """Returns the value of the attr of `op` with the given `name`, or None if no
 
   such attr exists.
@@ -385,6 +516,13 @@ def _GetOpAttrOrNone(op, name):
 
 @ops.RegisterGradient("SparseSegmentSum")
 def _SparseSegmentSumGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the forward-compatibility check against a 2021 date is always true today, so the
+  # fallback branch (gather plus unsorted segment sum) is effectively dead code.
+  # Gradient registered for SparseSegmentSum. If the op's sparse-gradient attribute is set, returns a
+  # sparse indexed-slices gradient from the shared v2 helper. Otherwise uses the dense sparse-segment
+  # sum gradient kernel with the first dimension of the data as output rows. Returns a triple: data
+  # gradient, then null values for indices and segment ids.
   """Gradient for SparseSegmentSum."""
   if _GetOpAttrOrNone(op, "sparse_gradient"):
     return _SparseSegmentReduceGradV2(op, grad), None, None
@@ -399,6 +537,12 @@ def _SparseSegmentSumGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("SparseSegmentSumWithNumSegments")
 def _SparseSegmentSumWithNumSegmentsGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the forward-compatibility check against a 2021 date is always true today, so the
+  # fallback branch (gather plus unsorted segment sum) is effectively dead code.
+  # Gradient registered for SparseSegmentSumWithNumSegments. Same as the plain sparse segment sum
+  # gradient but returns four values: the data gradient (sparse or dense depending on the
+  # sparse-gradient attribute) and null values for indices, segment ids and number of segments.
   """Gradient for SparseSegmentSumWithNumSegments."""
   if _GetOpAttrOrNone(op, "sparse_gradient"):
     return _SparseSegmentReduceGradV2(op, grad), None, None, None
@@ -414,6 +558,10 @@ def _SparseSegmentSumWithNumSegmentsGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("SparseSegmentMean")
 def _SparseSegmentMeanGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for SparseSegmentMean. If the sparse-gradient attribute is set returns an
+  # indexed-slices gradient using the mean normalization; otherwise uses the dense sparse-segment
+  # mean gradient kernel. Returns data gradient plus null values for indices and segment ids.
   """Gradient for SparseSegmentMean."""
   if _GetOpAttrOrNone(op, "sparse_gradient"):
     return _SparseSegmentReduceGradV2(op, grad, "mean"), None, None
@@ -424,6 +572,9 @@ def _SparseSegmentMeanGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("SparseSegmentMeanWithNumSegments")
 def _SparseSegmentMeanWithNumSegmentsGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for SparseSegmentMeanWithNumSegments. Same as the mean variant but returns
+  # four values: data gradient and null values for indices, segment ids and number of segments.
   """Gradient for SparseSegmentMeanWithNumSegments."""
   if _GetOpAttrOrNone(op, "sparse_gradient"):
     return _SparseSegmentReduceGradV2(op, grad, "mean"), None, None, None
@@ -434,6 +585,10 @@ def _SparseSegmentMeanWithNumSegmentsGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("SparseSegmentSqrtN")
 def _SparseSegmentSqrtNGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for SparseSegmentSqrtN. If the sparse-gradient attribute is set returns an
+  # indexed-slices gradient using square-root-of-count normalization; otherwise uses the dense kernel.
+  # Returns data gradient plus null values for indices and segment ids.
   """Gradient for SparseSegmentSqrtN."""
   if _GetOpAttrOrNone(op, "sparse_gradient"):
     return _SparseSegmentReduceGradV2(op, grad, "sqrtn"), None, None
@@ -444,6 +599,9 @@ def _SparseSegmentSqrtNGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("SparseSegmentSqrtNWithNumSegments")
 def _SparseSegmentSqrtNWithNumSegmentsGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for SparseSegmentSqrtNWithNumSegments. Same as the sqrt-n variant but returns
+  # four values: data gradient and null values for indices, segment ids and number of segments.
   """Gradient for SparseSegmentSqrtNWithNumSegments."""
   if _GetOpAttrOrNone(op, "sparse_gradient"):
     return _SparseSegmentReduceGradV2(op, grad, "sqrtn"), None, None, None
@@ -453,6 +611,11 @@ def _SparseSegmentSqrtNWithNumSegmentsGrad(op: ops.Operation, grad):
 
 
 def _SegmentMinOrMaxGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # HELPER: shared by the SegmentMin and SegmentMax gradients.
+  # Marks which input elements equal their segment's result, counts them per segment, divides the
+  # segment gradient evenly among the ties, gathers back by segment id and keeps the value only at
+  # selected positions (zeros elsewhere). Returns the data gradient and a null value for segment ids.
   """ Gradient for SegmentMin and SegmentMax. """
   zeros = array_ops.zeros_like(op.inputs[0], dtype=op.inputs[0].dtype)
   # Get the number of selected (minimum or maximum) elements in each segment.
@@ -469,12 +632,18 @@ def _SegmentMinOrMaxGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("SegmentMin")
 def _SegmentMinGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for SegmentMin; delegates to the shared segment min-or-max helper and returns
+  # its result (data gradient, null for segment ids).
   """Gradient for SegmentMin."""
   return _SegmentMinOrMaxGrad(op, grad)
 
 
 @ops.RegisterGradient("SegmentMax")
 def _SegmentMaxGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for SegmentMax; delegates to the shared segment min-or-max helper and returns
+  # its result (data gradient, null for segment ids).
   """Gradient for SegmentMax."""
   return _SegmentMinOrMaxGrad(op, grad)
 
@@ -482,6 +651,13 @@ def _SegmentMaxGrad(op: ops.Operation, grad):
 # pylint: disable=g-doc-args
 @ops.RegisterGradient("SegmentProd")
 def _SegmentProdGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for SegmentProd. Handles zeros without dividing by them: segments with two or
+  # more zeros get zero gradient; segments with exactly one zero give the product of the other
+  # entries to the zero element and zero to the rest; segments with no zeros use the segment product
+  # divided by the element. Implemented by replacing zeros with ones for a second segment product,
+  # gathering both products by segment id and selecting between them elementwise. Returns the data
+  # gradient and a null value for segment ids.
   """Gradient for SegmentProd.
 
   The gradient can be expressed for each segment by dividing the segment's
@@ -524,6 +700,13 @@ def _GatherDropNegatives(params,
                          ids,
                          zero_clipped_indices=None,
                          is_positive=None):
+  # [FUNCTION DOC]
+  # HELPER: shared by the unsorted segment gradients.
+  # Gathers rows of params by ids, returning zeros for rows whose id is negative. Inputs: params,
+  # ids, and optionally precomputed clipped indices and a positivity mask (to reuse across calls; when
+  # the mask is omitted it is computed and broadcast to the shape of the gathered result). If ids is
+  # null, both reusable values must be supplied. Returns a triple: gathered values with negatives
+  # zeroed, the indices clipped at zero, and the boolean mask of non-negative ids.
   """ Helper function for unsorted segment ops.
 
   Gathers params for
@@ -562,6 +745,12 @@ def _GatherDropNegatives(params,
 
 
 def _UnsortedSegmentMinOrMaxGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # HELPER: shared by the UnsortedSegmentMin and UnsortedSegmentMax gradients.
+  # Gathers the segment outputs for each element (zero for negative ids), marks elements equal to their
+  # segment result and with a non-negative id, counts them per segment, divides the gradient among
+  # ties, gathers back and keeps values only at selected positions. Returns a triple: data
+  # gradient and null values for segment ids and number of segments.
   """Gradient for UnsortedSegmentMin and UnsortedSegmentMax."""
   # Get the number of selected (minimum or maximum) elements in each segment.
   gathered_outputs, zero_clipped_indices, is_positive = _GatherDropNegatives(
@@ -584,24 +773,41 @@ def _UnsortedSegmentMinOrMaxGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("UnsortedSegmentSum")
 def _UnsortedSegmentSumGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for UnsortedSegmentSum. Gathers the output gradient by segment id, producing
+  # zeros for negative ids. Returns a triple: data gradient, null for segment ids, null for number
+  # of segments.
   """Gradient for UnsortedSegmentSum."""
   return _GatherDropNegatives(grad, op.inputs[1])[0], None, None
 
 
 @ops.RegisterGradient("UnsortedSegmentMax")
 def _UnsortedSegmentMaxGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for UnsortedSegmentMax; delegates to the shared unsorted min-or-max helper
+  # and returns its triple (data gradient, null, null).
   """ Gradient for UnsortedSegmentMax. """
   return _UnsortedSegmentMinOrMaxGrad(op, grad)
 
 
 @ops.RegisterGradient("UnsortedSegmentMin")
 def _UnsortedSegmentMinGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for UnsortedSegmentMin; delegates to the shared unsorted min-or-max helper
+  # and returns its triple (data gradient, null, null).
   """ Gradient for UnsortedSegmentMin. """
   return _UnsortedSegmentMinOrMaxGrad(op, grad)
 
 
 @ops.RegisterGradient("UnsortedSegmentProd")
 def _UnsortedSegmentProdGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for UnsortedSegmentProd. Same strategy as the SegmentProd gradient: segments
+  # with two or more zeros get zero gradient, a segment with exactly one zero gives the product of
+  # the other entries to that element, others use product divided by element. Segment ids are clipped
+  # at zero for gathering and negative ids are masked out when gathering the gradient. The division by
+  # the element may produce not-a-number or infinity values, but those positions are overridden by the
+  # selection. Returns the data gradient and null values for segment ids and number of segments.
   """ Gradient for UnsortedSegmentProd.
 
   The gradient can be expressed for each segment by dividing the segment's
@@ -650,18 +856,27 @@ def _UnsortedSegmentProdGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Abs")
 def _AbsGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Abs: the incoming gradient multiplied by the sign of the input. Returns a
+  # single tensor. No side effects.
   x = op.inputs[0]
   return grad * math_ops.sign(x)
 
 
 @ops.RegisterGradient("Neg")
 def _NegGrad(_, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Neg: returns the negated incoming gradient. The op argument is ignored.
   """Returns -grad."""
   return -grad
 
 
 @ops.RegisterGradient("Inv")
 def _InvGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Inv (legacy name of reciprocal). Calls the reciprocal-grad kernel with
+  # the forward output and incoming gradient, giving the negated gradient times the square of the
+  # output. Returns a single tensor.
   """Returns -grad * (1 / x^2)."""
   y = op.outputs[0]  # y = 1 / x
   return gen_math_ops.reciprocal_grad(y, grad)
@@ -669,6 +884,9 @@ def _InvGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Reciprocal")
 def _ReciprocalGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Reciprocal. Uses the reciprocal-grad kernel with the forward output and
+  # the incoming gradient (negative gradient times output squared). Returns a single tensor.
   """Returns -grad * (1 / x^2)."""
   y = op.outputs[0]  # y = 1 / x
   return gen_math_ops.reciprocal_grad(y, grad)
@@ -676,6 +894,12 @@ def _ReciprocalGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("InvGrad")
 def _InvGradGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Second-order gradient registered for InvGrad. Inputs: op with the forward inputs (output y, its
+  # gradient) and the incoming gradient. Under a control dependency on the gradient, uses conjugates
+  # and returns a pair: the gradient for the first input (minus two times conjugated gradient times
+  # second input times conjugated first input) and the reciprocal-grad of the conjugated first
+  # input and the gradient for the second input.
   b = op.inputs[1]
   # op.output[0]: y = -b * conj(a)^2
   with ops.control_dependencies([grad]):
@@ -686,6 +910,11 @@ def _InvGradGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("ReciprocalGrad")
 def _ReciprocalGradGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Second-order gradient registered for ReciprocalGrad; identical computation to the one for InvGrad.
+  # Under a control dependency on the gradient, returns a pair: gradient for the first input (minus two
+  # times conjugated gradient times second input times conjugated first input) and the reciprocal-grad
+  # of the conjugated first input and the gradient for the second input.
   b = op.inputs[1]
   # op.output[0]: y = -b * conj(a)^2
   with ops.control_dependencies([grad]):
@@ -696,6 +925,10 @@ def _ReciprocalGradGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Square")
 def _SquareGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Square: gradient times two times the conjugated input. A control
+  # dependency on the gradient delays computing the factor until the gradient is available. Returns a
+  # single tensor.
   x = op.inputs[0]
   # Added control dependencies to prevent 2*x from being computed too early.
   with ops.control_dependencies([grad]):
@@ -706,12 +939,19 @@ def _SquareGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Sqrt")
 def _SqrtGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Sqrt: uses the sqrt-grad kernel with the forward output and incoming
+  # gradient (half the gradient divided by the output). Returns a single tensor.
   y = op.outputs[0]  # y = x^(1/2)
   return gen_math_ops.sqrt_grad(y, grad)
 
 
 @ops.RegisterGradient("SqrtGrad")
 def _SqrtGradGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Second-order gradient registered for SqrtGrad. Inputs: op (first input a, second input, output y)
+  # and incoming gradient. Under a control dependency, computes the gradient divided by a and returns
+  # a pair: the negated conjugate of that quotient times the output y, and half the quotient.
   a = op.inputs[0]
   y = op.outputs[0]  # y = 0.5 * b / conj(a)
   with ops.control_dependencies([grad]):
@@ -721,6 +961,9 @@ def _SqrtGradGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Rsqrt")
 def _RsqrtGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Rsqrt: uses the rsqrt-grad kernel with the forward output and incoming
+  # gradient (minus half the gradient times the cube of the conjugated output). Returns a single tensor.
   """Returns -0.5 * grad * conj(y)^3."""
   y = op.outputs[0]  # y = x^(-1/2)
   return gen_math_ops.rsqrt_grad(y, grad)
@@ -728,6 +971,10 @@ def _RsqrtGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("RsqrtGrad")
 def _RsqrtGradGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Second-order gradient registered for RsqrtGrad. Returns a pair for the two inputs a and b: for a,
+  # minus one and a half times conjugate of the gradient times b times square of conjugated a; for b,
+  # the rsqrt-grad of the conjugated a and the gradient. Runs under a control dependency on the gradient.
   """Returns backprop gradient for f(a,b) = -0.5 * b * conj(a)^3."""
   a = op.inputs[0]  # a = x^{-1/2}
   b = op.inputs[1]  # backprop gradient for a
@@ -741,6 +988,9 @@ def _RsqrtGradGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Exp")
 def _ExpGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Exp: gradient times the conjugated forward output. Evaluated under a
+  # control dependency on the gradient. Returns a single tensor.
   """Returns grad * exp(x)."""
   y = op.outputs[0]  # y = e^x
   with ops.control_dependencies([grad]):
@@ -750,6 +1000,9 @@ def _ExpGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Expm1")
 def _Expm1Grad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Expm1: gradient times the exponential of the conjugated input. Evaluated
+  # under a control dependency on the gradient. Returns a single tensor.
   """Returns grad * exp(x)."""
   x = op.inputs[0]
   with ops.control_dependencies([grad]):
@@ -760,6 +1013,9 @@ def _Expm1Grad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Log")
 def _LogGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Log: gradient times the reciprocal of the conjugated input. Evaluated
+  # under a control dependency on the gradient. Returns a single tensor.
   """Returns grad * (1/x)."""
   x = op.inputs[0]
   with ops.control_dependencies([grad]):
@@ -769,6 +1025,9 @@ def _LogGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Log1p")
 def _Log1pGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Log1p: gradient times the reciprocal of one plus the conjugated input.
+  # Evaluated under a control dependency on the gradient. Returns a single tensor.
   """Returns grad * (1/(1 + x))."""
   x = op.inputs[0]
   with ops.control_dependencies([grad]):
@@ -778,6 +1037,12 @@ def _Log1pGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Xlogy")
 def _XLogyGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Xlogy (x times log y, defined as zero where x is zero). Computes the
+  # partial derivative with respect to x as xlogy of an indicator of nonzero x and y, and with respect
+  # to y as x divided by y (safe division). Each is multiplied by the gradient, summed over the
+  # broadcast axes found by the dynamic broadcast-gradient-args op and reshaped to the operand shape.
+  # Returns a pair of gradients for x and y.
   """Returns gradient of xlogy(x, y) with respect to x and y."""
   x = op.inputs[0]
   y = op.inputs[1]
@@ -795,6 +1060,11 @@ def _XLogyGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Xlog1py")
 def _XLog1pyGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Xlog1py (x times log of one plus y, zero where x is zero). Partial for x
+  # is xlog1py of a nonzero-x indicator and y; partial for y is x divided by one plus y (safe
+  # division). Each is multiplied by the gradient, summed over broadcast axes and reshaped. Returns a
+  # pair of gradients for x and y.
   """Returns gradient of xlog1py(x, y) with respect to x and y."""
   x = op.inputs[0]
   y = op.inputs[1]
@@ -812,6 +1082,10 @@ def _XLog1pyGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Xdivy")
 def _XDivyGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Xdivy (x divided by y, zero where x is zero). Partial for x is xdivy of a
+  # nonzero-x indicator and y; partial for y is negative x divided by y squared (safe division). Each
+  # is multiplied by the gradient, summed over broadcast axes and reshaped. Returns a pair for x and y.
   """Returns gradient of xdivy(x, y) with respect to x and y."""
   x = op.inputs[0]
   y = op.inputs[1]
@@ -829,6 +1103,9 @@ def _XDivyGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Sinh")
 def _SinhGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Sinh: gradient times the hyperbolic cosine of the conjugated input, under a
+  # control dependency on the gradient. Returns a single tensor.
   """Returns grad * cosh(x)."""
   x = op.inputs[0]
   with ops.control_dependencies([grad]):
@@ -838,6 +1115,9 @@ def _SinhGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Cosh")
 def _CoshGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Cosh: gradient times the hyperbolic sine of the conjugated input, under a
+  # control dependency on the gradient. Returns a single tensor.
   """Returns grad * sinh(x)."""
   x = op.inputs[0]
   with ops.control_dependencies([grad]):
@@ -847,6 +1127,9 @@ def _CoshGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Tanh")
 def _TanhGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Tanh: uses the tanh-grad kernel with the conjugated forward output and the
+  # incoming gradient. Runs under a control dependency on the gradient. Returns a single tensor.
   """Returns grad * (1 - tanh(x) * tanh(x))."""
   y = op.outputs[0]  # y = tanh(x)
   with ops.control_dependencies([grad]):
@@ -856,6 +1139,9 @@ def _TanhGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Asinh")
 def _AsinhGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Asinh: gradient divided by the hyperbolic cosine of the conjugated forward
+  # output. Under a control dependency on the gradient. Returns a single tensor.
   """Returns grad * 1/cosh(y)."""
   y = op.outputs[0]
   with ops.control_dependencies([grad]):
@@ -865,6 +1151,9 @@ def _AsinhGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Acosh")
 def _AcoshGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Acosh: gradient divided by the hyperbolic sine of the conjugated forward
+  # output. Under a control dependency on the gradient. Returns a single tensor.
   """Returns grad * 1/sinh(y)."""
   y = op.outputs[0]
   with ops.control_dependencies([grad]):
@@ -874,6 +1163,9 @@ def _AcoshGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Atanh")
 def _AtanhGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Atanh: gradient times the reciprocal of one minus the square of the
+  # conjugated input. Under a control dependency on the gradient. Returns a single tensor.
   """Returns grad * 1/ (1 - x^2)."""
   x = op.inputs[0]
   with ops.control_dependencies([grad]):
@@ -886,6 +1178,11 @@ def _AtanhGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("TanhGrad")
 def _TanhGradGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Second-order gradient registered for TanhGrad. Under a control dependency on the gradient and with
+  # both inputs conjugated, returns a pair: the gradient for the first input (gradient times minus two
+  # times the second input times the first input) and the tanh-grad of the first input and gradient for
+  # the second input.
   with ops.control_dependencies([grad]):
     a = math_ops.conj(op.inputs[0])
     b = math_ops.conj(op.inputs[1])
@@ -894,6 +1191,10 @@ def _TanhGradGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Erf")
 def _ErfGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Erf: gradient times two over the square root of pi times the exponential
+  # of minus the square of the conjugated input. The constant is created in the gradient's dtype. Under
+  # a control dependency on the gradient. Returns a single tensor.
   """Returns grad * 2/sqrt(pi) * exp(-x**2)."""
   x = op.inputs[0]
   two_over_root_pi = constant_op.constant(2 / np.sqrt(np.pi), dtype=grad.dtype)
@@ -904,6 +1205,9 @@ def _ErfGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Erfc")
 def _ErfcGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Erfc: like the Erf gradient but with the opposite sign (minus two over the
+  # square root of pi). Under a control dependency on the gradient. Returns a single tensor.
   """Returns -grad * 2/sqrt(pi) * exp(-x**2)."""
   x = op.inputs[0]
   minus_two_over_root_pi = constant_op.constant(
@@ -915,6 +1219,10 @@ def _ErfcGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Erfinv")
 def _ErfinvGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Erfinv: gradient times half the square root of pi times the exponential
+  # of the square of the forward output. Under a control dependency on the gradient. Returns a single
+  # tensor.
   """Returns grad * sqrt(pi) / 2 * exp(erfinv(x)**2)."""
   root_pi_over_two = constant_op.constant(np.sqrt(np.pi) / 2, dtype=grad.dtype)
   with ops.control_dependencies([grad]):
@@ -924,6 +1232,10 @@ def _ErfinvGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Ndtri")
 def _NdtriGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Ndtri (inverse normal CDF): gradient times the square root of two pi times
+  # the exponential of half the square of the forward output. Under a control dependency on the
+  # gradient. Returns a single tensor.
   """Returns grad * sqrt(2 * pi) * exp(ndtri(x)**2 / 2)."""
   root_two_pi = constant_op.constant(np.sqrt(2 * np.pi), dtype=grad.dtype)
   with ops.control_dependencies([grad]):
@@ -933,6 +1245,9 @@ def _NdtriGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Lgamma")
 def _LgammaGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Lgamma: gradient times the digamma of the conjugated input, under a control
+  # dependency on the gradient. Returns a single tensor.
   """Returns grad * digamma(x)."""
   x = op.inputs[0]
   with ops.control_dependencies([grad]):
@@ -942,6 +1257,9 @@ def _LgammaGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Digamma")
 def _DigammaGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Digamma: gradient times the trigamma (order-one polygamma) of the
+  # conjugated input, under a control dependency on the gradient. Returns a single tensor.
   """Compute gradient of the digamma function with respect to its argument."""
   x = op.inputs[0]
   with ops.control_dependencies([grad]):
@@ -952,6 +1270,9 @@ def _DigammaGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Dawsn")
 def _DawsnGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Dawsn (Dawson integral): gradient times one minus two times the input times
+  # the forward output. Under a control dependency on the gradient. Returns a single tensor.
   """Compute gradient of dawsn(x) with respect to its argument."""
   x = op.inputs[0]
   y = op.outputs[0]
@@ -961,6 +1282,9 @@ def _DawsnGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Expint")
 def _ExpintGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Expint (exponential integral): gradient times the exponential of the input
+  # divided by the input. Under a control dependency on the gradient. Returns a single tensor.
   """Compute gradient of expint(x) with respect to its argument."""
   x = op.inputs[0]
   with ops.control_dependencies([grad]):
@@ -969,6 +1293,9 @@ def _ExpintGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("FresnelCos")
 def _FresnelCosGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for FresnelCos: gradient times the cosine of half pi times the square of the
+  # input. Under a control dependency on the gradient. Returns a single tensor.
   """Compute gradient of fresnel_cos(x) with respect to its argument."""
   x = op.inputs[0]
   with ops.control_dependencies([grad]):
@@ -977,6 +1304,9 @@ def _FresnelCosGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("FresnelSin")
 def _FresnelSinGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for FresnelSin: gradient times the sine of half pi times the square of the
+  # input. Under a control dependency on the gradient. Returns a single tensor.
   """Compute gradient of fresnel_sin(x) with respect to its argument."""
   x = op.inputs[0]
   with ops.control_dependencies([grad]):
@@ -985,6 +1315,10 @@ def _FresnelSinGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Spence")
 def _SpenceGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Spence (dilogarithm): partial derivative is the log of the input divided by
+  # one minus the input, with the removable singularity at one replaced by minus one. Multiplied by the
+  # gradient under a control dependency on the gradient. Returns a single tensor.
   """Compute gradient of spence(x) with respect to its argument."""
   x = op.inputs[0]
   with ops.control_dependencies([grad]):
@@ -996,6 +1330,9 @@ def _SpenceGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("BesselI0")
 def _BesselI0Grad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for BesselI0: gradient times bessel_i1 of the input, under a control
+  # dependency on the gradient. Returns a single tensor.
   """Compute gradient of bessel_i0(x) with respect to its argument."""
   x = op.inputs[0]
   with ops.control_dependencies([grad]):
@@ -1005,6 +1342,10 @@ def _BesselI0Grad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("BesselI0e")
 def _BesselI0eGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for BesselI0e (exponentially scaled): gradient times bessel_i1e of the input
+  # minus sign of the input times the forward output. Under a control dependency on the gradient.
+  # Returns a single tensor.
   """Compute gradient of bessel_i0e(x) with respect to its argument."""
   x = op.inputs[0]
   y = op.outputs[0]
@@ -1015,6 +1356,10 @@ def _BesselI0eGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("BesselI1")
 def _BesselI1Grad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for BesselI1. The derivative is bessel_i0 minus output over input, which is
+  # undefined at zero, so a manual value of one is substituted where the input equals zero. Multiplied
+  # by the gradient under a control dependency on the gradient. Returns a single tensor.
   """Compute gradient of bessel_i1(x) with respect to its argument."""
   x = op.inputs[0]
   y = op.outputs[0]
@@ -1032,6 +1377,10 @@ def _BesselI1Grad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("BesselI1e")
 def _BesselI1eGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for BesselI1e. Derivative is bessel_i0e minus output times the sum of the sign
+  # and the reciprocal of the input; at zero the value is imputed as one half to avoid not-a-number.
+  # Multiplied by the gradient under a control dependency on the gradient. Returns a single tensor.
   """Compute gradient of bessel_i1e(x) with respect to its argument."""
   x = op.inputs[0]
   y = op.outputs[0]
@@ -1050,6 +1399,9 @@ def _BesselI1eGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("BesselK0")
 def _BesselK0Grad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for BesselK0: gradient times minus bessel_k1 of the input, under a control
+  # dependency on the gradient. Returns a single tensor.
   """Compute gradient of bessel_k0(x) with respect to its argument."""
   x = op.inputs[0]
   with ops.control_dependencies([grad]):
@@ -1059,6 +1411,9 @@ def _BesselK0Grad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("BesselK0e")
 def _BesselK0eGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for BesselK0e: gradient times the forward output minus bessel_k1e of the input.
+  # Under a control dependency on the gradient. Returns a single tensor.
   """Compute gradient of bessel_k0e(x) with respect to its argument."""
   x = op.inputs[0]
   y = op.outputs[0]
@@ -1069,6 +1424,10 @@ def _BesselK0eGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("BesselK1")
 def _BesselK1Grad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for BesselK1: gradient times minus bessel_k0 minus output over input. The
+  # derivative is undefined (not-a-number) at zero, which is accepted. Under a control dependency on
+  # the gradient. Returns a single tensor.
   """Compute gradient of bessel_k1(x) with respect to its argument."""
   x = op.inputs[0]
   y = op.outputs[0]
@@ -1081,6 +1440,10 @@ def _BesselK1Grad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("BesselK1e")
 def _BesselK1eGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for BesselK1e: gradient times output times one minus the reciprocal of the
+  # input, minus bessel_k0e of the input. Not-a-number at zero is accepted. Under a control dependency
+  # on the gradient. Returns a single tensor.
   """Compute gradient of bessel_k1e(x) with respect to its argument."""
   x = op.inputs[0]
   y = op.outputs[0]
@@ -1094,6 +1457,9 @@ def _BesselK1eGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("BesselJ0")
 def _BesselJ0Grad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for BesselJ0: gradient times minus bessel_j1 of the input, under a control
+  # dependency on the gradient. Returns a single tensor.
   """Compute gradient of bessel_j0(x) with respect to its argument."""
   x = op.inputs[0]
   with ops.control_dependencies([grad]):
@@ -1103,6 +1469,12 @@ def _BesselJ0Grad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("BesselJ1")
 def _BesselJ1Grad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the inline comment about the zero-input case talks about bessel_i0e and bessel_i2e
+  # (copied from the I1e gradient) although the code uses bessel_j0; behavior is unaffected.
+  # Gradient registered for BesselJ1: derivative is bessel_j0 minus output over input, with the value
+  # one half imputed where the input is zero. Multiplied by the gradient under a control dependency on
+  # the gradient. Returns a single tensor.
   """Compute gradient of bessel_j1(x) with respect to its argument."""
   x = op.inputs[0]
   y = op.outputs[0]
@@ -1120,6 +1492,9 @@ def _BesselJ1Grad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("BesselY0")
 def _BesselY0Grad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for BesselY0: gradient times minus bessel_y1 of the input, under a control
+  # dependency on the gradient. Returns a single tensor.
   """Compute gradient of bessel_y0(x) with respect to its argument."""
   x = op.inputs[0]
   with ops.control_dependencies([grad]):
@@ -1129,6 +1504,9 @@ def _BesselY0Grad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("BesselY1")
 def _BesselY1Grad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for BesselY1: gradient times bessel_y0 minus output over input; not-a-number at
+  # zero is accepted. Under a control dependency on the gradient. Returns a single tensor.
   """Compute gradient of bessel_y1(x) with respect to its argument."""
   x = op.inputs[0]
   y = op.outputs[0]
@@ -1141,6 +1519,11 @@ def _BesselY1Grad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Igamma")
 def _IgammaGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Igamma (regularized lower incomplete gamma). Partial for a comes from the
+  # igamma-grad-a kernel; partial for x is computed in log space as the exponential of minus x plus
+  # (a minus one) times log x minus lgamma of a, to avoid overflow. Each partial is multiplied by the
+  # gradient, summed over broadcast axes and reshaped to the operand shape. Returns a pair for a and x.
   """Returns gradient of igamma(a, x) with respect to a and x."""
   a = op.inputs[0]
   x = op.inputs[1]
@@ -1160,6 +1543,9 @@ def _IgammaGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Igammac")
 def _IgammacGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Igammac (upper incomplete gamma, one minus Igamma). Computes the Igamma
+  # gradients with the same op and gradient and returns both negated, as a pair for a and x.
   """Returns gradient of igammac(a, x) = 1 - igamma(a, x) w.r.t. a and x."""
   igamma_grad_a, igamma_grad_x = _IgammaGrad(op, grad)
   return (-igamma_grad_a, -igamma_grad_x)
@@ -1167,6 +1553,11 @@ def _IgammacGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Betainc")
 def _BetaincGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Betainc. Only the gradient with respect to x is implemented: the density
+  # of the beta distribution, computed in log space with xlog1py and xlogy and the log beta function,
+  # multiplied by the gradient, summed over broadcast axes and reshaped. Returns a triple with null
+  # values for a and b and the gradient for x. The input shapes are compared against the shape of a only.
   """Returns gradient of betainc(a, b, x) with respect to x."""
   # TODO(ebrevdo): Perhaps add the derivative w.r.t. a, b
   a, b, x = op.inputs
@@ -1195,6 +1586,10 @@ def _BetaincGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Zeta")
 def _ZetaGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Zeta (Hurwitz zeta). Only the derivative with respect to q is implemented:
+  # minus x times zeta of x plus one and q (conjugated inputs). It is multiplied by the gradient, summed
+  # over broadcast axes and reshaped. Returns a pair: null for x, gradient for q.
   """Returns gradient of zeta(x, q) with respect to x and q."""
   # TODO(tillahoffmann): Add derivative with respect to x
   x = op.inputs[0]
@@ -1214,6 +1609,10 @@ def _ZetaGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Polygamma")
 def _PolygammaGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Polygamma. Only the derivative with respect to x is implemented: polygamma
+  # of n plus one and x (conjugated inputs). Multiplied by the gradient, summed over broadcast axes and
+  # reshaped. Returns a pair: null for n, gradient for x.
   """Returns gradient of psi(n, x) with respect to n and x."""
   # TODO(tillahoffmann): Add derivative with respect to n
   n = op.inputs[0]
@@ -1233,6 +1632,9 @@ def _PolygammaGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Sigmoid")
 def _SigmoidGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Sigmoid: uses the sigmoid-grad kernel with the conjugated forward output
+  # and the incoming gradient, under a control dependency on the gradient. Returns a single tensor.
   """Returns grad * sigmoid(x) * (1 - sigmoid(x))."""
   y = op.outputs[0]  # y = sigmoid(x)
   with ops.control_dependencies([grad]):
@@ -1242,6 +1644,10 @@ def _SigmoidGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("SigmoidGrad")
 def _SigmoidGradGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Second-order gradient registered for SigmoidGrad. With both inputs conjugated and under a control
+  # dependency on the gradient, returns a pair: gradient times second input times (one minus two times
+  # the first input), and the sigmoid-grad of the first input and the gradient.
   with ops.control_dependencies([grad]):
     a = math_ops.conj(op.inputs[0])
     b = math_ops.conj(op.inputs[1])
@@ -1251,6 +1657,9 @@ def _SigmoidGradGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Sign")
 def _SignGrad(op: ops.Operation, _):
+  # [FUNCTION DOC]
+  # Gradient registered for Sign: always zero. Returns a zeros tensor shaped like the input; the
+  # incoming gradient is ignored.
   """Returns 0."""
   x = op.inputs[0]
   return array_ops.zeros_like(x)
@@ -1258,6 +1667,9 @@ def _SignGrad(op: ops.Operation, _):
 
 @ops.RegisterGradient("Sin")
 def _SinGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Sin: gradient times cosine of the conjugated input, under a control
+  # dependency on the gradient. Returns a single tensor.
   """Returns grad * cos(x)."""
   x = op.inputs[0]
   with ops.control_dependencies([grad]):
@@ -1267,6 +1679,9 @@ def _SinGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Cos")
 def _CosGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Cos: minus gradient times sine of the conjugated input, under a control
+  # dependency on the gradient. Returns a single tensor.
   """Returns grad * -sin(x)."""
   x = op.inputs[0]
   with ops.control_dependencies([grad]):
@@ -1276,6 +1691,12 @@ def _CosGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Tan")
 def _TanGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the result is the gradient times one over secant squared, but the
+  # code multiplies the gradient by secant squared (the correct derivative of tangent).
+  # Gradient registered for Tan. Computes secant as the reciprocal of the cosine of the conjugated
+  # input, squares it and multiplies by the gradient, under a control dependency on the gradient.
+  # Returns a single tensor.
   """Returns grad * 1/sec^2(x)."""
   x = op.inputs[0]
   with ops.control_dependencies([grad]):
@@ -1287,6 +1708,9 @@ def _TanGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Asin")
 def _AsinGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Asin: gradient times the reciprocal of the square root of one minus the
+  # square of the conjugated input, under a control dependency on the gradient. Returns a single tensor.
   """Returns grad * 1/sqrt(1-x^2)."""
   x = op.inputs[0]
   with ops.control_dependencies([grad]):
@@ -1300,6 +1724,9 @@ def _AsinGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Acos")
 def _AcosGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Acos: like the Asin gradient but negated (minus gradient over the square
+  # root of one minus x squared), under a control dependency on the gradient. Returns a single tensor.
   """Returns grad * -1/sqrt(1-x^2)."""
   x = op.inputs[0]
   with ops.control_dependencies([grad]):
@@ -1313,6 +1740,9 @@ def _AcosGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Atan")
 def _AtanGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Atan: gradient times the reciprocal of one plus the square of the
+  # conjugated input, under a control dependency on the gradient. Returns a single tensor.
   """Returns grad * 1/ (1 + x^2)."""
   x = op.inputs[0]
   with ops.control_dependencies([grad]):
@@ -1325,6 +1755,11 @@ def _AtanGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Atan2")
 def _Atan2Grad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Atan2 with inputs y and x. Divides the gradient by the sum of squares of
+  # y and x, giving the gradient for y as x times that and for x as minus y times that. The pair is
+  # reduced to the operand shapes with the broadcast reduction helper; the argument order passed to it
+  # is deliberately swapped relative to the helper's parameter names. Returns a pair for y and x.
   """Returns grad * x / (y^2 + x^2), grad * -y / (y^2 + x^2)."""
   y = op.inputs[0]
   x = op.inputs[1]
@@ -1339,12 +1774,19 @@ def _Atan2Grad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("AddN")
 def _AddNGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for AddN: every input receives the same incoming gradient (no broadcasting).
+  # Returns a list with one entry per input, all referring to the same gradient.
   """Copies the gradient to all inputs."""
   # Not broadcasting.
   return [grad] * len(op.inputs)
 
 
 def _ShapesFullySpecifiedAndEqual(x, y, grad):
+  # [FUNCTION DOC]
+  # HELPER: fast-path check used by Add, Sub, Mul, MulNoNan and SquaredDifference gradients.
+  # Returns true when the static shapes of x, y and grad are known, fully defined and identical, so no
+  # broadcast reduction is needed. Pure check using protected shape accessors; no side effects.
   # pylint: disable=protected-access
   x_shape = x._shape_tuple()
   y_shape = y._shape_tuple()
@@ -1357,6 +1799,13 @@ def _ShapesFullySpecifiedAndEqual(x, y, grad):
 @ops.RegisterGradient("Add")
 @ops.RegisterGradient("AddV2")
 def _AddGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Add and AddV2. If the op can skip input gradients and the second input is a
+  # scalar and its gradient is skipped, returns the gradient and null. When the gradient is a tensor and
+  # x, y and gradient have the same fully known shape, returns the gradient for both. Otherwise
+  # passes the gradient (or null for skipped inputs) through the broadcast reduction helper to match
+  # operand shapes. Ops lacking the skip-indices attribute are treated as skipping nothing. Returns a
+  # pair of gradients for x and y.
   """Gradient for Add."""
   y = op.inputs[1]
   try:
@@ -1380,6 +1829,11 @@ def _AddGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Sub")
 def _SubGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Sub. Same structure as the Add gradient but the second input receives the
+  # negated gradient: scalar fast path (gradient, null), same-static-shape fast path (gradient,
+  # negated gradient), otherwise the broadcast-reduced gradients honoring skipped inputs. Returns a pair
+  # for x and y.
   """Gradient for Sub."""
   y = op.inputs[1]
   try:
@@ -1403,6 +1857,13 @@ def _SubGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Mul")
 def _MulGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Mul (elementwise multiply). Fast path when the second input is a scalar and
+  # its gradient is skipped: gradient times conjugated y, null. Fast path for same fully known shapes and
+  # float32 or int32 gradients: gradient times y and gradient times x. Otherwise asserts both inputs have
+  # the same base dtype (assertion error if not), computes gradient times conjugated y for x and
+  # conjugated x times gradient for y (null for skipped inputs), and reduces over broadcast axes.
+  # Returns a pair for x and y.
   """The gradient of scalar multiplication."""
   y = op.inputs[1]
   try:
@@ -1437,6 +1898,11 @@ def _MulGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("MulNoNan")
 def _MulNoNanGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for MulNoNan. Computes the gradients with the mul-no-nan kernel (gradient with
+  # y for x, x with gradient for y). If the shapes are fully known and equal, returns them directly;
+  # otherwise asserts both inputs have the same base dtype and reduces them over broadcast axes.
+  # Returns a pair for x and y. Does not honor skipped input indices.
   """The gradient of scalar multiplication with NaN-suppression."""
   x = op.inputs[0]
   y = op.inputs[1]
@@ -1453,6 +1919,10 @@ def _MulNoNanGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Div")
 def _DivGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Div. Gradient for x is the gradient divided by the conjugated y; gradient for
+  # y is the gradient times minus conjugated x over conjugated y squared. Both are reduced over broadcast
+  # axes. Returns a pair for x and y.
   """The gradient for the Div operator."""
   x = op.inputs[0]
   y = op.inputs[1]
@@ -1465,12 +1935,19 @@ def _DivGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("FloorDiv")
 def _FloorDivGrad(_, unused_grad):
+  # [FUNCTION DOC]
+  # Gradient registered for FloorDiv: not differentiable, returns a pair of null values and ignores
+  # its arguments.
   """The gradient for the FloorDiv operator."""
   return None, None
 
 
 @ops.RegisterGradient("FloorMod")
 def _FloorModGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for FloorMod: the gradient for x is the incoming gradient and for y is the
+  # gradient times minus floor division of conjugated x by conjugated y. Both are reduced over broadcast
+  # axes. Returns a pair for x and y.
   """Returns grad * (1, -floor(x/y))."""
   x = math_ops.conj(op.inputs[0])
   y = math_ops.conj(op.inputs[1])
@@ -1482,11 +1959,18 @@ def _FloorModGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("TruncateDiv")
 def _TruncateDivGrad(_, unused_grad):
+  # [FUNCTION DOC]
+  # Gradient registered for TruncateDiv: not differentiable, returns a pair of null values and ignores
+  # its arguments.
   return None, None
 
 
 @ops.RegisterGradient("RealDiv")
 def _RealDivGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for RealDiv: same math as the Div gradient but using real division. Gradient for x
+  # is the gradient over conjugated y, for y it is the gradient times minus conjugated x over conjugated y
+  # squared; both reduced over broadcast axes. Returns a pair for x and y.
   """RealDiv op gradient."""
   x = op.inputs[0]
   y = op.inputs[1]
@@ -1499,6 +1983,10 @@ def _RealDivGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("DivNoNan")
 def _DivNoNanGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for DivNoNan: like the Div gradient but with safe division (zero where the
+  # divisor is zero). Gradient for x is gradient over conjugated y, for y the gradient times minus
+  # conjugated x over conjugated y squared, both reduced over broadcast axes. Returns a pair.
   """DivNoNan op gradient."""
   x = math_ops.conj(op.inputs[0])
   y = math_ops.conj(op.inputs[1])
@@ -1509,6 +1997,14 @@ def _DivNoNanGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Pow")
 def _PowGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring mentions z, which is not defined; it presumably denotes the forward
+  # output of the op.
+  # Gradient registered for Pow. Gradient for x is gradient times y times x raised to y minus one
+  # (conjugated). Gradient for y is gradient times conjugated output times log of x, where the log is
+  # replaced by zero for non-positive x (real case) or for zero x (complex case) to avoid false
+  # singularities. Honors skipped input indices (with a fast path for a scalar exponent), then reduces
+  # over broadcast axes. Returns a pair for x and y.
   """Returns grad * (y*x^(y-1), z*log(x))."""
   x = op.inputs[0]
   y = op.inputs[1]
@@ -1545,6 +2041,11 @@ def _PowGrad(op: ops.Operation, grad):
 
 
 def _MaximumMinimumGradInputOnly(op: ops.Operation, grad, selector_op):
+  # [FUNCTION DOC]
+  # HELPER: fast path of the Maximum/Minimum gradient when only the first input's gradient is needed.
+  # Inputs: the op, the gradient and a comparison function. Builds a mask by applying the comparison to x
+  # and y, and keeps the gradient where the mask is true and zero elsewhere. Returns a pair: that
+  # gradient and null for y (the second input is a scalar whose gradient is skipped).
   x = op.inputs[0]
   y = op.inputs[1]
   zeros = array_ops.zeros_like(grad)
@@ -1555,6 +2056,13 @@ def _MaximumMinimumGradInputOnly(op: ops.Operation, grad, selector_op):
 
 
 def _MaximumMinimumGrad(op: ops.Operation, grad, selector_op):
+  # [FUNCTION DOC]
+  # HELPER: shared by the Maximum and Minimum gradients.
+  # Inputs: the op, the gradient, and a comparison function (greater-equal for maximum, less-equal for
+  # minimum) producing a mask of where x is selected. If the second input is a scalar whose gradient is
+  # skipped, uses the input-only fast path. Otherwise the gradient for x is the gradient where the mask
+  # is true (zeros elsewhere) and for y the gradient where it is false, with null for skipped inputs;
+  # both are reduced over broadcast axes. Returns a pair for x and y.
   """Factor out the code for the gradient of Maximum or Minimum."""
   y = op.inputs[1]
   try:
@@ -1582,18 +2090,30 @@ def _MaximumMinimumGrad(op: ops.Operation, grad, selector_op):
 
 @ops.RegisterGradient("Maximum")
 def _MaximumGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Maximum: delegates to the shared helper using the greater-or-equal
+  # comparison, so x receives the gradient where it is at least y (ties go to x). Returns a pair.
   """Returns grad*(x >= y, x < y) with type of grad."""
   return _MaximumMinimumGrad(op, grad, math_ops.greater_equal)
 
 
 @ops.RegisterGradient("Minimum")
 def _MinimumGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Minimum: delegates to the shared helper using the less-or-equal comparison,
+  # so x receives the gradient where it is at most y (ties go to x). Returns a pair.
   """Returns grad*(x <= y, x > y) with type of grad."""
   return _MaximumMinimumGrad(op, grad, math_ops.less_equal)
 
 
 @ops.RegisterGradient("SquaredDifference")
 def _SquaredDifferenceGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for SquaredDifference. Computes two times the gradient times the difference of
+  # x and y, under a control dependency on the gradient (scalar multiplication keeps sparse gradients
+  # convertible). The gradient for x is that value and for y its negation. With equal fully known shapes
+  # returns them directly; otherwise honors skipped input indices and reduces over broadcast axes.
+  # Returns a pair for x and y.
   """Returns the gradient for (x-y)^2."""
   x = op.inputs[0]
   y = op.inputs[1]
@@ -1633,6 +2153,10 @@ ops.NotDifferentiable("LogicalNot")
 
 @ops.RegisterGradient("Select")
 def _SelectGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Select (legacy condition/then/else op). The condition gets null; the then
+  # branch gets the gradient where the condition is true and zeros elsewhere; the else branch the
+  # opposite. Returns a triple for condition, x and y.
   c = op.inputs[0]
   x = op.inputs[1]
   zeros = array_ops.zeros_like(x)
@@ -1645,6 +2169,11 @@ def _SelectGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("SelectV2")
 def _SelectGradV2(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for SelectV2, which allows broadcasting. Creates a scalar zero in the gradient
+  # dtype, selects the gradient for the then and else branches using the condition, and reduces each
+  # over broadcast axes against the output shape. Returns a triple: null for the condition, then
+  # gradient for x, and else gradient for y.
   c = op.inputs[0]
   x = op.inputs[1]
   y = op.inputs[2]
@@ -1658,6 +2187,11 @@ def _SelectGradV2(op: ops.Operation, grad):
 
 
 def _MatMulGradAgainstFirstOnly(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # HELPER: MatMul gradient when only the first input needs a gradient.
+  # Using the conjugated second input and the transpose attributes of the op, produces the first
+  # input's gradient with the appropriate mat-mul transposition for the four transpose combinations,
+  # marking it as a gradient for the first operand. Returns a pair: that gradient and null.
   """Gradient for MatMul, only for the first input."""
   t_a = op.get_attr("transpose_a")
   t_b = op.get_attr("transpose_b")
@@ -1676,6 +2210,11 @@ def _MatMulGradAgainstFirstOnly(op: ops.Operation, grad):
 
 
 def _MatMulGradAgainstSecondOnly(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # HELPER: MatMul gradient when only the second input needs a gradient.
+  # Using the conjugated first input and the transpose attributes, produces the second input's gradient
+  # with the right operand order and transposition for each of the four transpose combinations.
+  # Returns a pair: null and that gradient.
   """Gradient for MatMul, only for the second input."""
   t_a = op.get_attr("transpose_a")
   t_b = op.get_attr("transpose_b")
@@ -1695,6 +2234,12 @@ def _MatMulGradAgainstSecondOnly(op: ops.Operation, grad):
 
 @ops.RegisterGradient("MatMul")
 def _MatMulGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for MatMul. If the op reports skipped input indices, uses the single-input
+  # helpers; ops without that attribute fall through to the full computation. Otherwise reads the
+  # transpose attributes and computes both gradients with mat-mul calls on the conjugated inputs,
+  # choosing operand order and transposition for each of the four transpose combinations. Returns a pair
+  # of gradients for the first and second input.
   """Gradient for MatMul."""
   try:
     skip_input_indices = op.skip_input_indices
@@ -1732,6 +2277,12 @@ def _MatMulGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("SparseMatMul")
 def _SparseMatMulGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for SparseMatMul. Reads the transpose attributes and the sparsity hints of both
+  # inputs, and guesses whether the gradient is sparse (in graph mode when its producer is a relu
+  # gradient op). Computes both gradients with a nested helper that calls the general matmul with those
+  # sparsity hints, for each of the four transpose combinations. Returns a pair of gradients for the
+  # first and second input, cast back to each input's dtype.
   """Gradient for SparseMatMul."""
 
   t_a = op.get_attr("transpose_a")
@@ -1744,6 +2295,12 @@ def _SparseMatMulGrad(op: ops.Operation, grad):
       grad.op.type == "ReluGrad")
 
   def _SparseMatMul(t1, t2, out_dtype, transpose_a=False, transpose_b=False):
+    # [FUNCTION DOC]
+    # HELPER: nested helper that builds one matmul with sparsity hints for the SparseMatMul gradient.
+    # Inputs: two tensors, the output dtype, and transpose flags for each (default false). Asserts both
+    # tensors are known in the sparsity table of the enclosing function. Transposes the second tensor
+    # explicitly if requested, then calls the general matmul with the sparsity hints, and casts the
+    # product to the output dtype if it differs. Returns the product tensor.
     """Helper function to create SparseMatMul op."""
 
     assert t1.ref() in is_sparse and t2.ref() in is_sparse
@@ -1784,27 +2341,40 @@ def _SparseMatMulGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Floor")
 def _FloorGrad(_, unused_grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Floor: not differentiable, returns a list with one null value.
   return [None]
 
 
 @ops.RegisterGradient("Ceil")
 def _CeilGrad(_, unused_grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Ceil: not differentiable, returns a list with one null value.
   return [None]
 
 
 @ops.RegisterGradient("Round")
 def _RoundGrad(_, unused_grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Round: not differentiable, returns a list with one null value.
   return [None]
 
 
 @ops.RegisterGradient("Rint")
 def _RintGrad(_, unused_grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Rint: returns a list with one null value (treated as no gradient flow).
   # the gradient of Rint is zero
   return [None]
 
 
 @ops.RegisterGradient("BatchMatMul")
 def _BatchMatMul(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for BatchMatMul (version one, no broadcasting of batch dimensions). Reads the
+  # adjoint attributes of the op and computes the gradients for x and y with batched matmul calls whose
+  # operand order and adjoint flags depend on the four adjoint combinations. Returns a pair of
+  # gradients for x and y.
   """Returns the gradient of x and y given the gradient of x * y."""
   x = op.inputs[0]
   y = op.inputs[1]
@@ -1832,6 +2402,12 @@ def _BatchMatMul(op: ops.Operation, grad):
 @ops.RegisterGradient("BatchMatMulV2")
 @ops.RegisterGradient("BatchMatMulV3")
 def _BatchMatMulV2(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for BatchMatMulV2 and BatchMatMulV3. Computes the gradients like the version
+  # one function, additionally marking the matmul calls as gradient calls. If the static batch shapes
+  # could differ (higher-rank inputs whose batch dimensions are not fully known and equal), the
+  # gradients are summed over the broadcast batch dimensions and reshaped to the inputs' shapes using
+  # the dynamic broadcast-gradient-args op. Returns a pair of gradients for x and y.
   """Returns the gradient of x and y given the gradient of x * y."""
   x = op.inputs[0]
   y = op.inputs[1]
@@ -1897,6 +2473,10 @@ ops.NotDifferentiable("LinSpace")
 
 @ops.RegisterGradient("Complex")
 def _ComplexGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Complex: the gradient for the real part is the real component of the
+  # incoming gradient, and for the imaginary part its imaginary component, reduced over broadcast
+  # axes. Returns a pair for the two inputs.
   """Returns the real and imaginary components of 'grad', respectively."""
   x = op.inputs[0]
   y = op.inputs[1]
@@ -1907,6 +2487,9 @@ def _ComplexGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Real")
 def _RealGrad(_, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Real: builds a complex gradient with the incoming real gradient as the real
+  # part and zero as the imaginary part. Returns a single complex tensor.
   """Returns 'grad' as the real part and set the imaginary part 0."""
   zero = constant_op.constant(0, dtype=grad.dtype)
   return math_ops.complex(grad, zero)
@@ -1914,6 +2497,9 @@ def _RealGrad(_, grad):
 
 @ops.RegisterGradient("Imag")
 def _ImagGrad(_, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Imag: builds a complex gradient with zero real part and the incoming
+  # gradient as the imaginary part. Returns a single complex tensor.
   """Returns 'grad' as the imaginary part and set the real part 0."""
   zero = constant_op.constant(0, dtype=grad.dtype)
   return math_ops.complex(zero, grad)
@@ -1921,6 +2507,10 @@ def _ImagGrad(_, grad):
 
 @ops.RegisterGradient("Angle")
 def _AngleGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Angle: minus the (complexified) gradient times the reciprocal of a complex
+  # number whose real part is the input's imaginary part and whose imaginary part is the input's real
+  # part. Evaluated under a control dependency on the gradient. Returns a single complex tensor.
   """Returns `-grad / (Im(x) + i Re(x))`."""
   x = op.inputs[0]
   with ops.control_dependencies([grad]):
@@ -1934,12 +2524,18 @@ def _AngleGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Conj")
 def _ConjGrad(_, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Conj: returns the complex conjugate of the incoming gradient.
   """Returns the complex conjugate of grad."""
   return math_ops.conj(grad)
 
 
 @ops.RegisterGradient("ComplexAbs")
 def _ComplexAbsGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for ComplexAbs: the real gradient promoted to complex times the input, safely
+  # divided by the forward output promoted to complex (zero where the magnitude is zero). Returns a
+  # single complex tensor.
   """Returns the gradient of ComplexAbs."""
   return math_ops.div_no_nan(
       math_ops.complex(
@@ -1950,6 +2546,10 @@ def _ComplexAbsGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Cast")
 def _CastGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Cast. If both the source and destination dtypes are floating point or
+  # complex types (float16, float32, float64, bfloat16, complex64, complex128), casts the gradient back
+  # to the source dtype; otherwise returns a null value (no gradient). Returns one tensor or null.
   t = [
       dtypes.float16, dtypes.float32, dtypes.float64, dtypes.bfloat16,
       dtypes.complex64, dtypes.complex128
@@ -1964,6 +2564,10 @@ def _CastGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Cross")
 def _CrossGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Cross (three-element cross product). Returns a pair: the cross product of
+  # the second input with the gradient for the first input, and the cross product of the gradient with
+  # the first input for the second input.
   u = op.inputs[0]
   v = op.inputs[1]
   return (math_ops.cross(v, grad), math_ops.cross(grad, u))
@@ -1971,6 +2575,10 @@ def _CrossGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Cumsum")
 def _CumsumGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Cumsum. The gradient is a cumulative sum of the incoming gradient along the
+  # same axis with the same exclusive flag but the reverse flag flipped. Returns a list: that tensor and
+  # null for the axis.
   axis = op.inputs[1]
   exclusive = op.get_attr("exclusive")
   reverse = op.get_attr("reverse")
@@ -1982,6 +2590,11 @@ def _CumsumGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Cumprod")
 def _CumprodGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for Cumprod. Recomputes the cumulative product of the input, multiplies it by
+  # the gradient, takes a reverse-direction cumulative sum with the same exclusive flag and divides by
+  # the input with safe division (zero where the input is zero, so gradients at zeros are dropped,
+  # which is not the exact derivative). Returns a list: input gradient and null for the axis.
   x = op.inputs[0]
   axis = op.inputs[1]
   exclusive = op.get_attr("exclusive")
@@ -1997,6 +2610,12 @@ def _CumprodGrad(op: ops.Operation, grad):
 # pylint: disable=missing-function-docstring
 @ops.RegisterGradient("CumulativeLogsumexp")
 def _CumulativeLogsumexpGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for CumulativeLogsumexp. Splits the gradient into positive and negative parts,
+  # takes the log of each (using the dtype minimum where the part is empty) for numerical stability,
+  # runs a reverse-direction cumulative logsumexp of each log gradient minus the forward output with
+  # the same exclusive flag, adds the input, exponentiates and subtracts the negative part from the
+  # positive one. Returns a list: input gradient and null for the axis.
   x = op.inputs[0]
   axis = op.inputs[1]
   cumulative_logsumexp = op.outputs[0]
@@ -2031,6 +2650,11 @@ def _CumulativeLogsumexpGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("NextAfter")
 def _NextAfterGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient registered for NextAfter. Treats the derivative with respect to the first input as one and
+  # with respect to the second as zero; each is multiplied by the gradient, summed over broadcast axes
+  # found dynamically, and reshaped to the input shape. Under a control dependency on the gradient.
+  # Returns a pair for the two inputs.
   """Returns gradient of nextafter(x1, x2) with respect to x1 and x2."""
   x1 = op.inputs[0]
   x2 = op.inputs[1]
