@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit tests for revived type registration matching. At import time it registers a test type
+# with four versions (differing in producer, consumer and bad consumer constraints) and then
+# checks which version is saved and which is chosen on load for various protos.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,8 +26,14 @@ from tensorflow.python.trackable import autotrackable
 
 
 class CustomTestClass(autotrackable.AutoTrackable):
+  # [CLASS DOC]
+  # HELPER: trackable test type whose single attribute, version, records which registered
+  # version's object factory created it. Registered below as the type test_type.
 
   def __init__(self, version):
+    # [FUNCTION DOC]
+    # Input: version, the integer identifying which registration created this object. Stores it
+    # as an attribute. Returns nothing.
     self.version = version
 
 
@@ -50,11 +60,21 @@ revived_types.register_revived_type(
 
 
 class RegistrationMatchingTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for version matching in the revived type registry. Relies on the module-level
+  # registration of test_type, whose versions are: 1 (producer min 1, consumer min 1), 2
+  # (producer min 2, consumer min 1), 3 (producer min 3, consumer min 2) and 4 (producer min 4,
+  # consumer min 2, bad consumer 3).
 
   def test_save_typecheck(self):
+    # [FUNCTION DOC]
+    # Scenario: serializing a plain auto-trackable object, which matches no registered type,
+    # returns nothing (null).
     self.assertIs(revived_types.serialize(autotrackable.AutoTrackable()), None)
 
   def test_load_identifier_not_found(self):
+    # [FUNCTION DOC]
+    # Scenario: deserializing a proto with an unregistered identifier returns nothing (null).
     nothing_matches = revived_types.deserialize(
         saved_object_graph_pb2.SavedUserObject(
             identifier="_unregistered_type",
@@ -65,6 +85,10 @@ class RegistrationMatchingTest(test.TestCase):
     self.assertIs(nothing_matches, None)
 
   def test_most_recent_version_saved(self):
+    # [FUNCTION DOC]
+    # Scenario: serializes an instance of the test class. Asserts the proto carries the bad
+    # consumer list of the newest version (three), and that deserializing it yields an instance
+    # created by version four.
     serialized = revived_types.serialize(CustomTestClass(None))
     self.assertEqual([3], serialized.version.bad_consumers)
     deserialized, _ = revived_types.deserialize(serialized)
@@ -72,6 +96,9 @@ class RegistrationMatchingTest(test.TestCase):
     self.assertEqual(4, deserialized.version)
 
   def test_min_consumer_version(self):
+    # [FUNCTION DOC]
+    # Scenario: a proto for test_type with producer and minimum consumer version five, higher
+    # than every registered version. Asserts deserialization returns nothing (null).
     nothing_matches = revived_types.deserialize(
         saved_object_graph_pb2.SavedUserObject(
             identifier="test_type",
@@ -82,6 +109,10 @@ class RegistrationMatchingTest(test.TestCase):
     self.assertIs(nothing_matches, None)
 
   def test_bad_versions(self):
+    # [FUNCTION DOC]
+    # Scenario: a proto for test_type with producer five, minimum consumer one, and bad
+    # consumers four and three. Versions four and three are skipped, so asserts the object
+    # comes from version two.
     deserialized, _ = revived_types.deserialize(
         saved_object_graph_pb2.SavedUserObject(
             identifier="test_type",
@@ -92,6 +123,10 @@ class RegistrationMatchingTest(test.TestCase):
     self.assertEqual(2, deserialized.version)
 
   def test_min_producer_version(self):
+    # [FUNCTION DOC]
+    # Scenario: a proto for test_type with producer version three, minimum consumer zero and no
+    # bad consumers. Version four requires producer four so is skipped; asserts the object
+    # comes from version three.
     deserialized, _ = revived_types.deserialize(
         saved_object_graph_pb2.SavedUserObject(
             identifier="test_type",

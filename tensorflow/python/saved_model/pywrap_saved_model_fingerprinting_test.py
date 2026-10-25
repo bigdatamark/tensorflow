@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Tests for the native saved model fingerprinting bindings: creating and reading fingerprints,
+# building singleprints, and the missing-fingerprint error. Depends on saved model test data in the
+# source tree. Defines an open source flag, updated by the export tooling, that skips chunked-model
+# checks.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,7 +27,16 @@ is_oss = True  # Updated by copybara.
 
 
 class FingerprintingTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the native fingerprinting bindings (creating and reading fingerprints and
+  # singleprints). Uses saved model test data directories from the source tree and compares
+  # against hard-coded hash values. Module flag marks whether the build is open source.
   def test_create_fingerprint_def(self):
+    # [FUNCTION DOC]
+    # Scenario: computes a fingerprint from the VarsAndArithmeticObjectGraph test model and
+    # parses the returned bytes. Asserts a positive saved model checksum, fixed graph, signature
+    # and object graph hashes, and a positive checkpoint hash (the checksum and checkpoint hash
+    # are non-deterministic so only their sign is checked).
     export_dir = test.test_src_dir_path(
         "cc/saved_model/testdata/VarsAndArithmeticObjectGraph")
 
@@ -40,6 +54,10 @@ class FingerprintingTest(test.TestCase):
     self.assertGreater(fingerprint.checkpoint_hash, 0)
 
   def test_read_saved_model_fingerprint(self):
+    # [FUNCTION DOC]
+    # Scenario: reads the stored fingerprint file of the test model. Asserts a positive
+    # checksum, fixed graph, signature and object graph hashes (different from the computed
+    # ones), a positive checkpoint hash and producer version one.
     export_dir = test.test_src_dir_path(
         "cc/saved_model/testdata/VarsAndArithmeticObjectGraph")
     fingerprint = fingerprint_pb2.FingerprintDef().FromString(
@@ -53,6 +71,10 @@ class FingerprintingTest(test.TestCase):
     self.assertEqual(fingerprint.version.producer, 1)
 
   def test_read_nonexistent_fingerprint(self):
+    # [FUNCTION DOC]
+    # Scenario: reads the fingerprint of a test model directory that has none (AssetModule).
+    # Asserts the binding raises its file-not-found exception with a message saying the
+    # fingerprint could not be found.
     export_dir = test.test_src_dir_path("cc/saved_model/testdata/AssetModule")
     with self.assertRaises(
         pywrap_fingerprinting.FileNotFoundException) as excinfo:
@@ -60,6 +82,10 @@ class FingerprintingTest(test.TestCase):
     self.assertRegex(str(excinfo.exception), "Could not find fingerprint.")
 
   def test_read_saved_model_singleprint(self):
+    # [FUNCTION DOC]
+    # Scenario: reads the stored fingerprint, builds a singleprint from its four hashes, and
+    # asserts the text matches the three deterministic hashes joined by slashes (the checkpoint
+    # hash is excluded from the pattern because it is non-deterministic).
     export_dir = test.test_src_dir_path(
         "cc/saved_model/testdata/VarsAndArithmeticObjectGraph")
     fingerprint = fingerprint_pb2.FingerprintDef().FromString(
@@ -78,6 +104,9 @@ class FingerprintingTest(test.TestCase):
                          ]))
 
   def test_read_saved_model_singleprint_from_fp(self):
+    # [FUNCTION DOC]
+    # Scenario: asks the binding for a singleprint derived from the fingerprint file of the test
+    # model, and asserts it matches the three deterministic hashes joined by slashes.
     export_dir = test.test_src_dir_path(
         "cc/saved_model/testdata/VarsAndArithmeticObjectGraph")
     singleprint = pywrap_fingerprinting.SingleprintFromFP(export_dir)
@@ -90,6 +119,10 @@ class FingerprintingTest(test.TestCase):
                          ]))
 
   def test_read_saved_model_singleprint_from_sm(self):
+    # [FUNCTION DOC]
+    # Scenario: asks the binding for a singleprint computed from the saved model itself, using
+    # the AssetModule test model (no fingerprint file), and asserts it matches the expected three
+    # hashes joined by slashes.
     export_dir = test.test_src_dir_path(
         "cc/saved_model/testdata/AssetModule")
     singleprint = pywrap_fingerprinting.SingleprintFromSM(export_dir)
@@ -102,6 +135,11 @@ class FingerprintingTest(test.TestCase):
                          ]))
 
   def test_read_chunked_saved_model_fingerprint(self):
+    # [FUNCTION DOC]
+    # Scenario: skipped in the open source build because the image format is disabled there.
+    # Otherwise computes the fingerprint of a chunked saved model test directory and asserts a
+    # positive checksum, graph and object graph hashes within accepted alternatives (they vary
+    # with compilation mode), a fixed signature hash, and a checkpoint hash of zero.
     if is_oss:
       self.skipTest("Experimental image format disabled in OSS.")
     export_dir = test.test_src_dir_path(

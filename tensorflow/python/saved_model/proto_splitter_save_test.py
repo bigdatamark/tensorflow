@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Tests that saving a module with the experimental image format option writes a chunked proto
+# file when the model exceeds the splitter size limit and an ordinary proto file otherwise. Uses
+# the splitter's global debug maximum size setting, which the tests change and do not restore.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,8 +33,18 @@ from tensorflow.tools.proto_splitter import constants
 
 
 class ProtoSplitterSaveTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for saving a module with the experimental image format option, which writes the
+  # saved model as chunked proto when it is bigger than the splitter's maximum size. Tests set
+  # the splitter's debug maximum size to force each outcome.
 
   def test_save_experimental_image_format(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: sets the global splitter maximum size to 80000 bytes and never restores it, so
+    # later tests in the process see this limit.
+    # Scenario: a module holding a large random float constant (150 by 150) and a function
+    # returning it is saved with the image format option and a small size limit. Asserts the
+    # chunked proto file (.cpb) exists in the save directory.
     root = module.Module()
     root.c = constant_op.constant(np.random.random_sample([150, 150]))
     root.get_c = def_function.function(lambda: root.c)
@@ -46,6 +60,10 @@ class ProtoSplitterSaveTest(test.TestCase, parameterized.TestCase):
     self.assertTrue(os.path.exists(save_dir + "/saved_model.cpb"))
 
   def test_save_experimental_image_format_not_chunked(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: sets the global splitter maximum size to 2 GB and never restores it.
+    # Scenario: the same module is saved with the image format option but a very large size
+    # limit, so no splitting is needed. Asserts the ordinary binary proto file (.pb) exists.
     root = module.Module()
     root.c = constant_op.constant(np.random.random_sample([150, 150]))
     root.get_c = def_function.function(lambda: root.c)

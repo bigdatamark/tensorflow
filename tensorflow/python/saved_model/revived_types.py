@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Registry of revived (wrapper) types used when saving and loading objects such as trackable
+# dictionary, list and tuple wrappers. Exposes the version registration class and functions to
+# register a type, serialize a trackable into a saved user object proto, deserialize a proto
+# into a trackable plus a dependency setter, list registered identifiers, and get a setter.
+# Import-time side effects: fills module-level registry state and registers the built-in
+# dictionary, list and tuple wrapper types (tuples are revived as lists so that dependencies
+# can be appended while loading).
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,10 +32,25 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export("__internal__.saved_model.load.VersionedTypeRegistration", v1=[])
 class VersionedTypeRegistration(object):
+  # [CLASS DOC]
+  # Record describing one version of a revived (wrapper) type: how to build the object from a
+  # saved user object proto, the version numbers governing compatibility, and the setter used
+  # to attach dependencies. Attributes: setter, identifier (set when registered), version.
+  # Created by callers and passed in a list to register_revived_type, which fills the
+  # identifier. Exported as an internal saved-model load API.
   """Holds information about one version of a revived type."""
 
   def __init__(self, object_factory, version, min_producer_version,
                min_consumer_version, bad_consumers=None, setter=setattr):
+    # [FUNCTION DOC]
+    # Stores the registration data. Inputs: object_factory, callable taking a saved user object
+    # proto and returning a new trackable; version, integer producer version of this wrapper;
+    # min_producer_version, lowest producer version in a proto this registration can load;
+    # min_consumer_version, written into saved protos as the lowest consumer version able to
+    # load them; bad_consumers, optional list of incompatible consumer versions (defaults to
+    # an empty list; a given list is stored as is, not copied); setter, callable like the
+    # attribute-setting builtin used to add dependencies (default is that builtin). Sets the
+    # identifier to nothing until registration. Returns nothing; no validation is done.
     """Identify a revived type version.
 
     Args:
@@ -72,6 +95,10 @@ class VersionedTypeRegistration(object):
     self._bad_consumers = bad_consumers
 
   def to_proto(self):
+    # [FUNCTION DOC]
+    # Builds a saved user object proto for this registration: the identifier plus a version
+    # message with producer set to this version, min consumer and bad consumers as stored.
+    # Returns the proto. The identifier is empty/null if the registration was never registered.
     """Create a SavedUserObject proto."""
     # For now wrappers just use dependencies to save their state, so the
     # SavedUserObject doesn't depend on the object being saved.
@@ -84,10 +111,19 @@ class VersionedTypeRegistration(object):
             bad_consumers=self._bad_consumers))
 
   def from_proto(self, proto):
+    # [FUNCTION DOC]
+    # Input: proto, a saved user object proto. Returns the new trackable made by calling the
+    # object factory with the proto. Dependencies are attached later using the setter.
     """Recreate a trackable object from a SavedUserObject proto."""
     return self._object_factory(proto)
 
   def should_load(self, proto):
+    # [FUNCTION DOC]
+    # Decides whether this registration may load the given saved user object proto. Returns
+    # false if the identifiers differ, if this version is lower than the proto's min consumer
+    # version, if the proto's producer version is lower than this registration's minimum
+    # producer version, or if this version appears in the proto's bad consumer list. Otherwise
+    # returns true. No side effects.
     """Checks if this object should load the SavedUserObject `proto`."""
     if proto.identifier != self.identifier:
       return False
@@ -108,6 +144,17 @@ _TYPE_IDENTIFIERS = []
 
 @tf_export("__internal__.saved_model.load.register_revived_type", v1=[])
 def register_revived_type(identifier, predicate, versions):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: registering the same identifier twice replaces the registry entry but appends
+  # the identifier to the identifier list again, so it is checked twice during serialization.
+  # Also the versions list is sorted in place, mutating the caller's list, and the checks raise
+  # assertion errors rather than value errors.
+  # Registers a revived type. Inputs: identifier, unique string; predicate, callable taking a
+  # trackable and returning a boolean saying whether this registration can save it; versions,
+  # list of version registration objects. Sorts versions from highest to lowest version number,
+  # sets each one's identifier, and stores predicate and versions in the module registry and the
+  # identifier in the ordered identifier list. Raises AssertionError if the list is empty or two
+  # entries share a version number (in which case some identifiers were already set).
   """Register a type for revived objects.
 
   Args:
@@ -137,6 +184,10 @@ def register_revived_type(identifier, predicate, versions):
 
 
 def serialize(obj):
+  # [FUNCTION DOC]
+  # Input: obj, a trackable object. Checks registered predicates in registration order and, for
+  # the first one that accepts the object, returns a saved user object proto made from that
+  # type's highest-version registration. Returns nothing (null) if no predicate matches.
   """Create a SavedUserObject from a trackable object."""
   for identifier in _TYPE_IDENTIFIERS:
     predicate, versions = _REVIVED_TYPE_REGISTRY[identifier]
@@ -147,6 +198,11 @@ def serialize(obj):
 
 
 def deserialize(proto):
+  # [FUNCTION DOC]
+  # Input: proto, a saved user object proto. Looks up the registrations for its identifier and
+  # walks them from highest version down, using the first whose compatibility check accepts the
+  # proto. Returns a pair of the newly created trackable and that registration's setter, or
+  # nothing (null) if the identifier is unknown or no version is compatible.
   """Create a trackable object from a SavedUserObject proto.
 
   Args:
@@ -168,6 +224,10 @@ def deserialize(proto):
 
 @tf_export("__internal__.saved_model.load.registered_identifiers", v1=[])
 def registered_identifiers():
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says a set of strings is returned, but the result is a live view
+  # of the registry's keys (a dictionary key view), which changes as types are registered.
+  # Takes no inputs and returns that view of the registered identifier strings.
   """Return all the current registered revived object identifiers.
 
   Returns:
@@ -178,6 +238,10 @@ def registered_identifiers():
 
 @tf_export("__internal__.saved_model.load.get_setter", v1=[])
 def get_setter(proto):
+  # [FUNCTION DOC]
+  # Input: proto, a saved user object proto. Finds the first compatible registration (highest
+  # version first) for its identifier and returns its setter callable, or nothing (null) if the
+  # identifier is unknown or no registration is compatible. Does not create any object.
   """Gets the registered setter function for the SavedUserObject proto.
 
   See VersionedTypeRegistration for info about the setter function.
