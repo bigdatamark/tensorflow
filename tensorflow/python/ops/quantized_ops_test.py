@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Functional tests for the array-level quantize and dequantize ops. One test class checks
+# min-first quantization of floats to unsigned 8-bit, dequantization back to floats, and
+# per-axis scaled quantization to signed 8-bit with half-to-even rounding (including negative
+# axis values). Not a helper module; no import-time side effects beyond the test main hook.
+#
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,11 +29,21 @@ from tensorflow.python.platform import test
 
 
 class QuantizedOpsTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the quantize and dequantize array ops. Stateless; each test builds its own
+  # constants and evaluates the ops in a CPU session.
 
   def __init__(self, method_name="runTest"):
+    # [FUNCTION DOC]
+    # Constructor that only forwards the test method name (default is the standard run method
+    # name) to the base test case constructor. No other state or side effects.
     super(QuantizedOpsTest, self).__init__(method_name)
 
   def testQuantizeOp(self):
+    # [FUNCTION DOC]
+    # Scenario: quantize six floats (1.0, 1.25, 1.75, 127.0, 255.0, 500.0) to unsigned 8-bit with
+    # range 0 to 255 in min-first mode. Expected output values 1, 1, 2, 127, 255, 255 (the last
+    # saturates), compared within 0.1.
     expected_output = [1, 1, 2, 127, 255, 255]
     with self.session(use_gpu=False) as sess:
       x = constant_op.constant(
@@ -41,6 +57,9 @@ class QuantizedOpsTest(test.TestCase):
       self.assertArrayNear(expected_output, value.output, 0.1)
 
   def testDequantizeOp(self):
+    # [FUNCTION DOC]
+    # Scenario: dequantize unsigned 8-bit values 1, 2, 4, 8, 16, 255 with range 0 to 255 in
+    # min-first mode. Expected: the floats 1, 2, 4, 8, 16, 255, compared within 0.1.
     expected_output = [1.0, 2.0, 4.0, 8.0, 16.0, 255.0]
     inp = np.array([1, 2, 4, 8, 16, 255]).astype(np.uint8)
     with self.session(use_gpu=False) as sess:
@@ -52,9 +71,22 @@ class QuantizedOpsTest(test.TestCase):
       self.assertArrayNear(expected_output, value, 0.1)
 
   def testAxis(self):
+    # [FUNCTION DOC]
+    # Scenario: quantize a 2x3x4x5 float tensor to signed 8-bit in scaled mode with half-to-even
+    # rounding, once with a single global range (axis null) and then per slice along each of the
+    # four axes, where slice k holds the base values scaled by k+1 and gets ranges scaled likewise.
+    # Expected: the quantized result always equals the same fixed integer pattern. For each
+    # non-null axis the call is repeated with the equivalent negative axis (axis minus 4) and the
+    # result must be close to the same expectation.
     # Generates a tensor of the specified `shape` using values from `values`
     # scaled by (slice_idx + 1) along `axis` dimension.
     def scale_per_slice(shape, axis, values):
+      # [FUNCTION DOC]
+      # HELPER: builds test input and expected arrays for the axis test.
+      # Inputs: shape (sequence of dimension sizes), axis (dimension index or null) and values (a
+      # one-dimensional array). Fills an array of the given shape by cycling through values in
+      # row-major order; if axis is not null, multiplies each slice along that axis by its index
+      # plus one. Returns the new array. No side effects.
       # Note: repeats the values if the shape is larger than values.
       out = np.take(values, np.remainder(np.arange(np.prod(shape)),
                                          len(values))).reshape(shape)

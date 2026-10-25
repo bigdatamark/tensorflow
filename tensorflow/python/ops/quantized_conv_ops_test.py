@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Functional tests for the quantized 2-D convolution op. Defines one test class that feeds
+# small unsigned 8-bit quantized inputs and filters (incrementing values) through the quantized
+# convolution with 32-bit quantized output, converts the result back to floating point and
+# compares it to hand-computed totals. Also checks that malformed rank arguments are rejected.
+# Not a helper module; no import-time side effects beyond the standard test main hook.
+#
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,12 +32,29 @@ from tensorflow.python.platform import test
 
 
 class Conv2DTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the quantized 2-D convolution op. Holds no state; shared fixtures are the
+  # helper methods that run the op on incrementing uint8 data, de-quantize the 32-bit output and
+  # check the expected values, plus a helper checking that bad argument ranks raise errors.
 
   def __init__(self, method_name="runTest"):
+    # [FUNCTION DOC]
+    # Constructor that only forwards the test method name (default is the standard run method
+    # name) to the base test case constructor. No other state or side effects.
     super(Conv2DTest, self).__init__(method_name)
 
   def _VerifyValues(self, tensor_in_sizes, filter_in_sizes, stride, padding,
                     expected):
+    # [FUNCTION DOC]
+    # HELPER: shared verification routine for the convolution value tests.
+    # Inputs: tensor_in_sizes (four sizes: batch, rows, columns, depth), filter_in_sizes (four
+    # sizes: kernel rows, kernel columns, input depth, output depth), stride (integer used for both
+    # spatial strides), padding (string such as VALID or SAME) and expected (list of expected
+    # floating-point outputs).
+    # Builds uint8 input and filter data counting up from one, wraps them as quantized tensors with
+    # range zero to 255, runs the quantized convolution with 32-bit quantized output on CPU,
+    # converts the output to floats using the reported output range and asserts every value is
+    # within 1.0 of the expected one and that the evaluated shape equals the static shape.
     """Verifies the output values of the convolution function.
 
     Args:
@@ -81,10 +105,22 @@ class Conv2DTest(test.TestCase):
     self.assertEqual(value[0].shape, conv[0].get_shape())
 
   def _assertQuantizedArrayEquals(self, iarray1, iarray2):
+    # [FUNCTION DOC]
+    # HELPER: assertion utility for quantized arrays (not used by the tests in this file).
+    # KNOWN ISSUE: pairs elements with zip, so extra elements of the longer array are silently
+    # ignored and differing lengths are not detected.
+    # Asserts that corresponding elements of the two sequences are equal; fails the test on the
+    # first mismatch. Returns nothing.
     for i1, i2 in zip(iarray1, iarray2):
       self.assertTrue(i1 == i2)
 
   def _QuantizedOutputToFloat(self, quantized, quantized_min, quantized_max):
+    # [FUNCTION DOC]
+    # HELPER: de-quantizes the 32-bit quantized convolution output for comparison.
+    # Inputs: quantized (array of 32-bit signed quantized values), quantized_min and quantized_max
+    # (the float range the quantized values represent). Maps each value linearly from the signed
+    # 32-bit range onto the float range (with a small range adjustment) using double precision.
+    # Returns a flat one-dimensional array of doubles. No side effects.
     number_of_bits = 32
     number_of_steps = 1 << number_of_bits
     range_adjust = (number_of_steps / (number_of_steps - np.float64(1.0)))
@@ -97,6 +133,12 @@ class Conv2DTest(test.TestCase):
     return result
 
   def testConv2D1x1Filter(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the inline comments in the body say some results are "clamped to 255", but the
+    # expected list holds the unclamped values (258, 261, 312) and that is what is asserted.
+    # Scenario: 1x2x3x3 input convolved with a 1x1 filter (3 in, 3 out channels), stride 1, VALID
+    # padding. Expected: the hand-computed per-pixel dot products (30 up to 312), compared within a
+    # tolerance of 1.0. Exercises the non-optimized reference path because the output shift is zero.
     # Our generated input is [batch, rows, cols, depth], and looks like this:
     # (1,2,3)    (4,5,6)    (7,8,9)
     # (10,11,12) (13,14,15) (16,17,18)
@@ -135,6 +177,10 @@ class Conv2DTest(test.TestCase):
         expected=expected_output)
 
   def testConv2D2x2Filter(self):
+    # [FUNCTION DOC]
+    # Scenario: 1x2x3x3 input with a 2x2 filter (3 in, 3 out channels), stride 1, VALID padding.
+    # Expected: six outputs (two positions by three channels) equal to the hand-computed raw
+    # accumulated totals (2271 through 3165), within tolerance.
     # Our generated input is [batch, rows, cols, depth], and looks like this:
     # (1,2,3)    (4,5,6)    (7,8,9)
     # (10,11,12) (13,14,15) (16,17,18)
@@ -165,6 +211,10 @@ class Conv2DTest(test.TestCase):
         expected=expected_output)
 
   def testConv2D1x2Filter(self):
+    # [FUNCTION DOC]
+    # Scenario: 1x2x3x3 input with a 1x2 filter, stride 1, VALID padding. Expected: twelve outputs
+    # matching precomputed values (231 through 1029), within tolerance. The comment says this
+    # configuration takes the optimized computation path.
     # The outputs are computed using third_party/py/IPython/notebook.
     # With a shift of 21, we should execute the optimized path here.
     expected_output = [
@@ -179,6 +229,9 @@ class Conv2DTest(test.TestCase):
         expected=expected_output)
 
   def testConv2D2x2FilterStride2(self):
+    # [FUNCTION DOC]
+    # Scenario: 1x2x3x3 input with a 2x2 filter, stride 2, VALID padding. Expected: three outputs
+    # (2271, 2367, 2463), within tolerance; uses the optimized path per the comment.
     # With a shift of 21, we should execute the optimized path here.
     expected_output = [2271.0, 2367.0, 2463.0]
     self._VerifyValues(
@@ -189,6 +242,10 @@ class Conv2DTest(test.TestCase):
         expected=expected_output)
 
   def testConv2D2x2FilterStride2Same(self):
+    # [FUNCTION DOC]
+    # Scenario: 1x2x3x3 input with a 2x2 filter, stride 2, SAME padding. Expected: six outputs
+    # (2271, 2367, 2463, 1230, 1305, 1380), the second group reflecting the zero-padded border,
+    # within tolerance.
     # With a shift of 21, we should execute the optimized path here.
     expected_output = [2271.0, 2367.0, 2463.0, 1230.0, 1305.0, 1380.0]
     self._VerifyValues(
@@ -206,6 +263,14 @@ class Conv2DTest(test.TestCase):
                         min_filter=None,
                         max_filter=None,
                         error_regex=""):
+    # [FUNCTION DOC]
+    # HELPER: runs the quantized convolution with one deliberately malformed argument and asserts
+    # that an error matching a pattern is raised.
+    # Inputs (all optional): tin and tfilter (quantized tensors; default to ones of shape
+    # 1x2x3x3), min_input, max_input, min_filter, max_filter (range tensors; default to scalar
+    # zero floats) and error_regex (pattern the error text must match; default matches anything).
+    # Uses unit strides, SAME padding and 32-bit quantized output. Expects either a value error or
+    # an invalid-argument error whose message matches the pattern.
     strides = [1, 1, 1, 1]
     padding = "SAME"
     if tin is None:
@@ -243,6 +308,10 @@ class Conv2DTest(test.TestCase):
               max_filter=max_filter))
 
   def testBadInputSizes(self):
+    # [FUNCTION DOC]
+    # Scenario: six invalid calls, each changing one argument. A rank-2 input and a rank-2 filter
+    # must raise errors containing "must be rank 4"; a rank-1 minimum or maximum for the input or
+    # the filter must raise errors containing "must be rank 0".
     self._testBadInputSize(
         tin=math_ops.cast(
             constant_op.constant(1, shape=[1, 2]), dtype=dtypes.quint8),

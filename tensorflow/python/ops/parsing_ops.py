@@ -1,3 +1,16 @@
+# [MODULE DOC]
+# Public Python front end for TensorFlow's parsing operations: parsing serialized Example and
+# SequenceExample protocol buffers into dense, sparse and ragged tensors (batch and single-record
+# variants, v1 and v2 endpoints), decoding raw bytes into numeric tensors, decoding CSV records and
+# converting JSON-encoded Example records to binary protos.
+# It re-exports the feature specification classes from the parsing configuration module (variable
+# length, fixed length, fixed length sequence, sparse and ragged feature descriptions) and the
+# private helpers used to build parse parameters and composite output tensors.
+# Import-time side effects: imports the parsing gradient module so gradients are registered, pulls
+# every generated parsing op into this namespace through a wildcard import, exports public symbols
+# under the io namespace (and some legacy root names) and registers the decode-compressed op as a
+# unary elementwise API for dispatch.
+#
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -50,6 +63,14 @@ _construct_sparse_tensors_for_sparse_features = \
 
 
 def _prepend_none_dimension(features):
+  # [FUNCTION DOC]
+  # HELPER: prepares the feature mapping for the Example parsing entry points.
+  # Takes a mapping from feature keys to feature specifications (or nothing/empty) and returns it
+  # unchanged when it is empty or null. Otherwise returns a shallow copy in which every
+  # fixed-length-sequence feature is replaced by a new one whose shape has an unknown (null)
+  # leading dimension in front of the original shape, keeping dtype, allow_missing and default
+  # value. The input mapping is not mutated.
+  # Raises a value error if a fixed-length-sequence feature has allow_missing set to false.
   """Returns a copy of features with adjusted FixedLenSequenceFeature shapes."""
   if features:
     modified_features = dict(features)  # Create a copy to modify
@@ -71,6 +92,16 @@ def _prepend_none_dimension(features):
 @tf_export("io.parse_example", v1=[])
 @dispatch.add_dispatch_support
 def parse_example_v2(serialized, features, example_names=None, name=None):
+  # [FUNCTION DOC]
+  # Public v2 endpoint that parses a batch of serialized Example protos into a mapping from
+  # feature keys to dense tensors, sparse tensors or ragged tensors.
+  # Inputs: serialized is a vector of strings (the batch); features maps keys to variable-length,
+  # sparse, ragged, fixed-length or fixed-length-sequence feature specifications; example_names is
+  # an optional vector of debug names (no effect on output); name is an optional op name.
+  # Behavior: raises a value error if features is null or empty; adds an unknown leading dimension
+  # to fixed-length-sequence features, builds the parse parameters from the features, runs the raw
+  # parse op and then assembles the composite (sparse/ragged) outputs.
+  # Returns a mapping from keys to the parsed tensors. No side effects other than adding graph ops.
   # pylint: disable=line-too-long
   """Parses `Example` protos into a `dict` of tensors.
 
@@ -310,6 +341,12 @@ def parse_example_v2(serialized, features, example_names=None, name=None):
 @tf_export(v1=["io.parse_example", "parse_example"])
 @dispatch.add_dispatch_support
 def parse_example(serialized, features, name=None, example_names=None):
+  # [FUNCTION DOC]
+  # Legacy v1 endpoint for parsing a batch of serialized Example protos. It only differs from the
+  # v2 function in argument order (name comes before example_names) and simply forwards all
+  # arguments to the v2 function, returning its result (a mapping from feature keys to tensors).
+  # It has no docstring of its own; the documentation is copied from the v2 function right after
+  # the definition at import time. Errors are those of the v2 function.
   return parse_example_v2(serialized, features, example_names, name)
 
 
@@ -317,6 +354,17 @@ parse_example.__doc__ = parse_example_v2.__doc__
 
 
 def _parse_example_raw(serialized, names, params, name):
+  # [FUNCTION DOC]
+  # HELPER: core of the Example parsing endpoints; wraps the generated parse op.
+  # Inputs: serialized is a batch of serialized Example protos, names an optional vector of debug
+  # names (null becomes an empty list), params a parse-parameters object describing sparse, dense
+  # and ragged keys, types and shapes, and name an optional op name.
+  # Raises a value error if there are no features, or if ragged features are requested while the
+  # rank of serialized is not statically known.
+  # Converts serialized to a tensor, calls the generated version-2 parse op inside a name scope,
+  # then wraps the sparse outputs in sparse tensors and builds ragged tensors from values and row
+  # splits. Returns a mapping from sparse keys, dense keys and ragged keys (in that order) to the
+  # corresponding tensors.
   """Parses `Example` protos.
 
   Args:
@@ -370,6 +418,12 @@ def _parse_example_raw(serialized, names, params, name):
 @tf_export(v1=["io.parse_single_example", "parse_single_example"])
 @dispatch.add_dispatch_support
 def parse_single_example(serialized, features, name=None, example_names=None):
+  # [FUNCTION DOC]
+  # Legacy v1 endpoint that parses one serialized Example proto (a scalar string) into a mapping
+  # from feature keys to tensors without a batch dimension. Differs from the v2 function only in
+  # argument order (name before example_names); it forwards everything to the v2 function and
+  # returns its result. Raises a value error for null/empty features or invalid features, and
+  # for a non-scalar serialized input (via the v2 function).
   """Parses a single `Example` proto.
 
   Similar to `parse_example`, except:
@@ -407,6 +461,15 @@ def parse_single_example(serialized, features, name=None, example_names=None):
 def parse_single_example_v2(
     serialized, features, example_names=None, name=None
     ):
+  # [FUNCTION DOC]
+  # Public v2 endpoint that parses a single serialized Example proto into a mapping from feature
+  # keys to tensors (no batch dimension in the results).
+  # Inputs: serialized is a scalar string; features maps keys to feature specifications;
+  # example_names is an optional scalar debug name; name is an optional op name.
+  # Raises a value error if features is null or empty, or if serialized is not a scalar (checked
+  # statically or by a runtime assertion when the rank is unknown).
+  # Behavior: converts serialized to a tensor, asserts it is a scalar and delegates to the batch
+  # parser, within a name scope. Returns the mapping produced by the batch parser.
   """Parses a single `Example` proto.
 
   Similar to `parse_example`, except:
@@ -453,6 +516,18 @@ def parse_sequence_example(serialized,
                            sequence_features=None,
                            example_names=None,
                            name=None):
+  # [FUNCTION DOC]
+  # Public endpoint that parses a batch (vector) of serialized SequenceExample protos.
+  # Inputs: serialized is a vector of strings; context_features maps keys to variable-length,
+  # fixed-length or ragged specifications for whole-example data; sequence_features maps keys to
+  # variable-length, fixed-length-sequence or ragged specifications for feature lists;
+  # example_names is an optional vector of debug names; name is an optional op name. Both feature
+  # arguments are optional but at least one must be non-empty.
+  # Raises a value error if both feature arguments are null or empty.
+  # Builds parse parameters for each section, calls the raw parser inside a name scope, and for
+  # sections that contain ragged keys builds the final composite tensors.
+  # Returns a tuple of three mappings: context results, feature list results, and the lengths of
+  # dense feature list features.
   # pylint: disable=line-too-long
   """Parses a batch of `SequenceExample` protos.
 
@@ -573,6 +648,19 @@ def _parse_sequence_example_raw(serialized,
                                 context,
                                 feature_list,
                                 name=None):
+  # [FUNCTION DOC]
+  # HELPER: core of the SequenceExample parsing endpoints; wraps the generated parse op.
+  # KNOWN ISSUE: the docstring says it raises a type error when the feature list dense defaults
+  # are not null or a mapping, but the code never raises that; it raises a value error when no
+  # feature keys are given, when a feature list dense default is not null, or when ragged features
+  # are requested and the rank of serialized is not statically known.
+  # Inputs: serialized is a vector of serialized SequenceExample protos, debug_name an optional
+  # vector of debug names (null becomes an empty list), context and feature_list are parse
+  # parameter objects for the two sections, and name is an optional op name.
+  # Feature list dense features with null defaults are flagged as "missing assumed empty". Calls
+  # the generated version-2 op, wraps sparse outputs into sparse tensors, builds ragged tensors
+  # from values and splits, and returns a tuple of three mappings: context outputs, feature list
+  # outputs and lengths of dense feature list features.
   """Parses a vector of `SequenceExample` protos.
 
   Args:
@@ -697,6 +785,15 @@ def _parse_sequence_example_raw(serialized,
 def parse_single_sequence_example(
     serialized, context_features=None, sequence_features=None,
     example_name=None, name=None):
+  # [FUNCTION DOC]
+  # Public endpoint that parses one serialized SequenceExample proto (a scalar string).
+  # Inputs: serialized is a scalar string; context_features and sequence_features are optional
+  # mappings from keys to feature specifications (same kinds as in the batch variant);
+  # example_name is an optional scalar debug name; name is an optional op name.
+  # Raises a value error if both feature arguments are null or empty.
+  # Builds parse parameters, delegates to the single-example raw parser inside a name scope and
+  # builds composite (ragged) tensors where needed.
+  # Returns a tuple of two mappings: context results and feature list results.
   # pylint: disable=line-too-long
   """Parses a single `SequenceExample` proto.
 
@@ -809,6 +906,17 @@ def _parse_single_sequence_example_raw(serialized,
                                        feature_list,
                                        debug_name,
                                        name=None):
+  # [FUNCTION DOC]
+  # HELPER: core of the single SequenceExample parser; reuses the batch raw parser.
+  # KNOWN ISSUE: the docstring claims a type error is raised for bad feature list dense defaults,
+  # but this function raises nothing itself; errors come from the batch raw parser (value errors)
+  # or from the scalar check on serialized. Also only the scalar check runs inside the name
+  # scope; the delegated call runs outside of it.
+  # Inputs: serialized scalar string, context and feature_list parse-parameter objects, debug_name
+  # optional scalar debug name, name optional op name.
+  # Converts serialized to a tensor and asserts it is a scalar, then calls the batch raw parser and
+  # returns only its first two results (context outputs and feature list outputs), dropping the
+  # dense feature list lengths.
   """Parses a single `SequenceExample` proto.
 
   Args:
@@ -844,6 +952,15 @@ def decode_raw(input_bytes,
                little_endian=True,
                fixed_length=None,
                name=None):
+  # [FUNCTION DOC]
+  # Public v2 endpoint that reinterprets the bytes of each string element as numbers.
+  # Inputs: input_bytes is a tensor of strings; out_type is the numeric data type of the output;
+  # little_endian says whether the input bytes are little-endian (default true; converted to host
+  # order); fixed_length is optional and, when given, each element is zero-padded or truncated to
+  # that many bytes (must be a multiple of the output type size); name is an optional op name.
+  # Behavior: with fixed_length it uses the padded decode op, otherwise the plain decode op, which
+  # needs equal-length elements. The result has one more dimension than the input.
+  # Returns the decoded tensor. Errors come from the underlying ops.
   r"""Convert raw bytes from input tensor into numeric tensors.
 
   Every component of the input tensor is interpreted as a sequence of bytes.
@@ -977,6 +1094,16 @@ def decode_raw_v1(
     name=None,
     bytes=None  # pylint: disable=redefined-builtin
 ):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: out_type has a default of null although it is mandatory; the function raises a
+  # value error when it is null, mimicking a missing positional argument. The deprecated bytes
+  # parameter shadows a built-in name.
+  # Legacy v1 endpoint that converts raw byte strings into numeric tensors (no fixed-length
+  # support). Inputs: input_bytes (strings), out_type (numeric data type, required in practice),
+  # little_endian (default true), name (optional) and bytes, a deprecated alias for input_bytes
+  # that logs a deprecation warning when used.
+  # Resolves the deprecated alias, validates out_type and calls the generated decode op.
+  # Returns the decoded tensor.
   """Convert raw byte strings into tensors.
 
   Args:
@@ -1020,6 +1147,14 @@ def decode_csv(records,
                name=None,
                na_value="",
                select_cols=None):
+  # [FUNCTION DOC]
+  # Legacy v1 endpoint that converts CSV text records into a list of tensors, one per column.
+  # Differs from the v2 function only in argument order (name precedes na_value and select_cols)
+  # and forwards everything, reordered, to the v2 function, returning its list of tensors.
+  # Inputs: records (string tensor), record_defaults (list of default tensors that also set the
+  # column types), field_delim (default comma), use_quote_delim (default true), name, na_value
+  # (extra string treated as missing, default empty) and select_cols (optional sorted list of
+  # column indices). Errors (value errors for bad select_cols) come from the v2 function.
   """Convert CSV records to tensors. Each column maps to one tensor.
 
   RFC 4180 format is expected for the CSV records.
@@ -1067,6 +1202,16 @@ def decode_csv_v2(records,
                   na_value="",
                   select_cols=None,
                   name=None):
+  # [FUNCTION DOC]
+  # Public v2 endpoint that converts CSV text records into a list of tensors, one per column, with
+  # the same shape as the records and the types of record_defaults.
+  # Inputs: records (string tensor), record_defaults (list of default tensors; an empty vector
+  # means the column is required), field_delim (default comma), use_quote_delim (default true),
+  # na_value (extra string treated as missing), select_cols (optional strictly increasing list of
+  # non-negative column indices, same length as record_defaults) and name.
+  # Raises a value error if select_cols is not strictly increasing, contains a negative first
+  # value, or its length differs from the number of defaults.
+  # Calls the generated decode op and returns its list of tensors.
   """Convert CSV records to tensors. Each column maps to one tensor.
 
   RFC 4180 format is expected for the CSV records.
@@ -1117,6 +1262,13 @@ def decode_csv_v2(records,
 
 
 def _assert_scalar(value, name):
+  # [FUNCTION DOC]
+  # HELPER: scalar-input check used by the single-example parsing functions.
+  # Inputs: value is a tensor, name a string used in messages and op names.
+  # If the rank is statically unknown, adds a runtime assertion that the rank is zero, makes the
+  # value depend on it, forces the static shape to scalar and returns that tensor. If the rank is
+  # known to be zero returns the value unchanged. Otherwise raises a value error saying the input
+  # must be a scalar.
   """Asserts that `value` is scalar, and returns `value`."""
   value_rank = value.shape.rank
   if value_rank is None:
@@ -1138,6 +1290,12 @@ def _assert_scalar(value, name):
 @tf_export("io.decode_json_example",
            v1=["decode_json_example", "io.decode_json_example"])
 def decode_json_example(json_examples, name=None):
+  # [FUNCTION DOC]
+  # Public endpoint that converts JSON-encoded Example records into binary-serialized Example
+  # protos, suitable as input to the Example parsing functions. It is not a general JSON parser.
+  # Inputs: json_examples is a string tensor of any shape holding JSON text; name is an optional
+  # op name. Returns a string tensor of the same shape with binary protos. Invalid JSON causes an
+  # invalid-argument error when the op runs. Simply forwards to the generated op.
   r"""Convert JSON-encoded Example records to binary protocol buffer strings.
 
   Note: This is **not** a general purpose JSON parsing op.

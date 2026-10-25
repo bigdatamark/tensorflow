@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Gradient definitions for random sampling ops. Registers, at import time, gradient functions
+# for the random gamma op, the stateless random gamma ops (versions 2 and 3) and the stateless
+# parameterized truncated normal op, all based on implicit reparameterization (Figurnov et al.,
+# 2018). Gradients are produced only for the distribution parameters (shape, seed/key/counter
+# and algorithm inputs get no gradient). Also holds small private helpers (leading-dimension
+# padding, the shared gamma gradient routine and the normal distribution function).
+# Not meant to be called directly; the gradient machinery looks the functions up by op type.
+#
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,6 +36,11 @@ from tensorflow.python.ops import math_ops
 
 
 def add_leading_unit_dimensions(x, num_dimensions):  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # HELPER: makes distribution parameters broadcastable against samples in the gamma gradients.
+  # Inputs: x is a tensor; num_dimensions is a scalar integer tensor (or value) giving how many
+  # dimensions of size one to put in front of x's shape. Returns x reshaped with that many
+  # leading unit dimensions. No side effects other than adding graph ops.
   new_shape = array_ops.concat(
       [array_ops.ones([num_dimensions], dtype=dtypes.int32),
        array_ops.shape(x)], axis=0)
@@ -35,6 +49,15 @@ def add_leading_unit_dimensions(x, num_dimensions):  # pylint: disable=invalid-n
 
 @ops.RegisterGradient("RandomGamma")
 def _RandomGammaGrad(op: ops.Operation, grad):  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # HELPER: registered gradient function for the random gamma op (called by the autodiff engine).
+  # KNOWN ISSUE: the inline comment says unit dimensions are appended, but the code puts them in
+  # front (leading dimensions), which is what broadcasting against the sample requires.
+  # Inputs: op is the forward operation (inputs: shape, alpha; output: sample) and grad is the
+  # incoming gradient with respect to the sample. Computes the partial derivative of the sample
+  # with respect to alpha by implicit differentiation, multiplies by grad and sums over the
+  # leading sample dimensions, all under a control dependency on grad.
+  # Returns a pair: nothing for the shape input and the gradient with respect to alpha.
   """Returns the gradient of a Gamma sample w.r.t. alpha.
 
   The gradient is computed using implicit differentiation
@@ -75,6 +98,12 @@ def _RandomGammaGrad(op: ops.Operation, grad):  # pylint: disable=invalid-name
 
 @ops.RegisterGradient("StatelessRandomGammaV2")
 def _StatelessRandomGammaV2Grad(op: ops.Operation, grad):  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # HELPER: registered gradient function for the stateless random gamma op, version 2.
+  # Inputs: op (forward operation with inputs shape, seed, alpha and output sample) and grad (the
+  # incoming gradient with respect to the sample). Under a control dependency on grad, delegates
+  # to the shared stateless gamma gradient routine. Returns a triple: nothing for shape, nothing
+  # for seed, and the gradient with respect to alpha.
   """Returns the gradient of a Gamma sample w.r.t. alpha.
 
   The gradient is computed using implicit differentiation
@@ -107,6 +136,13 @@ def _StatelessRandomGammaV2Grad(op: ops.Operation, grad):  # pylint: disable=inv
 
 @ops.RegisterGradient("StatelessRandomGammaV3")
 def _StatelessRandomGammaV3Grad(op: ops.Operation, grad):  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # HELPER: registered gradient function for the stateless random gamma op, version 3.
+  # Inputs: op (forward operation with inputs shape, key, counter, algorithm, alpha and output
+  # sample) and grad (incoming gradient with respect to the sample). Under a control dependency
+  # on grad, delegates to the shared stateless gamma gradient routine using the fifth input as
+  # alpha. Returns a five-element tuple with nothing for the first four inputs and the gradient
+  # with respect to alpha last.
   """Returns the gradient of a Gamma sample w.r.t. alpha.
 
   The gradient is computed using implicit differentiation
@@ -139,6 +175,14 @@ def _StatelessRandomGammaV3Grad(op: ops.Operation, grad):  # pylint: disable=inv
 
 
 def _StatelessGammaGradAlpha(shape, alpha, sample, grad):
+  # [FUNCTION DOC]
+  # HELPER: shared by the stateless gamma gradient functions.
+  # Inputs: shape (requested sample shape, a vector), alpha (concentration tensor), sample (the
+  # forward output) and grad (incoming gradient). The number of extra sample dimensions is the
+  # length of shape minus the rank of alpha; alpha gets that many leading unit dimensions, the
+  # gamma-gradient op gives the partial derivative of the sample with respect to alpha, and the
+  # product with grad is summed over the extra leading dimensions.
+  # Returns the gradient tensor with the shape of alpha.
   """Returns gradients of a gamma sampler wrt alpha."""
   # Note that the shape handling is slightly different for stateless_gamma,
   # in particular num_sample_dimensions is different.
@@ -155,6 +199,11 @@ def _StatelessGammaGradAlpha(shape, alpha, sample, grad):
 
 
 def _Ndtr(x):
+  # [FUNCTION DOC]
+  # HELPER: standard normal cumulative distribution function for the truncated normal gradient.
+  # Input: x, a floating-point tensor. Computes the CDF through the error function, using the
+  # complementary error function in the tails for numerical stability (switches on the magnitude
+  # of x scaled by half the square root of two). Returns a tensor of the same shape and type as x.
   """Normal distribution function."""
   half_sqrt_2 = constant_op.constant(
       0.5 * np.sqrt(2.), dtype=x.dtype, name="half_sqrt_2")
@@ -170,6 +219,17 @@ def _Ndtr(x):
 
 @ops.RegisterGradient("StatelessParameterizedTruncatedNormal")
 def _StatelessParameterizedTruncatedNormalGrad(op: ops.Operation, grad):  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # HELPER: registered gradient function for the stateless parameterized truncated normal op.
+  # KNOWN ISSUE: the docstring says it returns a list; it actually returns a six-element tuple.
+  # Inputs: op (forward operation with inputs shape, seed, mean, stddev, minval, maxval and output
+  # sample) and grad (incoming gradient with respect to the sample).
+  # Standardizes the sample and bounds, computes the sample's CDF position within the truncation
+  # interval (clipped to avoid log of zero), and derives the partial derivatives with respect to
+  # mean, stddev, minval and maxval by implicit differentiation. Each is multiplied by grad,
+  # summed over the extra leading dimensions introduced by the shape, then reduced over
+  # broadcast dimensions and reshaped back to the corresponding parameter's shape.
+  # Returns a tuple: nothing for shape and seed, then gradients for mean, stddev, minval, maxval.
   """Returns the gradient of a TruncatedNormal sample w.r.t. parameters.
 
   The gradient is computed using implicit differentiation

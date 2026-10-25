@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# Legacy (TF1-style) helpers for splitting a large variable into several shards.
+# Exposes three partitioner factories (variable_axis_size_partitioner, min_max_variable_partitioner,
+# fixed_size_partitioner), each returning a partition function that maps a variable shape (and
+# data type) to a list giving the number of slices per axis, for use as the partitioner argument of
+# variable scopes and variable getters; plus the deprecated create_partitioned_variables, which
+# builds the sharded variables directly from an explicit slicing.
+# Relies on the variable scope module for actual variable creation. No import-time side effects
+# other than exporting the public names to the v1 API.
+#
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -67,6 +77,16 @@ __all__ = [
 @tf_export(v1=["variable_axis_size_partitioner"])
 def variable_axis_size_partitioner(
     max_shard_bytes, axis=0, bytes_per_string_element=16, max_shards=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the first error message is built from two adjacent strings with no space, so it
+  # reads "...is <n>andbytes_per_string_element is <m>". Also a max_shards of zero is treated as
+  # "no limit" (falsy) rather than rejected.
+  # Factory returning a partition function that shards a variable along one axis so each shard is
+  # at most max_shard_bytes. Inputs: max_shard_bytes (positive integer), axis (default 0),
+  # bytes_per_string_element (positive size estimate for string elements, default 16) and
+  # max_shards (optional cap on shard count that takes precedence over the byte limit).
+  # Raises a value error if either byte count is below one or if max_shards is given and below
+  # one. Returns the inner partition function; creates no variables itself.
   """Get a partitioner for VariableScope to keep shards below `max_shard_bytes`.
 
   This partitioner will shard a Variable along one axis, attempting to keep
@@ -107,6 +127,14 @@ def variable_axis_size_partitioner(
         "max_shards must be positive.")
 
   def _partitioner(shape, dtype):
+    # [FUNCTION DOC]
+    # HELPER: the partition function returned by the axis-size partitioner factory.
+    # Inputs: shape must be a fully defined shape object, dtype a data type (converted if needed).
+    # Raises a value error if shape is not a shape object or not fully defined.
+    # Computes the bytes per slice along the chosen axis (string types use the configured size
+    # estimate), how many slices fit in a shard (at least one), and the number of shards needed,
+    # capped by max_shards when set. Returns a list with one entry per dimension: one everywhere
+    # except the chosen axis, which holds the shard count. No side effects.
     """Partitioner that partitions shards to have max_shard_bytes total size.
 
     Args:
@@ -155,6 +183,14 @@ def variable_axis_size_partitioner(
 def min_max_variable_partitioner(max_partitions=1, axis=0,
                                  min_slice_size=256 << 10,
                                  bytes_per_string_element=16):
+  # [FUNCTION DOC]
+  # Factory returning a partition function that splits a variable along one axis into slices of
+  # roughly at least min_slice_size bytes, with at most max_partitions slices.
+  # KNOWN ISSUE: the inner function rounds the partition count up, so slices can end up smaller
+  # than min_slice_size, contrary to the "minimum size per slice" description.
+  # Inputs: max_partitions (upper bound, default 1), axis (default 0), min_slice_size (bytes,
+  # default 256K) and bytes_per_string_element (size estimate for strings, default 16).
+  # Returns the inner partition function; performs no validation at creation time.
   """Partitioner to allocate minimum size per slice.
 
   Returns a partitioner that partitions the variable of given shape and dtype
@@ -176,6 +212,13 @@ def min_max_variable_partitioner(max_partitions=1, axis=0,
 
   """
   def _partitioner(shape, dtype):
+    # [FUNCTION DOC]
+    # HELPER: the partition function returned by the min/max partitioner factory.
+    # Inputs: shape (sequence of dimensions with element count available) and dtype.
+    # Raises a value error if the chosen axis is not a valid axis of the shape.
+    # Computes total bytes (string types use the size estimate), divides by the minimum slice size,
+    # rounds up, and limits the result by the axis length and max_partitions (at least one).
+    # Returns a list of ones except for the chosen axis, which holds the partition count.
     """Partitioner that partitions list for a variable of given shape and type.
 
     Ex: Consider partitioning a variable of type float32 with
@@ -219,6 +262,10 @@ def min_max_variable_partitioner(max_partitions=1, axis=0,
 
 @tf_export(v1=["fixed_size_partitioner"])
 def fixed_size_partitioner(num_shards, axis=0):
+  # [FUNCTION DOC]
+  # Factory returning a partition function that always requests num_shards slices along the given
+  # axis (default 0), capped by the axis length. Inputs: num_shards (integer) and axis (integer).
+  # Returns the inner partition function; no validation or side effects at creation time.
   """Partitioner to specify a fixed number of shards along given axis.
 
   @compatibility(TF2)
@@ -266,6 +313,13 @@ def fixed_size_partitioner(num_shards, axis=0):
     `variable_scope` and `get_variable`.
   """
   def _partitioner(shape, **unused_args):
+    # [FUNCTION DOC]
+    # HELPER: the partition function returned by the fixed-size partitioner factory.
+    # Takes a shape (with dimension values available); any other keyword arguments such as the
+    # data type are ignored (so the data type must be passed by keyword, not position).
+    # Returns a list of ones with the entry for the configured axis set to the smaller of the
+    # shard count and that dimension's size. May fail if the axis is out of range or the
+    # dimension is unknown.
     partitions_list = [1] * len(shape)
     partitions_list[axis] = min(num_shards, shape.dims[axis].value)
     return partitions_list
@@ -279,6 +333,18 @@ def fixed_size_partitioner(num_shards, axis=0):
 def create_partitioned_variables(
     shape, slicing, initializer, dtype=dtypes.float32,
     trainable=True, collections=None, name=None, reuse=None):
+  # [FUNCTION DOC]
+  # Deprecated TF1 function creating the list of variables that make up one partitioned variable.
+  # Inputs: shape (list of integers, full variable shape), slicing (list of integers of the same
+  # length giving slices per dimension; only one may exceed one), initializer (a tensor of the
+  # full shape or a function called once per slice), dtype (default float32, ignored for tensor
+  # initializers), trainable (default true, also registers in the trainable collection),
+  # collections (optional collection keys), name (optional, default "PartitionedVariable") and
+  # reuse (optional true/false/null to control variable reuse).
+  # Raises a value error if shape and slicing differ in length or the rank is below one.
+  # Side effects: opens a variable scope and creates variables in the current graph through the
+  # private partitioned getter, using a partitioner that simply returns the given slicing.
+  # Returns a list of the slice variables. Emits a deprecation warning when called.
   """Create a list of partitioned variables according to the given `slicing`.
 
   Currently only one dimension of the full variable can be sliced, and the

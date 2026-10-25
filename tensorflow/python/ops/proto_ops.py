@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Thin module exposing protocol buffer encoding and decoding ops. Re-exports the generated
+# version-2 decode op under the name decode_proto and the generated encode op encode_proto.
+# Import-time side effects: marks the decode and encode proto ops as not differentiable in the
+# gradient registry. Contains no functions of its own.
+#
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
