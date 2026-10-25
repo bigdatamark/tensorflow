@@ -12,7 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-
+# [MODULE DOC]
+# HELPER: gradient-registration module for the low-level control flow ops (Switch, Merge, Exit,
+# NextIteration, Enter, LoopCond and their reference-typed variants). The gradient functions are
+# used by automatic differentiation when backpropagating through conditionals and while loops
+# built from these primitives. Mapping: Switch gradients use Merge, Merge gradients use Switch,
+# Exit gradients use Enter, Enter gradients use Exit (or accumulators), NextIteration gradient is
+# an identity, and LoopCond stops gradients. Import-time side effect: registers each gradient
+# function with the global gradient registry. It star-imports everything from the control flow
+# ops module to get merge, switch, exit, and the context classes.
 """Gradients for operators defined in control_flow_ops.py."""
 
 from tensorflow.python.framework import dtypes
@@ -30,6 +38,20 @@ from tensorflow.python.ops.control_flow_ops import *
 
 
 def _SwitchGrad(op, *grad):
+  # [FUNCTION DOC]
+  # HELPER: gradient function registered for the Switch and RefSwitch ops.
+  # Inputs: op (the forward switch operation) and its two output gradients (false branch first,
+  # true branch second; either may be null). Returns a pair: gradient for the data input and
+  # null for the predicate input. Behavior depends on the control flow context of the forward op.
+  # In a while loop: on the first visit, if the exit-branch gradient exists, it makes a merge of
+  # that gradient with itself, records it in the loop's switch map and returns it; if that
+  # gradient is absent returns nulls (not differentiable). On the second visit, it updates the
+  # merge's second input with a next-iteration/back edge using the other branch gradient and
+  # returns nulls. In a conditional: takes the gradient of the other branch to detect a missing
+  # zero gradient; returns nulls for it (or a merge of the branch gradient duplicated for resource
+  # variables) otherwise merges both gradients. Outside any context: switches each gradient on
+  # the predicate and merges them. Side effects: adds graph ops and updates the gradient state's
+  # switch map.
   """Gradients for a Switch op is calculated using a Merge op.
 
   If the switch is a loop switch, it will be visited twice. We create
@@ -91,6 +113,17 @@ ops.RegisterGradient("RefSwitch")(_SwitchGrad)
 
 @ops.RegisterGradient("Merge")
 def _MergeGrad(op, grad, _):
+  # [FUNCTION DOC]
+  # HELPER: gradient function registered for the Merge op.
+  # Inputs: op (forward merge), grad (gradient of the merged value), and an ignored gradient for
+  # the index output. Returns the gradient(s) for the merge inputs, built with switch ops. If the
+  # merge's input lives in a while loop context, switches the gradient on the loop pivot. If it
+  # lives in a conditional, switches on the conditional's predicate; when this occurs inside a
+  # loop gradient, the predicate value of every iteration is accumulated in the forward pass
+  # (cached in the history map) and the accumulated value is used. Otherwise it builds, for each
+  # input, a switch on whether the merge's chosen index equals that input and keeps the
+  # taken-branch output, returning a list. Side effects: adds graph ops and may add forward
+  # accumulators and update the history map of the gradient state.
   """Gradients for a Merge op are calculated using a Switch op."""
   input_op = op.inputs[0].op
   graph = ops.get_default_graph()
@@ -139,11 +172,25 @@ def _MergeGrad(op, grad, _):
 
 @ops.RegisterGradient("RefMerge")
 def _RefMergeGrad(op, grad, _):
+  # [FUNCTION DOC]
+  # HELPER: gradient for the reference-typed Merge op; simply forwards the op, the gradient and
+  # the ignored index gradient to the regular merge gradient function and returns its result.
   return _MergeGrad(op, grad, _)
 
 
 @ops.RegisterGradient("Exit")
 def _ExitGrad(op, grad):
+  # [FUNCTION DOC]
+  # HELPER: gradient function registered for the Exit and RefExit ops.
+  # KNOWN ISSUE: the type error message for unsupported gradient types is built from two string
+  # pieces with no space between "either" and the following backtick text, so it reads run-together.
+  # Inputs: op (forward exit) and grad (incoming gradient: a tensor, indexed slices or sparse
+  # tensor). Returns null if the gradient loop context disables backprop. Raises a type error if
+  # the forward loop already has gradient state (second-order gradients of while loops are
+  # unsupported) or if the gradient is of an unsupported type. Registers the gradient's tensor
+  # names with the gradient loop context, then, inside that context, creates an Enter op named
+  # for the backward exit (non-constant, using the context's parallel iterations), records it in
+  # the context's loop enters and returns it.
   """Gradients for an exit op are calculated using an Enter op."""
   graph = ops.get_default_graph()
   # pylint: disable=protected-access
@@ -188,6 +235,9 @@ ops.RegisterGradient("RefExit")(_ExitGrad)
 
 @ops.RegisterGradient("NextIteration")
 def _NextIterationGrad(_, grad):
+  # [FUNCTION DOC]
+  # HELPER: gradient for NextIteration; ignores the op and returns the incoming gradient
+  # unchanged (identity). The backward next-iteration is added elsewhere, in the switch gradient.
   """A forward next_iteration is translated into a backprop identity.
 
   Note that the backprop next_iteration is added in switch grad.
@@ -197,11 +247,24 @@ def _NextIterationGrad(_, grad):
 
 @ops.RegisterGradient("RefNextIteration")
 def _RefNextIterationGrad(_, grad):
+  # [FUNCTION DOC]
+  # HELPER: gradient for the reference-typed NextIteration op; delegates to the regular
+  # next-iteration gradient and returns the incoming gradient unchanged.
   return _NextIterationGrad(_, grad)
 
 
 @ops.RegisterGradient("Enter")
 def _EnterGrad(op, grad):
+  # [FUNCTION DOC]
+  # HELPER: gradient function registered for the Enter op.
+  # Inputs: op (forward enter) and grad (incoming gradient). Returns the gradient unchanged when
+  # there is no gradient context, when backprop is disabled for the loop, or when not inside a
+  # gradient while-loop. For loop invariants (constant enters) it adds a backprop accumulator: a
+  # standard one for dense tensors, an indexed-slices one for indexed slices; any other gradient
+  # type raises a type error (sparse tensors are unsupported). For ordinary loop variables it
+  # applies an exit op to the gradient, records the exit in the context's loop exits and
+  # registers it as an exit result. Returns the resulting tensor. Side effects: adds graph ops
+  # and mutates the gradient loop context lists.
   """Gradients for an Enter are calculated using an Exit op.
 
   For loop variables, grad is the gradient so just add an exit.
@@ -238,10 +301,16 @@ def _EnterGrad(op, grad):
 
 @ops.RegisterGradient("RefEnter")
 def _RefEnterGrad(op, grad):
+  # [FUNCTION DOC]
+  # HELPER: gradient for the reference-typed Enter op; forwards the op and gradient to the
+  # regular enter gradient and returns its result.
   return _EnterGrad(op, grad)
 
 
 @ops.RegisterGradient("LoopCond")
 def _LoopCondGrad(_):
+  # [FUNCTION DOC]
+  # HELPER: gradient for LoopCond. Takes the op (ignored) and returns null, stopping
+  # backpropagation through a while loop's predicate.
   """Stop backprop for the predicate of a while loop."""
   return None

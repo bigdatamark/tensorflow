@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Utilities for classification metrics: a helper that squeezes a trailing singleton dimension
+# so labels and predictions have compatible ranks, the confusion matrix op (exported as the
+# math confusion_matrix endpoint, with a separate deprecated-endpoint variant for the
+# first-generation API that changes argument order), and nothing else. Builds on array,
+# check, math and control flow ops. Import-time side effects are only API export registration
+# and dispatch / deprecation decorators.
 """Confusion matrix related utilities."""
 
 from tensorflow.python.framework import dtypes
@@ -29,6 +36,17 @@ from tensorflow.python.util.tf_export import tf_export
 
 def remove_squeezable_dimensions(
     labels, predictions, expected_rank_diff=0, name=None):
+  # [FUNCTION DOC]
+  # HELPER: shape-alignment utility used by metrics and confusion matrix code before comparing
+  # labels with predictions.
+  # Inputs: labels and predictions (tensors or values convertible to tensors), expected_rank_diff
+  # (integer, default 0, the expected value of prediction rank minus label rank), name (optional
+  # scope name). Converts both to tensors. When both ranks are statically known, it squeezes the
+  # last dimension of predictions if the rank difference is one more than expected and that
+  # dimension is compatible with size one, or squeezes the last dimension of labels if the
+  # difference is one less than expected and its last dimension is compatible with one. When a
+  # rank is unknown it instead adds conditionals that decide at run time. Returns a pair of the
+  # (possibly squeezed) labels and predictions. No exceptions of its own; no persistent side effects.
   """Squeeze last dim if ranks differ from expected by exactly 1.
 
   In the common case where we expect shapes to match, `expected_rank_diff`
@@ -97,6 +115,18 @@ def confusion_matrix(labels,
                      weights=None,
                      dtype=dtypes.int32,
                      name=None):
+  # [FUNCTION DOC]
+  # Builds the confusion matrix op. Inputs: labels and predictions (1-D integer-like tensors
+  # of equal length; trailing singleton dimensions are squeezed), num_classes (optional integer;
+  # when absent it is one plus the maximum value found in either input), weights (optional
+  # tensor matching the predictions shape; each entry adds its weight instead of one), dtype
+  # (element type of the result, default 32-bit integer), name (optional scope name).
+  # Casts labels and predictions to 64-bit integers and adds assertions that they are
+  # non-negative and, if num_classes is given, strictly below it. Scatters the counts or weights
+  # into a square matrix with rows indexed by true label and columns by prediction. Returns the
+  # matrix tensor of the given dtype. Raises a value error if the weights shape is incompatible
+  # with predictions (checked statically); out-of-range values fail at run time through the
+  # assertions.
   """Computes the confusion matrix from predictions and labels.
 
   The matrix columns represent the prediction labels and the rows represent the
@@ -205,6 +235,12 @@ def confusion_matrix_v1(labels,
                         dtype=dtypes.int32,
                         name=None,
                         weights=None):
+  # [FUNCTION DOC]
+  # Version of the confusion matrix op for the first-generation API; same inputs as the main
+  # function but with dtype, name and weights in a different positional order. It is deprecated
+  # in favor of other endpoints. It simply forwards all arguments to the main confusion matrix
+  # function (reordering them) and returns its result tensor. Exceptions are those of the
+  # delegate. Side effects: deprecation warning for the deprecated endpoint names.
   """Computes the confusion matrix from predictions and labels.
 
   The matrix columns represent the prediction labels and the rows represent the

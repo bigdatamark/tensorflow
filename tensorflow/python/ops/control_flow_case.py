@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Implements the case operation (multi-way conditional): the public second-generation endpoint
+# (which only accepts lists or tuples of predicate/function pairs) and the first-generation
+# endpoint (which also accepts dictionaries), plus private helpers that validate arguments,
+# synthesize a default branch when none is given, chain the pairs into nested conditionals and
+# build assertions that at most N predicates are true. Built on the cond function and the Assert
+# op. Import-time side effects are only API export registration and dispatch decorators.
 """Case functions for Control Flow Operations."""
 
 import collections
@@ -37,6 +44,16 @@ def case_v2(pred_fn_pairs,
             exclusive=False,
             strict=False,
             name="case"):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says a type error is raised if the pairs are not a list or tuple,
+  # but the shared helper also accepts dictionaries (unordered or ordered); only other types are
+  # rejected. The docstring also omits the value error raised for unordered dicts in eager mode.
+  # Second-generation public case endpoint. Inputs: pred_fn_pairs (list or tuple of pairs of a
+  # boolean scalar tensor and a callable), default (optional callable used when no predicate is
+  # true), exclusive (if true, asserts at most one predicate is true), strict (disables unpacking
+  # of singleton results), name (scope name, default "case"). Delegates to the shared case
+  # helper using the standard cond with Python booleans disallowed, and returns the structure of
+  # tensors from the selected branch. Raises type errors for malformed arguments.
   """Create a case operation.
 
   See also `tf.switch_case`.
@@ -142,6 +159,14 @@ def case(pred_fn_pairs,
          exclusive=False,
          strict=False,
          name="case"):
+  # [FUNCTION DOC]
+  # First-generation public case endpoint. Same inputs and behavior as the second-generation
+  # version, except pred_fn_pairs may also be a dictionary mapping predicate tensors to
+  # callables (sorted by tensor name in graph mode; with a warning if not exclusive; in eager
+  # mode only allowed when exclusive is true). Delegates to the shared case helper with the
+  # standard cond and Python booleans disallowed; returns the tensors of the selected branch.
+  # Raises type errors for malformed arguments and a value error for unordered dicts in eager mode
+  # when not exclusive.
   """Create a case operation.
 
   See also `tf.switch_case`.
@@ -245,6 +270,13 @@ def case(pred_fn_pairs,
 
 
 def _assert_at_most_n_true(predicates, n, msg):
+  # [FUNCTION DOC]
+  # HELPER: builds the runtime check used by case for exclusive mode and default-branch safety.
+  # Inputs: predicates (list of boolean scalar tensors), n (maximum allowed number of true
+  # predicates), msg (prefix for the error message). Stacks the predicates, counts the true ones,
+  # compares to n, and builds an error message listing the predicate names (unknown names shown
+  # as a question mark). Returns the Assert op that fails at run time when more than n are true,
+  # printing all predicate values.
   """Returns an Assert op that checks that at most n predicates are True.
 
   Args:
@@ -267,6 +299,15 @@ def _assert_at_most_n_true(predicates, n, msg):
 
 
 def _case_create_default_action(predicates, actions):
+  # [FUNCTION DOC]
+  # HELPER: lets case work without a user-supplied default branch.
+  # KNOWN ISSUE: the docstring says it returns a callable, but it actually returns a three-item
+  # tuple: the new default callable, the remaining predicates and the remaining actions.
+  # Inputs: predicates (list of boolean scalar tensors) and actions (parallel list of
+  # callables). Picks the last pair as the default, leaving the earlier pairs as the remaining
+  # ones. The returned default callable, when run, asserts that none of the other predicates is
+  # true (implementation error) and that the picked predicate is true (input error, none matched),
+  # then runs the picked action under those assertions.
   """Creates default action for a list of actions and their predicates.
 
   It uses the input actions to select an arbitrary as default and makes sure
@@ -284,6 +325,11 @@ def _case_create_default_action(predicates, actions):
   other_predicates, other_actions = predicates[:k], actions[:k]
 
   def default_action():
+    # [FUNCTION DOC]
+    # HELPER: synthesized fallback branch for case when no default was given.
+    # Takes no arguments. Builds the two assertions described above (no other predicate true;
+    # the chosen last predicate true), makes the chosen action depend on them, and returns the
+    # action's result. Fails at run time with an invalid-argument error if no predicate matched.
     others_msg = ("Implementation error: "
                   "selected default action #%d was called, but some of other "
                   "predicates are True: " % k)
@@ -307,6 +353,16 @@ def _case_helper(cond_fn,
                  name,
                  allow_python_preds=False,
                  **cond_kwargs):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation behind the public case endpoints, parameterized by the cond
+  # function. Inputs: cond_fn (conditional builder), pred_fn_pairs (list, tuple or dict of
+  # predicate/callable pairs), default (optional callable), exclusive (flag), name (scope name),
+  # allow_python_preds (permit Python booleans as predicates), extra keyword arguments passed
+  # to cond_fn. Validates and canonicalizes the pairs, opens a name scope, creates a default
+  # branch if needed, then builds nested conditionals in reverse order so predicates are tried in
+  # the given order. If exclusive, the result is computed under a control dependency on an
+  # assertion that at most one predicate is true. Returns the selected branch's tensors; raises
+  # type or value errors from the validation step.
   """Implementation of case that allows for different cond functions.
 
   Args:
@@ -354,6 +410,18 @@ def _case_helper(cond_fn,
 
 def _case_verify_and_canonicalize_args(pred_fn_pairs, exclusive, name,
                                        allow_python_preds):
+  # [FUNCTION DOC]
+  # HELPER: argument validation for the case helper.
+  # KNOWN ISSUE: when a pair's function is not callable, the error message reads the name
+  # attribute of the predicate, which fails with an attribute error if the predicate is a Python
+  # boolean (allowed when python predicates are enabled). Also, the docstring's Raises section
+  # omits the value error for unordered dictionaries in eager mode.
+  # Inputs: pred_fn_pairs, exclusive, name (used in a warning), allow_python_preds. Rejects types
+  # other than list, tuple or dict; turns ordered dicts into item sequences; for plain dicts uses
+  # traversal order in eager mode (value error if not exclusive) or sorts by tensor name in graph
+  # mode (logging a warning if not exclusive). Each entry must be a 2-tuple, the predicate a bool
+  # tensor (or a Python bool when allowed), and the function callable, else type errors are raised.
+  # Returns two parallel tuples: predicates and actions.
   """Verifies input arguments for the case function.
 
   Args:

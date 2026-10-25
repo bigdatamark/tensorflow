@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Defines the public assertion op for control flow (the Assert function, exported as the
+# debugging Assert endpoint and the top-level Assert endpoint) plus a private helper that
+# renders eager tensors as short text for error messages. It works in both eager mode (raises
+# immediately) and graph mode (builds an assert operation, guarded by a conditional when the
+# data may live on a device). Imports have no side effects beyond API export registration and
+# dispatch / should-use-result decorators applied to Assert.
 """Assert functions for Control Flow Operations."""
 
 from tensorflow.python.eager import context
@@ -29,6 +36,14 @@ from tensorflow.python.util.tf_export import tf_export
 
 
 def _summarize_eager(tensor, summarize=None):
+  # [FUNCTION DOC]
+  # HELPER: formats eager tensor data for the error message raised by Assert in eager mode.
+  # Takes an eager tensor and an optional count of leading elements to include (default 3
+  # when nothing is given; a negative value means include everything, by using the tensor's
+  # size). For tensors with rank above zero it flattens the values and joins the first
+  # elements as text with commas, appending an ellipsis marker if elements were cut off. For
+  # scalars it prints the single value unless the count is zero, in which case the result is
+  # empty. Returns the resulting string; no side effects.
   """Returns a summarized string representation of eager `tensor`.
 
   Args:
@@ -63,6 +78,21 @@ def _summarize_eager(tensor, summarize=None):
 @dispatch.add_dispatch_support
 @tf_should_use.should_use_result
 def Assert(condition, data, summarize=None, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the Raises section of the docstring actually holds a TF1 usage note, not an
+  # exception description; the real exception is an invalid-argument error raised only in eager
+  # mode. Also, the second eager-mode check after the guarded conditional is unreachable
+  # in practice because eager execution already returned earlier.
+  # Asserts that a condition holds. Inputs: condition (a boolean or boolean tensor), data (a
+  # list of tensors or values to show on failure), summarize (optional number of entries to
+  # print per tensor), name (optional op name). In eager mode, if the condition is false it
+  # converts data to tensors, summarizes them and raises an invalid-argument error whose
+  # message includes the condition and the summarized data; otherwise it returns nothing. In
+  # graph mode it opens a name scope and converts data to tensors. If every tensor is of string
+  # or 32-bit integer type (assumed to be host resident) it directly creates the logging assert
+  # op and returns it. Otherwise it converts the condition to a tensor and builds a conditional
+  # named AssertGuard that does nothing when true and runs the assert op when false, returning
+  # the guard's underlying operation. The result is wrapped so unused results trigger a warning.
   """Asserts that the given condition is true.
 
   If `condition` evaluates to false, print the list of tensors in `data`.
@@ -117,6 +147,11 @@ def Assert(condition, data, summarize=None, name=None):
       condition = ops.convert_to_tensor(condition, name="Condition")
 
       def true_assert():
+        # [FUNCTION DOC]
+        # HELPER: branch callback for the conditional guard inside Assert.
+        # Takes no arguments; creates and returns the logging assert op using the enclosing
+        # condition, data and summarize values, named Assert. Only executed when the guarded
+        # condition is false.
         return gen_logging_ops._assert(  # pylint: disable=protected-access
             condition, data, summarize, name="Assert")
 

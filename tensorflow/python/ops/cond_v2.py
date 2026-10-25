@@ -12,6 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # =============================================================================
+# [MODULE DOC]
+# Implementation of the version-2 conditional (cond) and multi-way case (switch_case) control
+# flow built on functional If / StatelessIf / Case / StatelessCase ops instead of Switch and
+# Merge primitives. Each branch is traced into its own function graph; the module builds the
+# single functional op, matches the inputs and outputs of all branches (adding placeholders,
+# optional-wrapped intermediates or zeros as needed), and registers gradient functions that
+# build gradient branch functions which capture forward-pass intermediates. It also contains
+# many helpers shared with while_v2 and other v2 control flow code (capture verification,
+# output matching, structured output specs, resource-input attribute handling). Import-time side
+# effects: registers gradients for the If, StatelessIf, Case and StatelessCase ops.
 """cond_v2 and gradient.
 
 This is a version of cond that emits a single If op, as well as the gradient
@@ -61,6 +71,11 @@ _CASE = 2
 
 
 def _normalize_pred(pred):
+  # [FUNCTION DOC]
+  # HELPER: predicate preprocessing for cond building.
+  # Takes a predicate (tensor or value convertible to one), converts it to a tensor and, if the
+  # tensor has a non-scalar or unknown shape, squeezes all size-one dimensions. Returns the
+  # resulting tensor (ideally scalar). No other side effects.
   """Normalize the predicate to a scalar tensor."""
   pred = ops.convert_to_tensor(pred)
   if tensor_util.is_tf_type(pred) and (
@@ -71,6 +86,15 @@ def _normalize_pred(pred):
 
 
 def cond_v2(pred, true_fn, false_fn, name="cond"):
+  # [FUNCTION DOC]
+  # Version-2 conditional. Inputs: pred (boolean scalar tensor; Python booleans are rejected),
+  # true_fn and false_fn (callables with no arguments building the branch results), name (scope
+  # name; an empty name becomes "cond"). Traces each branch into its own function graph
+  # (inheriting the current graph's automatic-control-dependency setting and collections),
+  # verifies that captured tensors are legal, then builds one functional If op via the shared
+  # builder. Returns the structured outputs of the branches (packed per their common output
+  # spec). Raises a type error if pred is a Python boolean; mismatched branch outputs raise
+  # errors from the builder. Side effects: adds ops and branch functions to the default graph.
   """Like tf.cond, except emits a single If op."""
   if isinstance(pred, bool):
     raise TypeError("pred must not be a Python bool", pred)
@@ -115,6 +139,15 @@ def cond_v2(pred, true_fn, false_fn, name="cond"):
 
 
 def fast_cond_v2(pred, true_fn, false_fn, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it returns a list of tensors, but the builder packs outputs
+  # into the branches' structured output specs, so the result can be a nested structure.
+  # Optimized variant of cond_v2 for simple conditionals that are never differentiated. Inputs:
+  # pred (boolean scalar tensor; Python booleans rejected), true_fn / false_fn (callables), name
+  # (optional; defaults to "fast_cond"). Traces branches without automatic control
+  # dependencies, then builds the If op with no identity ops on outputs and with lowering to
+  # Switch/Merge disabled. Raises a type error for a Python boolean predicate. Side effects: adds
+  # ops and branch functions to the default graph.
   """Like cond_v2, except emits an If op and applies various optimizations.
 
   This function is intended to be used for cases where the cond is used to
@@ -191,6 +224,19 @@ def fast_cond_v2(pred, true_fn, false_fn, name=None):
 @ops.RegisterGradient("StatelessIf")
 @ops.RegisterGradient("If")
 def _IfGrad(op, *grads):  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # HELPER: gradient function registered for the If and StatelessIf ops.
+  # Inputs: op (the forward op, possibly a mock wrapper) and gradients for each output. Finds the
+  # forward branch graphs, creates gradient function graphs for both branches, and fills
+  # missing (null) gradients with zeros where the other branch has one. If either gradient graph
+  # needs forward intermediates, it rewrites the forward If op in place: extra outputs carrying
+  # the intermediates are appended to both branches (wrapped in optionals, or plain with fake
+  # placeholder values under XLA or when optionals are disabled), the branch functions and
+  # output attributes are replaced and the op gets new outputs. It then resolves the gradient
+  # graphs' inputs, matches composite outputs, and builds a gradient If op from the original
+  # predicate. Returns a list with null for the predicate followed by the gradient outputs.
+  # Side effects: mutates the forward op and graphs (may make running sessions unusable).
+  # Asserts that branch graphs belong to the op's graph.
   """The gradient of an If op produced by cond_v2."""
   # Get the if operator (this logic handles the case where op is a MockOp)
   if_op = op.outputs[0].op
@@ -279,6 +325,14 @@ def _IfGrad(op, *grads):  # pylint: disable=invalid-name
 
 
 def _is_op_stateful(op):
+  # [FUNCTION DOC]
+  # HELPER: decides whether a branch contains stateful ops, to choose between If and StatelessIf.
+  # KNOWN ISSUE: the docstring's return description reads "indicates whether the operation is
+  # stateless" but the function returns true when the op IS stateful. It also contains hard-coded
+  # op type names as a workaround.
+  # Input: op. Returns false for a few special op types (global iteration id, a statistics
+  # update op, and collective gather or all-to-all ops whose stateless attribute is set);
+  # otherwise returns the op's own stateful flag.
   """Check whether an op is stateful.
 
   This helper function handles two special cases to make the stateful analysis
@@ -317,6 +371,21 @@ def _build_cond(
     prevent_lowering: bool = False,
     name=None,
 ):
+  # [FUNCTION DOC]
+  # HELPER: core builder shared by cond_v2, fast_cond_v2 and the If gradient.
+  # Inputs: pred, true_graph and false_graph (branch function graphs), true_inputs / false_inputs
+  # (outer tensors captured by each branch), building_gradient (true when making a gradient op,
+  # which skips intermediate outputs), add_identities (wrap outputs in identity ops for pruning,
+  # default true), prevent_lowering (stop conversion to Switch/Merge, default false), name.
+  # Makes indexed-slices index types match, checks both branches have the same output types,
+  # makes the inputs of both branches match, and (for non-gradient conds when enabled) appends
+  # all intermediates as optional-wrapped extra outputs. Chooses a stateful If when any branch
+  # has stateful ops, otherwise a StatelessIf, creates it under control dependencies of the
+  # branches' captured control inputs (run as a function when taping gradients), copies handle
+  # data, links the branch graphs to the op, sets lowering and read-only resource attributes,
+  # and prevents fetching if lowering is allowed. Returns the op outputs (with identity wrappers
+  # if requested) packed into the compatible structured output spec. Raises errors when branch
+  # outputs mismatch. Side effects: mutates the branch graphs and adds ops to the default graph.
   """Creates an If op from the specified predicate, branch functions and inputs.
 
   Note that this modifies true_graph and false_graph to make the inputs match,
@@ -398,6 +467,14 @@ def _build_cond(
       op_fn = gen_functional_ops.stateless_if
 
     def _make_op(inputs):
+      # [FUNCTION DOC]
+      # HELPER: creates the functional If / StatelessIf op for _build_cond.
+      # Input: inputs (list of tensors passed to the op after the predicate). Creates the op
+      # from the enclosing predicate, branch functions, output types and merged shapes, copies
+      # handle data to outputs, and, when an op was produced, attaches the branch graphs, sets
+      # lowering and compile-time-constant attributes, sets read-only resource inputs and
+      # prevents fetching unless lowering is blocked. Returns the output tensors. A null op
+      # arises for a stateless op with no outputs, in which case the attribute steps are skipped.
       if_op, tensors = util.get_op_and_outputs(op_fn(
           pred,
           inputs, [t.dtype for t in true_graph.outputs],
@@ -447,6 +524,14 @@ def _build_cond(
 
 
 def get_func_graphs(op):
+  # [FUNCTION DOC]
+  # Recovers the branch function graphs of a conditional op. Input: op, an If, StatelessIf, Case
+  # or StatelessCase operation. For each branch it reuses a cached graph attached to the op if
+  # present, otherwise rebuilds one from the branch function using the input shapes; then copies
+  # handle data from outer inputs to graph inputs, resets the graph's captures to the op inputs
+  # (excluding the predicate/index) and links the op as the graph's forward cond. Returns a pair
+  # (then, else) for If-type ops or a list of graphs for Case-type ops. Raises a value error for
+  # any other op type.
   """Returns `FuncGraph`s for the input op branches.
 
   Args:
@@ -458,6 +543,12 @@ def get_func_graphs(op):
   """
 
   def _get_func_graph_for_branch(name_attr_list, cached_attr_name=None):
+    # [FUNCTION DOC]
+    # HELPER: builds or fetches one branch graph for get_func_graphs.
+    # Inputs: name_attr_list (function name attribute of the branch) and cached_attr_name
+    # (optional attribute on the op holding a pre-built graph). Returns the branch function
+    # graph with captures reset to the op inputs after the first one and with the forward op
+    # recorded on it. Side effects: copies handle data into the graph inputs.
     """Generates and returns a FuncGraph for the given branch."""
     func_graph = None
     if cached_attr_name is not None:
@@ -486,6 +577,10 @@ def get_func_graphs(op):
 
 
 def _get_compatible_structured_output_specs(true_graph, false_graph):
+  # [FUNCTION DOC]
+  # HELPER: computes the output structure of a cond. Takes two branch graphs and maps over their
+  # structured outputs in parallel, returning a structure of the most specific type spec
+  # compatible with both branches' outputs. Raises errors from the per-leaf comparison.
   """Returns the most specific compatible specs of graph structured outputs."""
   return nest.map_structure(_get_compatible_spec,
                             true_graph.structured_outputs,
@@ -493,6 +588,12 @@ def _get_compatible_structured_output_specs(true_graph, false_graph):
 
 
 def _get_compatible_spec(value_or_spec1, value_or_spec2):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says a value error is raised for incompatible inputs, but the
+  # code raises a type error when no common supertype exists.
+  # HELPER: leaf comparison for cond output specs. Inputs: two values or type specs. Converts
+  # each to a type spec, strips tensor names, and returns their most specific common supertype.
+  # Raises a type error if there is none.
   """Returns the most specific compatible spec.
 
   Args:
@@ -517,6 +618,9 @@ def _get_compatible_spec(value_or_spec1, value_or_spec2):
 
 
 def _get_spec_for(value_or_spec):
+  # [FUNCTION DOC]
+  # HELPER: returns the input unchanged if it is already a type spec, otherwise the type spec
+  # describing the given value (computed from the value's type).
   """Returns TypeSpec of a value or itself if it is a TypeSpec already."""
   if isinstance(value_or_spec, type_spec.TypeSpec):
     return value_or_spec
@@ -524,6 +628,13 @@ def _get_spec_for(value_or_spec):
 
 
 def _grad_fn(func_graph, grads):
+  # [FUNCTION DOC]
+  # HELPER: body of a gradient branch function for cond_v2.
+  # Inputs: func_graph (forward branch graph) and grads (list of incoming gradient tensors, one
+  # per forward output; the count must match, asserted). Drops outputs whose type is not
+  # trainable (for example booleans), then differentiates the remaining outputs with respect to
+  # the branch inputs, building gradient ops in the current graph and capturing forward tensors.
+  # Returns the list of input gradients (entries may be null).
   """The gradient function for each conditional branch.
 
   This function builds the gradient graph of the corresponding forward-pass
@@ -562,6 +673,10 @@ def _grad_fn(func_graph, grads):
 
 
 def _create_grad_func(func_graph, grads, name):
+  # [FUNCTION DOC]
+  # HELPER: builds the gradient branch graph for the If gradient. Inputs: forward branch graph,
+  # list of incoming gradients and a name for the new function. Traces the gradient function
+  # into a new gradient-aware function graph linked to the forward graph and returns it.
   """Returns the FuncGraph representation of _grad_fn."""
   return func_graph_module.func_graph_from_py_func(
       name,
@@ -570,6 +685,14 @@ def _create_grad_func(func_graph, grads, name):
 
 
 def _resolve_grad_inputs(cond_graph, grad_graph):
+  # [FUNCTION DOC]
+  # HELPER: computes the outer inputs to pass to a gradient branch graph. Inputs: the forward
+  # branch graph and its gradient graph. For each external capture of the gradient graph, keeps
+  # it if it belongs to the gradient graph's outer graph; otherwise it must belong to the forward
+  # graph, and is replaced by the matching output of the forward If op (if it is a branch output)
+  # or by the matching external capture (if it is an internal capture). Returns the list of
+  # tensors. Raises a value error if a forward tensor is neither an output nor a capture; asserts
+  # the replacements live in the forward graph's outer graph.
   """Returns the tensors to pass as inputs to `grad_graph`.
 
   The `grad_graph` may have external references to
@@ -622,6 +745,10 @@ def _resolve_grad_inputs(cond_graph, grad_graph):
 
 
 def _get_intermediates(func_graph):
+  # [FUNCTION DOC]
+  # HELPER: collects tensors a branch computes that the gradient may need. Input: branch graph.
+  # Returns a list of all op output tensors in the graph except graph inputs, graph outputs,
+  # resource-typed tensors and outputs of mutex-lock ops (accumulating those can deadlock).
   """Returns intermediate tensors of `func_graph` for gradient computation."""
   intermediates = []
   for op in func_graph.get_operations():
@@ -638,6 +765,12 @@ def _get_intermediates(func_graph):
 
 
 def _make_intermediates_match(branch_graphs, branch_optionals):
+  # [FUNCTION DOC]
+  # HELPER: equalizes the number of extra intermediate outputs across branches. Inputs: list of
+  # branch graphs and a parallel list of lists of optional-wrapped intermediate tensors. Pads
+  # each branch's list with empty optionals (created in that branch's graph) up to the length
+  # of the longest list. Returns, for each branch, its full list (own intermediates first, then
+  # padding). The input lists are not modified.
   """Returns new optionals lists that have matching signatures.
 
   This is done by mirroring each list in the other using none optionals.
@@ -665,6 +798,12 @@ def _make_intermediates_match(branch_graphs, branch_optionals):
 
 
 def _make_intermediates_match_xla(branch_graphs, branch_intermediates):
+  # [FUNCTION DOC]
+  # HELPER: XLA-compatible counterpart of the optional-based matching. Inputs: branch graphs and
+  # a parallel list of lists of raw intermediate tensors. For each branch, creates fake
+  # parameter tensors in its graph standing in for the other branches' intermediates and
+  # arranges the result so every branch has the same layout: placeholders for earlier branches,
+  # then its own intermediates, then placeholders for later branches. Returns the new lists.
   """Like _make_intermediates_match but for the XLA case."""
   new_branch_intermediates = []
   for i, branch_graph in enumerate(branch_graphs):
@@ -680,6 +819,14 @@ def _make_intermediates_match_xla(branch_graphs, branch_intermediates):
 
 
 def _make_inputs_match(branch_graphs, branch_inputs):
+  # [FUNCTION DOC]
+  # HELPER: unifies input signatures of all branch graphs. Inputs: list of branch graphs and a
+  # parallel list of lists of outer tensors each branch captures (lengths must match, asserted).
+  # Builds a deduplicated union of outer tensors (by tensor identity, first occurrence order),
+  # then gives every branch graph a parameter for each of them, reusing its own parameter when
+  # it already captured the tensor and creating a dummy placeholder otherwise. Resets each
+  # graph's inputs and captures accordingly (mutates the graphs). Returns the unified list of
+  # outer tensors to feed the functional op.
   """Modifies branch_graphs so they have the same input signature.
 
   This method reorders and/or adds parameters to each graph in branch_graphs so
@@ -726,6 +873,13 @@ def _make_inputs_match(branch_graphs, branch_inputs):
 
 
 def _create_zeros_for_none_grads(forward_graphs, grad_graphs):
+  # [FUNCTION DOC]
+  # HELPER: makes gradient branch outputs line up. Inputs: forward graphs and gradient graphs
+  # (same count and the same number of structured outputs per gradient graph, asserted). For
+  # each output position where some branches produce no gradient but others do, fills the empty
+  # ones with zeros shaped like the corresponding forward input, built inside that gradient
+  # graph. Then recomputes each gradient graph's flat output list without nulls. Mutates the
+  # gradient graphs; returns nothing.
   """Creates zeros for None out grads if at least one branch has non-None grad.
 
   Args:
@@ -754,6 +908,13 @@ def _create_zeros_for_none_grads(forward_graphs, grad_graphs):
 
 
 def _make_output_composite_tensors_match(op_type, branch_graphs):
+  # [FUNCTION DOC]
+  # HELPER: reconciles composite output types among gradient branches. Inputs: op_type (cond or
+  # case marker used for error text) and the branch graphs (non-empty, same number of outputs).
+  # Where outputs at the same position differ in type and at least one is an indexed-slices
+  # value, converts plain tensors in the other branches into indexed slices inside their graphs.
+  # Raises a type error if a differing output is neither a tensor nor indexed slices. Updates
+  # structured and flat outputs of each branch graph. Returns nothing.
   """Modifies each branch_graph's outputs to have the same output signature.
 
   Currently the only transformation implemented is turning a Tensor into an
@@ -805,6 +966,14 @@ def _make_output_composite_tensors_match(op_type, branch_graphs):
 
 
 def _make_indexed_slices_indices_types_match(op_type, branch_graphs):
+  # [FUNCTION DOC]
+  # HELPER: makes the index tensors of indexed-slices outputs share one integer type. Inputs:
+  # op_type (cond or case marker for error text) and a non-empty list of branch graphs. Scans
+  # structured outputs of all branches in parallel; raises a type error if at some position only
+  # some branches return indexed slices; records flat positions of the index components. Raises a
+  # value error if the flat output count is inconsistent with the scan, and a type error if an
+  # index type is neither 32- nor 64-bit integer. Where branches disagree, casts 32-bit indices to
+  # 64-bit in their graphs, then repacks each branch's structured outputs. Returns nothing.
   """Match dtype of IndexedSlices.indices in outputs of branch_graphs."""
   assert branch_graphs
   # Indices of `IndexedSlices.indices` tensors in `branch_graphs[i].outputs`.
@@ -872,6 +1041,11 @@ def _make_indexed_slices_indices_types_match(op_type, branch_graphs):
 
 
 def _pack_sequence_as(structured_outputs, op_outputs):
+  # [FUNCTION DOC]
+  # HELPER: rebuilds the nested output structure of a cond or case. Inputs: structured_outputs
+  # (a branch's nested outputs, possibly containing null entries) and op_outputs (flat list of the
+  # op's tensors without the null entries). Re-inserts nulls at their positions (walking composites
+  # in expanded form) and packs the result into the same structure. Returns that structure.
   """Packs the outputs of the gradient If/Case op.
 
   The branch functions may contain None's in the list of `structured_outputs`.
@@ -899,11 +1073,19 @@ def _pack_sequence_as(structured_outputs, op_outputs):
 
 
 def _wrap_intermediates(func_graph, intermediates):
+  # [FUNCTION DOC]
+  # HELPER: wraps forward intermediates in optionals so branches with different intermediates
+  # can share output signatures. Inputs: a branch graph and its list of intermediate tensors.
+  # Inside that graph, creates one optional holding each tensor. Returns the list of optionals.
   with func_graph.as_default():
     return [gen_optional_ops.optional_from_value([t]) for t in intermediates]
 
 
 def _create_dummy_input(func_graph, template_tensor):
+  # [FUNCTION DOC]
+  # HELPER: creates a stand-in parameter. Inputs: a function graph and a template tensor from
+  # the outer graph. Adds a placeholder to the function graph with the template's type and shape
+  # and returns it.
   """Creates tensors in func_graph to represent template_tensors.
 
   Args:
@@ -919,6 +1101,9 @@ def _create_dummy_input(func_graph, template_tensor):
 
 
 def _create_none_optionals(func_graph, n):
+  # [FUNCTION DOC]
+  # HELPER: creates padding for optional outputs. Inputs: function graph and count n. Adds n
+  # empty-optional ops inside the graph and returns them as a list (empty if n is zero).
   """Creates `n` `None` optionals in func_graph.
 
   Args:
@@ -935,6 +1120,10 @@ def _create_none_optionals(func_graph, n):
 # TODO(b/265317139): remove this function and move this dynamic dimension
 # handling logic to XLA once XLA shape is ready for dynamic dimensions.
 def _convert_dynamic_dimension_to_zero(shape):
+  # [FUNCTION DOC]
+  # HELPER: shape sanitizer for XLA fake parameters. Input: a tensor shape. Returns the shape
+  # unchanged if its rank is unknown, otherwise a shape of the same rank with every unknown
+  # dimension replaced by zero. Marked in a comment as temporary until XLA handles dynamic dims.
   """Converts dynamic dimensions in `shape` to zero.
 
   The fake params created to match the intermediates captured in other branches
@@ -962,6 +1151,10 @@ def _convert_dynamic_dimension_to_zero(shape):
 
 
 def _create_fakeparams(func_graph, template_tensors):
+  # [FUNCTION DOC]
+  # HELPER: creates XLA fake parameters. Inputs: function graph and a list of template tensors.
+  # Inside the graph, adds one fake-parameter op per template with the template's type and its
+  # shape with unknown dimensions set to zero. Returns the list of new tensors.
   """Creates FakeParams for the XLA case."""
   with func_graph.as_default():
     return [
@@ -971,9 +1164,20 @@ def _create_fakeparams(func_graph, template_tensors):
 
 
 def _check_same_outputs(op_type, graphs):
+  # [FUNCTION DOC]
+  # HELPER: validation shared by cond and case builders. Inputs: op_type (cond or case marker
+  # for error text) and a list of branch graphs. Compares each branch after the first with the
+  # first: the structured outputs must have the same nested structure (including composites),
+  # the flat output lists must be of equal length, and corresponding outputs must share a data
+  # type. Raises a type error describing both branches' outputs for structure or type
+  # mismatches, and a value error for a length mismatch. Returns nothing.
   """Raises an error if `graphs` have different outputs."""
 
   def error(branch_idx, error_detail):
+    # [FUNCTION DOC]
+    # HELPER: raises the type error for _check_same_outputs. Inputs: index of the offending
+    # branch and a detail string. Always raises a type error naming the true/false or numbered
+    # branches, the operation, both branch outputs, and the detail; never returns.
     raise TypeError(
         "{b0_name} and {bn_name} arguments to {op_name} must have the same "
         "number, type, and overall structure of return values.\n"
@@ -1015,6 +1219,11 @@ def _check_same_outputs(op_type, graphs):
 
 
 def _get_output_shapes(*branch_graph_outputs):
+  # [FUNCTION DOC]
+  # HELPER: computes the output shapes of a functional cond/case op. Takes one list of output
+  # tensors per branch (all of equal length). For each output position, combines the shapes
+  # of that output across branches into the most specific shape compatible with all of them.
+  # Returns the list of combined shapes.
   output_shapes = []
   for out_by_branch in zip(*branch_graph_outputs):
     shape = out_by_branch[0].shape
@@ -1025,6 +1234,14 @@ def _get_output_shapes(*branch_graph_outputs):
 
 
 def _copy_handle_data(external_tensors, *branch_graph_outputs):
+  # [FUNCTION DOC]
+  # HELPER: propagates resource/variant handle metadata to the cond/case op outputs. Inputs: the
+  # op's output tensors and, per branch, the branch output tensors. For each output position, if
+  # every branch has handle data with exactly one shape-and-type entry, merges them: the shape
+  # becomes the most specific compatible shape, and the dtype is kept if all agree, otherwise
+  # marked invalid (no static dtype). The merged data is set on the external tensor. Positions
+  # where some branch lacks suitable handle data are skipped. Mutates handle metadata; returns
+  # nothing.
   """Combines shapes in handle data and sets metadata on `external_tensors`."""
   for tensors in zip(external_tensors, *branch_graph_outputs):
     external = tensors[0]
@@ -1059,6 +1276,12 @@ def _copy_handle_data(external_tensors, *branch_graph_outputs):
 
 
 def verify_captures(op_type, branch_graphs):
+  # [FUNCTION DOC]
+  # Checks that no branch captures a symbolic tensor created inside another branch. Inputs:
+  # op_type (cond or case marker, used to name branches in the message) and the list of branch
+  # graphs. For every external capture that is not an eager tensor and belongs to one of the
+  # branch graphs, raises a value error naming the tensor, the branch that owns it and the
+  # branch that reads it. Returns nothing.
   """Verify that a branch's tensor is not accessed in another branch fn."""
   # Note: It is technically not possible for lower-branch_index branches to
   # capture tensors from higher-branch_index branches, because of the order of
@@ -1078,6 +1301,14 @@ def verify_captures(op_type, branch_graphs):
 
 
 class _CondGradFuncGraph(util.CondBranchFuncGraph):
+  # [CLASS DOC]
+  # HELPER: function graph used to build the gradient of one branch of an If op. It intercepts
+  # captures of forward-graph tensors: constants are recreated locally; resources are traced to
+  # the corresponding forward input; other intermediates are wrapped in optionals inside the
+  # forward graph (or captured directly under XLA / when optionals are disabled) and unwrapped
+  # in the gradient graph. State: a flag saying the forward op must be rewritten to output
+  # intermediates, the forward graph, caches of captured/wrapped values, raw XLA intermediates and
+  # a map of created constants. Created by _create_grad_func for each branch.
   """FuncGraph for the gradient function of the branch of an If op.
 
   Handles wrapping and unwrapping intermediate values that are captured by the
@@ -1089,6 +1320,11 @@ class _CondGradFuncGraph(util.CondBranchFuncGraph):
   """
 
   def __init__(self, name, forward_graph):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: name of the gradient graph and the forward branch graph it
+    # differentiates. Initializes the base branch graph with the default graph's collections and
+    # sets up state: rewrite flag false, forward graph reference, empty maps for indirect
+    # captures, wrapped intermediates (ordered), XLA intermediates list and captured constants.
     super(_CondGradFuncGraph, self).__init__(
         name, collections=ops.get_default_graph()._collections)  # pylint: disable=protected-access
     self.op_needs_rewrite = False
@@ -1108,15 +1344,32 @@ class _CondGradFuncGraph(util.CondBranchFuncGraph):
 
   @property
   def wrapped_intermediates(self):
+    # [FUNCTION DOC]
+    # Read-only property: returns a new list of the optional tensors (in the forward graph) that
+    # wrap intermediates captured by this gradient graph, in capture order.
     """The optional-wrapped intermediates captured from the forward graph."""
     return list(self._wrapped_intermediates.values())
 
   @property
   def xla_intermediates(self):
+    # [FUNCTION DOC]
+    # Read-only property: returns the live list of raw forward intermediates captured directly
+    # (used when optionals are disabled or in an XLA context); empty otherwise.
     """Raw intermediates captured from the forward graph if XLA is enabled."""
     return self._xla_intermediates
 
   def _capture_helper(self, tensor, name):
+    # [FUNCTION DOC]
+    # HELPER: overrides capture handling of the base function graph. Inputs: the tensor being
+    # captured and a name. Tensors that are not from the forward graph, or are forward inputs or
+    # outputs, use the default capture. Forward constants are recreated as constants in this graph
+    # (cached). When optionals are disabled or under XLA, the raw intermediate is captured and
+    # recorded (setting the rewrite flag the first time). Otherwise, cached results are reused;
+    # resource tensors are traced to the matching forward input and captured; other tensors are
+    # wrapped in an optional in the forward graph (reusing an existing wrapper that is already a
+    # forward output, else creating one and setting the rewrite flag), that optional is captured
+    # and its value read back with the original type and shape. Returns the tensor to use inside
+    # this graph. Side effects: may add ops to the forward graph and update caches.
     if (tensor.graph is not self._forward_graph or
         any(tensor is t for t in self._forward_graph.inputs) or
         any(tensor is t for t in self._forward_graph.outputs)):
@@ -1197,6 +1450,15 @@ def indexed_case(branch_index,
                  branch_fns,
                  name="indexed_case",
                  lower_using_switch_merge=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says "conv_v2", which is a typo for the cond version-2 function.
+  # Multi-branch conditional. Inputs: branch_index (integer scalar tensor; a Python integer is
+  # rejected with a type error), branch_fns (list of callables with no arguments, one per
+  # branch), name (scope name, default "indexed_case"), lower_using_switch_merge (optional flag
+  # controlling conversion to Switch/Merge). Traces each branch into its own function graph
+  # (with automatic control dependencies matching the current graph), verifies no branch uses
+  # another's tensors, and builds a single functional Case op. Returns the packed structured
+  # outputs of the branches. Side effects: adds ops and functions to the default graph.
   """Like conv_v2, except emits a Case op instead of an If."""
   if isinstance(branch_index, int):
     raise TypeError("branch_index must not be a Python int", branch_index)
@@ -1237,6 +1499,18 @@ def indexed_case(branch_index,
 @ops.RegisterGradient("Case")
 @ops.RegisterGradient("StatelessCase")
 def _CaseGrad(op, *grads):  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # HELPER: gradient function registered for the Case and StatelessCase ops.
+  # Inputs: op (the forward op, possibly a mock wrapper) and gradients for each output. Gets the
+  # forward branch graphs (asserting they belong to the op's graph), builds a gradient graph per
+  # branch, and fills missing gradients with zeros if another branch has them. If any gradient
+  # graph captured forward intermediates, it rewrites the forward Case op in place: appends extra
+  # outputs (optional-wrapped, or raw with fake placeholders for XLA / disabled optionals) to every
+  # branch, replaces the branch functions and output attributes, and adds outputs to the op. Then
+  # resolves gradient inputs, matches composite output types, reads the forward op's lowering
+  # attribute if present, and builds a gradient Case op from the original branch index. Returns a
+  # list with null for the index followed by the gradient outputs. Side effects: mutates the
+  # forward op and graphs (may invalidate active sessions).
   """The gradient of a Case op produced by tf.switch_case."""
   # Get the Case operator (this logic handles the case where op is a MockOp)
   case_op = op.outputs[0].op
@@ -1337,6 +1611,16 @@ def _build_case(branch_index,
                 branch_inputs,
                 name=None,
                 lower_using_switch_merge=None):
+  # [FUNCTION DOC]
+  # HELPER: core builder for Case ops, shared by indexed_case and the Case gradient.
+  # KNOWN ISSUE: statefulness is detected with the automatic-control-dependency helper, while the
+  # If builder uses its own special-case function (_is_op_stateful) that treats some collective and
+  # iterator ops as stateless; the two decisions can disagree.
+  # Inputs: branch_index (integer tensor), branch_graphs, branch_inputs (per-branch lists of
+  # outer tensors), name, lower_using_switch_merge (optional). Matches indexed-slices index types,
+  # checks equal output types, makes branch inputs match, picks a stateful Case if any branch has
+  # stateful ops (else stateless), creates it under the branches' captured control dependencies
+  # (see the nested creator), and returns the packed outputs. Mutates the branch graphs.
   """Creates an `Case` op from `branch_index`, branch graphs and inputs.
 
   Note that this modifies `branch_graphs` to make the inputs match, and to
@@ -1381,6 +1665,14 @@ def _build_case(branch_index,
       sum((list(bg.function_captures.control) for bg in branch_graphs), [])):
 
     def _make_op(inputs):
+      # [FUNCTION DOC]
+      # HELPER: creates the functional Case / StatelessCase op for _build_case.
+      # Input: inputs (list of tensors passed after the branch index). Creates the op with
+      # output types and merged shapes from the branches, copies handle data to outputs, and,
+      # when an op exists (not for output-less stateless ops), sets lowering and
+      # compile-time-constant attributes, sets read-only resource inputs, prevents fetching,
+      # and stores each branch graph on the op (and updates its outer graph) for reuse by the
+      # gradient. Returns the output tensors.
       case_op, tensors = util.get_op_and_outputs(op_fn(
           branch_index,
           inputs, [t.dtype for t in branch_graphs[0].outputs],
@@ -1418,6 +1710,12 @@ def _build_case(branch_index,
 
 
 def _set_read_only_resource_inputs_attr(op, branch_graphs):
+  # [FUNCTION DOC]
+  # HELPER: annotates a cond/case op for automatic control dependencies. Inputs: the If or Case
+  # op and its branch graphs. Starts with all non-predicate input positions, intersects with the
+  # read-only resource input indices of every branch graph (asserting each branch has one fewer
+  # input than the op), shifts indices by one to account for the predicate, and sets the sorted
+  # list as an integer-list attribute on the op. Side effect: mutates op attributes. Returns nothing.
   """Sets the list of resource inputs which are read-only.
 
   This is used by AutomaticControlDependencies.
