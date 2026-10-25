@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Tests for the unified N-dimensional pooling function in the nn ops (max and average
+# pooling with padding, dilation and strides, optionally with channel-first data formats).
+# Provides two numpy reference implementations (single axis and multi axis pooling) used as
+# ground truth, and one test class that compares the op against them for 1-D, 2-D and 3-D
+# inputs and checks numerical gradients. Importing registers nn gradients. Running as a
+# script starts the standard test runner.
 """Tests for unified pooling functionality in tensorflow.ops.nn."""
 
 import math
@@ -35,6 +42,16 @@ def pool_direct_single_axis(
     padding,
     dilation_rate,
     stride):
+  # [FUNCTION DOC]
+  # HELPER: numpy reference pooling along one axis, used by pool_direct and the tests.
+  # Inputs: input (numpy array), axis (which axis to pool), window_size (positive int),
+  # pooling_type ("MAX" or "AVG"), padding ("SAME" or "VALID"), dilation_rate and stride
+  # (positive ints). Computes the effective window size with dilation, derives the output
+  # size and leading padding (SAME pads so that output size is ceil of input over stride, with
+  # half of the padding before; VALID uses no padding), then for each output position takes the
+  # max or mean over the dilated window slice clipped to the array bounds (padding cells are
+  # simply excluded, not zero filled). Returns a new array with the pooled axis resized.
+  # Raises a value error for an unsupported padding or pooling type. Does not modify input.
   """Numpy implementation of pooling along a single axis.
 
   This is intended for testing only, and therefore isn't particularly efficient.
@@ -100,6 +117,14 @@ def pool_direct(
     dilation_rate,
     strides,
     data_format=None):
+  # [FUNCTION DOC]
+  # HELPER: numpy reference for N-dimensional pooling, used as ground truth by the tests.
+  # Inputs: input (numpy array of rank N+2), window_shape, dilation_rate and strides (sequences
+  # of N positive ints), pooling_type ("MAX" or "AVG"), padding ("SAME" or "VALID"), and an
+  # optional data_format; a format starting with "NC" means spatial dims start at axis 2,
+  # otherwise they start at axis 1. Applies the single-axis reference to each spatial axis in
+  # turn and returns the resulting array. Errors from the single-axis helper (value error
+  # for unsupported padding or pooling type) propagate. Does not modify the input.
   """Numpy implementation of pooling.
 
   This is intended for testing only, and therefore isn't particularly efficient.
@@ -140,8 +165,18 @@ def pool_direct(
 
 
 class PoolingTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case comparing the unified pooling op to the numpy reference over many combinations
+  # of padding, pooling type, window shape, dilation and strides in one to three spatial
+  # dimensions, plus channel-first formats on CUDA and numerical gradient checks.
 
   def _test(self, input_shape, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: shared forward comparison. Builds a float32 input of the given shape filled with
+    # strictly negative decreasing numbers (so wrongly used zero padding would show up), runs the
+    # numpy reference and the real pooling op with the extra keyword arguments (window shape,
+    # pooling type, padding, dilation rate, strides, optional data format), and asserts
+    # the results are close (tolerance 1e-2). Returns nothing.
     # Use negative numbers to make sure there isn't any zero padding getting
     # used.
     x = -np.arange(
@@ -151,6 +186,9 @@ class PoolingTest(test.TestCase):
     self.assertAllClose(y1, self.evaluate(y2), rtol=1e-2, atol=1e-2)
 
   def testPoolSimple(self):
+    # [FUNCTION DOC]
+    # Scenario: input of shape 1x1x10x1 with window 1x3 and strides 1x2, for both paddings and
+    # both pooling types; expects the op to match the numpy reference.
     with self.session(use_gpu=test.is_gpu_available()):
       for padding in ["SAME", "VALID"]:
         for pooling_type in ["MAX", "AVG"]:
@@ -163,6 +201,10 @@ class PoolingTest(test.TestCase):
               strides=[1, 2])
 
   def testPool1D(self):
+    # [FUNCTION DOC]
+    # Sweeps one-dimensional pooling over paddings, pooling types, two input lengths, window
+    # sizes 1 to 3, dilation rates (VALID padding only, with unit strides) and strides (skipping
+    # strides larger than the window, with unit dilation); expects agreement with the reference.
     with self.session(use_gpu=test.is_gpu_available()):
       for padding in ["SAME", "VALID"]:
         for pooling_type in ["MAX", "AVG"]:
@@ -189,6 +231,9 @@ class PoolingTest(test.TestCase):
                     strides=strides)
 
   def testPool2D(self):
+    # [FUNCTION DOC]
+    # Same sweep as the 1-D test for two spatial dimensions, with several window shapes,
+    # dilation rates (VALID only) and strides; expects agreement with the numpy reference.
     with self.session(use_gpu=test.is_gpu_available()):
       for padding in ["SAME", "VALID"]:
         for pooling_type in ["MAX", "AVG"]:
@@ -215,6 +260,9 @@ class PoolingTest(test.TestCase):
                     strides=strides)
 
   def testPool3D(self):
+    # [FUNCTION DOC]
+    # Same sweep for three spatial dimensions with several window shapes, dilation rates (VALID
+    # only) and strides; expects agreement with the numpy reference.
     with self.session(use_gpu=test.is_gpu_available()):
       for padding in ["SAME", "VALID"]:
         for pooling_type in ["MAX", "AVG"]:
@@ -242,6 +290,11 @@ class PoolingTest(test.TestCase):
                     strides=strides)
 
   def testPoolNC(self):
+    # [FUNCTION DOC]
+    # Channel-first formats (NCW, NCHW, NCDHW) are only supported on CUDA, so the test does
+    # nothing unless a CUDA GPU is available. Then, for max pooling with both paddings and
+    # various strides, checks the op against the reference; finally a VALID padding NCHW case
+    # with dilation rate 2 is checked once.
     if test.is_gpu_available(cuda_only=True):
       # "NC*" format is currently only supported on CUDA.
       with self.session():
@@ -288,6 +341,11 @@ class PoolingTest(test.TestCase):
             data_format="NCHW")
 
   def _test_gradient(self, input_shape, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: shared numerical gradient check. Builds a float32 constant of negative decreasing
+    # values with the given shape, applies the pooling op with the extra keyword arguments,
+    # and uses the graph-mode gradient checker (with the same initial value) to compute the
+    # error between analytic and numeric gradients; asserts it is below 1e-2. Returns nothing.
     x_val = -np.arange(
         np.prod(input_shape), dtype=np.float32).reshape(input_shape) - 1
     x = constant_op.constant(x_val, name="x", dtype=dtypes.float32)
@@ -302,6 +360,11 @@ class PoolingTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testGradient1D(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the strided loop calls the forward-value helper instead of the gradient
+    # helper, so gradients are only checked for the dilation cases (VALID padding, unit
+    # strides); the strided cases just repeat the forward comparison.
+    # Sweeps 1-D pooling over paddings, pooling types, small shapes and windows. Graph mode only.
     with self.session(use_gpu=test.is_gpu_available()):
       for padding in ["SAME", "VALID"]:
         for pooling_type in ["AVG", "MAX"]:
@@ -329,6 +392,11 @@ class PoolingTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testGradient2D(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: as in the 1-D test, the strided loop calls the forward-value helper instead of
+    # the gradient helper, so strided cases are not gradient-checked.
+    # Sweeps 2-D pooling over paddings, pooling types, shapes, windows and dilation rates
+    # (VALID padding) with gradient checks. Graph mode only.
     with self.session(use_gpu=test.is_gpu_available()):
       for padding in ["SAME", "VALID"]:
         for pooling_type in ["AVG", "MAX"]:
@@ -356,6 +424,11 @@ class PoolingTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testGradient3D(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: as in the 1-D test, the strided loop calls the forward-value helper instead of
+    # the gradient helper, so strided cases are not gradient-checked.
+    # Sweeps 3-D pooling over paddings, pooling types, shapes, windows and dilation rates
+    # (VALID padding) with gradient checks. Graph mode only.
     with self.session(use_gpu=test.is_gpu_available()):
       for padding in ["SAME", "VALID"]:
         for pooling_type in ["AVG", "MAX"]:

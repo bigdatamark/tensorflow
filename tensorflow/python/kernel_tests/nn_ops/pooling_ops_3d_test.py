@@ -12,6 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Functional tests for the 3-D max and average pooling ops and their gradient ops. Contains a
+# helper listing the valid (data format, device) test configurations and one test class that
+# checks forward values against hand computed outputs (float32 and bfloat16), gradient
+# correctness through numerical Jacobians, and error handling for invalid shapes, kernel sizes
+# and sizes. Import registers nn gradients. Running as a script starts the test runner.
 """Functional tests for 3d pooling operations."""
 
 import numpy as np
@@ -32,6 +38,11 @@ from tensorflow.python.platform import test
 
 
 def GetTestConfigs():
+  # [FUNCTION DOC]
+  # HELPER: lists the (data format, use GPU flag) pairs that the pooling tests iterate over.
+  # Always includes channel-last on CPU-style and GPU-style placement; adds the channel-first
+  # format on GPU only when a CUDA GPU is available. Takes no arguments, returns a list of
+  # pairs, and has no side effects other than querying GPU availability.
   """Get all the valid tests configs to run.
 
   Returns:
@@ -47,9 +58,21 @@ def GetTestConfigs():
 # TODO(mjanusz): Add microbenchmarks for 3d pooling.
 @test_util.with_eager_op_as_function
 class PoolingTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for 3-D pooling (decorated so ops also run as functions in eager mode). Provides
+  # shared helpers that run a pooling function for each configuration from the config helper
+  # and verify values, plus helpers computing and comparing analytic and numeric Jacobians.
 
   def _VerifyOneTest(self, pool_func, input_sizes, window, strides, padding,
                      data_format, data_type, expected, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: runs one pooling configuration and checks values.
+    # Inputs: pool_func (the pooling op), input_sizes (five dims), window and strides (three
+    # element tuples for planes, rows, cols), padding string, data_format (channel-last or
+    # channel-first), data_type (float32 or bfloat16), expected (flat list of values), use_gpu.
+    # Builds an input of incrementing numbers starting from 1 (scaled by 0.1 for bfloat16, as
+    # is the expected list), converts layouts for channel-first, evaluates the op, flattens
+    # the result and asserts closeness (1e-6 tolerance, 2e-2 for bfloat16). Returns nothing.
     """Verifies the output values of the pooling function.
 
     Args:
@@ -98,6 +121,11 @@ class PoolingTest(test.TestCase):
 
   def _VerifyValues(self, pool_func, input_sizes, window, strides,
                     padding, expected):
+    # [FUNCTION DOC]
+    # HELPER: runs the single-configuration check for every test config (data format and
+    # device): always in float32, and additionally in bfloat16 except on GPU placement without
+    # an available CUDA GPU. Arguments are as in the single-configuration helper without
+    # format, type and device. Returns nothing.
     for data_format, use_gpu in GetTestConfigs():
       self._VerifyOneTest(pool_func, input_sizes, window, strides, padding,
                           data_format, dtypes.float32, expected, use_gpu)
@@ -107,6 +135,9 @@ class PoolingTest(test.TestCase):
                             data_format, dtypes.bfloat16, expected, use_gpu)
 
   def testAvgPool3dValidPadding(self):
+    # [FUNCTION DOC]
+    # Average pooling of a 1x3x3x3x3 input with 2x2x2 window and stride and valid padding;
+    # expects three output values 20.5, 21.5, 22.5.
     expected_output = [20.5, 21.5, 22.5]
     self._VerifyValues(
         nn_ops.avg_pool3d,
@@ -117,6 +148,9 @@ class PoolingTest(test.TestCase):
         expected=expected_output)
 
   def testAvgPool3dSamePadding(self):
+    # [FUNCTION DOC]
+    # Average pooling of a 1x2x2x4x3 input, 2x2x2 window and stride, same padding; expects six
+    # values (edge windows average only over valid cells).
     expected_output = [20.5, 21.5, 22.5, 26.5, 27.5, 28.5]
     self._VerifyValues(
         nn_ops.avg_pool3d,
@@ -127,6 +161,9 @@ class PoolingTest(test.TestCase):
         expected=expected_output)
 
   def testAvgPool3dSamePaddingDifferentStrides(self):
+    # [FUNCTION DOC]
+    # Average pooling of a 1x5x8x1x1 input with window 1x2x3 and strides 2x3x1, same padding;
+    # expects nine hand computed values.
     expected_output = [1.5, 4.5, 7.5, 17.5, 20.5, 23.5, 33.5, 36.5, 39.5]
     self._VerifyValues(
         nn_ops.avg_pool3d,
@@ -137,6 +174,12 @@ class PoolingTest(test.TestCase):
         expected=expected_output)
 
   def testAvgPool3dGrad(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the loop over data types sits inside the assertRaises block, so it stops at
+    # the first raised error and the bfloat16 iteration never runs.
+    # Scenario: the average pooling gradient op is given an absurdly large original input
+    # shape (about 1.9 billion per dimension) with a small gradient. Expects a resource
+    # exhausted or invalid-argument error rather than a crash.
     with self.assertRaises(
         (errors.ResourceExhaustedError, errors.InvalidArgumentError)):
       for dtype in [dtypes.float32, dtypes.bfloat16]:
@@ -156,6 +199,12 @@ class PoolingTest(test.TestCase):
           self.evaluate(t)
 
   def testAvgPool3dGradEmptyInput(self):
+    # [FUNCTION DOC]
+    # Scenario: average pooling gradient with an original input shape that has a zero sized
+    # dimension and a matching scalar-filled gradient, for each test config. Expects the op to
+    # run without error; no value is asserted.
+    # KNOWN ISSUE: the data format is passed to the op unchanged even though the shape is
+    # given in channel-last order, so the channel-first config is not a meaningful layout check.
     for data_format, use_gpu in GetTestConfigs():
       with self.cached_session(use_gpu=use_gpu):
         orig_input_shape = constant_op.constant([5, 6, 7, 0, 8],
@@ -172,6 +221,9 @@ class PoolingTest(test.TestCase):
         self.evaluate(t)
 
   def testAvgPool3dGradInvalidKsize(self):
+    # [FUNCTION DOC]
+    # Scenario: average pooling gradient with a negative window size for the depth dimension on
+    # a 1x1x1x1x1 shape, for each test config. Expects an invalid-argument error.
     for data_format, use_gpu in GetTestConfigs():
       with self.cached_session(use_gpu=use_gpu):
         orig_input_shape = constant_op.constant(
@@ -190,6 +242,8 @@ class PoolingTest(test.TestCase):
           self.evaluate(t)
 
   def testMaxPool3dValidPadding(self):
+    # [FUNCTION DOC]
+    # Max pooling of a 1x3x3x3x3 input, 2x2x2 window and stride, valid padding; expects 40, 41, 42.
     expected_output = [40.0, 41.0, 42.0]
     self._VerifyValues(
         nn_ops.max_pool3d,
@@ -200,6 +254,9 @@ class PoolingTest(test.TestCase):
         expected=expected_output)
 
   def testMaxPool3dSamePadding(self):
+    # [FUNCTION DOC]
+    # Max pooling of a 1x2x2x3x3 input, 2x2x2 window and stride, same padding; expects the six
+    # values 31 to 36.
     expected_output = [31., 32., 33., 34., 35., 36.]
     self._VerifyValues(
         nn_ops.max_pool3d,
@@ -210,6 +267,12 @@ class PoolingTest(test.TestCase):
         expected=expected_output)
 
   def testMaxPool3dSamePaddingDifferentStrides(self):
+    # [FUNCTION DOC]
+    # Two scenarios with same padding. First, a small 1x5x8x1x1 input with window 1x2x3 and
+    # strides 2x3x1 against nine hand computed values. Second, a larger 1x5x27x27x64 input
+    # with window and strides 1x2x2 whose expected output is simulated in numpy by padding one
+    # row and column and sampling every other element, with last row and column corrected to
+    # the second-to-last values. Both are checked via the shared verification helper.
     expected_output = [2., 5., 8., 18., 21., 24., 34., 37., 40.]
     self._VerifyValues(
         nn_ops.max_pool3d,
@@ -240,6 +303,10 @@ class PoolingTest(test.TestCase):
         expected=expected_output.flatten())
 
   def testKernelSmallerThanStride(self):
+    # [FUNCTION DOC]
+    # Scenario: window smaller than the stride, so some inputs are skipped. Checks max and
+    # average pooling on 3x3x3 (window 1, stride 2, same padding) and 7x7x7 (window 2,
+    # stride 3, valid padding) single channel inputs against hand computed values.
     self._VerifyValues(
         nn_ops.max_pool3d,
         input_sizes=[1, 3, 3, 3, 1],
@@ -273,6 +340,9 @@ class PoolingTest(test.TestCase):
         expected=[29.5, 32.5, 50.5, 53.5, 176.5, 179.5, 197.5, 200.5])
 
   def testMaxPool3DEmptyTensorOutputShape(self):
+    # [FUNCTION DOC]
+    # Scenario: max pooling of an input with batch size zero (0x112x112x112x64), window and
+    # stride 2, valid padding. Expects an empty result whose shape is 0x56x56x56x64.
     """Verifies the output shape of the max pooling function when tensor is empty.
 
     Args: none
@@ -294,6 +364,12 @@ class PoolingTest(test.TestCase):
 
   # TODO(penporn): Determine if we will allow input_sizes[3] < ksize[3].
   def DISABLED_testAvgPool3dEmptyOutTensor(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: disabled test; the name does not start with the test prefix so the runner
+    # never executes it (pending a decision on allowing a smaller input dimension than the
+    # window).
+    # Intended scenario: average pooling where the window is larger than the input in the
+    # third spatial dimension, expecting an output of shape 30x1x1x0x17.
     input_sizes = [30, 19, 4, 19, 17]
     input_data = 1.0
     input_tensor = constant_op.constant(
@@ -318,6 +394,15 @@ class PoolingTest(test.TestCase):
                     data_format,
                     use_gpu,
                     dtype=np.float32):
+    # [FUNCTION DOC]
+    # HELPER: computes analytic and numeric Jacobians for a pooling op and for its gradient.
+    # Inputs: pool_func, input_sizes and output_sizes (channel-last lists), window and strides
+    # (three element sequences), padding, data_format, use_gpu, and numpy dtype (default
+    # float32). Builds an input of consecutive numbers, converts to channel-first layout when
+    # requested, then uses the v2 gradient checker on the pooling function, and on a function
+    # that maps random upstream gradients (uniform in minus one to one) to the input gradient
+    # recorded by a gradient tape. Returns a pair: (analytic input Jacobian, analytic gradient
+    # Jacobian) and (numeric input Jacobian, numeric gradient Jacobian).
     with self.cached_session(use_gpu=use_gpu):
       x = np.arange(np.prod(input_sizes)).reshape(input_sizes).astype(dtype)
       input_tensor = constant_op.constant(x, shape=input_sizes)
@@ -330,6 +415,9 @@ class PoolingTest(test.TestCase):
         output_sizes = test_util.NHWCToNCHW(output_sizes)
 
       def func(in_tensor):
+        # [FUNCTION DOC]
+        # HELPER: closure applying the pooling op to a tensor with the enclosing window,
+        # strides, padding and data format; returns the pooled tensor. Used for Jacobians.
         return pool_func(
             in_tensor,
             ksize=ksize,
@@ -341,6 +429,10 @@ class PoolingTest(test.TestCase):
           func, [input_tensor])
 
       def pool_grad_function(upstream_gradients):
+        # [FUNCTION DOC]
+        # HELPER: closure computing the gradient of the pooling output, weighted by the given
+        # upstream gradients, with respect to the input tensor using a gradient tape. Returns
+        # that gradient tensor. Used to check second-order (gradient of gradient) behavior.
         with backprop.GradientTape() as tape:
           tape.watch(input_tensor)
           pool_output = pool_func(
@@ -362,6 +454,12 @@ class PoolingTest(test.TestCase):
   def _ConstructAndTestGradientForConfig(self, pool_func, input_sizes,
                                          output_sizes, window, strides, padding,
                                          data_format, data_type, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: gradient check for one data format, data type and device.
+    # Gets analytic and numeric Jacobians for the pooling op (using the numpy dtype matching
+    # data_type). For bfloat16 the numeric Jacobians are recomputed in float32 so that bfloat16
+    # analytic values are compared with float32 numeric values. Asserts both input and
+    # gradient Jacobians are close (relative and absolute tolerance 1e-3). Returns nothing.
     """Verifies the gradients of a pooling function.
 
     Args:
@@ -408,6 +506,10 @@ class PoolingTest(test.TestCase):
   def _ConstructAndTestGradient(self,
                                 pool_func,
                                 **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: runs the per-config gradient check for every test config in float32, and
+    # additionally in bfloat16 only when running on a CUDA GPU. The extra keyword arguments
+    # (sizes, window, strides, padding) are forwarded. Returns nothing.
     """Runs _ConstructAndTestGradientForConfig for all tests configurations."""
 
     for data_format, use_gpu in GetTestConfigs():
@@ -427,6 +529,9 @@ class PoolingTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testMaxPoolGradValidPadding1_1_3d(self):
+    # [FUNCTION DOC]
+    # Gradient check of 3-D max pooling: 1x3x3x3x1 input, window 1 and stride 1, valid padding.
+    # Compares analytic and numeric Jacobians for all configs. Graph mode (deprecated v1 style).
     self._ConstructAndTestGradient(
         nn_ops.max_pool3d,
         input_sizes=[1, 3, 3, 3, 1],
@@ -437,6 +542,9 @@ class PoolingTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testMaxPoolGradValidPadding2_1_6_3d(self):
+    # [FUNCTION DOC]
+    # Gradient check of 3-D max pooling: 1x2x3x4x2 input, window 2, stride 1, valid padding
+    # (output 1x1x2x3x2). Compares analytic and numeric Jacobians for all configs.
     self._ConstructAndTestGradient(
         nn_ops.max_pool3d,
         input_sizes=[1, 2, 3, 4, 2],
@@ -447,6 +555,9 @@ class PoolingTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testMaxPoolGradValidPadding2_1_7_3d(self):
+    # [FUNCTION DOC]
+    # Gradient check of 3-D max pooling: 1x3x2x7x1 input, window 2, stride 1, valid padding
+    # (output 1x2x1x6x1). Compares analytic and numeric Jacobians for all configs.
     self._ConstructAndTestGradient(
         nn_ops.max_pool3d,
         input_sizes=[1, 3, 2, 7, 1],
@@ -457,6 +568,9 @@ class PoolingTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testMaxPoolGradValidPadding1_2_3d(self):
+    # [FUNCTION DOC]
+    # Gradient check of 3-D max pooling: 1x3x3x3x1 input, window 1, stride 2, valid padding
+    # (output 1x2x2x2x1). Compares analytic and numeric Jacobians for all configs.
     self._ConstructAndTestGradient(
         nn_ops.max_pool3d,
         input_sizes=[1, 3, 3, 3, 1],
@@ -467,6 +581,9 @@ class PoolingTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testMaxPoolGradValidPadding2_2_3d(self):
+    # [FUNCTION DOC]
+    # Gradient check of 3-D max pooling: batch of two 2x2x2x1 volumes, window 2, stride 2, valid
+    # padding (output 2x1x1x1x1). Compares analytic and numeric Jacobians for all configs.
     self._ConstructAndTestGradient(
         nn_ops.max_pool3d,
         input_sizes=[2, 2, 2, 2, 1],
@@ -477,6 +594,9 @@ class PoolingTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testMaxPoolGradSamePadding1_1_3d(self):
+    # [FUNCTION DOC]
+    # Gradient check of 3-D max pooling: 1x3x2x4x1 input, window 1, stride 1, same padding
+    # (output same shape as input). Compares analytic and numeric Jacobians for all configs.
     self._ConstructAndTestGradient(
         nn_ops.max_pool3d,
         input_sizes=[1, 3, 2, 4, 1],
@@ -487,6 +607,9 @@ class PoolingTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testMaxPoolGradSamePadding1_2_3d(self):
+    # [FUNCTION DOC]
+    # Gradient check of 3-D max pooling: 1x3x2x4x1 input, window 1, stride 2, same padding
+    # (output 1x2x1x2x1). Compares analytic and numeric Jacobians for all configs.
     self._ConstructAndTestGradient(
         nn_ops.max_pool3d,
         input_sizes=[1, 3, 2, 4, 1],
@@ -497,6 +620,9 @@ class PoolingTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testMaxPoolGradSamePadding2_1_3d(self):
+    # [FUNCTION DOC]
+    # Gradient check of 3-D max pooling: 1x3x2x4x1 input, window 2, stride 1, same padding
+    # (output same shape as input). Compares analytic and numeric Jacobians for all configs.
     self._ConstructAndTestGradient(
         nn_ops.max_pool3d,
         input_sizes=[1, 3, 2, 4, 1],
@@ -507,6 +633,9 @@ class PoolingTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testMaxPoolGradSamePadding2_2_3d(self):
+    # [FUNCTION DOC]
+    # Gradient check of 3-D max pooling: 1x5x2x4x2 input, window 2, stride 2, same padding
+    # (output 1x3x1x2x2). Compares analytic and numeric Jacobians for all configs.
     self._ConstructAndTestGradient(
         nn_ops.max_pool3d,
         input_sizes=[1, 5, 2, 4, 2],
@@ -517,6 +646,9 @@ class PoolingTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testMaxPoolGradSamePadding3_1_3d(self):
+    # [FUNCTION DOC]
+    # Gradient check of 3-D max pooling: 1x3x4x2x1 input, window 3, stride 1, same padding
+    # (output same shape as input). Compares analytic and numeric Jacobians for all configs.
     self._ConstructAndTestGradient(
         nn_ops.max_pool3d,
         input_sizes=[1, 3, 4, 2, 1],
@@ -527,6 +659,9 @@ class PoolingTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testAvgPoolGradValidPadding1_1_3d(self):
+    # [FUNCTION DOC]
+    # Gradient check of 3-D average pooling: 1x3x3x3x1 input, window 1, stride 1, valid padding.
+    # Compares analytic and numeric Jacobians for all configs.
     self._ConstructAndTestGradient(
         nn_ops.avg_pool3d,
         input_sizes=[1, 3, 3, 3, 1],
@@ -537,6 +672,9 @@ class PoolingTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testAvgPoolGradValidPadding1_2_3d(self):
+    # [FUNCTION DOC]
+    # Gradient check of 3-D average pooling: 1x3x3x3x1 input, window 1, stride 2, valid padding
+    # (output 1x2x2x2x1). Compares analytic and numeric Jacobians for all configs.
     self._ConstructAndTestGradient(
         nn_ops.avg_pool3d,
         input_sizes=[1, 3, 3, 3, 1],
@@ -547,6 +685,9 @@ class PoolingTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testAvgPoolGradValidPadding2_1_3d(self):
+    # [FUNCTION DOC]
+    # Gradient check of 3-D average pooling: 1x3x3x3x2 input, window 2, stride 1, valid padding
+    # (output 1x2x2x2x2). Compares analytic and numeric Jacobians for all configs.
     self._ConstructAndTestGradient(
         nn_ops.avg_pool3d,
         input_sizes=[1, 3, 3, 3, 2],
@@ -557,6 +698,9 @@ class PoolingTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testAvgPoolGradValidPadding2_2_3d(self):
+    # [FUNCTION DOC]
+    # Gradient check of 3-D average pooling: 2x2x2x2x2 input, window 2, stride 2, valid padding
+    # (output 2x1x1x1x2). Compares analytic and numeric Jacobians for all configs.
     self._ConstructAndTestGradient(
         nn_ops.avg_pool3d,
         input_sizes=[2, 2, 2, 2, 2],
@@ -567,6 +711,9 @@ class PoolingTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testAvgPoolGradSamePadding1_1_3d(self):
+    # [FUNCTION DOC]
+    # Gradient check of 3-D average pooling: 1x3x2x4x2 input, window 1, stride 1, same padding.
+    # Compares analytic and numeric Jacobians for all configs.
     self._ConstructAndTestGradient(
         nn_ops.avg_pool3d,
         input_sizes=[1, 3, 2, 4, 2],
@@ -577,6 +724,9 @@ class PoolingTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testAvgPoolGradSamePadding1_2_3d(self):
+    # [FUNCTION DOC]
+    # Gradient check of 3-D average pooling: 1x3x2x4x2 input, window 1, stride 2, same padding
+    # (output 1x2x1x2x2). Compares analytic and numeric Jacobians for all configs.
     self._ConstructAndTestGradient(
         nn_ops.avg_pool3d,
         input_sizes=[1, 3, 2, 4, 2],
@@ -587,6 +737,9 @@ class PoolingTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testAvgPoolGradSamePadding2_1_3d(self):
+    # [FUNCTION DOC]
+    # Gradient check of 3-D average pooling: 1x2x2x2x1 input, window 2, stride 1, same padding.
+    # Compares analytic and numeric Jacobians for all configs.
     self._ConstructAndTestGradient(
         nn_ops.avg_pool3d,
         input_sizes=[1, 2, 2, 2, 1],
@@ -597,6 +750,9 @@ class PoolingTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testAvgPoolGradSamePadding2_2_3d(self):
+    # [FUNCTION DOC]
+    # Gradient check of 3-D average pooling: 1x5x2x4x1 input, window 2, stride 2, same padding
+    # (output 1x3x1x2x1). Compares analytic and numeric Jacobians for all configs.
     self._ConstructAndTestGradient(
         nn_ops.avg_pool3d,
         input_sizes=[1, 5, 2, 4, 1],
@@ -607,6 +763,9 @@ class PoolingTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testAvgPoolGradSamePadding3_1_3d(self):
+    # [FUNCTION DOC]
+    # Gradient check of 3-D average pooling: 1x3x6x2x1 input, window 3, stride 1, same padding.
+    # Compares analytic and numeric Jacobians for all configs.
     self._ConstructAndTestGradient(
         nn_ops.avg_pool3d,
         input_sizes=[1, 3, 6, 2, 1],
@@ -616,6 +775,12 @@ class PoolingTest(test.TestCase):
         padding="SAME")
 
   def testMaxPool3DZeroPoolSize(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the name says max pool, but the test loops over both the max and average 3-D
+    # pooling functions.
+    # Regression test for a GitHub issue: a window with a zero dimension and scalar stride on a
+    # 3x4x10x11x12 input, valid padding. Expects an invalid-argument or value error instead of
+    # a crash.
     # Test case for GitHub issue 51936.
     for f in [nn_ops.max_pool3d, nn_ops.avg_pool3d]:
       with self.session():
@@ -630,6 +795,12 @@ class PoolingTest(test.TestCase):
 
   @test_util.disable_xla("b/205634417")  # XLA does not raise these errors.
   def testMaxPoolGradEagerShapeErrors(self):
+    # [FUNCTION DOC]
+    # Eager-mode scenario for max pooling gradient and gradient-of-gradient ops. Passes an
+    # original output whose last dimension is 2 rather than 1, then a gradient with last
+    # dimension 2, expecting an invalid-argument error whose message states the expected shape
+    # and the received shape in each of the four calls. Skipped under XLA, which does not
+    # raise these errors.
     with context.eager_mode():
       orig_in = array_ops.ones((1, 1, 1, 1, 1))
 

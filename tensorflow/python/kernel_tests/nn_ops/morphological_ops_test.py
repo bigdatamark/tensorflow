@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Functional tests for the 2-D grayscale morphological ops: dilation and erosion, both forward
+# values and gradients. Contains two test classes (DilationTest, ErosionTest) that run small
+# hand-computed cases (valid/same padding, depth, batch, non-square window, atrous rate, uneven
+# stride) on CPU and GPU settings, and numerically check gradients with the v2 gradient checker.
+# Importing it also pulls in the nn gradient registrations. Running as a script starts the
+# standard test runner.
 """Functional tests for morphological filtering operations."""
 
 from absl.testing import parameterized
@@ -29,9 +36,21 @@ from tensorflow.python.platform import test
 
 
 class DilationTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests for the 2-D dilation op (forward values and gradients) in float32 and bfloat16,
+  # parameterized by data type. Helper methods with a leading underscore build individual
+  # scenarios; the public test methods loop over them for GPU and CPU placement.
 
   def _VerifyValues(self, image, kernel, strides, rates, padding, out, use_gpu,
                     dtype):
+    # [FUNCTION DOC]
+    # HELPER: shared assertion helper for the dilation forward-value scenarios.
+    # KNOWN ISSUE: the docstring does not list the dtype parameter, which is required and is
+    # the data type used to build both the image and kernel constants.
+    # Wraps strides and rates (two element lists for height and width) with leading and
+    # trailing ones, runs the dilation op on constants made from image and kernel in a cached
+    # session on the requested device, and asserts the result is close to the expected out
+    # with a tolerance chosen according to the data type. Returns nothing.
     """Verifies the output values of the dilation function.
 
     Args:
@@ -57,6 +76,9 @@ class DilationTest(test.TestCase, parameterized.TestCase):
       self.assertAllCloseAccordingToType(out, self.evaluate(out_tensor))
 
   def _testDilationValidPadding(self, use_gpu, dtype):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testDilation. A 2x2 single channel image with a 2x2 kernel,
+    # unit strides and rates and valid padding; expects a single output value of 0.5.
     # [1, 2, 2, 1]
     image = [[[[.1], [.2]], [[.3], [.4]]]]
     # [2, 2, 1]
@@ -74,6 +96,9 @@ class DilationTest(test.TestCase, parameterized.TestCase):
         dtype=dtype)
 
   def _testDilationSamePadding(self, use_gpu, dtype):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testDilation. Same 2x2 image and 2x2 kernel as the valid-padding
+    # case but with same padding; expects a 2x2 output of 0.5, 0.6, 0.7, 0.8.
     # [1, 2, 2, 1]
     image = [[[[.1], [.2]], [[.3], [.4]]]]
     # [2, 2, 1]
@@ -91,6 +116,10 @@ class DilationTest(test.TestCase, parameterized.TestCase):
         dtype=dtype)
 
   def _testDilationSamePaddingDepth(self, use_gpu, dtype):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testDilation. A 2x2 image with three channels and a 2x2x3 kernel,
+    # same padding, unit strides and rates; each channel is dilated independently, and the
+    # expected 2x2x3 output is compared.
     # [1, 2, 2, 3]
     image = [[[[.1, .2, .0], [.2, .3, .1]], [[.3, .4, .2], [.4, .5, .3]]]]
     # [2, 2, 3]
@@ -108,6 +137,9 @@ class DilationTest(test.TestCase, parameterized.TestCase):
         dtype=dtype)
 
   def _testDilationSamePaddingBatch(self, use_gpu, dtype):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testDilation. A batch of two 2x2 single channel images with a 2x2
+    # kernel and same padding; checks each batch item is dilated independently.
     # [2, 2, 2, 1]
     image = [[[[.1], [.2]], [[.3], [.4]]], [[[.2], [.3]], [[.4], [.5]]]]
     # [2, 2, 1]
@@ -125,6 +157,9 @@ class DilationTest(test.TestCase, parameterized.TestCase):
         dtype=dtype)
 
   def _testDilationValidPaddingNonSquareWindow(self, use_gpu, dtype):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testDilation. A 2x2 image with a 1x2 (non square) kernel and valid
+    # padding; expects a 2x1 output of 0.5 and 0.7.
     # [1, 2, 2, 1]
     image = [[[[.1], [.2]], [[.3], [.4]]]]
     # [1, 2, 1]
@@ -142,6 +177,10 @@ class DilationTest(test.TestCase, parameterized.TestCase):
         dtype=dtype)
 
   def _testDilationSamePaddingRate(self, use_gpu, dtype):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testDilation. A 3x3 image with a 2x2 kernel using an atrous rate
+    # of 2 in both directions (effective 3x3 kernel with zero gaps) and same padding; compares
+    # against a hand computed 3x3 output.
     # [1, 3, 3, 1]
     image = [[[[.1], [.2], [.3]], [[.4], [.5], [.6]], [[.7], [.8], [.9]]]]
     # [2, 2, 1]
@@ -163,6 +202,11 @@ class DilationTest(test.TestCase, parameterized.TestCase):
         dtype=dtype)
 
   def _testDilationValidPaddingUnevenStride(self, use_gpu, dtype):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testDilation. A 3x4 image with a 2x2 kernel, strides of 1 in height
+    # and 2 in width, valid padding; expects a 2x2 output.
+    # KNOWN ISSUE: a comment in the code labels the image as shape 1x3x3x1 but it is actually
+    # 1x3x4x1.
     # [1, 3, 3, 1]
     image = [[[[.1], [.2], [.3], [.4]], [[.5], [.6], [.7], [.8]],
               [[.9], [1.0], [1.1], [1.2]]]]
@@ -182,6 +226,10 @@ class DilationTest(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(dtypes.float32, dtypes.bfloat16)
   def testDilation(self, dtype):
+    # [FUNCTION DOC]
+    # Parameterized over float32 and bfloat16. For both GPU and CPU placement, runs all seven
+    # dilation forward-value scenarios (valid, same, depth, batch, non square window, rate,
+    # uneven stride) and expects every result to match the hand computed values.
     for use_gpu in True, False:
       self._testDilationValidPadding(use_gpu, dtype)
       self._testDilationSamePadding(use_gpu, dtype)
@@ -199,6 +247,18 @@ class DilationTest(test.TestCase, parameterized.TestCase):
                                 padding,
                                 use_gpu,
                                 dtype=dtypes.float32):
+    # [FUNCTION DOC]
+    # HELPER: shared gradient checker for the dilation gradient scenarios.
+    # KNOWN ISSUE: the docstring omits the dtype parameter (default float32). Also the random
+    # image and kernel are always generated as float32 numpy arrays and then converted to
+    # the constants of the requested dtype.
+    # Inputs: image_shape (batch, height, width, channels), kernel_shape (height, width,
+    # channels), strides and rates (two element lists), padding string, use_gpu flag, dtype.
+    # Asserts the channel counts match (assertion error otherwise), seeds numpy randomness
+    # with a fixed value, builds random constants, and computes the gradient error of the
+    # dilation op with respect to both the image and the kernel using the v2 gradient
+    # checker on the chosen device. Prints the larger error and asserts it is below 4.0 for
+    # bfloat16 or 1e-4 otherwise. Returns nothing.
     """Verifies the gradients of the dilation function.
 
     Args:
@@ -224,6 +284,10 @@ class DilationTest(test.TestCase, parameterized.TestCase):
         kernel, shape=kernel_shape, name="filter", dtype=dtype)
 
     def compute_dilation2d(image_tensor, kernel_tensor):
+      # [FUNCTION DOC]
+      # HELPER: closure used as the function under differentiation. Applies the dilation op
+      # to the given image and kernel tensors using the enclosing strides, rates and padding,
+      # and returns the output tensor.
       return nn_ops.dilation2d(
           image_tensor,
           kernel_tensor,
@@ -250,6 +314,8 @@ class DilationTest(test.TestCase, parameterized.TestCase):
       self.assertLess(err, 1e-4)
 
   def _testDilationGradValidPadding_1x1x1(self, use_gpu, dtype):
+    # [FUNCTION DOC]
+    # HELPER: gradient scenario for testDilationGrad. 3x3x1 image, 1x1x1 kernel, valid padding.
     self._ConstructAndTestGradient(
         image_shape=[1, 3, 3, 1],
         kernel_shape=[1, 1, 1],
@@ -260,6 +326,12 @@ class DilationTest(test.TestCase, parameterized.TestCase):
         dtype=dtype)
 
   def _testDilationGradDeterminismError(self, use_gpu, dtype):
+    # [FUNCTION DOC]
+    # HELPER: gradient scenario for testDilationGrad that enables op determinism first.
+    # When a CUDA GPU is requested and available, expects the gradient computation to raise an
+    # unimplemented error saying determinism is not supported for the dilation input
+    # backprop. Otherwise (CPU or no CUDA) expects the gradient check to succeed normally.
+    # Side effect: turns global op determinism on and always turns it off again afterwards.
     if use_gpu and test.is_gpu_available(cuda_only=True):
       try:
         config.enable_op_determinism()
@@ -291,6 +363,8 @@ class DilationTest(test.TestCase, parameterized.TestCase):
         config.disable_op_determinism()
 
   def _testDilationGradSamePadding_1x1x1(self, use_gpu, dtype):
+    # [FUNCTION DOC]
+    # HELPER: gradient scenario for testDilationGrad. 3x3x1 image, 1x1x1 kernel, same padding.
     self._ConstructAndTestGradient(
         image_shape=[1, 3, 3, 1],
         kernel_shape=[1, 1, 1],
@@ -301,6 +375,8 @@ class DilationTest(test.TestCase, parameterized.TestCase):
         dtype=dtype)
 
   def _testDilationGradSamePadding_1x1x2(self, use_gpu, dtype):
+    # [FUNCTION DOC]
+    # HELPER: gradient scenario for testDilationGrad. 3x3x2 image, 1x1x2 kernel, same padding.
     self._ConstructAndTestGradient(
         image_shape=[1, 3, 3, 2],
         kernel_shape=[1, 1, 2],
@@ -311,6 +387,8 @@ class DilationTest(test.TestCase, parameterized.TestCase):
         dtype=dtype)
 
   def _testDilationGradValidPadding_2x2x1(self, use_gpu, dtype):
+    # [FUNCTION DOC]
+    # HELPER: gradient scenario for testDilationGrad. 3x3x1 image, 2x2x1 kernel, valid padding.
     self._ConstructAndTestGradient(
         image_shape=[1, 3, 3, 1],
         kernel_shape=[2, 2, 1],
@@ -321,6 +399,8 @@ class DilationTest(test.TestCase, parameterized.TestCase):
         dtype=dtype)
 
   def _testDilationGradSamePadding_2x2x1(self, use_gpu, dtype):
+    # [FUNCTION DOC]
+    # HELPER: gradient scenario for testDilationGrad. 3x3x1 image, 2x2x1 kernel, same padding.
     self._ConstructAndTestGradient(
         image_shape=[1, 3, 3, 1],
         kernel_shape=[2, 2, 1],
@@ -331,6 +411,9 @@ class DilationTest(test.TestCase, parameterized.TestCase):
         dtype=dtype)
 
   def _testDilationGradSamePaddingBatch_2x2x1(self, use_gpu, dtype):
+    # [FUNCTION DOC]
+    # HELPER: gradient scenario for testDilationGrad. Batch of four 3x3x1 images, 2x2x1
+    # kernel, same padding.
     self._ConstructAndTestGradient(
         image_shape=[4, 3, 3, 1],
         kernel_shape=[2, 2, 1],
@@ -341,6 +424,8 @@ class DilationTest(test.TestCase, parameterized.TestCase):
         dtype=dtype)
 
   def _testDilationGradSamePadding_2x2x4(self, use_gpu, dtype):
+    # [FUNCTION DOC]
+    # HELPER: gradient scenario for testDilationGrad. 3x3x4 image, 2x2x4 kernel, same padding.
     self._ConstructAndTestGradient(
         image_shape=[1, 3, 3, 4],
         kernel_shape=[2, 2, 4],
@@ -352,6 +437,10 @@ class DilationTest(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(dtypes.float32, dtypes.bfloat16)
   def testDilationGrad(self, dtype):
+    # [FUNCTION DOC]
+    # Parameterized over float32 and bfloat16. For GPU and CPU placement, runs the determinism
+    # scenario and the seven dilation gradient scenarios, expecting gradient error within the
+    # tolerance of the shared checker.
     for use_gpu in True, False:
       self._testDilationGradDeterminismError(use_gpu, dtype)
       self._testDilationGradValidPadding_1x1x1(use_gpu, dtype)
@@ -364,8 +453,16 @@ class DilationTest(test.TestCase, parameterized.TestCase):
 
 
 class ErosionTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for the 2-D erosion op (forward values and gradients) in float32. Mirrors the
+  # dilation tests: private helpers build scenarios and public tests loop over GPU and CPU.
 
   def _VerifyValues(self, image, kernel, strides, rates, padding, out, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: shared assertion helper for the erosion forward-value scenarios.
+    # Wraps strides and rates (two element lists) with leading and trailing ones, runs the
+    # erosion op on constants made from image and kernel in a cached session on the requested
+    # device, and asserts the result is close to the expected out. Returns nothing.
     """Verifies the output values of the erosion function.
 
     Args:
@@ -391,6 +488,8 @@ class ErosionTest(test.TestCase):
       self.assertAllClose(out, self.evaluate(out_tensor))
 
   def _testErosionValidPadding(self, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testErosion. 2x2 image, 2x2 kernel, valid padding; expects 0.0.
     # [1, 2, 2, 1]
     image = [[[[.1], [.2]], [[.3], [.4]]]]
     # [2, 2, 1]
@@ -407,6 +506,9 @@ class ErosionTest(test.TestCase):
         use_gpu=use_gpu)
 
   def _testErosionSamePadding(self, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testErosion. 2x2 image, 2x2 kernel, same padding; expects a 2x2
+    # output of 0.0, 0.1, 0.3, 0.4.
     # [1, 2, 2, 1]
     image = [[[[.1], [.2]], [[.3], [.4]]]]
     # [2, 2, 1]
@@ -423,6 +525,9 @@ class ErosionTest(test.TestCase):
         use_gpu=use_gpu)
 
   def _testErosionSamePaddingDepth(self, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testErosion. 2x2 image with three channels, 2x2x3 kernel, same
+    # padding; each channel eroded independently and compared with expected 2x2x3 output.
     # [1, 2, 2, 3]
     image = [[[[.1, .2, .0], [.2, .3, .1]], [[.3, .4, .2], [.4, .5, .3]]]]
     # [2, 2, 3]
@@ -439,6 +544,9 @@ class ErosionTest(test.TestCase):
         use_gpu=use_gpu)
 
   def _testErosionSamePaddingBatch(self, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testErosion. Batch of two 2x2 single channel images, 2x2 kernel,
+    # same padding; checks each batch item is eroded independently.
     # [2, 2, 2, 1]
     image = [[[[.1], [.2]], [[.3], [.4]]], [[[.2], [.3]], [[.4], [.5]]]]
     # [2, 2, 1]
@@ -455,6 +563,9 @@ class ErosionTest(test.TestCase):
         use_gpu=use_gpu)
 
   def _testErosionValidPaddingNonSquareWindow(self, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testErosion. 2x2 image with a 1x2 kernel, valid padding; expects a
+    # 2x1 output of -0.2 and 0.0.
     # [1, 2, 2, 1]
     image = [[[[.1], [.2]], [[.3], [.4]]]]
     # [1, 2, 1]
@@ -471,6 +582,9 @@ class ErosionTest(test.TestCase):
         use_gpu=use_gpu)
 
   def _testErosionSamePaddingRate(self, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testErosion. 3x3 image, 2x2 kernel, atrous rate 2 in both
+    # directions (effective 3x3 kernel), same padding; compares to a hand computed output.
     # [1, 3, 3, 1]
     image = [[[[.1], [.2], [.3]], [[.4], [.5], [.6]], [[.7], [.8], [.9]]]]
     # [2, 2, 1]
@@ -491,6 +605,11 @@ class ErosionTest(test.TestCase):
         use_gpu=use_gpu)
 
   def _testErosionValidPaddingUnevenStride(self, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: scenario for testErosion. 3x4 image, 2x2 kernel, strides 1 by 2, valid padding;
+    # expects a 2x2 output.
+    # KNOWN ISSUE: a comment in the code labels the image as shape 1x3x3x1 but it is actually
+    # 1x3x4x1.
     # [1, 3, 3, 1]
     image = [[[[.1], [.2], [.3], [.4]], [[.5], [.6], [.7], [.8]],
               [[.9], [1.0], [1.1], [1.2]]]]
@@ -508,6 +627,9 @@ class ErosionTest(test.TestCase):
         use_gpu=use_gpu)
 
   def testErosion(self):
+    # [FUNCTION DOC]
+    # For both GPU and CPU placement, runs all seven erosion forward-value scenarios and
+    # expects every result to match the hand computed values.
     for use_gpu in True, False:
       self._testErosionValidPadding(use_gpu)
       self._testErosionSamePadding(use_gpu)
@@ -519,6 +641,14 @@ class ErosionTest(test.TestCase):
 
   def _ConstructAndTestGradient(self, image_shape, kernel_shape, strides, rates,
                                 padding, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: shared gradient checker for the erosion gradient scenarios.
+    # Inputs: image_shape (batch, height, width, channels), kernel_shape (height, width,
+    # channels), strides and rates (two element lists), padding string, use_gpu flag.
+    # Asserts channel counts match, seeds numpy randomness with a fixed value, builds random
+    # float32 constants, computes the gradient error of the erosion op with respect to both
+    # the image and the kernel with the v2 gradient checker on the chosen device, prints the
+    # larger error and asserts it is below 1e-4. Returns nothing.
     """Verifies the gradients of the erosion function.
 
     Args:
@@ -543,6 +673,10 @@ class ErosionTest(test.TestCase):
         kernel, shape=kernel_shape, name="filter")
 
     def compute_erosion2d(image_tensor, kernel_tensor):
+      # [FUNCTION DOC]
+      # HELPER: closure used as the function under differentiation. Applies the erosion op to
+      # the given image and kernel tensors using the enclosing strides, rates and padding,
+      # and returns the output tensor.
       return nn_ops.erosion2d(
           image_tensor,
           kernel_tensor,
@@ -566,6 +700,8 @@ class ErosionTest(test.TestCase):
     self.assertLess(err, 1e-4)
 
   def _testErosionGradValidPadding_1x1x1(self, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: gradient scenario for testErosionGrad. 3x3x1 image, 1x1x1 kernel, valid padding.
     self._ConstructAndTestGradient(
         image_shape=[1, 3, 3, 1],
         kernel_shape=[1, 1, 1],
@@ -575,6 +711,8 @@ class ErosionTest(test.TestCase):
         use_gpu=use_gpu)
 
   def _testErosionGradSamePadding_1x1x1(self, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: gradient scenario for testErosionGrad. 3x3x1 image, 1x1x1 kernel, same padding.
     self._ConstructAndTestGradient(
         image_shape=[1, 3, 3, 1],
         kernel_shape=[1, 1, 1],
@@ -584,6 +722,8 @@ class ErosionTest(test.TestCase):
         use_gpu=use_gpu)
 
   def _testErosionGradSamePadding_1x1x2(self, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: gradient scenario for testErosionGrad. 3x3x2 image, 1x1x2 kernel, same padding.
     self._ConstructAndTestGradient(
         image_shape=[1, 3, 3, 2],
         kernel_shape=[1, 1, 2],
@@ -593,6 +733,8 @@ class ErosionTest(test.TestCase):
         use_gpu=use_gpu)
 
   def _testErosionGradValidPadding_2x2x1(self, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: gradient scenario for testErosionGrad. 3x3x1 image, 2x2x1 kernel, valid padding.
     self._ConstructAndTestGradient(
         image_shape=[1, 3, 3, 1],
         kernel_shape=[2, 2, 1],
@@ -602,6 +744,8 @@ class ErosionTest(test.TestCase):
         use_gpu=use_gpu)
 
   def _testErosionGradSamePadding_2x2x1(self, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: gradient scenario for testErosionGrad. 3x3x1 image, 2x2x1 kernel, same padding.
     self._ConstructAndTestGradient(
         image_shape=[1, 3, 3, 1],
         kernel_shape=[2, 2, 1],
@@ -611,6 +755,9 @@ class ErosionTest(test.TestCase):
         use_gpu=use_gpu)
 
   def _testErosionGradSamePaddingBatch_2x2x1(self, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: gradient scenario for testErosionGrad. Batch of four 3x3x1 images, 2x2x1 kernel,
+    # same padding.
     self._ConstructAndTestGradient(
         image_shape=[4, 3, 3, 1],
         kernel_shape=[2, 2, 1],
@@ -620,6 +767,8 @@ class ErosionTest(test.TestCase):
         use_gpu=use_gpu)
 
   def _testErosionGradSamePadding_2x2x4(self, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: gradient scenario for testErosionGrad. 3x3x4 image, 2x2x4 kernel, same padding.
     self._ConstructAndTestGradient(
         image_shape=[1, 3, 3, 4],
         kernel_shape=[2, 2, 4],
@@ -629,6 +778,9 @@ class ErosionTest(test.TestCase):
         use_gpu=use_gpu)
 
   def testErosionGrad(self):
+    # [FUNCTION DOC]
+    # For both GPU and CPU placement, runs the seven erosion gradient scenarios, expecting the
+    # numerical gradient error of each to stay below the shared tolerance.
     for use_gpu in True, False:
       self._testErosionGradValidPadding_1x1x1(use_gpu)
       self._testErosionGradSamePadding_1x1x1(use_gpu)
