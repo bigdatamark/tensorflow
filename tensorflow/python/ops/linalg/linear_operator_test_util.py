@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: Testing helper module for the LinearOperator family. Provides the abstract test base
+# classes (general, square and non-square) that operator test files subclass, the add_tests
+# function that generates dozens of standard checks (to_dense, determinant, matmul, solve,
+# inverse, trace, composite tensor, saved model, gradients, and so on) comparing an operator
+# against an equivalent dense matrix, and random matrix generators (normal, uniform, sign-uniform,
+# positive definite, lower triangular, correlated columns). No import-time side effects.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -48,6 +55,10 @@ from tensorflow.python.util import nest
 
 
 class OperatorShapesInfo:
+  # [CLASS DOC]
+  # Plain data holder describing the expected static shape of the matrix an operator under test
+  # should represent, plus any extra metadata the test harness wants. The shape is a list of
+  # integers (batch dims then rows and columns). Extra keyword arguments become attributes.
   """Object encoding expected shape for a test.
 
   Encodes the expected shape of a matrix for a test. Also
@@ -55,11 +66,18 @@ class OperatorShapesInfo:
   """
 
   def __init__(self, shape, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. Stores the given shape and copies every extra keyword argument into the instance
+    # attribute mapping, so callers can read them as attributes. Returns nothing; no validation.
     self.shape = shape
     self.__dict__.update(kwargs)
 
 
 class CheckTapeSafeSkipOptions:
+  # [CLASS DOC]
+  # HELPER: Namespace of string constants naming checks of the tape-safety test helper that a test
+  # may ask to skip (determinant, diagonal part, log absolute determinant, trace). Never instantiated;
+  # only its class attributes are used by the tape-safe check.
 
   # Skip checking this particular method.
   DETERMINANT = "determinant"
@@ -69,6 +87,12 @@ class CheckTapeSafeSkipOptions:
 
 
 class LinearOperatorDerivedClassTest(test.TestCase, metaclass=abc.ABCMeta):
+  # [CLASS DOC]
+  # Abstract base class for test cases of LinearOperator subclasses. Subclasses supply the shapes to
+  # test, a way to build an operator together with an equivalent dense matrix, and helpers that make
+  # matmul inputs and solve right-hand sides. The module-level add_tests function then attaches many
+  # generated test methods (to_dense, determinant, matmul, solve, and so on) to the subclass.
+  # Holds per-dtype absolute and relative tolerance tables and overridable option hooks.
   """Tests for derived classes.
 
   Subclasses should implement every abstractmethod, and this will enable all
@@ -93,6 +117,13 @@ class LinearOperatorDerivedClassTest(test.TestCase, metaclass=abc.ABCMeta):
   }
 
   def assertAC(self, x, y, check_dtype=False):
+    # [FUNCTION DOC]
+    # Asserts that two arrays are close using the per-dtype absolute and relative tolerances of this
+    # test class, looked up from the dtype of the first argument. If check_dtype is true, also asserts
+    # the first argument has the dtype of the second. Inputs: x, y arrays or tensors; check_dtype bool
+    # (default false). Returns nothing; fails the test on mismatch.
+    # KNOWN ISSUE: the docstring talks about deriving classes setting tolerances, but the method itself
+    # performs the comparison; the tolerance override is done through class attributes elsewhere.
     """Derived classes can set _atol, _rtol to get different tolerance."""
     dtype = dtypes.as_dtype(x.dtype)
     atol = self._atol[dtype]
@@ -103,27 +134,45 @@ class LinearOperatorDerivedClassTest(test.TestCase, metaclass=abc.ABCMeta):
 
   @staticmethod
   def adjoint_options():
+    # [FUNCTION DOC]
+    # Static hook giving the list of adjoint flag values the generated tests iterate over (false and
+    # true). Subclasses may override to restrict. Takes no input.
     return [False, True]
 
   @staticmethod
   def adjoint_arg_options():
+    # [FUNCTION DOC]
+    # Static hook giving the list of adjoint-argument flag values the generated tests iterate over
+    # (false and true). Subclasses may override. Takes no input.
     return [False, True]
 
   @staticmethod
   def dtypes_to_test():
+    # [FUNCTION DOC]
+    # Static hook returning the dtypes the generated tests run with: 32 and 64 bit float and 64 and
+    # 128 bit complex. Half precision is excluded because the linear solve does not support it yet.
     # TODO(langmore) Test tf.float16 once tf.linalg.solve works in 16bit.
     return [dtypes.float32, dtypes.float64, dtypes.complex64, dtypes.complex128]
 
   @staticmethod
   def use_placeholder_options():
+    # [FUNCTION DOC]
+    # Static hook returning the values of the use-placeholder option the generated tests iterate over
+    # (false and true), i.e. whether operators are built with unknown-shape placeholders.
     return [False, True]
 
   @staticmethod
   def use_blockwise_arg():
+    # [FUNCTION DOC]
+    # Static hook telling the generated matmul/solve tests whether to also exercise blockwise
+    # arguments. Returns false by default; blockwise operator test classes override it to true.
     return False
 
   @staticmethod
   def operator_shapes_infos():
+    # [FUNCTION DOC]
+    # Static hook that subclasses must override to return a list of shape-info objects describing the
+    # operator shapes to test. This default raises a not-implemented error.
     """Returns list of OperatorShapesInfo, encapsulating the shape to test."""
     raise NotImplementedError("operator_shapes_infos has not been implemented.")
 
@@ -131,6 +180,13 @@ class LinearOperatorDerivedClassTest(test.TestCase, metaclass=abc.ABCMeta):
   def operator_and_matrix(
       self, shapes_info, dtype, use_placeholder,
       ensure_self_adjoint_and_pd=False):
+    # [FUNCTION DOC]
+    # Abstract method. Subclasses build and return a pair: a LinearOperator instance and a dense tensor
+    # that the operator should behave like. Inputs: shapes_info (shape description object), dtype
+    # (numpy dtype of the data), use_placeholder (if true, initialize with a placeholder of unknown
+    # shape), ensure_self_adjoint_and_pd (if true, produce a Hermitian positive definite operator with
+    # matching hints, needed by cholesky and eigenvalue tests; default false). This base
+    # implementation only raises a not-implemented error.
     """Build a batch matrix and an Operator that should have similar behavior.
 
     Every operator acts like a (batch) matrix.  This method returns both
@@ -158,6 +214,11 @@ class LinearOperatorDerivedClassTest(test.TestCase, metaclass=abc.ABCMeta):
 
   @abc.abstractmethod
   def make_rhs(self, operator, adjoint, with_batch=True):
+    # [FUNCTION DOC]
+    # Abstract method. Subclasses return a tensor usable as the right-hand side of a solve with the
+    # given operator. Inputs: operator; adjoint (true if the rhs is for the adjoint operator);
+    # with_batch (true to give the rhs the operator batch shape, false for a plain matrix). This base
+    # version raises a not-implemented error.
     """Make a rhs appropriate for calling operator.solve(rhs).
 
     Args:
@@ -175,6 +236,11 @@ class LinearOperatorDerivedClassTest(test.TestCase, metaclass=abc.ABCMeta):
 
   @abc.abstractmethod
   def make_x(self, operator, adjoint, with_batch=True):
+    # [FUNCTION DOC]
+    # Abstract method. Subclasses return a tensor usable as the argument of a matrix multiply with the
+    # given operator. Inputs: operator; adjoint (true if x is for the adjoint operator); with_batch
+    # (true to match the operator batch shape, false for a plain matrix). This base version raises a
+    # not-implemented error.
     """Make an 'x' appropriate for calling operator.matmul(x).
 
     Args:
@@ -191,6 +257,9 @@ class LinearOperatorDerivedClassTest(test.TestCase, metaclass=abc.ABCMeta):
 
   @staticmethod
   def skip_these_tests():
+    # [FUNCTION DOC]
+    # Static hook returning the list of generated test names (without the test prefix) to skip.
+    # Subclasses override. Default is an empty list.
     """List of test names to skip."""
     # Subclasses should over-ride if they want to skip some tests.
     # To skip "test_foo", add "foo" to this list.
@@ -198,18 +267,30 @@ class LinearOperatorDerivedClassTest(test.TestCase, metaclass=abc.ABCMeta):
 
   @staticmethod
   def optional_tests():
+    # [FUNCTION DOC]
+    # Static hook returning the list of optional generated test names to enable (operator matmul and
+    # solve with same type). Subclasses override. Default is an empty list.
     """List of optional test names to run."""
     # Subclasses should over-ride if they want to add optional tests.
     # To add "test_foo", add "foo" to this list.
     return []
 
   def assertRaisesError(self, msg):
+    # [FUNCTION DOC]
+    # HELPER: Context manager factory for tests expecting an error whose message matches a pattern.
+    # Input: msg, a regular expression. Returns a regex-based exception assertion in eager mode and an
+    # op-error assertion in graph mode.
     """assertRaisesRegexp or OpError, depending on context.executing_eagerly."""
     if context.executing_eagerly():
       return self.assertRaisesRegex(Exception, msg)
     return self.assertRaisesOpError(msg)
 
   def check_convert_variables_to_tensors(self, operator):
+    # [FUNCTION DOC]
+    # Check that converting the variables of a composite operator into tensors works. Asserts the
+    # operator is a composite tensor, converts it, asserts the type is unchanged, that the converted
+    # operator has no variables left, and that tensors match the original variable values (via the
+    # recursive checker). Input: operator. Returns nothing; fails the test otherwise.
     """Checks that internal Variables are correctly converted to Tensors."""
     self.assertIsInstance(operator, composite_tensor.CompositeTensor)
     tensor_operator = composite_tensor.convert_variables_to_tensors(operator)
@@ -218,6 +299,11 @@ class LinearOperatorDerivedClassTest(test.TestCase, metaclass=abc.ABCMeta):
     self._check_tensors_equal_variables(operator, tensor_operator)
 
   def _check_tensors_equal_variables(self, obj, tensor_obj):
+    # [FUNCTION DOC]
+    # HELPER: Recursive checker used by the variable-conversion check. Compares obj with tensor_obj:
+    # variables must have equal values to the tensors; composite tensors are compared through their
+    # parameters (same key set); mappings and nested sequences are walked element by element; other
+    # leaf values are ignored. Returns nothing; fails the test on any mismatch.
     """Checks that Variables in `obj` have equivalent Tensors in `tensor_obj."""
     if isinstance(obj, variables.Variable):
       self.assertAllClose(ops.convert_to_tensor(obj),
@@ -238,6 +324,15 @@ class LinearOperatorDerivedClassTest(test.TestCase, metaclass=abc.ABCMeta):
       pass
 
   def check_tape_safe(self, operator, skip_options=None):
+    # [FUNCTION DOC]
+    # Checks that gradients with respect to the operator variables are not missing for the main
+    # methods. Meant to be called from derived test classes. Input: operator (must hold variables;
+    # raises an assertion error if it has none); skip_options (optional list of skip constants).
+    # Always checks gradients of dense form, the operator itself, its adjoint and a matrix-vector
+    # product. For square operators it also checks determinant, log determinant, diagonal part and
+    # trace unless skipped; for operators not flagged singular it checks inverse and solve; for
+    # self-adjoint positive definite operators it checks Cholesky. Returns nothing; fails if a
+    # gradient is missing.
     """Check gradients are not None w.r.t. operator.variables.
 
     Meant to be called from the derived class.
@@ -256,6 +351,8 @@ class LinearOperatorDerivedClassTest(test.TestCase, metaclass=abc.ABCMeta):
       raise AssertionError("`operator.variables` was empty")
 
     def _assert_not_none(iterable):
+      # [FUNCTION DOC]
+      # HELPER: Asserts that no element of the given iterable (a list of gradients) is nothing/null.
       for item in iterable:
         self.assertIsNotNone(item)
 
@@ -318,7 +415,16 @@ class LinearOperatorDerivedClassTest(test.TestCase, metaclass=abc.ABCMeta):
 
 
 def _test_slicing(use_placeholder, shapes_info, dtype):
+  # [FUNCTION DOC]
+  # HELPER: Test factory. Returns a test method that checks slicing of the batch dimensions of an
+  # operator. Inputs: use_placeholder, shapes_info, dtype are captured by the returned closure.
   def test_slicing(self: "LinearOperatorDerivedClassTest"):
+    # [FUNCTION DOC]
+    # Generated test. In a fresh graph with the default seed, builds an operator and matrix, skips if
+    # the batch shape is empty or its first batch size is at most one, slices the operator batch
+    # (drop first and last member, and for several batch dims also select the first of the last
+    # dimension), slices the dense matrix the same way and asserts the sliced operator dense form
+    # equals the sliced matrix.
     with self.session(graph=ops.Graph()) as sess:
       sess.graph.seed = random_seed.DEFAULT_GRAPH_SEED
       operator, mat = self.operator_and_matrix(
@@ -342,7 +448,14 @@ def _test_slicing(use_placeholder, shapes_info, dtype):
 
 
 def _test_to_dense(use_placeholder, shapes_info, dtype):
+  # [FUNCTION DOC]
+  # HELPER: Test factory. Returns a test method checking the to-dense conversion of an operator
+  # (arguments captured by the closure).
   def test_to_dense(self: "LinearOperatorDerivedClassTest"):
+    # [FUNCTION DOC]
+    # Generated test. Builds operator and matrix in a fresh seeded graph, converts the operator to
+    # dense, checks the static shape against the expected shape when placeholders are not used, and
+    # asserts the evaluated dense form is close to the matrix.
     with self.session(graph=ops.Graph()) as sess:
       sess.graph.seed = random_seed.DEFAULT_GRAPH_SEED
       operator, mat = self.operator_and_matrix(
@@ -356,7 +469,12 @@ def _test_to_dense(use_placeholder, shapes_info, dtype):
 
 
 def _test_det(use_placeholder, shapes_info, dtype):
+  # [FUNCTION DOC]
+  # HELPER: Test factory. Returns a test method checking the determinant of an operator.
   def test_det(self: "LinearOperatorDerivedClassTest"):
+    # [FUNCTION DOC]
+    # Generated test. Computes the operator determinant, checks the static batch shape when not using
+    # placeholders, and asserts it is close to the determinant of the reference matrix.
     with self.session(graph=ops.Graph()) as sess:
       sess.graph.seed = random_seed.DEFAULT_GRAPH_SEED
       operator, mat = self.operator_and_matrix(
@@ -371,7 +489,13 @@ def _test_det(use_placeholder, shapes_info, dtype):
 
 
 def _test_log_abs_det(use_placeholder, shapes_info, dtype):
+  # [FUNCTION DOC]
+  # HELPER: Test factory. Returns a test method checking the log absolute determinant.
   def test_log_abs_det(self: "LinearOperatorDerivedClassTest"):
+    # [FUNCTION DOC]
+    # Generated test. Computes the operator log absolute determinant, checks the static batch shape
+    # when not using placeholders, and asserts closeness to the log absolute determinant (from the
+    # sign-and-log determinant routine) of the reference matrix.
     with self.session(graph=ops.Graph()) as sess:
       sess.graph.seed = random_seed.DEFAULT_GRAPH_SEED
       operator, mat = self.operator_and_matrix(
@@ -388,10 +512,18 @@ def _test_log_abs_det(use_placeholder, shapes_info, dtype):
 
 
 def _test_operator_matmul_with_same_type(use_placeholder, shapes_info, dtype):
+  # [FUNCTION DOC]
+  # HELPER: Test factory. Returns a test method for multiplying one operator by another of the same
+  # class (optional test; the product must keep the class). Runs without reduced-precision
+  # tensor-float matmul.
   """op_a.matmul(op_b), in the case where the same type is returned."""
   @test_util.run_without_tensor_float_32("Use FP32 in matmul")
   def test_operator_matmul_with_same_type(
       self: "LinearOperatorDerivedClassTest"):
+    # [FUNCTION DOC]
+    # Generated test. Builds two operator-matrix pairs, multiplies the operators and the matrices,
+    # asserts the operator product is an instance of the first operator class and that its dense
+    # form is close to the matrix product.
     with self.session(graph=ops.Graph()) as sess:
       sess.graph.seed = random_seed.DEFAULT_GRAPH_SEED
       operator_a, mat_a = self.operator_and_matrix(
@@ -409,9 +541,16 @@ def _test_operator_matmul_with_same_type(use_placeholder, shapes_info, dtype):
 
 
 def _test_operator_solve_with_same_type(use_placeholder, shapes_info, dtype):
+  # [FUNCTION DOC]
+  # HELPER: Test factory. Returns a test method for solving one operator against another of the same
+  # class (optional test; result must keep the class).
   """op_a.solve(op_b), in the case where the same type is returned."""
   def test_operator_solve_with_same_type(
       self: "LinearOperatorDerivedClassTest"):
+    # [FUNCTION DOC]
+    # Generated test. Builds two operator-matrix pairs, solves the first operator against the second
+    # and the matrices with a broadcasting solve, asserts the result is an instance of the first
+    # operator class and its dense form is close to the matrix solve.
     with self.session(graph=ops.Graph()) as sess:
       sess.graph.seed = random_seed.DEFAULT_GRAPH_SEED
       operator_a, mat_a = self.operator_and_matrix(
@@ -437,6 +576,14 @@ def _test_matmul_base(
     adjoint_arg,
     blockwise_arg,
     with_batch):
+  # [FUNCTION DOC]
+  # HELPER: Shared body of the matmul tests. Inputs: self (the test case), use_placeholder,
+  # shapes_info, dtype, adjoint, adjoint_arg, blockwise_arg and with_batch. Returns early if
+  # with_batch is false and the operator has no batch dimensions. Otherwise builds operator and
+  # matrix, makes x, multiplies with the operator (using the adjoint of x when adjoint_arg is
+  # set) and with the matrix, checks static shapes without placeholders, optionally also tests
+  # blockwise inputs by splitting x into blocks (for blockwise operators with several blocks), then
+  # asserts closeness of results.
   # If batch dimensions are omitted, but there are
   # no batch dimensions for the linear operator, then
   # skip the test case. This is already checked with
@@ -508,8 +655,14 @@ def _test_matmul(
     adjoint,
     adjoint_arg,
     blockwise_arg):
+  # [FUNCTION DOC]
+  # HELPER: Test factory. Returns a matmul test method for the given adjoint, adjoint-argument and
+  # blockwise options, with batch-shaped input.
   @test_util.run_without_tensor_float_32("Use FP32 in matmul")
   def test_matmul(self: "LinearOperatorDerivedClassTest"):
+    # [FUNCTION DOC]
+    # Generated test. Calls the shared matmul body with batch-shaped input. Runs without reduced
+    # precision matmul.
     _test_matmul_base(
         self,
         use_placeholder,
@@ -529,8 +682,15 @@ def _test_matmul_with_broadcast(
     adjoint,
     adjoint_arg,
     blockwise_arg):
+  # [FUNCTION DOC]
+  # HELPER: Test factory. Returns a matmul-with-broadcast test method.
   @test_util.run_without_tensor_float_32("Use FP32 in matmul")
   def test_matmul_with_broadcast(self: "LinearOperatorDerivedClassTest"):
+    # [FUNCTION DOC]
+    # Generated test meant to check matmul when x has no batch dimensions so it must broadcast.
+    # KNOWN ISSUE: it passes with_batch true, the same as the plain matmul test, so the broadcast
+    # case is never exercised (the solve counterpart passes false).
+    # Calls the shared matmul body.
     _test_matmul_base(
         self,
         use_placeholder,
@@ -544,7 +704,13 @@ def _test_matmul_with_broadcast(
 
 
 def _test_adjoint(use_placeholder, shapes_info, dtype):
+  # [FUNCTION DOC]
+  # HELPER: Test factory. Returns a test method for the operator adjoint.
   def test_adjoint(self: "LinearOperatorDerivedClassTest"):
+    # [FUNCTION DOC]
+    # Generated test. Builds operator and matrix, computes the adjoint dense form through both the
+    # adjoint method and the H property, and asserts both are close to the conjugate transpose of
+    # the matrix.
     with self.test_session(graph=ops.Graph()) as sess:
       sess.graph.seed = random_seed.DEFAULT_GRAPH_SEED
       operator, mat = self.operator_and_matrix(
@@ -560,7 +726,13 @@ def _test_adjoint(use_placeholder, shapes_info, dtype):
 
 
 def _test_cholesky(use_placeholder, shapes_info, dtype):
+  # [FUNCTION DOC]
+  # HELPER: Test factory. Returns a test method for the Cholesky factorization of an operator.
   def test_cholesky(self: "LinearOperatorDerivedClassTest"):
+    # [FUNCTION DOC]
+    # Generated test. Uses a graph seed offset by two (to make float32 pass within tolerance), builds a
+    # self-adjoint positive definite operator and matrix, and asserts the operator Cholesky dense
+    # form is close to the matrix Cholesky factor.
     with self.test_session(graph=ops.Graph()) as sess:
       # This test fails to pass for float32 type by a small margin if we use
       # random_seed.DEFAULT_GRAPH_SEED.  The correct fix would be relaxing the
@@ -579,7 +751,13 @@ def _test_cholesky(use_placeholder, shapes_info, dtype):
 
 
 def _test_eigvalsh(use_placeholder, shapes_info, dtype):
+  # [FUNCTION DOC]
+  # HELPER: Test factory. Returns a test method for the eigenvalues of self-adjoint operators.
   def test_eigvalsh(self: "LinearOperatorDerivedClassTest"):
+    # [FUNCTION DOC]
+    # Generated test. Builds a self-adjoint positive definite operator and matrix, sorts the real
+    # eigenvalues of the operator and of the matrix (computed in 64-bit precision) and asserts they
+    # are close, using looser tolerances for single precision types.
     with self.test_session(graph=ops.Graph()) as sess:
       sess.graph.seed = random_seed.DEFAULT_GRAPH_SEED
       operator, mat = self.operator_and_matrix(
@@ -609,7 +787,16 @@ def _test_eigvalsh(use_placeholder, shapes_info, dtype):
 
 
 def _test_cond(use_placeholder, shapes_info, dtype):
+  # [FUNCTION DOC]
+  # HELPER: Test factory. Returns a test method for the condition number of an operator.
   def test_cond(self: "LinearOperatorDerivedClassTest"):
+    # [FUNCTION DOC]
+    # Generated test. Skips empty matrices (singular values undefined) and complex types on ROCm.
+    # Builds a self-adjoint positive definite operator and matrix, computes the reference condition
+    # number from the ratio of largest to smallest singular value and asserts closeness with
+    # looser per-dtype tolerances.
+    # KNOWN ISSUE: a comment inside the body about casting eigenvalues to double and sorting is a
+    # leftover and does not describe the code, which compares condition numbers.
     with self.test_session(graph=ops.Graph()) as sess:
       # svd does not work with zero dimensional matrices, so we'll
       # skip
@@ -663,6 +850,13 @@ def _test_solve_base(
     adjoint_arg,
     blockwise_arg,
     with_batch):
+  # [FUNCTION DOC]
+  # HELPER: Shared body of the solve tests. Inputs: self (the test case), use_placeholder,
+  # shapes_info, dtype, adjoint, adjoint_arg, blockwise_arg and with_batch. Returns early if
+  # with_batch is false and the operator has no batch dimensions. Otherwise builds operator and
+  # matrix, makes a right-hand side, solves with the operator (passing the adjoint of the rhs when
+  # adjoint_arg is set) and with a broadcasting matrix solve, checks static shapes, optionally
+  # tests blockwise right-hand sides for blockwise operators, and asserts closeness.
   # If batch dimensions are omitted, but there are
   # no batch dimensions for the linear operator, then
   # skip the test case. This is already checked with
@@ -730,7 +924,11 @@ def _test_solve_base(
 
 def _test_solve(
     use_placeholder, shapes_info, dtype, adjoint, adjoint_arg, blockwise_arg):
+  # [FUNCTION DOC]
+  # HELPER: Test factory. Returns a solve test method using batch-shaped right-hand sides.
   def test_solve(self: "LinearOperatorDerivedClassTest"):
+    # [FUNCTION DOC]
+    # Generated test. Calls the shared solve body with batch-shaped right-hand side.
     _test_solve_base(
         self,
         use_placeholder,
@@ -745,7 +943,12 @@ def _test_solve(
 
 def _test_solve_with_broadcast(
     use_placeholder, shapes_info, dtype, adjoint, adjoint_arg, blockwise_arg):
+  # [FUNCTION DOC]
+  # HELPER: Test factory. Returns a solve-with-broadcast test method.
   def test_solve_with_broadcast(self: "LinearOperatorDerivedClassTest"):
+    # [FUNCTION DOC]
+    # Generated test. Calls the shared solve body with a right-hand side without batch dimensions so
+    # that it must be broadcast.
     _test_solve_base(
         self,
         use_placeholder,
@@ -759,7 +962,12 @@ def _test_solve_with_broadcast(
 
 
 def _test_inverse(use_placeholder, shapes_info, dtype):
+  # [FUNCTION DOC]
+  # HELPER: Test factory. Returns a test method for the operator inverse.
   def test_inverse(self: "LinearOperatorDerivedClassTest"):
+    # [FUNCTION DOC]
+    # Generated test. Asserts the dense form of the operator inverse is close to the matrix inverse
+    # and has the same dtype.
     with self.session(graph=ops.Graph()) as sess:
       sess.graph.seed = random_seed.DEFAULT_GRAPH_SEED
       operator, mat = self.operator_and_matrix(
@@ -771,7 +979,12 @@ def _test_inverse(use_placeholder, shapes_info, dtype):
 
 
 def _test_trace(use_placeholder, shapes_info, dtype):
+  # [FUNCTION DOC]
+  # HELPER: Test factory. Returns a test method for the trace.
   def test_trace(self: "LinearOperatorDerivedClassTest"):
+    # [FUNCTION DOC]
+    # Generated test. Computes the operator trace, checks the static shape without placeholders, and
+    # asserts closeness to the trace of the reference matrix.
     with self.session(graph=ops.Graph()) as sess:
       sess.graph.seed = random_seed.DEFAULT_GRAPH_SEED
       operator, mat = self.operator_and_matrix(
@@ -786,7 +999,12 @@ def _test_trace(use_placeholder, shapes_info, dtype):
 
 
 def _test_add_to_tensor(use_placeholder, shapes_info, dtype):
+  # [FUNCTION DOC]
+  # HELPER: Test factory. Returns a test method for adding an operator to a dense tensor.
   def test_add_to_tensor(self: "LinearOperatorDerivedClassTest"):
+    # [FUNCTION DOC]
+    # Generated test. Adds twice the reference matrix to the operator, checks the static shape
+    # without placeholders, and asserts the result is close to three times the matrix.
     with self.session(graph=ops.Graph()) as sess:
       sess.graph.seed = random_seed.DEFAULT_GRAPH_SEED
       operator, mat = self.operator_and_matrix(
@@ -803,7 +1021,12 @@ def _test_add_to_tensor(use_placeholder, shapes_info, dtype):
 
 
 def _test_diag_part(use_placeholder, shapes_info, dtype):
+  # [FUNCTION DOC]
+  # HELPER: Test factory. Returns a test method for the diagonal part.
   def test_diag_part(self: "LinearOperatorDerivedClassTest"):
+    # [FUNCTION DOC]
+    # Generated test. Computes the operator diagonal part, checks the static shape without
+    # placeholders, and asserts closeness to the diagonal of the reference matrix.
     with self.session(graph=ops.Graph()) as sess:
       sess.graph.seed = random_seed.DEFAULT_GRAPH_SEED
       operator, mat = self.operator_and_matrix(
@@ -823,8 +1046,15 @@ def _test_diag_part(use_placeholder, shapes_info, dtype):
 
 
 def _test_composite_tensor(use_placeholder, shapes_info, dtype):
+  # [FUNCTION DOC]
+  # HELPER: Test factory. Returns a test method for composite tensor behavior of an operator.
   @test_util.run_without_tensor_float_32("Use FP32 in matmul")
   def test_composite_tensor(self: "LinearOperatorDerivedClassTest"):
+    # [FUNCTION DOC]
+    # Generated test. Checks the operator is a composite tensor, flattens and repacks it, feeds it to a
+    # compiled function doing a matmul, runs it through a while loop that rebuilds the operator from
+    # its parameters, checks static shapes, asserts both results are close to the matrix product,
+    # and checks the type specification can be encoded by the structure coder.
     with self.session(graph=ops.Graph()) as sess:
       sess.graph.seed = random_seed.DEFAULT_GRAPH_SEED
       operator, mat = self.operator_and_matrix(
@@ -845,6 +1075,9 @@ def _test_composite_tensor(use_placeholder, shapes_info, dtype):
 
       # Test while_loop.
       def body(op):
+        # [FUNCTION DOC]
+        # Loop body for the while loop: rebuilds an operator of the same type from its parameters and
+        # returns it in a one-element tuple.
         return type(op)(**op.parameters),
       op_out, = while_v2.while_loop(
           cond=lambda _: True,
@@ -864,8 +1097,15 @@ def _test_composite_tensor(use_placeholder, shapes_info, dtype):
 
 
 def _test_saved_model(use_placeholder, shapes_info, dtype):
+  # [FUNCTION DOC]
+  # HELPER: Test factory. Returns a test method that saves and loads an operator through a saved model.
   @test_util.run_without_tensor_float_32("Use FP32 in matmul")
   def test_saved_model(self: "LinearOperatorDerivedClassTest"):
+    # [FUNCTION DOC]
+    # Generated test. Skips empty shapes when XLA is on. Builds an operator, defines a small module
+    # holding a variable x and a function taking the operator by type spec, saves it, reloads it,
+    # updates the variable, applies the loaded function to the operator and asserts the result is
+    # close to the matrix product. Writes into a temporary directory.
     with self.session(graph=ops.Graph()) as sess:
       sess.graph.seed = random_seed.DEFAULT_GRAPH_SEED
 
@@ -877,14 +1117,23 @@ def _test_saved_model(use_placeholder, shapes_info, dtype):
       x = self.make_x(operator, adjoint=False)
 
       class Model(module.Module):
+        # [CLASS DOC]
+        # HELPER: Local module used by the saved model test. Holds a variable initialized from x and
+        # exposes a traced function multiplying an operator by that variable.
 
         def __init__(self, init_x):
+          # [FUNCTION DOC]
+          # Constructor. Wraps every tensor of the given initial value into an unconstrained-shape variable
+          # and stores the result as attribute x.
           self.x = nest.map_structure(
               lambda x_: variables.Variable(x_, shape=None),
               init_x)
 
         @def_function.function(input_signature=(operator._type_spec,))  # pylint: disable=protected-access
         def do_matmul(self, op):
+          # [FUNCTION DOC]
+          # Traced method taking an operator (typed by the captured type spec) and returning its matmul with
+          # the stored variable x.
           return op.matmul(self.x)
 
       saved_model_dir = self.get_temp_dir()
@@ -907,7 +1156,14 @@ def _test_saved_model(use_placeholder, shapes_info, dtype):
 
 
 def _test_composite_tensor_gradient(use_placeholder, shapes_info, dtype):
+  # [FUNCTION DOC]
+  # HELPER: Test factory. Returns a test method for gradients with respect to a composite operator.
   def test_composite_tensor_gradient(self: "LinearOperatorDerivedClassTest"):
+    # [FUNCTION DOC]
+    # Generated test. Computes the gradient of a matmul output with respect to the operator itself
+    # and, separately, with respect to the flattened components. If all component gradients are
+    # missing, asserts the operator gradient is missing too; otherwise asserts it is an operator of the
+    # same class and that its flattened parts match the component gradients.
     with self.session(graph=ops.Graph()) as sess:
       sess.graph.seed = random_seed.DEFAULT_GRAPH_SEED
       operator, _ = self.operator_and_matrix(
@@ -921,6 +1177,8 @@ def _test_composite_tensor_gradient(use_placeholder, shapes_info, dtype):
           grad_ys=array_ops.ones_like(y))  # Complex dtypes need grad_ys.
 
       def _unflatten_and_matmul(components):
+        # [FUNCTION DOC]
+        # HELPER: Repacks the given flat components into an operator and returns its matmul with x.
         unflat_op = nest.pack_sequence_as(
             operator, components, expand_composites=True)
         return unflat_op.matmul(x)
@@ -945,6 +1203,15 @@ def _test_composite_tensor_gradient(use_placeholder, shapes_info, dtype):
 
 
 def add_tests(test_cls):
+  # [FUNCTION DOC]
+  # Attaches generated test methods to a test class. Input: test_cls, a LinearOperatorDerivedClassTest
+  # subclass. For each known test template (skipping names in the class skip list and optional tests
+  # not enabled) and each combination of dtype, placeholder option and shape info, builds a test
+  # named from those values (plus adjoint options for matmul and solve tests) and sets it on the
+  # class, wrapped to run in graph mode. Raises a value error if skip and optional lists overlap and
+  # a runtime error if a test name would be defined twice. Modifies the class; returns nothing.
+  # KNOWN ISSUE: the first string of the overlap error message lacks the formatting prefix, so the
+  # class placeholder is printed literally instead of the class name.
   """Add tests for LinearOperator methods."""
   test_name_dict = {
       # All test classes should be added here.
@@ -1026,6 +1293,10 @@ def add_tests(test_cls):
 
 class SquareLinearOperatorDerivedClassTest(
     LinearOperatorDerivedClassTest, metaclass=abc.ABCMeta):
+  # [CLASS DOC]
+  # Base test class for square operators. Provides square shapes (including empty and batched) and
+  # makes x and rhs with matching sizes, choosing one or two columns by operator tensor rank.
+  # Subclasses still define operator_and_matrix.
   """Base test class appropriate for square operators.
 
   Sub-classes must still define all abstractmethods from
@@ -1034,6 +1305,9 @@ class SquareLinearOperatorDerivedClassTest(
 
   @staticmethod
   def operator_shapes_infos():
+    # [FUNCTION DOC]
+    # Static override returning shape infos for square operators: empty 0x0, 1x1, batch of one 3x3,
+    # batch of three 4x4 and batch 2 by 1 of 4x4.
     shapes_info = OperatorShapesInfo
     # non-batch operators (n, n) and batch operators.
     return [
@@ -1044,12 +1318,19 @@ class SquareLinearOperatorDerivedClassTest(
         shapes_info((2, 1, 4, 4))]
 
   def make_rhs(self, operator, adjoint, with_batch=True):
+    # [FUNCTION DOC]
+    # Makes a right-hand side. Since the operator is square, delegates to make_x with the adjoint flag
+    # flipped. Inputs: operator, adjoint, with_batch (default true). Returns a random tensor.
     # This operator is square, so rhs and x will have same shape.
     # adjoint value makes no difference because the operator shape doesn't
     # change since it is square, but be pedantic.
     return self.make_x(operator, adjoint=not adjoint, with_batch=with_batch)
 
   def make_x(self, operator, adjoint, with_batch=True):
+    # [FUNCTION DOC]
+    # Makes a random normal input for matmul of shape batch plus size-by-columns, columns being one or
+    # two. Uses static shapes when fully defined, otherwise dynamic ones. Omits batch dimensions when
+    # with_batch is false. Adjoint makes no difference for square operators. Returns a tensor.
     # Value of adjoint makes no difference because the operator is square.
     # Return the number of systems to solve, R, equal to 1 or 2.
     r = self._get_num_systems(operator)
@@ -1073,6 +1354,9 @@ class SquareLinearOperatorDerivedClassTest(
     return random_normal(x_shape, dtype=operator.dtype)
 
   def _get_num_systems(self, operator):
+    # [FUNCTION DOC]
+    # HELPER: Returns the number of columns for generated inputs: one if the operator tensor rank is
+    # unknown or odd, otherwise two.
     """Get some number, either 1 or 2, depending on operator."""
     if operator.tensor_rank is None or operator.tensor_rank % 2:
       return 1
@@ -1082,6 +1366,12 @@ class SquareLinearOperatorDerivedClassTest(
 
 class NonSquareLinearOperatorDerivedClassTest(
     LinearOperatorDerivedClassTest, metaclass=abc.ABCMeta):
+  # [CLASS DOC]
+  # Base test class for rectangular operators. Never tests square shapes (create a separate class for
+  # that). Skips cholesky, eigenvalue, inverse, solve, determinant tests since they need square
+  # matrices. Subclasses still define operator_and_matrix.
+  # KNOWN ISSUE: the docstring refers to a square full-matrix test class by a name that does not exist
+  # in this module (the square base class here is a different name).
   """Base test class appropriate for generic rectangular operators.
 
   Square shapes are never tested by this class, so if you want to test your
@@ -1094,6 +1384,9 @@ class NonSquareLinearOperatorDerivedClassTest(
 
   @staticmethod
   def skip_these_tests():
+    # [FUNCTION DOC]
+    # Static override returning names of tests to skip: Cholesky, eigenvalues, inverse, solves,
+    # determinant and log determinant.
     """List of test names to skip."""
     return [
         "cholesky",
@@ -1107,6 +1400,11 @@ class NonSquareLinearOperatorDerivedClassTest(
 
   @staticmethod
   def operator_shapes_infos():
+    # [FUNCTION DOC]
+    # Static override returning rectangular shape infos: 2x1, 1x2, batch 1 of 3x2, batch 3 of 3x4 and
+    # batch 2 by 1 of 2x4.
+    # KNOWN ISSUE: the inline comment says non-batch operators of shape n by n, but the shapes are not
+    # square.
     shapes_info = OperatorShapesInfo
     # non-batch operators (n, n) and batch operators.
     return [
@@ -1117,11 +1415,18 @@ class NonSquareLinearOperatorDerivedClassTest(
         shapes_info((2, 1, 2, 4))]
 
   def make_rhs(self, operator, adjoint, with_batch=True):
+    # [FUNCTION DOC]
+    # Always raises a not-implemented error because solve is not tested for rectangular operators.
+    # Inputs are accepted but unused.
     # TODO(langmore) Add once we're testing solve_ls.
     raise NotImplementedError(
         "make_rhs not implemented because we don't test solve")
 
   def make_x(self, operator, adjoint, with_batch=True):
+    # [FUNCTION DOC]
+    # Makes a random normal input for matmul: shape is batch plus size-by-columns where size is the
+    # range dimension if adjoint, else the domain dimension, columns one or two. Uses static shapes when
+    # fully defined, else dynamic. Drops batch dims when with_batch is false. Returns a tensor.
     # Return the number of systems for the argument 'x' for .matmul(x)
     r = self._get_num_systems(operator)
     # If operator.shape = [B1,...,Bb, M, N] this returns a random matrix of
@@ -1150,6 +1455,9 @@ class NonSquareLinearOperatorDerivedClassTest(
     return random_normal(x_shape, dtype=operator.dtype)
 
   def _get_num_systems(self, operator):
+    # [FUNCTION DOC]
+    # HELPER: Returns the number of columns for generated inputs: one if the operator tensor rank is
+    # unknown or odd, otherwise two. Duplicate of the square class helper.
     """Get some number, either 1 or 2, depending on operator."""
     if operator.tensor_rank is None or operator.tensor_rank % 2:
       return 1
@@ -1161,6 +1469,15 @@ def random_positive_definite_matrix(shape,
                                     dtype,
                                     oversampling_ratio=4,
                                     force_well_conditioned=False):
+  # [FUNCTION DOC]
+  # Returns a random batch of positive definite matrices drawn as sample covariance (Wishart)
+  # matrices. Inputs: shape (tensor shape or list, last two dims equal), dtype, oversampling_ratio
+  # (sample size divided by dimension, default 4; smaller than one gives a singular matrix),
+  # force_well_conditioned (if true add the identity and halve, default false). Draws normal
+  # samples, forms the product with the conjugate transpose. Raises a value error if the matrix is
+  # not square statically. Random; returns a tensor.
+  # KNOWN ISSUE: if shape is passed as a tensor it is later treated as a list, which fails; the
+  # docstring name is misspelled as Wisart.
   """[batch] positive definite Wisart matrix.
 
   A Wishart(N, S) matrix is the S sample covariance matrix of an N-variate
@@ -1204,6 +1521,14 @@ def random_tril_matrix(shape,
                        dtype,
                        force_well_conditioned=False,
                        remove_upper=True):
+  # [FUNCTION DOC]
+  # Returns a random batch of lower triangular matrices. Inputs: shape, dtype, force_well_conditioned
+  # (replace the diagonal by random-sign values of modulus between one and square root of two,
+  # default false), remove_upper (zero the strictly upper triangle, default true). Random; returns a
+  # tensor.
+  # KNOWN ISSUE: the docstring says dtype may be a Python dtype and eigenvalue moduli lie in the
+  # range one to two, but the code reads the real dtype attribute of dtype directly (so a plain
+  # Python or numpy dtype fails) and the moduli are at most square root of two.
   """[batch] lower triangular matrix.
 
   Args:
@@ -1237,6 +1562,10 @@ def random_tril_matrix(shape,
 
 
 def random_normal(shape, mean=0.0, stddev=1.0, dtype=dtypes.float32, seed=None):
+  # [FUNCTION DOC]
+  # Returns a tensor with Gaussian entries; complex dtypes get independent real and imaginary parts.
+  # Inputs: shape, mean, stddev (default zero and one), dtype (default 32-bit float), optional integer
+  # seed (a different offset seed is used for the imaginary part). Random; returns a tensor.
   """Tensor with (possibly complex) Gaussian entries.
 
   Samples are distributed like
@@ -1275,6 +1604,10 @@ def random_uniform(shape,
                    maxval=None,
                    dtype=dtypes.float32,
                    seed=None):
+  # [FUNCTION DOC]
+  # Returns a tensor with uniform entries between minval and maxval; complex dtypes draw independent
+  # real and imaginary parts. Inputs: shape, minval, maxval (scalars), dtype (default 32-bit float),
+  # optional seed. Random; returns a tensor.
   """Tensor with (possibly complex) Uniform entries.
 
   Samples are distributed like
@@ -1317,6 +1650,11 @@ def random_sign_uniform(shape,
                         maxval=None,
                         dtype=dtypes.float32,
                         seed=None):
+  # [FUNCTION DOC]
+  # Returns a tensor whose entries are uniform on the interval between minval and maxval times a random
+  # sign (plus or minus one with equal probability); complex dtypes use uniform real and imaginary
+  # parts. Inputs: shape, minval, maxval, dtype (default 32-bit float), optional seed. Random;
+  # returns a tensor.
   """Tensor with (possibly complex) random entries from a "sign Uniform".
 
   Letting `Z` be a random variable equal to `-1` and `1` with equal probability,
@@ -1355,6 +1693,15 @@ def random_normal_correlated_columns(shape,
                                      dtype=dtypes.float32,
                                      eps=1e-4,
                                      seed=None):
+  # [FUNCTION DOC]
+  # Returns a random batch matrix with Gaussian entries and nearly dependent columns. Inputs: shape
+  # (list, at least length two), mean, stddev, dtype, eps (size of perturbation off the hyperplane),
+  # seed. Builds the matrix as the product of an embedding of a narrower random matrix plus small
+  # noise plus the mean. Raises a value error if shape has fewer than two entries.
+  # KNOWN ISSUE: the docstring says a plain independent matrix is returned when rows are fewer than
+  # columns and correlated otherwise, but the code does the reverse: it returns the plain matrix when
+  # there is at most one column or columns are fewer than rows, and correlates otherwise.
+  # Also the added noise is not seeded.
   """Batch matrix with (possibly complex) Gaussian entries and correlated cols.
 
   Returns random batch matrix `A` with specified element-wise `mean`, `stddev`,

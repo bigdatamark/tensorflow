@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Defines LinearOperatorLowRankUpdate, a linear operator of the form base operator plus a rank K
+# update U D V^H. Exposes only that class (exported publicly as the linalg low rank update
+# operator). Relies on the diagonal and identity operators for D and on linear operator
+# utilities for tensor conversion and broadcasting solves. No import-time side effects besides
+# the export registration and composite tensor wrapping of the class.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,6 +41,14 @@ __all__ = [
 @tf_export("linalg.LinearOperatorLowRankUpdate")
 @linear_operator.make_composite_tensor
 class LinearOperatorLowRankUpdate(linear_operator.LinearOperator):
+  # [CLASS DOC]
+  # Linear operator representing A = L + U D V^H: a base operator L perturbed by a rank K update
+  # with U (M x K), diagonal D (K x K, default identity) and V (N x K, default U). Supports
+  # batches, matmul, diag part, and (for square operators) determinant, log-determinant and solve
+  # via the matrix determinant lemma and the Woodbury identity, optionally with Cholesky when
+  # the hints imply symmetric positive definiteness. Holds the base operator, U, V, the optional
+  # diagonal and its diagonal operator, and the Cholesky flag. Exported as a public linalg
+  # class and registered as a composite tensor.
   """Perturb a `LinearOperator` with a rank `K` update.
 
   This operator acts like a [batch] matrix `A` with shape
@@ -138,6 +152,19 @@ class LinearOperatorLowRankUpdate(linear_operator.LinearOperator):
                is_positive_definite=None,
                is_square=None,
                name="LinearOperatorLowRankUpdate"):
+    # [FUNCTION DOC]
+    # Constructor. Builds an operator A = L + U D V^H from a base operator, matrix U, optional
+    # diagonal update (default identity D) and optional V (default U). Inputs: base_operator
+    # (linear operator), u (tensor), diag_update, v (optional tensors), property hints
+    # (booleans or nothing) and a name. Decides whether Cholesky-based solves can be used (base
+    # operator positive definite and self-adjoint, positive diagonal, V equal to U), auto-sets
+    # self-adjoint / positive-definite hints in those cases, converts U, V and diag_update to
+    # tensors inside a name scope, calls the parent constructor, builds the diagonal operator
+    # and validates shapes. Raises a value error if hints contradict each other (diagonal flagged
+    # not positive while defaulting to identity, or hints contradicting an implied
+    # positive-definite self-adjoint operator). Logs a warning for positive hint with complex dtype.
+    # KNOWN ISSUE: the self-adjoint auto-detection requires a non-complex dtype, but the Cholesky
+    # branch later sets self-adjoint true without that check.
     """Initialize a `LinearOperatorLowRankUpdate`.
 
     This creates a `LinearOperator` of the form `A = L + U D V^H`, with
@@ -268,6 +295,12 @@ class LinearOperatorLowRankUpdate(linear_operator.LinearOperator):
       self._check_shapes()
 
   def _check_shapes(self):
+    # [FUNCTION DOC]
+    # HELPER: Validation step called at the end of the constructor.
+    # Statically checks that U and V have broadcast-compatible batch shapes with each other and
+    # with the base operator, that the base operator domain dimension matches the row count of V,
+    # and that the rank dimension K of U/V matches the diagonal update length with compatible
+    # batch shape. Takes no inputs; returns nothing; raises a value error on static mismatch.
     """Static check that shapes are compatible."""
     # Broadcast shape also checks that u and v are compatible.
     uv_shape = array_ops.broadcast_static_shape(
@@ -287,6 +320,13 @@ class LinearOperatorLowRankUpdate(linear_operator.LinearOperator):
           batch_shape, self._diag_update.shape[:-1])
 
   def _set_diag_operators(self, diag_update, is_diag_update_positive):
+    # [FUNCTION DOC]
+    # HELPER: Called by the constructor to build the K x K operator D.
+    # Sets the diag_operator attribute: a diagonal operator built from the stored diagonal (with the
+    # positive-definite hint) when diag_update is given, otherwise an identity operator whose size
+    # is the last dimension of U (static if known, else dynamic) and whose dtype is the operator
+    # dtype. Inputs: diag_update (tensor or nothing) and is_diag_update_positive (bool or nothing).
+    # Returns nothing; mutates the instance.
     """Set attributes self._diag_update and self._diag_operator."""
     if diag_update is not None:
       self._diag_operator = linear_operator_diag.LinearOperatorDiag(
@@ -301,35 +341,57 @@ class LinearOperatorLowRankUpdate(linear_operator.LinearOperator):
 
   @property
   def u(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the stored U matrix (batch of M x K). No side effects.
     """If this operator is `A = L + U D V^H`, this is the `U`."""
     return self._u
 
   @property
   def v(self):
+    # [FUNCTION DOC]
+    # Read-only property returning V (the same object as U when no separate V was given).
     """If this operator is `A = L + U D V^H`, this is the `V`."""
     return self._v
 
   @property
   def is_diag_update_positive(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the hint that the diagonal of D is elementwise positive. It is
+    # forced to true when no diagonal update is supplied. No side effects.
     """If this operator is `A = L + U D V^H`, this hints `D > 0` elementwise."""
     return self._is_diag_update_positive
 
   @property
   def diag_update(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the diagonal of D as a tensor, or nothing if the default
+    # identity D is used. No side effects.
     """If this operator is `A = L + U D V^H`, this is the diagonal of `D`."""
     return self._diag_update
 
   @property
   def diag_operator(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the operator D (a diagonal operator, or an identity operator
+    # when no diagonal update was given). No side effects.
     """If this operator is `A = L + U D V^H`, this is `D`."""
     return self._diag_operator
 
   @property
   def base_operator(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the base operator L of the update. No side effects.
     """If this operator is `A = L + U D V^H`, this is the `L`."""
     return self._base_operator
 
   def _assert_self_adjoint(self):
+    # [FUNCTION DOC]
+    # Builds an assertion op that the operator is self-adjoint. When U and V are the same object
+    # and there is no diagonal update, the check is delegated to the base operator. Otherwise it
+    # calls the parent class public assert method. Takes no inputs; returns an assertion op (or
+    # nothing in eager mode).
+    # KNOWN ISSUE: the fallback calls the public assert_self_adjoint of the parent class, which
+    # itself dispatches back to this private method, so that branch can recurse without end.
     # Recall this operator is:
     #   A = L + UDV^H.
     # So in one case self-adjoint depends only on L
@@ -340,6 +402,10 @@ class LinearOperatorLowRankUpdate(linear_operator.LinearOperator):
     return super(LinearOperatorLowRankUpdate, self).assert_self_adjoint()
 
   def _shape(self):
+    # [FUNCTION DOC]
+    # Returns the static shape (a tensor shape object): the statically broadcast batch shape of
+    # the base operator, diagonal operator, U and V, concatenated with the base operator's last
+    # two dimensions. Takes no inputs; raises a value error if batch shapes are incompatible.
     batch_shape = array_ops.broadcast_static_shape(
         self.base_operator.batch_shape,
         self.diag_operator.batch_shape)
@@ -352,6 +418,10 @@ class LinearOperatorLowRankUpdate(linear_operator.LinearOperator):
     return batch_shape.concatenate(self.base_operator.shape[-2:])
 
   def _shape_tensor(self):
+    # [FUNCTION DOC]
+    # Returns the dynamic shape as a 1-D integer tensor: the batch shape is the dynamic broadcast
+    # of the base operator, diagonal operator, U and V batch shapes, concatenated with the last
+    # two (matrix) dimensions of the base operator. Takes no inputs; no side effects.
     batch_shape = array_ops.broadcast_dynamic_shape(
         self.base_operator.batch_shape_tensor(),
         self.diag_operator.batch_shape_tensor())
@@ -365,6 +435,11 @@ class LinearOperatorLowRankUpdate(linear_operator.LinearOperator):
         [batch_shape, self.base_operator.shape_tensor()[-2:]], axis=0)
 
   def _get_uv_as_tensors(self):
+    # [FUNCTION DOC]
+    # HELPER: Used by the matmul, determinant, diag-part and solve methods of this operator.
+    # Converts the stored U and V (which may be non-tensor references such as variables) to
+    # tensors. If V is the same object as U the conversion is done once and shared. Returns a
+    # pair (u, v) of tensors. No other side effects.
     """Get (self.u, self.v) as tensors (in case they were refs)."""
     u = tensor_conversion.convert_to_tensor_v2_with_dispatch(self.u)
     if self.v is self.u:
@@ -374,6 +449,12 @@ class LinearOperatorLowRankUpdate(linear_operator.LinearOperator):
     return u, v
 
   def _matmul(self, x, adjoint=False, adjoint_arg=False):
+    # [FUNCTION DOC]
+    # Multiplies the operator (or its adjoint) with a dense matrix x (or its adjoint when
+    # adjoint_arg is true). The result is the base operator product plus U D V^H x, or, for the
+    # adjoint, V D^H U^H x, evaluated right to left so the low rank structure is exploited.
+    # Inputs: x tensor with compatible batch shape, adjoint and adjoint_arg booleans (default
+    # False). Returns a dense tensor. No side effects.
     u, v = self._get_uv_as_tensors()
     l = self.base_operator
     d = self.diag_operator
@@ -392,6 +473,13 @@ class LinearOperatorLowRankUpdate(linear_operator.LinearOperator):
       return leading_term + u_d_vh_x
 
   def _determinant(self):
+    # [FUNCTION DOC]
+    # Returns the determinant of the operator. If the operator is flagged positive definite it
+    # exponentiates the log-abs-determinant; otherwise it applies the matrix determinant lemma,
+    # multiplying the determinants of the capacitance matrix, the diagonal operator and the base
+    # operator. Takes no inputs; returns a tensor of batch shape.
+    # KNOWN ISSUE: the positive-definite shortcut exponentiates the log-abs-determinant, which is
+    # only the true determinant for real dtypes; complex positive-definite operators may differ.
     if self.is_positive_definite:
       return math_ops.exp(self.log_abs_determinant())
     # The matrix determinant lemma gives
@@ -407,6 +495,11 @@ class LinearOperatorLowRankUpdate(linear_operator.LinearOperator):
     return det_c * det_d * det_l
 
   def _diag_part(self):
+    # [FUNCTION DOC]
+    # Returns the main diagonal of the operator: the base operator diagonal plus, per row, the sum
+    # over the rank index of U times the conjugate of V times the optional diagonal update.
+    # Takes no inputs; returns a tensor of shape batch + [min(M, N)] for the square case. No side
+    # effects.
     # [U D V^T]_{ii} = sum_{jk} U_{ij} D_{jk} V_{ik}
     #                = sum_{j}  U_{ij} D_{jj} V_{ij}
     u, v = self._get_uv_as_tensors()
@@ -417,6 +510,12 @@ class LinearOperatorLowRankUpdate(linear_operator.LinearOperator):
         math_ops.reduce_sum(product, axis=-1) + self.base_operator.diag_part())
 
   def _log_abs_determinant(self):
+    # [FUNCTION DOC]
+    # Computes the log of the absolute determinant using the matrix determinant lemma: the sum of
+    # the log-abs-determinants of the capacitance matrix, the diagonal operator D and the base
+    # operator. With the Cholesky hint set, the capacitance term is twice the sum of logs of the
+    # Cholesky diagonal; otherwise it is the log of the absolute value of its determinant (cast
+    # back to the complex dtype if needed). Takes no inputs; returns a tensor of batch shape.
     u, v = self._get_uv_as_tensors()
     # Recall
     #   det(L + UDV^H) = det(D^{-1} + V^H L^{-1} U) det(D) det(L)
@@ -438,6 +537,17 @@ class LinearOperatorLowRankUpdate(linear_operator.LinearOperator):
     return log_abs_det_c + log_abs_det_d + log_abs_det_l
 
   def _solve(self, rhs, adjoint=False, adjoint_arg=False):
+    # [FUNCTION DOC]
+    # Solves A x = rhs (or with the adjoint of A, or with the adjoint of rhs) using the Woodbury
+    # identity: base-solve of rhs minus base-solve of U times the inverse capacitance times V^H
+    # times base-solve of rhs. When adjoint is requested the roles of U and V are swapped. The
+    # capacitance system is solved with a Cholesky factorization when the positive-definite,
+    # self-adjoint hints allowed it, otherwise with a general broadcasting matrix solve.
+    # Inputs: rhs (tensor of compatible batch shape), adjoint and adjoint_arg (booleans, default
+    # False). Returns a tensor shaped like the solution. Raises a value error if the base operator
+    # is explicitly flagged as singular. No side effects.
+    # KNOWN ISSUE: in the Cholesky branch the adjoint flag is ignored for the capacitance solve,
+    # which is only valid because that branch implies a self-adjoint operator.
     if self.base_operator.is_non_singular is False:
       raise ValueError(
           "Solve not implemented unless this is a perturbation of a "
@@ -485,6 +595,13 @@ class LinearOperatorLowRankUpdate(linear_operator.LinearOperator):
     return linv_rhs - linv_u_capinv_vh_linv_rhs
 
   def _make_capacitance(self, u, v):
+    # [FUNCTION DOC]
+    # HELPER: Shared by the determinant, log-determinant and solve methods of the low-rank update.
+    # Builds the K x K "capacitance" matrix: the inverse of the diagonal operator D plus V^H times
+    # the solve of the base operator applied to U. Inputs: u (batch matrix M x K) and v (batch
+    # matrix N x K), both dense tensors of the operator dtype. Returns a dense tensor of shape
+    # batch + [K, K]. Raises whatever the base operator solve raises (for example if it is not
+    # solvable). No state is modified.
     # C := D^{-1} + V^H L^{-1} U
     # which is sometimes known as the "capacitance" matrix.
 
@@ -499,10 +616,19 @@ class LinearOperatorLowRankUpdate(linear_operator.LinearOperator):
 
   @property
   def _composite_tensor_fields(self):
+    # [FUNCTION DOC]
+    # Property returning the tuple of constructor argument names that are stored when this
+    # operator is converted to a composite tensor: base_operator, u, diag_update, v and
+    # is_diag_update_positive. Takes no inputs and has no side effects.
     return ("base_operator", "u", "diag_update", "v", "is_diag_update_positive")
 
   @property
   def _experimental_parameter_ndims_to_matrix_ndims(self):
+    # [FUNCTION DOC]
+    # Property returning a mapping from constructor parameter names to the number of trailing
+    # dimensions that form the matrix part of each parameter: zero for the base operator
+    # (itself an operator), two for u and v, one for the diagonal update vector. Used by the
+    # composite-tensor machinery to slice/broadcast batch dimensions of the parameters.
     return {
         "base_operator": 0,
         "u": 2,

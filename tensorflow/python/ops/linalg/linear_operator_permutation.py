@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Defines LinearOperatorPermutation, a linear operator that permutes the rows of its input
+# according to an integer vector (or batch of vectors), without materializing the matrix.
+# Exposes only that class (exported publicly). Uses gather and argsort for products and solves.
+# No import-time side effects besides export registration and composite tensor wrapping.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,6 +40,12 @@ __all__ = ["LinearOperatorPermutation",]
 @tf_export("linalg.LinearOperatorPermutation")
 @linear_operator.make_composite_tensor
 class LinearOperatorPermutation(linear_operator.LinearOperator):
+  # [CLASS DOC]
+  # Operator acting like a [batch] of N x N permutation matrices defined by an integer vector perm
+  # of unique values from zero to N-1; applying it moves row perm[i] of the input to row i.
+  # Holds the permutation tensor and an explicit dtype. Always square and non-singular; the
+  # determinant magnitude is one (log-abs-determinant zero), condition number one, solves are
+  # products with the inverse (transposed) permutation.
   """`LinearOperator` acting like a [batch] of permutation matrices.
 
   This operator acts like a [batch] of permutations with shape
@@ -109,6 +120,17 @@ class LinearOperatorPermutation(linear_operator.LinearOperator):
                is_positive_definite=None,
                is_square=None,
                name="LinearOperatorPermutation"):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: perm (integer tensor of shape batch + [N] with unique entries), dtype
+    # (floating or complex dtype of the operator, default 32-bit float), property hints and a
+    # name. Converts perm to a tensor in a name scope, validates it, rejects explicit non-singular
+    # or non-square false hints, forces is_square to true, and calls the parent constructor.
+    # Raises a value error if is_non_singular or is_square is explicitly false, plus the errors of
+    # the perm check.
+    # KNOWN ISSUE: the docstring says is_self_adjoint is auto-set to true and is_positive_definite
+    # to false and lists value errors for wrong values, but the code does neither: both hints are
+    # passed through unchanged and no error is raised for them. Also the unqualified use of the
+    # self-adjoint hint in matmul means a wrongly claimed self-adjoint hint gives wrong adjoints.
     r"""Initialize a `LinearOperatorPermutation`.
 
     Args:
@@ -175,6 +197,12 @@ class LinearOperatorPermutation(linear_operator.LinearOperator):
           name=name)
 
   def _check_perm(self, perm):
+    # [FUNCTION DOC]
+    # HELPER: Argument validation used by the constructor.
+    # Statically checks perm: raises a value error if its rank is known and below one; raises a
+    # type error if its dtype is not integer; and, when the values are statically known, raises a
+    # value error unless the sorted entries equal zero to N-1 (unique, in range). Dynamic values
+    # are not checked. Returns nothing.
     """Static check of perm."""
     if (perm.shape.ndims is not None and perm.shape.ndims < 1):
       raise ValueError(f"Argument `perm` must have at least 1 dimension. "
@@ -192,22 +220,41 @@ class LinearOperatorPermutation(linear_operator.LinearOperator):
             f"0 to {static_perm.shape[-1] - 1}.")
 
   def _shape(self):
+    # [FUNCTION DOC]
+    # Returns the static shape: perm's shape with its last dimension repeated, i.e. batch + [N, N].
     perm_shape = self._perm.shape
     return perm_shape.concatenate(perm_shape[-1:])
 
   def _shape_tensor(self):
+    # [FUNCTION DOC]
+    # Returns the dynamic shape as an integer tensor: perm's shape with its last dimension
+    # appended again.
     perm_shape = array_ops.shape(self._perm)
     k = perm_shape[-1]
     return array_ops.concat((perm_shape, [k]), 0)
 
   def _assert_non_singular(self):
+    # [FUNCTION DOC]
+    # Assertion that the operator is non-singular. Permutations are always invertible, so this
+    # returns a no-op and never fails.
     return control_flow_ops.no_op("assert_non_singular")
 
   def _domain_dimension_tensor(self, perm=None):
+    # [FUNCTION DOC]
+    # HELPER: Computes the number of columns/rows N as a dynamic scalar tensor, the last
+    # dimension of the given permutation, or of the stored one if none is passed.
+    # Input: perm (optional tensor). Returns an integer scalar tensor.
     perm = perm if perm is not None else self.perm
     return array_ops.shape(perm)[-1]
 
   def _matmul(self, x, adjoint=False, adjoint_arg=False):
+    # [FUNCTION DOC]
+    # Applies the permutation (or its inverse when adjoint is requested) to x (or to the adjoint
+    # of x when adjoint_arg is true). For the adjoint the permutation is inverted with an argsort
+    # unless the operator is flagged self-adjoint. Broadcasts x and perm to a common batch shape
+    # because gather does not broadcast, flattens batches, gathers rows per batch, and reshapes
+    # back. Inputs: x tensor, adjoint and adjoint_arg booleans (default False). Returns a tensor
+    # with the broadcast batch shape.
     perm = tensor_conversion.convert_to_tensor_v2_with_dispatch(self.perm)
     if adjoint and not self.is_self_adjoint:
       # TODO(srvasude): invert_permutation doesn't work on batches so we use
@@ -234,38 +281,60 @@ class LinearOperatorPermutation(linear_operator.LinearOperator):
   # TODO(srvasude): Permutation parity is equivalent to the determinant.
 
   def _log_abs_determinant(self):
+    # [FUNCTION DOC]
+    # Returns zeros of the batch shape and operator dtype, since permutation determinants are
+    # plus or minus one so the log of the absolute value is zero.
     # Permutation matrices have determinant +/- 1.
     return array_ops.zeros(shape=self.batch_shape_tensor(), dtype=self.dtype)
 
   def _solve(self, rhs, adjoint=False, adjoint_arg=False):
+    # [FUNCTION DOC]
+    # Solves against a permutation: the inverse equals the transpose, so it delegates to the
+    # matmul with the adjoint flag flipped. Inputs: rhs, adjoint and adjoint_arg (default False).
+    # Returns the solution tensor.
     # The inverse of a permutation matrix is the transpose matrix.
     # Apply a matmul and flip the adjoint bit.
     return self._matmul(rhs, adjoint=(not adjoint), adjoint_arg=adjoint_arg)
 
   def _to_dense(self):
+    # [FUNCTION DOC]
+    # Builds the dense matrix by comparing a range of column indices with each perm entry (one
+    # hot encoding of perm) and casting to the operator dtype. Returns a tensor of shape
+    # batch + [N, N].
     perm = tensor_conversion.convert_to_tensor_v2_with_dispatch(self.perm)
     return math_ops.cast(math_ops.equal(
         math_ops.range(0, self._domain_dimension_tensor(perm)),
         perm[..., array_ops.newaxis]), self.dtype)
 
   def _diag_part(self):
+    # [FUNCTION DOC]
+    # Returns the main diagonal: one where the perm entry equals its own index (fixed points),
+    # zero elsewhere, cast to the operator dtype. Shape is batch + [N].
     perm = tensor_conversion.convert_to_tensor_v2_with_dispatch(self.perm)
     return math_ops.cast(math_ops.equal(
         math_ops.range(0, self._domain_dimension_tensor(perm)),
         perm), self.dtype)
 
   def _cond(self):
+    # [FUNCTION DOC]
+    # Returns the condition number, always one (ones of batch shape in operator dtype).
     # Permutation matrices are rotations which have condition number 1.
     return array_ops.ones(self.batch_shape_tensor(), dtype=self.dtype)
 
   @property
   def perm(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the permutation tensor.
     return self._perm
 
   @property
   def _composite_tensor_fields(self):
+    # [FUNCTION DOC]
+    # Property giving the argument names stored for composite tensor conversion: perm and dtype.
     return ("perm", "dtype")
 
   @property
   def _experimental_parameter_ndims_to_matrix_ndims(self):
+    # [FUNCTION DOC]
+    # Property mapping perm to one matrix dimension for batch slicing in composite tensor handling.
     return {"perm": 1}

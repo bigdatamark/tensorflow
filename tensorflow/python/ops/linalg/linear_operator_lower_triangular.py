@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Defines LinearOperatorLowerTriangular, a linear operator backed by a dense [batch] square matrix
+# whose strictly upper triangle is ignored. Exposes only that class (exported publicly). Provides
+# cheap determinant (product of the diagonal), triangular solves, eigenvalues and a fused product
+# with diagonal operators. No import-time side effects other than export registration and
+# composite tensor wrapping.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,6 +37,11 @@ __all__ = [
 @tf_export("linalg.LinearOperatorLowerTriangular")
 @linear_operator.make_composite_tensor
 class LinearOperatorLowerTriangular(linear_operator.LinearOperator):
+  # [CLASS DOC]
+  # Operator acting like a [batch] N x N lower triangular matrix defined by a dense tensor; the
+  # upper triangle of the input is ignored (masked out when used). Always square. Holds the
+  # stored tensor in a private attribute. Matmul uses the masked matrix, solves use back
+  # substitution, determinant is the product of the diagonal, eigenvalues are the diagonal.
   """`LinearOperator` acting like a [batch] square lower triangular matrix.
 
   This operator acts like a [batch] lower triangular matrix `A` with shape
@@ -111,6 +122,12 @@ class LinearOperatorLowerTriangular(linear_operator.LinearOperator):
                is_positive_definite=None,
                is_square=None,
                name="LinearOperatorLowerTriangular"):
+    # [FUNCTION DOC]
+    # Constructor. Input: tril (tensor of shape batch + [N, N], at least 2 dimensions), property
+    # hints is_non_singular, is_self_adjoint, is_positive_definite, is_square (booleans or
+    # nothing) and a name. Converts tril to a tensor inside a name scope, checks its rank, and
+    # calls the parent constructor with the tensor dtype and is_square forced to true.
+    # Raises a value error if is_square is explicitly false or if tril has fewer than 2 dims.
     r"""Initialize a `LinearOperatorLowerTriangular`.
 
     Args:
@@ -165,10 +182,16 @@ class LinearOperatorLowerTriangular(linear_operator.LinearOperator):
 
   @property
   def tril(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the stored (unmasked) tensor that defines the operator.
     """The lower triangular matrix defining this operator."""
     return self._tril
 
   def _check_tril(self, tril):
+    # [FUNCTION DOC]
+    # HELPER: Argument validation used by the constructor.
+    # Statically checks that tril has at least two dimensions when its rank is known. Returns
+    # nothing; raises a value error otherwise.
     """Static check of the `tril` argument."""
 
     if tril.shape.ndims is not None and tril.shape.ndims < 2:
@@ -177,25 +200,43 @@ class LinearOperatorLowerTriangular(linear_operator.LinearOperator):
           % tril)
 
   def _get_tril(self):
+    # [FUNCTION DOC]
+    # HELPER: Returns the stored matrix with everything above the diagonal set to zero (lower
+    # band only), used by matmul, solve and to-dense.
     """Gets the `tril` kwarg, with upper part zero-d out."""
     return array_ops.matrix_band_part(self._tril, -1, 0)
 
   def _get_diag(self):
+    # [FUNCTION DOC]
+    # HELPER: Returns the main diagonal of the stored tensor, shape batch + [N]; used by
+    # determinant, eigenvalue and singularity-assertion methods.
     """Gets the diagonal part of `tril` kwarg."""
     return array_ops.matrix_diag_part(self._tril)
 
   def _shape(self):
+    # [FUNCTION DOC]
+    # Returns the static shape of the operator, which is the static shape of the stored tensor.
     return self._tril.shape
 
   def _shape_tensor(self):
+    # [FUNCTION DOC]
+    # Returns the dynamic shape of the operator as an integer tensor (shape of stored tensor).
     return array_ops.shape(self._tril)
 
   def _assert_non_singular(self):
+    # [FUNCTION DOC]
+    # Builds an assertion that the operator is non-singular, i.e. that no diagonal entry has zero
+    # modulus. Returns an assertion op (nothing in eager mode); fails at run time with a message
+    # about a singular operator if any diagonal entry is zero.
     return linear_operator_util.assert_no_entries_with_modulus_zero(
         self._get_diag(),
         message="Singular operator:  Diagonal contained zero values.")
 
   def _matmul(self, x, adjoint=False, adjoint_arg=False):
+    # [FUNCTION DOC]
+    # Multiplies the lower triangular part of the matrix (or its adjoint) with x (or its adjoint
+    # when adjoint_arg is true). Inputs: x tensor, adjoint and adjoint_arg booleans (default
+    # False). Returns the dense product tensor.
     return math_ops.matmul(
         self._get_tril(), x, adjoint_a=adjoint, adjoint_b=adjoint_arg)
 
@@ -204,6 +245,13 @@ class LinearOperatorLowerTriangular(linear_operator.LinearOperator):
       left_operator: "LinearOperatorLowerTriangular",
       right_operator: linear_operator.LinearOperator,
     ) -> linear_operator.LinearOperator:
+    # [FUNCTION DOC]
+    # Hook for composing this operator with another operator by matrix product. If the right
+    # operator looks like a diagonal operator (has a diagonal check method), returns a new lower
+    # triangular operator whose matrix is the dense left matrix with columns scaled by the right
+    # diagonal, with non-singular and self-adjoint hints combined from both and positive-definite
+    # unknown. Otherwise defers to the parent implementation. Inputs: left_operator (a lower
+    # triangular operator), right_operator (any linear operator). Returns a linear operator.
     # instance check of linear_operator_diag.LinearOperatorDiag
     if hasattr(right_operator, "_check_diag"):
       return LinearOperatorLowerTriangular(
@@ -219,27 +267,46 @@ class LinearOperatorLowerTriangular(linear_operator.LinearOperator):
     return super()._linop_matmul(left_operator, right_operator)
 
   def _determinant(self):
+    # [FUNCTION DOC]
+    # Returns the determinant: the product of the diagonal entries, reduced over the last axis.
     return math_ops.reduce_prod(self._get_diag(), axis=[-1])
 
   def _log_abs_determinant(self):
+    # [FUNCTION DOC]
+    # Returns the log of the absolute determinant: sum over the diagonal of the log of the
+    # absolute value of each entry.
     return math_ops.reduce_sum(
         math_ops.log(math_ops.abs(self._get_diag())), axis=[-1])
 
   def _solve(self, rhs, adjoint=False, adjoint_arg=False):
+    # [FUNCTION DOC]
+    # Solves the triangular system with the masked lower matrix by back substitution. Inputs: rhs
+    # tensor, adjoint (solve with the adjoint matrix) and adjoint_arg (use the adjoint of rhs),
+    # both default False. Returns the solution tensor.
     rhs = linalg.adjoint(rhs) if adjoint_arg else rhs
     return linalg.triangular_solve(
         self._get_tril(), rhs, lower=True, adjoint=adjoint)
 
   def _to_dense(self):
+    # [FUNCTION DOC]
+    # Returns the dense matrix of the operator: the stored tensor with the upper part zeroed.
     return self._get_tril()
 
   def _eigvals(self):
+    # [FUNCTION DOC]
+    # Returns the eigenvalues of the operator, which for a triangular matrix are its diagonal.
     return self._get_diag()
 
   @property
   def _composite_tensor_fields(self):
+    # [FUNCTION DOC]
+    # Property giving the tuple of constructor argument names stored for composite tensor
+    # conversion; here only the stored matrix.
     return ("tril",)
 
   @property
   def _experimental_parameter_ndims_to_matrix_ndims(self):
+    # [FUNCTION DOC]
+    # Property mapping the parameter name of the stored matrix to its number of matrix
+    # dimensions (two), used for batch slicing in composite tensor handling.
     return {"tril": 2}
