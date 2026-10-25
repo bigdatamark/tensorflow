@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Unit test for the loss util module: verifies the regularization-loss helper with an empty
+# collection, with summing, and with scope filtering.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,9 +25,19 @@ from tensorflow.python.platform import test
 
 
 class LossesUtilTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the regularization loss helper of the losses util module. No shared
+  # fixtures; each test builds its own graph state using the default graph's collections.
 
   @test_util.run_deprecated_v1
   def testGetRegularizationLoss(self):
+    # [FUNCTION DOC]
+    # Scenario: (1) with an empty regularization collection the total is expected to be zero;
+    # (2) after adding constants two and three to the collection the total is expected to be
+    # five; (3) after adding minus one inside a name scope named scope1, asking for the total
+    # restricted to that scope is expected to be minus one. Runs in graph mode (deprecated v1
+    # decorator) with a cached session and evaluates each result. Side effect: modifies the
+    # default graph collection.
     # Empty regularization collection should evaluate to 0.0.
     with self.cached_session():
       self.assertEqual(0.0, util.get_regularization_loss().eval())

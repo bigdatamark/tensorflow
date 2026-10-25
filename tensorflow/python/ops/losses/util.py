@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Helpers for working with the graph collections of losses: adding a loss to a collection,
+# reading losses, regularization losses and their total, plus utilities used by the loss
+# implementations and by Keras-style code to align ranks of predictions, labels and sample
+# weights, scale losses by weights, and check that per-example losses have rank at least one.
+# Several functions are exported under the v1 loss API. No import-time side effects besides
+# export registration.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,6 +35,17 @@ from tensorflow.python.util.tf_export import tf_export
 
 
 def squeeze_or_expand_dimensions(y_pred, y_true=None, sample_weight=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: Return arity varies: with no sample weight it returns a pair (y_pred, y_true),
+  # otherwise a triple, so callers must know which. When y_true is given, the argument order
+  # passed to the squeeze helper is (y_true, y_pred) and results are swapped back accordingly.
+  # Aligns ranks of predictions, optional labels and optional sample weights. If labels are
+  # given, drops a trailing size-one dimension from predictions or labels when their ranks differ
+  # by one (not when labels are sparse class ids with a larger last prediction dimension),
+  # using static ranks when known and runtime conditionals otherwise. A scalar sample weight is
+  # left unchanged; otherwise it is squeezed on its last dimension if its rank exceeds that of
+  # predictions by one, or expanded by one dimension if smaller by one. Returns the adjusted
+  # values as described above. Adds graph operations only when ranks are not statically known.
   """Squeeze or expand last dimension if needed.
 
   1. Squeezes last dim of `y_pred` or `y_true` if their rank differs by 1
@@ -99,11 +117,19 @@ def squeeze_or_expand_dimensions(y_pred, y_true=None, sample_weight=None):
   maybe_squeeze_weights = lambda: array_ops.squeeze(sample_weight, [-1])
 
   def _maybe_expand_weights():
+    # [FUNCTION DOC]
+    # HELPER: Nested runtime branch of the rank alignment function.
+    # Returns a conditional that expands sample weights by one trailing dimension when the
+    # weights rank is exactly one less than the predictions rank, otherwise returns them as is.
     expand_weights = lambda: array_ops.expand_dims(sample_weight, [-1])
     return cond.cond(
         math_ops.equal(rank_diff, -1), expand_weights, lambda: sample_weight)
 
   def _maybe_adjust_weights():
+    # [FUNCTION DOC]
+    # HELPER: Nested runtime branch of the rank alignment function.
+    # Returns a conditional that squeezes the last dimension of sample weights when their rank
+    # is exactly one more than the predictions rank, and otherwise defers to the expansion branch.
     return cond.cond(
         math_ops.equal(rank_diff, 1), maybe_squeeze_weights,
         _maybe_expand_weights)
@@ -117,6 +143,12 @@ def squeeze_or_expand_dimensions(y_pred, y_true=None, sample_weight=None):
 
 
 def scale_losses_by_sample_weight(losses, sample_weight):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: Always casts to float32, so float64 or half precision losses are changed in
+  # precision (a TODO in the code acknowledges this).
+  # Multiplies loss values by sample weights. Both inputs are cast to float32, the sample weight
+  # is rank-aligned with the losses by the squeeze-or-expand helper, and the elementwise
+  # product is returned as a float32 tensor.
   """Scales loss values by the given sample weights.
 
   `sample_weight` dimensions are updated to match with the dimension of `losses`
@@ -142,6 +174,12 @@ def scale_losses_by_sample_weight(losses, sample_weight):
 
 @tf_contextlib.contextmanager
 def check_per_example_loss_rank(per_example_loss):
+  # [FUNCTION DOC]
+  # Context manager (generator based) guarding code that needs a per-example loss of rank at
+  # least one. If the static rank is known and equals zero, raises a value error immediately on
+  # entry; if known and larger, simply enters the managed block. If the rank is unknown,
+  # enters the block under a control dependency on a runtime assertion that the rank is at least
+  # one, which fails at run time with an invalid-argument error. Yields nothing useful.
   """Context manager that checks that the rank of per_example_loss is at least 1.
 
   Args:
@@ -173,6 +211,10 @@ def check_per_example_loss_rank(per_example_loss):
 
 @tf_export(v1=["losses.add_loss"])
 def add_loss(loss, loss_collection=ops.GraphKeys.LOSSES):
+  # [FUNCTION DOC]
+  # Adds a loss tensor to a graph collection (default the losses collection). Does nothing when
+  # the collection name is empty or when executing eagerly, since keeping losses would just
+  # leak memory. Returns nothing; mutates the default graph's collection.
   """Adds a externally defined loss to the collection of losses.
 
   Args:
@@ -188,6 +230,9 @@ def add_loss(loss, loss_collection=ops.GraphKeys.LOSSES):
 
 @tf_export(v1=["losses.get_losses"])
 def get_losses(scope=None, loss_collection=ops.GraphKeys.LOSSES):
+  # [FUNCTION DOC]
+  # Returns the list of tensors in the given collection (default losses), optionally filtered to
+  # those whose names start with the optional scope name. Read only.
   """Gets the list of losses from the loss_collection.
 
   Args:
@@ -202,6 +247,9 @@ def get_losses(scope=None, loss_collection=ops.GraphKeys.LOSSES):
 
 @tf_export(v1=["losses.get_regularization_losses"])
 def get_regularization_losses(scope=None):
+  # [FUNCTION DOC]
+  # Returns the list of regularization loss tensors from the regularization losses collection,
+  # optionally filtered by an optional scope name prefix. Read only.
   """Gets the list of regularization losses.
 
   Args:
@@ -215,6 +263,10 @@ def get_regularization_losses(scope=None):
 
 @tf_export(v1=["losses.get_regularization_loss"])
 def get_regularization_loss(scope=None, name="total_regularization_loss"):
+  # [FUNCTION DOC]
+  # Returns a scalar tensor with the sum of all regularization losses (optionally filtered by
+  # scope prefix), named by the name argument. If there are none, returns a constant zero
+  # (the name is not applied in that case).
   """Gets the total regularization loss.
 
   Args:
@@ -235,6 +287,12 @@ def get_regularization_loss(scope=None, name="total_regularization_loss"):
 def get_total_loss(add_regularization_losses=True,
                    name="total_loss",
                    scope=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: The docstring says a value error is raised if losses is not iterable, but the
+  # code never raises it itself; when no losses exist, the sum op fails with its own error.
+  # Returns a tensor equal to the sum of all losses in the losses collection, plus, when
+  # add_regularization_losses is true (default), the regularization losses, both optionally
+  # filtered by scope prefix. The result is named by the name argument (default total_loss).
   """Returns a tensor whose value represents the total loss.
 
   In particular, this adds any losses you have added with `tf.add_loss()` to

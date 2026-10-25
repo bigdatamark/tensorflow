@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Implementation of the legacy (TF1-style) loss functions: absolute difference, cosine distance,
+# hinge, Huber, log loss, mean pairwise squared error, mean squared error, sigmoid and softmax
+# cross entropy and sparse softmax cross entropy, plus the reduction-type constants class and the
+# shared weighting and reduction logic. Every public loss casts inputs to floating point, builds an
+# element-wise loss, then calls the weighted-loss function, which applies weights, reduces
+# according to the chosen reduction, and registers the scalar result in a graph collection (the
+# collection is skipped when executing eagerly). Public functions are exported under the v1 loss
+# API names. The package module re-exports everything here through a wildcard import.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -34,6 +43,11 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export(v1=["losses.Reduction"])
 class Reduction:
+  # [CLASS DOC]
+  # Namespace of string constants naming the supported loss reduction modes (none, sum, mean,
+  # sum over batch size, sum by or over nonzero weights; the last two names are aliases) with
+  # two class methods to list all valid keys and to validate a key. Never instantiated; holds
+  # no per-instance state. Exported as the v1 reduction class.
   """Types of loss reduction.
 
   Contains the following values:
@@ -56,6 +70,9 @@ class Reduction:
 
   @classmethod
   def all(cls):
+    # [FUNCTION DOC]
+    # Class method returning a tuple of every valid reduction key string, in the order none,
+    # sum, mean, sum over batch size, sum over nonzero weights, sum by nonzero weights.
     return (
         cls.NONE,
         cls.SUM,
@@ -66,12 +83,19 @@ class Reduction:
 
   @classmethod
   def validate(cls, key):
+    # [FUNCTION DOC]
+    # Class method that checks key is one of the valid reduction strings. Returns nothing;
+    # raises a value error listing the valid keys if the key is not recognised.
     if key not in cls.all():
       raise ValueError(f"Invalid Reduction Key {key}. Key should be one of "
                        f"{cls.all()}.")
 
 
 def _safe_mean(losses, num_present):
+  # [FUNCTION DOC]
+  # HELPER: Used by the weighted-loss reductions to compute means.
+  # Sums the losses tensor and divides by num_present, returning zero instead of an error or
+  # infinity when num_present is zero. Output is a scalar tensor named value.
   """Computes a safe mean of the losses.
 
   Args:
@@ -87,6 +111,17 @@ def _safe_mean(losses, num_present):
 
 
 def _num_present(losses, weights, per_batch=False):
+  # [FUNCTION DOC]
+  # HELPER: Used by the weighted-loss reduction and the pairwise squared error to normalise.
+  # KNOWN ISSUE: The eager shortcut reads a private rank method of weights, which fails for
+  # weights that are Python integers or other non-tensor, non-float values when executing
+  # eagerly. Also the shortcut ignores the per_batch flag, so with per_batch set and a nonzero
+  # scalar weight it returns the total element count instead of a per-batch tensor.
+  # Counts the elements of losses that have nonzero weight after broadcasting weights to the
+  # shape of losses. If weights is a nonzero Python float, or (eagerly) a nonzero scalar tensor,
+  # returns the total number of elements. Otherwise builds a 0/1 presence tensor from weights
+  # cast to float32, broadcasts it, and sums it: over everything (scalar result) or, if per_batch
+  # is true, over all dimensions except the first (shape batch-size with kept dimensions).
   """Computes the number of elements in the loss function induced by `weights`.
 
   A given weights tensor induces different numbers of usable elements in the
@@ -129,6 +164,9 @@ def _num_present(losses, weights, per_batch=False):
 
 
 def _num_elements(losses):
+  # [FUNCTION DOC]
+  # HELPER: Used by reductions that divide by the element count.
+  # Returns the total number of elements of losses as a scalar tensor cast to the losses dtype.
   """Computes the number of elements in `losses` tensor."""
   with ops.name_scope(None, "num_elements", values=[losses]) as scope:
     return math_ops.cast(array_ops.size(losses, name=scope), dtype=losses.dtype)
@@ -139,6 +177,20 @@ def _num_elements(losses):
 def compute_weighted_loss(
     losses, weights=1.0, scope=None, loss_collection=ops.GraphKeys.LOSSES,
     reduction=Reduction.SUM_BY_NONZERO_WEIGHTS):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: The docstring says a missing weights value raises a value error, but nothing
+  # checks for that; a none weights value fails later with a different error. Results are
+  # computed in float32 and cast back, so higher precision inputs lose precision.
+  # Core of all the losses: multiplies the elementwise losses by weights (both cast to float32)
+  # and reduces according to reduction (validated first; invalid keys raise a value error):
+  # none keeps the weighted losses, sum sums, mean divides by the sum of weights, nonzero-weight
+  # modes divide by the count of nonzero weights, batch-size mode divides by the element
+  # count (all divisions are safe against zero). The result is cast back to the input dtype and
+  # added to loss_collection via the add-loss helper (skipped eagerly). Parameters: losses
+  # tensor, weights (scalar or broadcastable tensor, default one), scope name, collection name,
+  # and reduction. Side effect: records the reduction on the default graph for later loss
+  # normalisation by distribution code. Unless in an XLA context, a control dependency asserts
+  # that weights is broadcastable to losses. Returns the reduced scalar or unreduced tensor.
   """Computes the weighted loss.
 
   Args:
@@ -178,6 +230,13 @@ def compute_weighted_loss(
     ops.get_default_graph()._last_loss_reduction = reduction  # pylint: disable=protected-access
 
     def compute_loss(losses, weights, loss_collection, reduction):
+      # [FUNCTION DOC]
+      # HELPER: Nested worker of the weighted-loss function, split out so it can run with or
+      # without the broadcast-check dependency.
+      # Converts losses to a tensor, casts losses and weights to float32, multiplies them,
+      # applies the requested reduction (none, sum, mean, nonzero-weight mean, or batch-size
+      # mean), casts the result back to the original dtype, registers it in loss_collection and
+      # returns it.
       losses = ops.convert_to_tensor(losses)
       input_dtype = losses.dtype
       losses = math_ops.cast(losses, dtype=dtypes.float32)
@@ -219,6 +278,13 @@ def absolute_difference(
     labels, predictions, weights=1.0, scope=None,
     loss_collection=ops.GraphKeys.LOSSES,
     reduction=Reduction.SUM_BY_NONZERO_WEIGHTS):
+  # [FUNCTION DOC]
+  # Absolute difference (L1) loss. Takes ground truth labels, predictions, optional weights,
+  # scope name, loss collection and reduction. Raises a value error if labels or predictions is
+  # none, or if their static shapes are incompatible. Casts both to float32, computes the
+  # elementwise absolute value of predictions minus labels and passes it to the weighted-loss
+  # function. Returns the reduced loss (scalar unless reduction is none). Side effect: adds
+  # the loss to the collection in graph mode.
   """Adds an Absolute Difference loss to the training procedure.
 
   `weights` acts as a coefficient for the loss. If a scalar is provided, then
@@ -275,6 +341,15 @@ def cosine_distance(
     loss_collection=ops.GraphKeys.LOSSES,
     reduction=Reduction.SUM_BY_NONZERO_WEIGHTS,
     dim=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: The dim argument is deprecated and merged into axis; the axis default of none
+  # is not actually optional, since a missing axis raises a value error. The function does not
+  # normalise inputs, despite the loss name; it assumes unit-normalised vectors.
+  # Cosine distance loss. Resolves axis from the deprecated dim alias, then raises a value error
+  # if axis, labels or predictions is none or shapes are incompatible. Casts to float32, takes
+  # one minus the sum over axis (dimension kept) of the elementwise product of predictions and
+  # labels, and passes that to the weighted-loss function with the given weights, scope,
+  # collection and reduction. Returns the reduced loss; adds it to the collection in graph mode.
   """Adds a cosine-distance loss to the training procedure.
 
   Note that the function assumes that `predictions` and `labels` are already
@@ -329,6 +404,13 @@ def cosine_distance(
 def hinge_loss(labels, logits, weights=1.0, scope=None,
                loss_collection=ops.GraphKeys.LOSSES,
                reduction=Reduction.SUM_BY_NONZERO_WEIGHTS):
+  # [FUNCTION DOC]
+  # Hinge loss for binary classification. Inputs: labels (values zero or one), logits (float
+  # scores), weights, scope, loss collection, reduction. Raises a value error if labels or
+  # logits is none or their static shapes are incompatible. Converts labels from zero/one to
+  # minus one/plus one, computes the rectified value of one minus labels times logits, and
+  # passes it to the weighted-loss function. Returns the reduced loss; graph-mode side effect
+  # of adding it to the collection.
   """Adds a hinge loss to the training procedure.
 
   Args:
@@ -380,6 +462,14 @@ def hinge_loss(labels, logits, weights=1.0, scope=None,
 def huber_loss(labels, predictions, weights=1.0, delta=1.0, scope=None,
                loss_collection=ops.GraphKeys.LOSSES,
                reduction=Reduction.SUM_BY_NONZERO_WEIGHTS):
+  # [FUNCTION DOC]
+  # Huber loss: quadratic for errors up to delta and linear beyond. Inputs: labels, predictions,
+  # weights, delta threshold (default one), scope, collection, reduction. Raises a value error
+  # if labels or predictions is none or shapes are incompatible. Computes the absolute error,
+  # splits it into a quadratic part capped at delta and the linear remainder (written so the
+  # gradient at exactly delta is not doubled), and combines half the squared quadratic part
+  # with delta times the linear part. Then applies the weighted-loss function and returns the
+  # reduced loss; adds it to the collection in graph mode.
   """Adds a [Huber Loss](https://en.wikipedia.org/wiki/Huber_loss) term to the training procedure.
 
   For each value x in `error=labels-predictions`, the following is calculated:
@@ -457,6 +547,13 @@ def huber_loss(labels, predictions, weights=1.0, delta=1.0, scope=None,
 def log_loss(labels, predictions, weights=1.0, epsilon=1e-7, scope=None,
              loss_collection=ops.GraphKeys.LOSSES,
              reduction=Reduction.SUM_BY_NONZERO_WEIGHTS):
+  # [FUNCTION DOC]
+  # Log loss (binary cross entropy on probabilities). Inputs: labels, predictions (expected
+  # probabilities between zero and one), weights, epsilon added inside the logarithms to avoid
+  # taking the log of zero (default 1e-7), scope, collection, reduction. Raises a value error if
+  # labels or predictions is none or shapes are incompatible. Computes minus labels times log of
+  # predictions plus epsilon, minus one-minus-labels times log of one minus predictions plus
+  # epsilon, and passes it to the weighted-loss function. Returns the reduced loss.
   """Adds a Log Loss term to the training procedure.
 
   `weights` acts as a coefficient for the loss. If a scalar is provided, then
@@ -515,6 +612,14 @@ def log_loss(labels, predictions, weights=1.0, epsilon=1e-7, scope=None,
 def mean_pairwise_squared_error(
     labels, predictions, weights=1.0, scope=None,
     loss_collection=ops.GraphKeys.LOSSES):
+  # [FUNCTION DOC]
+  # Mean pairwise squared error: for each batch sample, averages the squared differences of
+  # prediction-minus-label errors over all pairs of elements within that sample. Inputs: labels,
+  # predictions, weights (scalar, per-sample or per-element), scope, collection. There is no
+  # reduction argument; the result is always a scalar. Raises a value error if labels or
+  # predictions is none or shapes are incompatible. Casts to float32 and, unless in an XLA
+  # context, requires weights to be broadcastable to labels. Registers the loss in the
+  # collection (graph mode) and returns it; yields zero if no elements are present.
   """Adds a pairwise-errors-squared loss to the training procedure.
 
   Unlike `mean_squared_error`, which is a measure of the differences between
@@ -571,6 +676,14 @@ def mean_pairwise_squared_error(
     labels = math_ops.cast(labels, dtype=dtypes.float32)
 
     def compute_loss(labels, predictions, weights, loss_collection):
+      # [FUNCTION DOC]
+      # HELPER: Nested worker of the pairwise squared error, run with or without the
+      # broadcast-check dependency.
+      # Computes per-sample sums of squared differences and sums of differences, normalises them
+      # by the count of present elements and by that count times itself minus one (safe
+      # division), forms the pairwise term as twice the first minus twice the second, multiplies
+      # by weights and sums. Returns zero if no elements are present. Adds the result to
+      # loss_collection and returns it.
       predictions = math_ops.cast(predictions, dtype=dtypes.float32)
       predictions.get_shape().assert_is_compatible_with(labels.get_shape())
 
@@ -624,6 +737,12 @@ def mean_squared_error(
     labels, predictions, weights=1.0, scope=None,
     loss_collection=ops.GraphKeys.LOSSES,
     reduction=Reduction.SUM_BY_NONZERO_WEIGHTS):
+  # [FUNCTION DOC]
+  # Mean squared error (L2) loss. Inputs: labels, predictions, weights, scope, loss collection
+  # and reduction. Raises a value error if labels or predictions is none or their static shapes
+  # are incompatible. Casts both to float32, computes the elementwise squared difference of
+  # predictions and labels, and passes it to the weighted-loss function. Returns the reduced
+  # loss (scalar unless reduction is none); adds it to the collection in graph mode.
   """Adds a Sum-of-Squares loss to the training procedure.
 
   `weights` acts as a coefficient for the loss. If a scalar is provided, then
@@ -774,6 +893,14 @@ def sigmoid_cross_entropy(
     multi_class_labels, logits, weights=1.0, label_smoothing=0, scope=None,
     loss_collection=ops.GraphKeys.LOSSES,
     reduction=Reduction.SUM_BY_NONZERO_WEIGHTS):
+  # [FUNCTION DOC]
+  # Sigmoid cross entropy loss for multi-label or binary classification. Inputs:
+  # multi_class_labels (values in zero to one, same shape as logits), logits, weights, a label
+  # smoothing amount (default zero; when positive, labels are pulled towards one half by
+  # that fraction), scope, collection and reduction. Raises a value error if labels or logits is
+  # none or static shapes are incompatible. Casts labels to the logits dtype, computes the
+  # elementwise sigmoid cross entropy with logits, and passes it to the weighted-loss function.
+  # Returns the reduced loss; adds it to the collection in graph mode.
   """Creates a cross-entropy loss using tf.nn.sigmoid_cross_entropy_with_logits.
 
   `weights` acts as a coefficient for the loss. If a scalar is provided,
@@ -840,6 +967,14 @@ def softmax_cross_entropy(
     onehot_labels, logits, weights=1.0, label_smoothing=0, scope=None,
     loss_collection=ops.GraphKeys.LOSSES,
     reduction=Reduction.SUM_BY_NONZERO_WEIGHTS):
+  # [FUNCTION DOC]
+  # Softmax cross entropy loss with one-hot labels. Inputs: onehot_labels, logits (same shape),
+  # weights, label smoothing amount (default zero; positive values move the one-hot targets
+  # towards a uniform distribution over classes), scope, collection and reduction. Raises a value
+  # error if labels or logits is none or shapes are incompatible. Casts labels to the logits
+  # dtype, applies smoothing, blocks gradients flowing into the labels, computes the per-example
+  # softmax cross entropy with logits (version two op) and passes it to the weighted-loss
+  # function. Returns the reduced loss; adds it to the collection in graph mode.
   r"""Creates a cross-entropy loss using tf.nn.softmax_cross_entropy_with_logits_v2.
 
   `weights` acts as a coefficient for the loss. If a scalar is provided,
@@ -995,6 +1130,15 @@ def softmax_cross_entropy(
 # TODO(ptucker): Merge this with similar method in metrics_impl.
 def _remove_squeezable_dimensions(
     labels, predictions, weights=None, expected_rank_diff=0):
+  # [FUNCTION DOC]
+  # HELPER: Used by the sparse softmax cross entropy to align label, prediction and weight ranks.
+  # KNOWN ISSUE: The docstring says it returns predictions, labels and weights, but the code
+  # returns labels, predictions, weights in that order. A TODO notes it duplicates a similar
+  # helper in the metrics implementation.
+  # Squeezes labels or predictions through the confusion-matrix helper when their ranks differ
+  # from expected_rank_diff by one. If weights is given it is converted to a tensor and squeezed
+  # on the last dimension when its rank exceeds that of labels by one, using static ranks if
+  # known and otherwise a runtime conditional. Returns the (labels, predictions, weights) tuple.
   """Internal version of _remove_squeezable_dimensions which handles weights.
 
   Squeezes `predictions` and `labels` if their ranks differ from expected by
@@ -1049,6 +1193,13 @@ def sparse_softmax_cross_entropy(
     labels, logits, weights=1.0, scope=None,
     loss_collection=ops.GraphKeys.LOSSES,
     reduction=Reduction.SUM_BY_NONZERO_WEIGHTS):
+  # [FUNCTION DOC]
+  # Sparse softmax cross entropy loss with integer class-id labels. Inputs: labels (class ids,
+  # rank one less than logits), logits (unscaled scores), weights, scope, collection and
+  # reduction. Raises a value error if labels or logits is none. Aligns ranks of labels, logits
+  # and weights (expecting logits to have exactly one more dimension), computes per-example
+  # sparse softmax cross entropy and passes it to the weighted-loss function. Returns the reduced
+  # loss; adds it to the collection in graph mode.
   """Cross-entropy loss using `tf.nn.sparse_softmax_cross_entropy_with_logits`.
 
   `weights` acts as a coefficient for the loss. If a scalar is provided,

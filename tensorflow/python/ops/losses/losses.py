@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Public facade of the loss package. Contains no logic of its own: it re-exports, by wildcard
+# import, every public name from the loss implementation module (loss functions and the
+# reduction class) and from the util module (loss collection helpers). Importing it only
+# triggers those imports. Losses are added to the graph losses collection by default.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
