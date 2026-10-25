@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test module validating the doc source tables of the API generator. Run as a script it parses
+# command-line arguments (list of generated output files, base package, API name), stores them
+# in a module-level holder, imports the base package, removes its own arguments from argv and
+# starts the test runner. The tests check table consistency against those arguments.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,8 +31,15 @@ FLAGS = None
 
 
 class DocSrcsTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case checking every entry of the doc source table for the API selected on the command
+  # line. Depends on a module-level holder of parsed arguments being filled before the tests run.
 
   def testModulesAreValidAPIModules(self):
+    # [FUNCTION DOC]
+    # For each module in the doc source table, derives the expected init file path (module dots
+    # become slashes, plus the init file name) and asserts it is in the list of generated output
+    # files, so no entry refers to a nonexistent API module.
     for module_name in doc_srcs.get_doc_sources(FLAGS.api_name):
       # Convert module_name to corresponding __init__.py file path.
       file_path = module_name.replace('.', '/')
@@ -40,6 +52,8 @@ class DocSrcsTest(test.TestCase):
           msg='%s is not a valid API module' % module_name)
 
   def testHaveDocstringOrDocstringModule(self):
+    # [FUNCTION DOC]
+    # Asserts that no doc source entry has both a literal docstring and a source module name set.
     for module_name, docsrc in doc_srcs.get_doc_sources(FLAGS.api_name).items():
       self.assertFalse(
           docsrc.docstring and docsrc.docstring_module_name,
@@ -48,6 +62,9 @@ class DocSrcsTest(test.TestCase):
                '"docstring_module_name" should be set.') % (module_name))
 
   def testDocstringModulesAreValidModules(self):
+    # [FUNCTION DOC]
+    # For each entry naming a source module, joins it with the base package and asserts the
+    # result is present in the loaded module table (the base package was imported at startup).
     for _, docsrc in doc_srcs.get_doc_sources(FLAGS.api_name).items():
       if docsrc.docstring_module_name:
         doc_module_name = '.'.join([

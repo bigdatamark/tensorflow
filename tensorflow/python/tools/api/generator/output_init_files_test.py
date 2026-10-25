@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Test module checking that the build-rule lists of generated API init files (the v2 and v1
+# lists in the build definition files next to it) exactly match the modules implied by the
+# export attributes of loaded TensorFlow symbols. Contains private helpers that collect API
+# modules from loaded modules, parse the generated-file list out of a build file, and expand a
+# module into the init file paths it requires, plus one test class. When run as a script it
+# parses a comma-separated packages argument, imports those packages to populate the loaded
+# module table, trims its arguments from argv and starts the test runner.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,17 +31,34 @@ from tensorflow.python.util import tf_decorator
 
 
 def _traverse_packages(packages):
+  # [FUNCTION DOC]
+  # HELPER: setup for the init-file tests.
+  # Imports every named package so their submodules (and exported symbols) are present in the
+  # loaded module table. Input: iterable of package names. Raises an import error for a missing
+  # package (an empty name also fails). Returns nothing.
   for package in packages:
     importlib.import_module(package)
 
 
 def _get_module_from_symbol(symbol):
+  # [FUNCTION DOC]
+  # HELPER: name splitting utility for the module collection helper.
+  # Given a dotted public API name, returns the part before the last dot, or an empty string
+  # when there is no dot (root module). Pure function.
   if '.' not in symbol:
     return ''
   return '.'.join(symbol.split('.')[:-1])
 
 
 def _get_modules(package, attr_name, constants_attr_name):
+  # [FUNCTION DOC]
+  # HELPER: gathers the expected API modules for the init-file tests.
+  # Scans loaded modules whose names contain the package text; for every attribute (decorators
+  # unwrapped) either reads the constants attribute (pairs of export names and constant names)
+  # or the per-symbol names attribute, converts every exported dotted name to its module part,
+  # and returns the set of those module names (the root is an empty string). Inputs: package
+  # substring, name of the symbol attribute holding API names, name of the module attribute
+  # holding constants. Side effect: reads attributes of all matching loaded modules.
   """Get list of TF API modules.
 
   Args:
@@ -73,6 +98,14 @@ def _get_modules(package, attr_name, constants_attr_name):
 
 
 def _get_files_set(path, start_tag, end_tag):
+  # [FUNCTION DOC]
+  # HELPER: build-file parser for the init-file tests.
+  # KNOWN ISSUE: the docstring says it returns a list, but it returns a set of strings.
+  # Reads a text file, takes the text between the start tag (plus one following character) and
+  # the end tag, splits it by commas, strips whitespace and surrounding double quotes and drops
+  # empty entries. Inputs: file path, start tag text, end tag text. Raises an error if the file
+  # cannot be opened; missing tags are not detected (a failed find yields minus one and the
+  # slice is then wrong). Returns the set of path strings.
   """Get set of file paths from the given file.
 
   Args:
@@ -97,6 +130,11 @@ def _get_files_set(path, start_tag, end_tag):
 
 
 def _module_to_paths(module):
+  # [FUNCTION DOC]
+  # HELPER: expands a module into required init file paths for the init-file tests.
+  # Input: dotted module name. For every prefix of the dotted name returns an init file path with
+  # dots replaced by slashes; the empty module (root) gives the top-level init file only. Note
+  # the top-level init file is not added for non-root modules. Returns a list of strings.
   """Get all API __init__.py file paths for the given module.
 
   Args:
@@ -120,10 +158,20 @@ def _module_to_paths(module):
 
 
 class OutputInitFilesTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case verifying that the file lists in the two build definition files (v2 and v1)
+  # match the API modules found from export attributes. Has a shared validation helper and one
+  # test per API version.
   """Test that verifies files that list paths for TensorFlow API."""
 
   def _validate_paths_for_modules(
       self, actual_paths, expected_paths, file_to_update_on_error):
+    # [FUNCTION DOC]
+    # HELPER: shared assertion for the version tests.
+    # Inputs: sets of listed paths and expected paths, and the name of the file to mention in
+    # error messages. Asserts both sets are non-empty, then that no expected path is missing and
+    # no listed path is redundant; failure messages list the quoted offending paths sorted, so
+    # they can be pasted into the file. Raises assertion failures; returns nothing.
     """Validates that actual_paths match expected_paths.
 
     Args:
@@ -154,6 +202,10 @@ class OutputInitFilesTest(test.TestCase):
             ',\n'.join(sorted(extra_paths)), file_to_update_on_error))
 
   def test_V2_init_files(self):
+    # [FUNCTION DOC]
+    # Scenario: collect modules from the v2 export attributes, read the generated file list from
+    # the v2 build definition file between the begin and end markers, and assert that the listed
+    # init files equal the files required by the modules.
     modules = _get_modules(
         'tensorflow', '_tf_api_names', '_tf_api_constants')
     file_path = resource_loader.get_path_to_datafile(
@@ -166,6 +218,9 @@ class OutputInitFilesTest(test.TestCase):
         paths, module_paths, file_to_update_on_error=file_path)
 
   def test_V1_init_files(self):
+    # [FUNCTION DOC]
+    # Scenario: same as the v2 test but using the v1 export attribute names and the v1 build
+    # definition file; asserts the listed init files equal the files required by the modules.
     modules = _get_modules(
         'tensorflow', '_tf_api_names_v1', '_tf_api_constants_v1')
     file_path = resource_loader.get_path_to_datafile(

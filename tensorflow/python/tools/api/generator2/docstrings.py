@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# HELPER: data-only module read by the second-generation API extractor.
+# Contains no code: only bare string literals, each holding the documentation text for one
+# public API module (app, distributions, gfile, metrics, nn.rnn_cell, resource_loader, sysconfig,
+# test, train) followed by a line of the form "API docstring: <module>". The extractor scans the
+# top-level string statements of source files, recognizes that marker line, and exports the
+# remaining text as the module's docstring. The strings are not assigned, so importing the
+# module has no effect.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

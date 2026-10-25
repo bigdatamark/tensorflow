@@ -1,3 +1,15 @@
+# [MODULE DOC]
+# Command-line generator for the public TensorFlow Python API package files. It scans all loaded
+# modules whose names contain the requested base packages, looks for symbols carrying the
+# API-export attributes (names and constants) placed by the export decorators, and builds the text
+# of every generated __init__.py file (static imports or a lazy-loading table of public APIs),
+# including compat.v1 / compat.v2 and nested compat modules, deprecation-wrapper footers and the
+# root-module underscore-name footer. It can alternatively write "proxy" files that simply
+# star-import from another module root. Exposes the SymbolExposedTwiceError exception, the
+# helper builder class, text-building functions and a main entry point driven by argparse.
+# Import-time side effects: none beyond reading API attribute tables from the export module and
+# defining module constants; running the script as main imports the target packages and writes
+# files to disk.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -65,11 +77,19 @@ _PUBLIC_APIS = {
 
 
 class SymbolExposedTwiceError(Exception):
+  # [CLASS DOC]
+  # Error type signalling that two different symbols were exported under the same public API
+  # name. Carries only a message; has no extra state. Raised by the module init code builder.
   """Raised when different symbols are exported with the same name."""
   pass
 
 
 def get_canonical_import(import_set):
+  # [FUNCTION DOC]
+  # Picks the single preferred import string for a symbol that is reachable through several
+  # import locations. Input: a set of pairs of (import text, priority). The pairs are sorted by
+  # descending priority and then ascending import text, and the text of the first one is
+  # returned as a string. Raises an index error if the set is empty. No side effects.
   """Obtain one single import from a set of possible sources of a symbol.
 
   One symbol might come from multiple places as it is being imported and
@@ -97,6 +117,15 @@ def get_canonical_import(import_set):
 
 
 class _ModuleInitCodeBuilder(object):
+  # [CLASS DOC]
+  # HELPER: internal accumulator used by the API generator functions of this module.
+  # Collects, per destination API module, every way each exported symbol can be imported (with a
+  # priority), detects name collisions, adds imports of submodules into their parents, and
+  # finally renders the text of each generated __init__.py plus deprecation/lazy-loading footers.
+  # State: output package, API version (1 or 2), lazy-loading flag, relative-import flag, a
+  # nested mapping module -> API name -> set of (import text, priority), a mapping from API name
+  # to symbol identity for collision checks, and the set of underscore names exported in the
+  # root module. Created by the API text generator and used once.
   """Builds a map from module name to imports included in that module."""
 
   def __init__(self,
@@ -104,6 +133,12 @@ class _ModuleInitCodeBuilder(object):
                api_version,
                lazy_loading=_LAZY_LOADING,
                use_relative_imports=False):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: output_package (name of the base package that generated files live
+    # in), api_version (integer 1 or 2), lazy_loading (boolean, defaults to the module-level
+    # setting; when true, lazy lookup tables are produced instead of static imports) and
+    # use_relative_imports (boolean, default false; use relative imports for submodules in
+    # static mode). Initializes empty bookkeeping structures. Returns nothing, no exceptions.
     self._output_package = output_package
     # Maps API module to API symbol name to set of tuples of the form
     # (module name, priority).
@@ -121,6 +156,13 @@ class _ModuleInitCodeBuilder(object):
     self._use_relative_imports = use_relative_imports
 
   def _check_already_imported(self, symbol_id, api_name):
+    # [FUNCTION DOC]
+    # HELPER: collision check used by add_import.
+    # Verifies that an API name is not being bound to two different symbols. Inputs: symbol_id
+    # (identity number of the symbol, or minus one for placeholders such as module imports) and
+    # api_name (full dotted public name). Raises SymbolExposedTwiceError if the name was seen
+    # before with a different real identity. Side effect: records the identity for the name
+    # (even a minus one overwrites a prior value). Returns nothing.
     if (api_name in self._dest_import_to_id and
         symbol_id != self._dest_import_to_id[api_name] and symbol_id != -1):
       raise SymbolExposedTwiceError(
@@ -129,6 +171,16 @@ class _ModuleInitCodeBuilder(object):
 
   def add_import(self, symbol, source_module_name, source_name,
                  dest_module_name, dest_name):
+    # [FUNCTION DOC]
+    # Registers one way of importing a symbol into a destination API module. Inputs: symbol (the
+    # Python object, or nothing for pure module imports), source_module_name and source_name
+    # (where to import it from and under which name), dest_module_name (API module receiving it,
+    # empty for the root) and dest_name (public name). A source module ending in the
+    # modules-with-exports aggregator is replaced by the symbol's own defining module. Checks
+    # for name collisions (raises SymbolExposedTwiceError), remembers root-level underscore
+    # names, computes a priority (one point if the source module equals the symbol's module, one
+    # more if the source name equals the symbol's name) and stores the formatted import text with
+    # that priority. Mutates the builder; returns nothing.
     """Adds this import to module_imports.
 
     Args:
@@ -174,6 +226,13 @@ class _ModuleInitCodeBuilder(object):
         (import_str, priority))
 
   def _import_submodules(self):
+    # [FUNCTION DOC]
+    # HELPER: preparation step for build.
+    # For every destination module that has exports, adds imports of each path component into
+    # its parent module (so importing a nested API module also exposes the intermediate
+    # modules). In lazy mode the entries point at the full output-package path; in static mode
+    # they use either a dot (relative) or the output package plus the parent path. Takes no
+    # inputs, returns nothing; mutates the recorded imports.
     """Add imports for all destination modules in self._module_imports."""
     # Import all required modules in their parent modules.
     # For e.g. if we import 'foo.bar.Value'. Then, we also
@@ -211,6 +270,16 @@ class _ModuleInitCodeBuilder(object):
               dest_name=module_split[submodule_index])
 
   def build(self):
+    # [FUNCTION DOC]
+    # Renders all generated text. First adds submodule imports, then for each destination module
+    # sorts the canonical import of every symbol and joins them (wrapped in the lazy-loading
+    # template when lazy loading is on). Builds a root-module footer listing exported
+    # underscore names and extending the all-list (only in static mode). For API version 1 or
+    # lazy mode it also builds per-module wrapper footers carrying the module name, public-API
+    # table name, deprecation flag (true for version 1 modules outside the compat prefix) and a
+    # has-lite flag (true only for the root module in lazy mode when a lite module exists).
+    # Returns a tuple of: module text mapping, footer text mapping, root module footer string.
+    # No exceptions of its own.
     """Get a map from destination module to __init__.py code for that module.
 
     Returns:
@@ -273,6 +342,12 @@ __all__.extend([_s for _s in _names_with_underscore])
     return module_text_map, footer_text_map, root_module_footer
 
   def format_import(self, source_module_name, source_name, dest_name):
+    # [FUNCTION DOC]
+    # Produces the text of one import entry. In lazy mode returns a table entry mapping the
+    # destination name to a pair of source module and source name. In static mode returns a
+    # from-import (with an alias when names differ) if a source module is given, otherwise a
+    # plain import (with an alias when names differ). Inputs are plain strings; no side effects
+    # or exceptions.
     """Formats import statement.
 
     Args:
@@ -300,15 +375,32 @@ __all__.extend([_s for _s in _names_with_underscore])
           return 'import %s as %s' % (source_name, dest_name)
 
   def get_destination_modules(self):
+    # [FUNCTION DOC]
+    # Returns a new set holding the names of all destination API modules that currently have
+    # recorded imports. No side effects.
     return set(self._module_imports.keys())
 
   def copy_imports(self, from_dest_module, to_dest_module):
+    # [FUNCTION DOC]
+    # Duplicates the recorded imports of one destination module into another. Inputs: the source
+    # and target destination module names. The target's mapping is replaced by a shallow copy of
+    # the source's mapping (inner sets are shared, not copied); a missing source yields an empty
+    # mapping because of the default-creating container. Returns nothing.
     self._module_imports[to_dest_module] = (
         self._module_imports[from_dest_module].copy())
 
 
 def add_nested_compat_imports(module_builder, compat_api_versions,
                               output_package):
+  # [FUNCTION DOC]
+  # Adds the nested compat modules (compat.vN.compat.vK and its compat child) to a module
+  # builder. Inputs: module_builder (the init code builder), compat_api_versions (list of
+  # integer versions), output_package (base package name). Copies all symbol imports of each
+  # compat.vK (and compat.vK.compat) into every compat.vN.compat.vK (and its compat child), then
+  # for each existing compat child module adds an import of that module from its original
+  # compat.vK location into each compat.vN location. Skips the compat.vN.compat.vK.compat module
+  # itself since it is handled by the copy. Asserts that a nested compat package is never named
+  # v1 or v2 (assertion error otherwise). Mutates the builder; returns nothing.
   """Adds compat.vN.compat.vK modules to module builder.
 
   To avoid circular imports, we want to add __init__.py files under
@@ -366,6 +458,11 @@ def add_nested_compat_imports(module_builder, compat_api_versions,
 
 
 def _get_name_and_module(full_name):
+  # [FUNCTION DOC]
+  # HELPER: splitting utility for the import-adding code.
+  # Splits a dotted name into its module part and last segment. Input: dotted string. Returns a
+  # pair of (module path joined by dots, short name); the module part is empty when there is no
+  # dot. No side effects.
   """Split full_name into module and short name.
 
   Args:
@@ -379,6 +476,10 @@ def _get_name_and_module(full_name):
 
 
 def _join_modules(module1, module2):
+  # [FUNCTION DOC]
+  # HELPER: joins module path pieces for the import-adding code.
+  # Returns the second string if the first is empty, the first if the second is empty, otherwise
+  # both joined with a dot. Pure function, no exceptions.
   """Concatenate 2 module components.
 
   Args:
@@ -403,6 +504,16 @@ def add_imports_for_symbol(module_code_builder,
                            api_name,
                            api_version,
                            output_module_prefix=''):
+  # [FUNCTION DOC]
+  # Records, in the builder, all public API imports declared by one symbol. Inputs: the builder,
+  # the symbol object, the module and name it can be imported from, the API name (key into the
+  # attribute tables), the API version (1 selects the v1 attribute names, anything else v2) and
+  # an optional prefix prepended to every destination module (used for compat modules). If the
+  # source name equals the constants attribute name, the symbol is treated as a list of pairs of
+  # (export names, constant name) and each export is registered under the constant's name. If
+  # the symbol has its own dictionary containing the names attribute, each exported dotted name
+  # is split into destination module and name and registered. Raises SymbolExposedTwiceError
+  # indirectly on collisions; KeyError if the API name is unknown. Returns nothing.
   """Add imports for the given symbol to `module_code_builder`.
 
   Args:
@@ -449,6 +560,17 @@ def get_api_init_text(packages,
                       compat_api_versions=None,
                       lazy_loading=_LAZY_LOADING,
                       use_relative_imports=False):
+  # [FUNCTION DOC]
+  # Walks every loaded module and builds the text of all generated __init__.py files. Inputs:
+  # packages (substrings selecting module names to scan), packages_to_ignore (substrings to
+  # exclude), output_package, api_name, api_version, optional compat_api_versions (list of
+  # extra versions, default none), lazy_loading and use_relative_imports flags. Skips empty
+  # modules, modules outside the packages, ignored modules, contrib modules (unless they are lite
+  # modules) and a blacklist of symbols whose unwrapping has side effects. For each remaining
+  # attribute it unwraps decorators and registers its exports for the main version and each
+  # compat version, then adds nested compat imports. Returns the builder's tuple of module text
+  # mapping, footer mapping and root footer. Side effect: reads attributes of all loaded modules.
+  # Errors from collisions propagate.
   """Get a map from destination module to __init__.py code for that module.
 
   Args:
@@ -483,6 +605,10 @@ def get_api_init_text(packages,
   # we want to traverse over TensorFlow Python modules.
 
   def in_packages(m):
+    # [FUNCTION DOC]
+    # HELPER: filter for the module scan.
+    # Returns true if any of the selected package names occurs as a substring of the given
+    # module name. Reads the enclosing packages list; no side effects.
     return any(package in m for package in packages)
 
   for module in list(sys.modules.values()):
@@ -521,6 +647,11 @@ def get_api_init_text(packages,
 
 
 def get_module(dir_path, relative_to_dir):
+  # [FUNCTION DOC]
+  # Converts a directory path to a dotted module name. Input: dir_path and the base directory
+  # whose length is stripped from the front (the prefix is assumed, not verified). Path
+  # separators become dots and leading/trailing dots are removed. Returns the module name
+  # (empty string for the base directory itself). Pure function.
   """Get module that corresponds to path relative to relative_to_dir.
 
   Args:
@@ -537,6 +668,14 @@ def get_module(dir_path, relative_to_dir):
 
 
 def get_module_docstring(module_name, package, api_name):
+  # [FUNCTION DOC]
+  # Chooses the documentation text placed at the top of a generated API module. Inputs:
+  # module_name (API module path, with any compat version prefix stripped), package (base python
+  # package, or the special value for the keras fork meaning no prefix is added) and api_name.
+  # Order: explicit docstring from the doc source table; else a named source module from that
+  # table; else the loaded module of the same name under the package, using its own doc text if
+  # non-empty; else a default sentence naming the namespace. Returns a string. Reads loaded
+  # modules; no writes.
   """Get docstring for the given module.
 
   This method looks for docstring in the following order:
@@ -597,6 +736,17 @@ def create_primary_api_files(output_files,
                              compat_init_templates,
                              lazy_loading=_LAZY_LOADING,
                              use_relative_imports=False):
+  # [FUNCTION DOC]
+  # Writes the generated API package files to disk. Inputs: output_files (paths of all expected
+  # init files), packages, packages_to_ignore, root_init_template (optional template file for the
+  # root module), output_dir, output_package, api_name, api_version, compat_api_versions,
+  # compat_init_templates (parallel to the compat versions), lazy_loading and
+  # use_relative_imports. Maps each output file to its module, creates directories and empty
+  # files for every expected output, generates the text, then for each module fills the root or
+  # compat template placeholders (imports, all-list footer) or builds a header with the module
+  # docstring plus imports; appends or substitutes the wrapper footer. Raises ValueError listing
+  # generated modules that have no declared output file (build rule must be updated). Note that
+  # the missing-file check happens after other files were already written. Returns nothing.
   """Creates __init__.py files for the Python API.
 
   Args:
@@ -701,6 +851,12 @@ def create_primary_api_files(output_files,
 def create_proxy_api_files(output_files,
                            proxy_module_root,
                            output_dir):
+  # [FUNCTION DOC]
+  # Writes proxy-style init files. Inputs: output_files (paths to create), proxy_module_root
+  # (module root to star-import from) and output_dir (API root used to derive each file's module
+  # name). For each file, creates its directory if missing and writes a single line that
+  # star-imports the same module path from the proxy root, overwriting existing content.
+  # Returns nothing; file system side effects only.
   """Creates __init__.py files in proxy format for the Python API.
 
   Args:
@@ -720,6 +876,17 @@ def create_proxy_api_files(output_files,
 
 
 def main():
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the relative-import flag is parsed with a boolean type converter, so any
+  # non-empty text, including the word false, is treated as true.
+  # Command-line entry point. Parses arguments (output files or a single file containing a
+  # semicolon-separated list, packages, packages to ignore, root init template, API directory
+  # and name, API version, compat versions and templates, output package, loading mode, relative
+  # import flag, proxy module root). Imports every listed package to populate the loaded module
+  # table, resolves the loading mode (default uses the module constant) and either writes primary
+  # API files or, when a proxy root is given, proxy files. Raises ValueError for an invalid
+  # loading value (unreachable through argument choices).
+  # Side effects: imports, file writes, may exit on bad arguments.
   parser = argparse.ArgumentParser()
   parser.add_argument(
       'outputs',

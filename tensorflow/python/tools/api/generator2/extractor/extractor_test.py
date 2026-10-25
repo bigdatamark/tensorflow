@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # =============================================================================
+# [MODULE DOC]
+# Unit tests for the second-generation API extractor's Parser class. Feeds small inline source
+# texts to the parser and checks the collected exported symbols and docstrings, or the bad
+# export errors raised for misuse. No import-time side effects; run through the absl test runner.
 from absl.testing import absltest
 
 from tensorflow.python.tools.api.generator2.extractor import extractor
@@ -19,8 +23,17 @@ from tensorflow.python.tools.api.generator2.shared import exported_api
 
 
 class ParserTest(absltest.TestCase):
+  # [CLASS DOC]
+  # Test case for the extractor's Parser. Each test builds an empty results collection and a
+  # parser (decorator path and API name prefix vary), feeds it an inline source text with numbered
+  # line comments, then asserts either the exact collection contents or that a bad export error
+  # naming the file and line is raised.
 
   def test_exported_docstring(self):
+    # [FUNCTION DOC]
+    # Scenario: source whose top-level string carries an API docstring marker for module tf.test.
+    # Asserts the collection holds exactly one doc record: file test.py, line 2, text without the
+    # marker line, and modules containing only tf.test.
     exporter = exported_api.ExportedApi()
     p = extractor.Parser(
         exporter,
@@ -50,6 +63,9 @@ API docstring: tf.test
     )
 
   def test_exported_docstring_not_at_top_level(self):
+    # [FUNCTION DOC]
+    # Scenario: the API docstring marker appears inside a function's docstring. Asserts that
+    # processing raises a bad export error whose message references test.py line 3.
     exporter = exported_api.ExportedApi()
     p = extractor.Parser(
         exporter,
@@ -71,6 +87,14 @@ def a():  # 2
     )
 
   def test_exported_symbol(self):
+    # [FUNCTION DOC]
+    # Scenario: source importing the export decorator in several ways (module import, aliased
+    # module import, direct import inside a try block, aliased direct import, and an unrelated
+    # import) and using it as assignment wrapper, call wrapper, class decorator, function
+    # decorator and a multi-line wrapped call, plus one decorator from an unrelated import.
+    # Asserts the collection holds exactly the six expected symbols with correct line numbers,
+    # prefixed v2 names, and v1 names (defaulting to v2 names unless a v1 list is given, which may
+    # be empty); the unrelated decorator is not exported.
     exporter = exported_api.ExportedApi()
     p = extractor.Parser(
         exporter,
@@ -156,6 +180,9 @@ def _not_exported():  # 23
     )
 
   def test_exported_symbol_not_at_top_level(self):
+    # [FUNCTION DOC]
+    # Scenario: the export is called inside a function body. Asserts a bad export error
+    # referencing test.py line 4 is raised.
     exporter = exported_api.ExportedApi()
     p = extractor.Parser(
         exporter,
@@ -176,6 +203,9 @@ def method():  # 3
     )
 
   def test_exported_symbol_not_applied(self):
+    # [FUNCTION DOC]
+    # Scenario: the export is called at top level but its result is never applied to a symbol.
+    # Asserts a bad export error referencing test.py line 3 is raised.
     exporter = exported_api.ExportedApi()
     p = extractor.Parser(
         exporter,
@@ -195,6 +225,9 @@ tf_export("a")  # 3
     )
 
   def test_exported_symbol_non_literal_args(self):
+    # [FUNCTION DOC]
+    # Scenario: the export is called with a non-literal argument (a bare name). Asserts a bad
+    # export error referencing test.py line 3 is raised.
     exporter = exported_api.ExportedApi()
     p = extractor.Parser(
         exporter,
@@ -214,6 +247,12 @@ tf_export(a)(b)  # 3
     )
 
   def test_exported_symbol_unknown_args(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: despite the name, the source does not pass an unknown keyword argument; it is
+    # an exact duplicate of the non-literal-argument test, so the unknown-keyword path is not
+    # actually tested.
+    # Scenario: export called with a bare name argument. Asserts a bad export error referencing
+    # test.py line 3 is raised.
     exporter = exported_api.ExportedApi()
     p = extractor.Parser(
         exporter,
@@ -233,6 +272,10 @@ tf_export(a)(b)  # 3
     )
 
   def test_exported_symbol_includes_module(self):
+    # [FUNCTION DOC]
+    # Scenario: the export is applied to a dotted name (a symbol of another module). Asserts a bad
+    # export error referencing test.py line 3 is raised, since the symbol must be defined in the
+    # current file.
     exporter = exported_api.ExportedApi()
     p = extractor.Parser(
         exporter,

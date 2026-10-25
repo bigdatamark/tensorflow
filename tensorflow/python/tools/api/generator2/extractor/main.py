@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Executable entry point of the API extractor. When run as a script it hands the extractor
+# module's main function to the absl application runner, which parses command-line flags
+# (output file, decorator path, API name) and passes the remaining arguments (source files) on.
+# No code runs at import time.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

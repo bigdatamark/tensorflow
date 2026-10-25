@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: data module for the API generator, which consults it when writing module docstrings.
+# Declares, for selected public API modules, where the generated module docstring should come
+# from: either literal text or the docstring of another source module. Holds separate tables for
+# the main TensorFlow API, the estimator API (defined but not returned by the accessor) and the
+# Keras API, plus a lookup function keyed by API name. No import-time side effects other than
+# building the tables.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,6 +24,11 @@ from tensorflow.python.util import tf_export
 
 
 class DocSource(object):
+  # [CLASS DOC]
+  # HELPER: small record used by the API generator's docstring lookup.
+  # Holds two optional attributes: a literal docstring, and the name of a module (relative to the
+  # base package) whose docstring should be reused. At most one may be set. Instances are created
+  # in the module-level tables and read by the generator.
   """Specifies docstring source for a module.
 
   Only one of docstring or docstring_module_name should be set.
@@ -27,6 +39,10 @@ class DocSource(object):
   """
 
   def __init__(self, docstring=None, docstring_module_name=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: docstring (literal text, optional) and docstring_module_name (name of
+    # a source module, optional); both default to nothing. Stores both. Raises a value error if
+    # both are given. Returns nothing.
     self.docstring = docstring
     self.docstring_module_name = docstring_module_name
 
@@ -129,6 +145,12 @@ _KERAS_DOC_SOURCES = {
 
 
 def get_doc_sources(api_name):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring mentions the estimator API as an option, but the estimator table
+  # is never returned (and is otherwise unused); an estimator API name yields an empty mapping.
+  # Returns the mapping from API module name to DocSource for the given API name: the main table
+  # for the TensorFlow API name, the Keras table for the Keras API name, otherwise an empty
+  # mapping. Returns the shared module-level object, not a copy, so callers must not mutate it.
   """Get a map from module to a DocSource object.
 
   Args:

@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Static extractor for the second-generation API generator. Parses Python source files into
+# syntax trees (without importing them) and records which symbols are exported to the public
+# API through the export decorator (as decorator, as wrapping assignment, as wrapping call, or as
+# constant export), plus top-level string literals marked as API docstrings. Results are
+# accumulated into an exported-API collection and written to an output file. Exposes a parse
+# error type for malformed exports, the Parser visitor class and a main function.
+# Import-time side effects: defines three command-line flags (output file, decorator full path,
+# API name prefix) and a compiled docstring-marker pattern.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -42,10 +51,21 @@ _DOCSTRING_PATTERN: re.Pattern[str] = re.compile(
 
 
 class BadExportError(Exception):
+  # [CLASS DOC]
+  # Error raised when an export is used in an unsupported way (not at top level, wrong argument
+  # shapes, non-literal arguments, unknown keywords, a dotted symbol name). Message includes the
+  # file name, line number and a dump of the offending syntax node. No extra state.
   """Exception for bad exports."""
 
 
 class Parser(ast.NodeVisitor):
+  # [CLASS DOC]
+  # Syntax-tree visitor that finds exported APIs in source files. State: the collection that
+  # receives results, the package and symbol parts of the export decorator's full path, the API
+  # name prefix, the file currently being processed and the set of local names under which the
+  # decorator is reachable in that file (found from import statements). Used by creating one
+  # instance and calling the file processing methods for each source. Top-level statements are
+  # inspected specially; nested uses of the export are errors.
   """Parser for Python source files that extracts TF API exports."""
 
   _exports: exported_api.ExportedApi
@@ -61,11 +81,20 @@ class Parser(ast.NodeVisitor):
       decorator: str,
       api_name: str,
   ):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: exports (collection that will receive exported symbols and docs),
+    # decorator (full dotted path of the export decorator, must contain at least one dot, else
+    # unpacking raises a value error) and api_name (prefix for all exported names). Splits the
+    # decorator into package and symbol parts. Returns nothing.
     self._exports = exports
     self._decorator_package, self._decorator_symbol = decorator.rsplit('.', 1)
     self._api_name = api_name
 
   def process_file(self, filename: str) -> None:
+    # [FUNCTION DOC]
+    # Reads a source file as UTF-8 text and processes its contents. Input: file path. Any
+    # exception while reading is logged and swallowed (the file is skipped). Exceptions from
+    # processing, such as bad export errors, propagate. Returns nothing.
     """Finds exported APIs in filename."""
     try:
       with open(filename, mode='r', encoding='utf-8') as f:
@@ -77,6 +106,12 @@ class Parser(ast.NodeVisitor):
       self.process(filename, contents)
 
   def process(self, filename: str, contents: str) -> None:
+    # [FUNCTION DOC]
+    # Parses source text and visits the tree to collect exports. Inputs: file name (for messages
+    # and records) and the file contents. Resets the per-file decorator names and current file,
+    # parses (a parse failure is logged and the file skipped), visits the tree, and in all cases
+    # clears the per-file state afterwards. Bad export errors raised while visiting propagate.
+    # Side effects: adds symbols and docs to the results collection; logging.
     """Finds exported APIs in contents."""
     self._current_file_decorators = set()
     self._current_file = filename
@@ -92,10 +127,19 @@ class Parser(ast.NodeVisitor):
       self._current_file_decorators = set()
 
   def visit_Module(self, node: ast.Module) -> None:  # pylint: disable=invalid-name
+    # [FUNCTION DOC]
+    # Visitor hook for the whole module. Passes each top-level statement to the statement
+    # processor so top-level exports are recognized (nested ones are handled by other hooks).
+    # Input: the module node. Returns nothing.
     for stmt in node.body:
       self._process_stmt(stmt)
 
   def _process_stmt(self, node: ast.stmt) -> None:
+    # [FUNCTION DOC]
+    # HELPER: dispatcher for top-level statements.
+    # Sends class and function definitions, assignments and expression statements to their
+    # dedicated processors; any other statement is visited generically. Input: statement node.
+    # Returns nothing.
     """Process top-level statement for exported apis."""
     if isinstance(node, (ast.ClassDef, ast.FunctionDef)):
       self._process_def(node)
@@ -107,6 +151,14 @@ class Parser(ast.NodeVisitor):
       self.visit(node)
 
   def visit_Import(self, node: ast.Import) -> None:  # pylint: disable=invalid-name
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring is generic. A plain import of the decorator's package registers
+    # only the last segment of the package path plus the decorator name, which would not match a
+    # use of the full dotted path in the source.
+    # Visitor hook for import statements. When an imported name equals the decorator's package,
+    # records the local name under which the decorator becomes reachable: the alias plus symbol
+    # when aliased, otherwise the last package segment plus symbol. Then visits children.
+    # Mutates the per-file decorator names. Input: import node. Returns nothing.
     """Identifies imports of decorator."""
     for name in node.names:
       if name.name == self._decorator_package:
@@ -124,6 +176,12 @@ class Parser(ast.NodeVisitor):
     self.generic_visit(node)
 
   def visit_ImportFrom(self, node: ast.ImportFrom) -> None:  # pylint: disable=invalid-name
+    # [FUNCTION DOC]
+    # Visitor hook for from-import statements. If the source module is the decorator's package
+    # and the decorator symbol is imported, records its local name (alias or original). Otherwise,
+    # if the source module is the parent of the decorator's package and the package's last segment
+    # is imported, records the local name of that module joined with the symbol. Then visits
+    # children. Mutates the per-file decorator names. Input: from-import node. Returns nothing.
     """Identifies imports of decorator."""
     if node.module == self._decorator_package:
       for name in node.names:
@@ -152,6 +210,15 @@ class Parser(ast.NodeVisitor):
     self.generic_visit(node)
 
   def _process_def(self, node: Union[ast.ClassDef, ast.FunctionDef]) -> None:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: only plain function definitions are accepted by the dispatcher; async
+    # function definitions fall to the generic visitor, so a decorator export on them is
+    # reported as a not-top-level error.
+    # Processes a top-level class or function definition. Each decorator that is an export call
+    # registers the definition's name as an exported symbol; other decorators are visited. Then
+    # visits base classes and keywords (classes) or arguments and return annotation (functions)
+    # and every body statement, so nested misuse of the export is caught. Raises a bad export
+    # error on invalid export calls. Returns nothing.
     """Process top-level [Class|Function]Def for potential symbol export."""
     # @tf_export(...)
     # [class|def] <id>:
@@ -175,6 +242,12 @@ class Parser(ast.NodeVisitor):
       self.visit(stmt)
 
   def _process_assign(self, node: ast.Assign) -> None:
+    # [FUNCTION DOC]
+    # Processes a top-level assignment whose value is a call of the export call. Recognizes the
+    # pattern of assigning the result of calling the export result to a single name, and registers
+    # that name as exported. Raises a bad export error if there is more than one target or the
+    # target is not a simple name (or attribute chain). Assignments of anything else are visited
+    # generically. Input: assignment node. Returns nothing.
     """Process top-level assign for potential symbol export."""
     if isinstance(node.value, ast.Call) and self._is_export_call(
         node.value.func
@@ -196,6 +269,10 @@ class Parser(ast.NodeVisitor):
       self.visit(node)
 
   def _process_expr(self, node: ast.Expr) -> None:
+    # [FUNCTION DOC]
+    # Processes a top-level expression statement: calls go to the call processor, string or other
+    # constants go to the constant processor (API docstring detection), everything else is
+    # visited generically. Input: expression statement node. Returns nothing.
     """Process top-level expression for potential symbol export."""
     if isinstance(node.value, ast.Call):
       self._process_call(node.value)
@@ -205,6 +282,13 @@ class Parser(ast.NodeVisitor):
       self.visit(node)
 
   def _process_call(self, node: ast.Call) -> None:
+    # [FUNCTION DOC]
+    # Processes a top-level call. Two forms are exports: the export call applied to exactly one
+    # positional argument (possibly wrapped in single-argument calls), whose resulting simple name
+    # is exported; and the export call's constant-export method called with the current module
+    # name placeholder and a literal constant name, which exports that literal. Raises a bad
+    # export error when argument counts, keywords or the module-name argument are wrong, or no
+    # simple name can be found. Other calls are visited generically. Returns nothing.
     """Process top-level call for potential symbol export."""
     func = node.func
     if self._is_export_call(func):
@@ -242,6 +326,13 @@ class Parser(ast.NodeVisitor):
       self.visit(node)
 
   def _process_constant(self, node: ast.Constant) -> None:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: a non-string constant, or a string without any matching API docstring marker,
+    # is only visited when the value is a string; non-string constants are silently ignored
+    # (the visit sits inside the string check), which is harmless but inconsistent.
+    # Processes a top-level constant. For a string, extracts the docstring text and target
+    # modules; if any modules match the API name, adds an exported doc record (file, line,
+    # modules, text) to the collection, otherwise visits the node generically. Returns nothing.
     """Process top-level constant for a potential API docstring export."""
     if isinstance(node.value, str):
       docstring, modules = self._extract_docstring(node.value)
@@ -258,6 +349,12 @@ class Parser(ast.NodeVisitor):
         self.visit(node)
 
   def _extract_docstring(self, value: str) -> tuple[str, Sequence[str]]:
+    # [FUNCTION DOC]
+    # Splits a string literal into docstring text and target modules. Each line matching the
+    # API-docstring marker contributes its module name, kept only if it equals the API name or
+    # starts with the API name plus a dot; all other lines (including marker lines for other
+    # APIs are dropped, non-marker lines are kept) form the text. Input: string value. Returns a
+    # pair of the stripped text and the list of matching module names. No side effects.
     """Extract docstring and list of modules that it should be applied to."""
     docstring = ''
     modules = []
@@ -273,6 +370,10 @@ class Parser(ast.NodeVisitor):
     return (docstring.strip(), modules)
 
   def visit_Call(self, node: ast.Call) -> None:  # pylint: disable=invalid-name
+    # [FUNCTION DOC]
+    # Visitor hook for calls reached outside the top-level patterns. Raises a bad export error if
+    # the call is a use of the export (exports must be at top level); otherwise visits children.
+    # Input: call node. Returns nothing.
     if self._is_export_call(node):
       raise BadExportError(
           f'{self._current_file}:{node.lineno} export must be'
@@ -281,6 +382,10 @@ class Parser(ast.NodeVisitor):
     self.generic_visit(node)
 
   def visit_Constant(self, node: ast.Constant) -> None:
+    # [FUNCTION DOC]
+    # Visitor hook for constants reached outside the top-level patterns. If a string constant
+    # contains an API docstring marker for this API, raises a bad export error (such docstrings
+    # must be at top level); otherwise visits children. Input: constant node. Returns nothing.
     if isinstance(node.value, str):
       _, modules = self._extract_docstring(node.value)
       if modules:
@@ -291,12 +396,22 @@ class Parser(ast.NodeVisitor):
     self.generic_visit(node)
 
   def _is_export_call(self, node: ast.expr) -> bool:  # TypeGuard[ast.Call]
+    # [FUNCTION DOC]
+    # HELPER: predicate used by the statement processors.
+    # Returns true if the node is a call whose callee's dotted name is one of the local names
+    # under which the export decorator was imported in the current file. Input: expression node.
+    # No side effects.
     return (
         isinstance(node, ast.Call)
         and self._name(node.func) in self._current_file_decorators
     )
 
   def _name(self, node: ast.expr) -> Optional[str]:
+    # [FUNCTION DOC]
+    # HELPER: name resolution for the statement processors.
+    # Returns the identifier for a simple name node, or the dotted path for a chain of attribute
+    # accesses on names; returns nothing (null) for any other kind of expression or a chain that
+    # does not start with a name. Input: expression node. Pure function.
     if isinstance(node, ast.Name):
       return node.id
     if isinstance(node, ast.Attribute):
@@ -305,12 +420,22 @@ class Parser(ast.NodeVisitor):
         return f'{parent}.{node.attr}'
 
   def _unwrap_simple_call(self, node: ast.expr) -> ast.expr:
+    # [FUNCTION DOC]
+    # HELPER: argument normalizer for the call processor.
+    # Repeatedly unwraps calls that have exactly one positional argument and no keywords,
+    # returning the innermost argument; any other expression is returned unchanged. Input:
+    # expression node. Pure function.
     """Unwraps a function call that takes a single unnamed parameter."""
     if isinstance(node, ast.Call) and len(node.args) == 1 and not node.keywords:
       return self._unwrap_simple_call(node.args[0])
     return node
 
   def _literal_value(self, node: ast.expr) -> Any:
+    # [FUNCTION DOC]
+    # HELPER: literal evaluation for export arguments.
+    # Evaluates the expression as a literal (strings, numbers, tuples, lists and so on) without
+    # running code. Input: expression node. Returns the value. Raises a bad export error (chained
+    # to the original failure) if the expression is not a literal.
     try:
       return ast.literal_eval(node)
     except Exception as e:
@@ -320,6 +445,14 @@ class Parser(ast.NodeVisitor):
       ) from e
 
   def _add_exported_symbol(self, node: ast.Call, symbol_name: str) -> None:
+    # [FUNCTION DOC]
+    # Records one exported symbol. Inputs: the export call node and the symbol's local name.
+    # Positional arguments (literals) become the v2 API names, each prefixed with the API name;
+    # a keyword for v1 supplies a separate list of v1 names (otherwise v1 equals v2); a keyword
+    # for allowing multiple exports is accepted and ignored. Raises a bad export error if the
+    # symbol name contains a dot (symbol not defined in this file), if an argument is not a
+    # literal, or for any other keyword. Adds an exported symbol record (file, line, name, v2
+    # names, v1 names) to the results collection. Returns nothing.
     """Adds an exported symbol represented by the given call."""
     if symbol_name.find('.') != -1:
       raise BadExportError(
@@ -355,6 +488,12 @@ class Parser(ast.NodeVisitor):
 
 
 def main(argv: Sequence[str]) -> None:
+  # [FUNCTION DOC]
+  # Entry point run by the application runner. Input: argument list whose first item is the
+  # program name and the rest are source file paths. Creates an empty results collection and a
+  # parser configured from the decorator and API-name flags, processes every source file, then
+  # writes the collection to the output flag's file path. Side effects: reads files, writes the
+  # output file, logs read/parse failures. Bad export errors propagate. Returns nothing.
   exporter = exported_api.ExportedApi()
   p = Parser(exporter, _DECORATOR.value, _API_NAME.value)
   for arg in argv[1:]:
