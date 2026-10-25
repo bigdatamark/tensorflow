@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Unit tests for ragged math operations: string reduce-join on ragged input, ragged softmax
+# (ordinary, large and short inputs compared with a numpy reference), and ragged cumulative sum
+# (axis, exclusive and reverse variants, compared with a dense-based slow baseline). Run through
+# the standard test runner entry point at the bottom.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,11 +35,17 @@ from tensorflow.python.platform import googletest
 
 
 class RaggedReduceTest(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case covering reductions of ragged tensors (currently only string reduce-join).
 
   @parameterized.parameters(
       [dict(original=['a b'.split(), 'c d e'.split()], expected='a b c d e')])
   @test_util.run_in_graph_and_eager_modes
   def testStringReduceJoin(self, original, expected, separator=' ', axis=None):
+    # [FUNCTION DOC]
+    # Test: joins the strings of a ragged tensor of two rows (a b / c d e) with a space separator
+    # over all axes (default) and asserts the result equals the single string "a b c d e". Runs in
+    # graph and eager modes. Parameters: original nested list, expected value, separator, axis.
     original_rt = ragged_factory_ops.constant(original)
     expected_rt = ragged_factory_ops.constant(expected)
     actual = ragged_string_ops.reduce_join(original_rt, axis=axis,
@@ -43,8 +54,15 @@ class RaggedReduceTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
 
 class RaggedSoftmaxTest(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case covering softmax on ragged tensors via the dense softmax API, compared with a numpy
+  # reference implemented as a helper method.
 
   def _softmax(self, x):
+    # [FUNCTION DOC]
+    # HELPER: numpy reference softmax for the softmax tests.
+    # Takes a 2D numpy array, returns it unchanged if it has zero columns, otherwise returns the
+    # row-wise softmax (max subtracted for stability). Asserts the input is 2D.
     assert len(x.shape) == 2
     if x.shape[1] == 0:
       return x
@@ -55,6 +73,10 @@ class RaggedSoftmaxTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testOrdinaryValues(self):
+    # [FUNCTION DOC]
+    # Test: softmax of a ragged tensor of log-probabilities (rows of 3 and 2 entries) should give
+    # probabilities 0.5, 0.25, 0.25 and 0.5, 0.5. Checks the numpy reference against the literal
+    # expectation and then the ragged softmax against the reference within a small tolerance.
     eps = 1e-5
     x_list = [np.log([0.5, 0.25, 0.25]), np.log([0.5, 0.5])]
     x_row_matrices = [[row] for row in x_list]
@@ -74,6 +96,9 @@ class RaggedSoftmaxTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testLargeValues(self):
+    # [FUNCTION DOC]
+    # Test: ragged softmax on very large magnitude inputs (negative hundreds and equal 1729s) must
+    # be numerically stable and match the numpy reference within a small tolerance.
     eps = 1e-5
     x_list = [[-500, -501, -502], [1729, 1729]]
     x_row_matrices = [[row] for row in x_list]
@@ -90,6 +115,9 @@ class RaggedSoftmaxTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testShortTensors(self):
+    # [FUNCTION DOC]
+    # Test: ragged softmax on rows that are empty or have a single element must match the numpy
+    # reference (empty stays empty, single element becomes one) within a small tolerance.
     eps = 1e-5
     x_list = [[], [1]]
     x_row_matrices = [[row] for row in x_list]
@@ -106,6 +134,11 @@ class RaggedSoftmaxTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
 
 def _cumsum_slow(rt, axis=0, exclusive=False, reverse=False, name=None):
+  # [FUNCTION DOC]
+  # HELPER: reference cumulative sum for the cumsum tests.
+  # Densifies the ragged tensor, applies the dense cumsum with the given axis, exclusive, reverse
+  # and name, and converts back to ragged using the original nested row lengths. Returns the ragged
+  # result. Note padding positions are summed too but are dropped by the conversion.
   dense = rt.to_tensor()
   result = math_ops.cumsum(dense, axis=axis, exclusive=exclusive,
                            reverse=reverse, name=name)
@@ -114,6 +147,9 @@ def _cumsum_slow(rt, axis=0, exclusive=False, reverse=False, name=None):
 
 
 class RaggedCumsumTest(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case covering the ragged cumulative sum on a two-row ragged tensor and on a deeper
+  # ragged tensor, over several axes and exclusive/reverse settings.
 
   @parameterized.parameters([
       dict(original=[[1, 2], [3, 4, 5]],
@@ -146,6 +182,12 @@ class RaggedCumsumTest(test_util.TensorFlowTestCase, parameterized.TestCase):
   ])
   def test_cumsum(self, original, expected, axis=0, exclusive=False,
                   reverse=False):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the parameter list contains the exclusive-only case twice, so one scenario is
+    # tested redundantly.
+    # Test: for each parameter set, builds a ragged tensor from the original nested list, runs the
+    # ragged cumulative sum with the given axis, exclusive and reverse flags and asserts it equals
+    # the expected ragged tensor; also asserts the dense-based slow baseline matches the expectation.
     original_rt = ragged_factory_ops.constant(original)
     expected_rt = ragged_factory_ops.constant(expected)
     actual = ragged_math_ops.ragged_cumsum(
@@ -165,6 +207,11 @@ class RaggedCumsumTest(test_util.TensorFlowTestCase, parameterized.TestCase):
            reverse=True, axis=2),
   ])
   def test_cumsum_deep(self, expected, axis=0, exclusive=False, reverse=False):
+    # [FUNCTION DOC]
+    # Test: builds a ragged tensor with a dense inner dimension of width 2 (row lengths 2 and 3)
+    # from the numbers 0 to 9, runs the ragged cumulative sum along the innermost axis with
+    # exclusive and reverse variants, and asserts both the ragged result and the slow baseline equal
+    # the expected nested values.
     # [[[0, 1], [2, 3]], [[4, 5], [6, 7], [8, 9]]]
 
     original_rt = ragged_tensor.RaggedTensor.from_row_lengths(

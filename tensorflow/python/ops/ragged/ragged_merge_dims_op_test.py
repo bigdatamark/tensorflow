@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Unit tests for merging adjacent dimensions of a ragged tensor. Covers 2D to 5D inputs with
+# ragged and dense inner values, positive and negative axes, merging a dimension with itself,
+# behavior on placeholder inputs without shape information in graph mode, and the type and range
+# errors for invalid axes. Run through the standard test runner entry point.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,6 +32,8 @@ from tensorflow.python.util import nest
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedMergeDimsOpTest(test_util.TensorFlowTestCase,
                             parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for the dimension-merging method of ragged tensors; runs in graph and eager modes.
 
   @parameterized.named_parameters([
       {
@@ -181,6 +188,12 @@ class RaggedMergeDimsOpTest(test_util.TensorFlowTestCase,
                           inner_axis,
                           expected,
                           ragged_ranks=(None,)):
+    # [FUNCTION DOC]
+    # Test: for each named case and each requested ragged rank (default the automatic one), builds
+    # a ragged tensor from the nested list, merges the dimensions from outer_axis to inner_axis and
+    # asserts the result equals the expected nested list. For non-negative axes it also asserts the
+    # result rank drops by the number of merged dimensions, repeats the merge with equivalent
+    # negative axes, and in graph mode repeats it on placeholder inputs lacking shape information.
     for ragged_rank in ragged_ranks:
       x = ragged_factory_ops.constant(rt, ragged_rank=ragged_rank)
 
@@ -259,6 +272,10 @@ class RaggedMergeDimsOpTest(test_util.TensorFlowTestCase,
                                exception,
                                message=None,
                                ragged_rank=None):
+    # [FUNCTION DOC]
+    # Test: builds a small ragged tensor and merges with invalid axes (non-integer axes, out of
+    # bounds, or outer axis greater than inner axis). Asserts each call raises the given exception
+    # type (type error or value error) with a message matching the expected pattern.
     x = ragged_factory_ops.constant(rt, ragged_rank=ragged_rank)
     with self.assertRaisesRegex(exception, message):
       self.evaluate(x.merge_dims(outer_axis, inner_axis))

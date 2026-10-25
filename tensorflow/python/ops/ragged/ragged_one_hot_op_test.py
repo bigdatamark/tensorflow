@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Unit tests for the one-hot encoding of ragged index tensors: expected outputs for 2D and 3D
+# ragged indices with various axes, on/off values and depth zero; error cases for unsupported axes;
+# and a randomized comparison against the dense one-hot for many shapes and ragged ranks. Run
+# through the standard test runner entry point.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,6 +37,9 @@ from tensorflow.python.platform import googletest
 @test_util.with_eager_op_as_function
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedOneHotTest(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for one-hot encoding of ragged tensors; runs in graph and eager modes, with eager
+  # ops executed as functions.
 
   @parameterized.parameters([
       # 2D Indices (ragged_rank=1)
@@ -88,6 +96,11 @@ class RaggedOneHotTest(test_util.TensorFlowTestCase, parameterized.TestCase):
                        dtype=None,
                        expected=None,
                        ragged_rank=None):
+    # [FUNCTION DOC]
+    # Test: builds ragged indices from a nested list (optional ragged rank), applies the ragged
+    # one-hot with the given depth, on/off values, axis and dtype, and asserts the result equals
+    # the expected nested list (negative indices and out-of-range indices give all-off rows) and
+    # that the output ragged rank equals the input ragged rank.
     ragged_indices = ragged_factory_ops.constant(
         indices, ragged_rank=ragged_rank)
     result = ragged_array_ops.ragged_one_hot(
@@ -123,6 +136,10 @@ class RaggedOneHotTest(test_util.TensorFlowTestCase, parameterized.TestCase):
                  exception=ValueError,
                  message=None,
                  ragged_rank=None):
+    # [FUNCTION DOC]
+    # Test: calls the dense one-hot API on ragged indices with an axis that is not allowed (at or
+    # below the ragged rank, or a negative value other than minus one) and asserts that it raises
+    # the expected exception type(s) with a message matching the expected pattern.
     ragged_indices = ragged_factory_ops.constant(
         indices, ragged_rank=ragged_rank)
     with self.assertRaisesRegex(exception, message):
@@ -154,6 +171,12 @@ class RaggedOneHotTest(test_util.TensorFlowTestCase, parameterized.TestCase):
                                             off_value=None,
                                             axis=None,
                                             dtype=None):
+    # [FUNCTION DOC]
+    # Test: draws random indices of the given shape (values from zero to depth inclusive), computes
+    # the dense one-hot as the expectation, then for every ragged rank from one up to the number of
+    # dimensions minus one (skipping axes not supported at or below the ragged rank), converts the
+    # indices to ragged form, applies the ragged one-hot and asserts the densified result equals
+    # the expectation. Uses numpy randomness without a fixed seed.
     """Tests that tf.one_hot gives the same result for ragged & uniform tensors.
 
     Runs tf.one_hot with a uniform tensor, and compares the output with the

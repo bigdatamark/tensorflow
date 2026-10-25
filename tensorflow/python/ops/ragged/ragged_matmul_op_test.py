@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Unit tests for the ragged matrix multiplication operation. Covers dense, rank-2, rank-3 and
+# multi-batch-dimension combinations of ragged and dense operands, transpose options, expected
+# static shapes, error cases (non-uniform inner dimensions, conflicting flags, dtype and rank
+# mismatches, batch size mismatch) and inputs of unknown rank. The module docstring mentions cross
+# products, but only matmul is tested here.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,6 +38,10 @@ from tensorflow.python.platform import googletest
 
 
 def T(shape):
+  # [FUNCTION DOC]
+  # HELPER: small shared test utility that builds input tensors.
+  # Returns an integer tensor of the given shape filled with consecutive numbers starting at zero
+  # (range of the product of the dimensions, reshaped), so values are nontrivial for matmul checks.
   """Make a dense test Tensor with the indicated shape."""
   # Values are arbitrary, but make them nontrivial because we use them to
   # test matmul against a reference implementation.
@@ -41,8 +51,17 @@ def T(shape):
 
 @test_util.run_all_in_graph_and_eager_modes
 class RaggedMatmulOpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for ragged matmul; every test runs in both graph and eager modes. Provides reference
+  # helpers that compute expected results with the dense matmul on a per-batch basis.
 
   def eager_ragged_matmul(self, a, b, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: reference implementation for the matmul tests.
+    # For inputs with more than two dimensions, recursively multiplies the matching slices along
+    # the first dimension and returns a nested list; for 2D inputs converts to dense (failing if
+    # ragged rows exist), runs the dense matmul with the extra keyword arguments, evaluates it and
+    # returns a nested list of values.
     """Reference implementation for ragged matmul."""
     if len(a.shape) > 2:
       return [
@@ -54,6 +73,10 @@ class RaggedMatmulOpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     return self.evaluate(math_ops.matmul(a, b, **kwargs)).tolist()
 
   def ensure_non_ragged(self, x):
+    # [FUNCTION DOC]
+    # HELPER: converts a possibly ragged tensor to a dense one for the reference matmul.
+    # Returns non-ragged input unchanged; otherwise densifies and asserts that the element count is
+    # unchanged (no padding was added), failing the test if the rows were ragged.
     """Returns x as a Tensor.  Fails if x contains ragged rows."""
     if not isinstance(x, ragged_tensor.RaggedTensor):
       return x
@@ -191,6 +214,12 @@ class RaggedMatmulOpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
           expected_shape=[2, None, None]),
   ])
   def testMatmul(self, a, b, expected_shape=None, **kwargs):
+    # [FUNCTION DOC]
+    # Test: for each named case (dense, 2D, 3D with map or batch folding, multiple batch
+    # dimensions, transposed operands), builds operands (calling them if they are callables), runs
+    # the ragged matmul and asserts the result equals the per-batch dense reference result. When an
+    # expected static shape is given and no extra options are used, also asserts the result shape is
+    # compatible with it in eager mode, or equal to it in graph mode.
     if callable(a):
       a = a()
     if callable(b):
@@ -253,6 +282,10 @@ class RaggedMatmulOpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
           message='Batch dimensions of `a` and `b` do not have the same size'),
   ])
   def testMatmulError(self, a, b, exc, message=None, **kwargs):
+    # [FUNCTION DOC]
+    # Test: for each invalid input case (ragged inner dimension, shape mismatches, both transpose
+    # and adjoint set, differing dtypes or ranks, mismatched batch sizes), runs the ragged matmul
+    # and asserts it raises the given exception type with a message matching the optional pattern.
     if callable(a):
       a = a()
     if callable(b):
@@ -261,6 +294,11 @@ class RaggedMatmulOpTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       self.evaluate(ragged_math_ops.matmul(a, b, **kwargs))
 
   def testUnknownRank(self):
+    # [FUNCTION DOC]
+    # Test: wraps matmul in compiled functions with input signatures where one or both ragged
+    # inputs have unknown rank. Multiplying a 1x2 by a 2x1 ragged tensor must give 11 when only one
+    # input has unknown rank, and must raise a value error saying at least one input needs a known
+    # rank when both are unknown.
     no_rank_spec = ragged_tensor.RaggedTensorSpec(None, dtypes.int32, 1)
     rank_only_spec = ragged_tensor.RaggedTensorSpec([None, None], dtypes.int32,
                                                     1)
