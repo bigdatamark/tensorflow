@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Implements the matrix-free preconditioned conjugate gradient solver for self-adjoint positive
+# definite linear operators, exported publicly as the experimental linalg conjugate gradient
+# function. The iteration is run inside a graph while loop. Re-exported by the sparse namespace
+# module. No import-time side effects besides the export and dispatch decorators.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,6 +41,21 @@ def conjugate_gradient(operator,
                        tol=1e-5,
                        max_iter=20,
                        name='conjugate_gradient'):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the initial guess and tolerance behave as for a plain solve,
+  # but when an initial guess x is given the stored initial residual is recomputed from it while
+  # the tolerance is still scaled by the norm of the broadcast right-hand side; also the final
+  # return rebuilds an identical state tuple (redundant). The docstring shape for r mentions M
+  # instead of N.
+  # Solves A x = rhs by (preconditioned) conjugate gradient. operator: self-adjoint, positive
+  # definite linear operator (raises a value error otherwise, judged by its hints). rhs: batched
+  # vector with last dimension N. preconditioner: optional operator approximating the inverse of A.
+  # x: optional initial guess (zeros if omitted). tol: relative tolerance (scaled by the norm of
+  # rhs per batch member). max_iter: maximum iterations. name: scope name. Batch shapes of rhs,
+  # operator and preconditioner are broadcast first so shapes are fixed across iterations. Runs
+  # a while loop until the iteration count reaches the maximum or all residual norms drop to the
+  # tolerance. Returns a named tuple with the iteration count, solution, residual, search
+  # direction and the preconditioned residual inner product. No external side effects.
   r"""Conjugate gradient solver.
 
   Solves a linear system of equations `A*x = rhs` for self-adjoint, positive
@@ -77,17 +97,32 @@ def conjugate_gradient(operator,
   cg_state = collections.namedtuple('CGState', ['i', 'x', 'r', 'p', 'gamma'])
 
   def stopping_criterion(i, state):
+    # [FUNCTION DOC]
+    # HELPER: loop condition for the conjugate gradient while loop.
+    # Returns a boolean scalar that is true while the iteration count is below the maximum and at
+    # least one batch member still has a residual norm above its tolerance.
     return math_ops.logical_and(
         i < max_iter,
         math_ops.reduce_any(linalg.norm(state.r, axis=-1) > tol))
 
   def dot(x, y):
+    # [FUNCTION DOC]
+    # HELPER: batched inner product for the solver.
+    # Returns the (conjugated) inner product over the last axis of x and y, with batch shape
+    # preserved, computed through a matrix-vector product with an adjoint left factor.
     return array_ops.squeeze(
         math_ops.matvec(
             x[..., array_ops.newaxis],
             y, adjoint_a=True), axis=-1)
 
   def cg_step(i, state):  # pylint: disable=missing-docstring
+    # [FUNCTION DOC]
+    # HELPER: loop body for the conjugate gradient while loop.
+    # Given the iteration counter and the current state (iteration, solution, residual, search
+    # direction, gamma), applies the operator to the search direction, computes the step length,
+    # updates solution and residual, applies the preconditioner (if any) to the new residual,
+    # updates gamma and the search direction, and returns the incremented counter with the new
+    # state tuple.
     z = math_ops.matvec(operator, state.p)
     alpha = state.gamma / dot(state.p, z)
     x = state.x + alpha[..., array_ops.newaxis] * state.p

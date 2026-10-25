@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Defines LinearOperatorTridiag, a linear operator acting like a (batch of) square tridiagonal
+# matrices. The diagonals can be supplied in three layouts: a full matrix, a compact tensor with a
+# dimension of size three holding super, main and sub diagonals, or a sequence of three tensors.
+# Matmul and solve use the specialised tridiagonal routines in the linalg implementation module,
+# so they cost linear time in the matrix size. Exported publicly and registered as a composite
+# tensor; no other import-time side effects. Module constants name the three accepted formats.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -39,6 +46,13 @@ _DIAGONAL_FORMATS = frozenset({_COMPACT, _MATRIX, _SEQUENCE})
 @tf_export('linalg.LinearOperatorTridiag')
 @linear_operator.make_composite_tensor
 class LinearOperatorTridiag(linear_operator.LinearOperator):
+  # [CLASS DOC]
+  # Linear operator for a (possibly batched) square tridiagonal matrix. Stores the diagonals
+  # exactly as given (a single tensor for the matrix and compact formats, or a list of three
+  # tensors for the sequence format) together with the format name, and takes its dtype from
+  # them. Matrix multiplication and solves delegate to the tridiagonal routines; adjoints are
+  # formed by rebuilding the diagonals. Dense conversion builds a banded matrix. Decorated for
+  # public export and composite-tensor support.
   """`LinearOperator` acting like a [batch] square tridiagonal matrix.
 
   This operator acts like a [batch] square tridiagonal matrix `A` with shape
@@ -132,6 +146,16 @@ class LinearOperatorTridiag(linear_operator.LinearOperator):
                is_positive_definite=None,
                is_square=None,
                name='LinearOperatorTridiag'):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says is_self_adjoint is auto-set for real dtype and that a
+    # type error or value error is raised for bad dtype or self-adjoint flag; the code performs
+    # none of these checks here and passes the flags unchanged to the base class.
+    # Constructor. diagonals is a tensor or (for the sequence format) a list of three tensors;
+    # diagonals_format selects the layout (compact by default, or matrix, or sequence). The
+    # optional hints is_non_singular, is_self_adjoint, is_positive_definite and is_square default
+    # to unknown; name is the scope name. Converts non-reference inputs to tensors, stores
+    # them and the format on the instance, and takes the dtype from the first sequence element
+    # or the single tensor. Raises a value error if the format is not one of the three allowed.
     r"""Initialize a `LinearOperatorTridiag`.
 
     Args:
@@ -205,6 +229,11 @@ class LinearOperatorTridiag(linear_operator.LinearOperator):
           name=name)
 
   def _shape(self):
+    # [FUNCTION DOC]
+    # Returns the static shape of the operator. For the matrix format it is the shape of the
+    # stored tensor; for compact it drops the size-three dimension; for the sequence format it
+    # broadcasts the batch shapes of the three diagonals. The matrix size is repeated to make
+    # the last two dimensions square.
     if self.diagonals_format == _MATRIX:
       return self.diagonals.shape
     if self.diagonals_format == _COMPACT:
@@ -222,6 +251,12 @@ class LinearOperatorTridiag(linear_operator.LinearOperator):
     return d_shape.concatenate(d_shape[-1])
 
   def _shape_tensor(self, diagonals=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: for the sequence format the optional diagonals argument is ignored and the
+    # stored diagonals are used instead.
+    # Returns the dynamic shape as a one-dimensional integer tensor, mirroring the static shape
+    # logic. The optional diagonals argument overrides the stored diagonals for the matrix and
+    # compact formats (used with adjoint-transformed diagonals).
     diagonals = diagonals if diagonals is not None else self.diagonals
     if self.diagonals_format == _MATRIX:
       return array_ops.shape(diagonals)
@@ -239,6 +274,13 @@ class LinearOperatorTridiag(linear_operator.LinearOperator):
     return array_ops.concat([d_shape, [d_shape[-1]]], axis=-1)
 
   def _assert_self_adjoint(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: an inline comment says the diagonal is checked to have non-zero imaginary part,
+    # but the code asserts the imaginary part is zero.
+    # Builds run-time assertions that the operator equals its adjoint and returns them grouped as
+    # one op. Matrix format: compares the matrix with its adjoint. Compact and sequence formats:
+    # asserts the main diagonal has zero imaginary part and that the conjugated, shifted
+    # subdiagonal equals the superdiagonal. Assertions fail at run time with explanatory messages.
     # Check the diagonal has non-zero imaginary, and the super and subdiagonals
     # are conjugate.
 
@@ -277,6 +319,11 @@ class LinearOperatorTridiag(linear_operator.LinearOperator):
     return control_flow_ops.group(asserts)
 
   def _construct_adjoint_diagonals(self, diagonals):
+    # [FUNCTION DOC]
+    # HELPER: builds adjoint diagonals for matmul and solve.
+    # Given diagonals in the operator's format, returns diagonals of the adjoint matrix in the same
+    # format: conjugates, swaps super and sub diagonals and rolls them to fix the padding positions
+    # (sequence and compact), or takes the matrix adjoint (matrix format). Pure function.
     # Constructs adjoint tridiagonal matrix from diagonals.
     if self.diagonals_format == _SEQUENCE:
       diagonals = [math_ops.conj(d) for d in reversed(diagonals)]
@@ -298,6 +345,10 @@ class LinearOperatorTridiag(linear_operator.LinearOperator):
       return array_ops_stack.stack([new_superdiag, diag, new_subdiag], axis=-2)
 
   def _matmul(self, x, adjoint=False, adjoint_arg=False):
+    # [FUNCTION DOC]
+    # Multiplies the operator (or its adjoint if adjoint is true) by x (or its adjoint if
+    # adjoint_arg is true) using the tridiagonal matmul routine in the stored format. Returns the
+    # product tensor. No side effects.
     diagonals = self.diagonals
     if adjoint:
       diagonals = self._construct_adjoint_diagonals(diagonals)
@@ -307,6 +358,12 @@ class LinearOperatorTridiag(linear_operator.LinearOperator):
         diagonals_format=self.diagonals_format)
 
   def _solve(self, rhs, adjoint=False, adjoint_arg=False):
+    # [FUNCTION DOC]
+    # Solves the system for right-hand side rhs (using the adjoint operator if adjoint is true; rhs
+    # is transposed and conjugated by the solver if adjoint_arg is true). Because the underlying
+    # tridiagonal solver does not broadcast, this first broadcasts rhs and the diagonals to a
+    # common batch shape (a TODO notes this workaround), then calls the tridiagonal solve routine.
+    # Returns the solution tensor. No side effects.
     diagonals = self.diagonals
     if adjoint:
       diagonals = self._construct_adjoint_diagonals(diagonals)
@@ -342,6 +399,10 @@ class LinearOperatorTridiag(linear_operator.LinearOperator):
     return y
 
   def _diag_part(self):
+    # [FUNCTION DOC]
+    # Returns the main diagonal: from the matrix by diagonal extraction, from the compact tensor by
+    # selecting the middle row, or from the sequence by broadcasting the second tensor to the
+    # batch shape plus matrix size.
     if self.diagonals_format == _MATRIX:
       return array_ops.matrix_diag_part(self.diagonals)
     elif self.diagonals_format == _SEQUENCE:
@@ -352,6 +413,10 @@ class LinearOperatorTridiag(linear_operator.LinearOperator):
       return self.diagonals[..., 1, :]
 
   def _to_dense(self):
+    # [FUNCTION DOC]
+    # Returns the dense matrix. Matrix format: returns the stored tensor. Compact and sequence
+    # formats: (stacks the sequence into a compact tensor first) then builds a banded matrix with
+    # bands from minus one to one, left-right alignment and zero padding. No side effects.
     if self.diagonals_format == _MATRIX:
       return self.diagonals
 
@@ -380,18 +445,31 @@ class LinearOperatorTridiag(linear_operator.LinearOperator):
 
   @property
   def diagonals(self):
+    # [FUNCTION DOC]
+    # Property returning the stored diagonals (tensor, or list of three tensors for sequence).
     return self._diagonals
 
   @property
   def diagonals_format(self):
+    # [FUNCTION DOC]
+    # Property returning the format name string: compact, matrix or sequence.
     return self._diagonals_format
 
   @property
   def _composite_tensor_fields(self):
+    # [FUNCTION DOC]
+    # HELPER: composite-tensor support hook.
+    # Property naming the constructor arguments, diagonals and diagonals format, that make up
+    # the composite tensor representation.
     return ('diagonals', 'diagonals_format')
 
   @property
   def _experimental_parameter_ndims_to_matrix_ndims(self):
+    # [FUNCTION DOC]
+    # HELPER: batch-slicing support hook.
+    # Property returning a mapping from the diagonals parameter to the number of its trailing
+    # dimensions that belong to the matrix: two for matrix and compact formats, and a list of
+    # three ones for the sequence format (one per diagonal vector).
     diagonal_event_ndims = 2
     if self.diagonals_format == _SEQUENCE:
       # For the diagonal and the super/sub diagonals.

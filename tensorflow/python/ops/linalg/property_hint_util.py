@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: helper module for the composition-style LinearOperator classes.
+# Small pure functions that combine the matrix property hints (self-adjoint, square, positive
+# definite, non-singular) of two operators into a hint for their composition. Each hint is true,
+# false or unknown (null). No import-time side effects.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,6 +22,11 @@
 
 # Note: only use this method in the commuting case.
 def combined_commuting_self_adjoint_hint(operator_a, operator_b):
+  # [FUNCTION DOC]
+  # HELPER: hint combination for compositions of commuting operators.
+  # Returns true if both operators are self-adjoint, false if exactly one is known self-adjoint
+  # and the other known not to be, and null (unknown) otherwise. Only valid when the operators
+  # commute. Pure function.
   """Get combined hint for self-adjoint-ness."""
 
   # The property is preserved under composition when the operators commute.
@@ -41,6 +51,15 @@ def combined_commuting_self_adjoint_hint(operator_a, operator_b):
 
 
 def is_square(operator_a, operator_b):
+  # [FUNCTION DOC]
+  # HELPER: hint combination for compositions.
+  # Returns true if both operators are square; if both are known non-square, compares the static
+  # range dimension of the first with the static domain dimension of the second and returns whether
+  # they are equal (only when both are known; otherwise falls through); returns false if exactly
+  # one is known square and the other known non-square; otherwise unknown (null). Pure function.
+  # KNOWN ISSUE: in the both-non-square case the comparison uses the first operator's range
+  # dimension and the second operator's domain dimension, which are the inner dimensions of
+  # the product and do not determine squareness of the result (outer dimensions do).
   """Return a hint to whether the composition is square."""
   if operator_a.is_square and operator_b.is_square:
     return True
@@ -62,6 +81,10 @@ def is_square(operator_a, operator_b):
 # when the operators commute and are symmetric. Only use this method in
 # commuting cases.
 def combined_commuting_positive_definite_hint(operator_a, operator_b):
+  # [FUNCTION DOC]
+  # HELPER: hint combination for compositions of commuting operators.
+  # Returns true only if both operators are known positive definite and known self-adjoint;
+  # otherwise unknown (null). Never returns false. Pure function.
   """Get combined PD hint for compositions."""
   # pylint:disable=g-bool-id-comparison
   if (operator_a.is_positive_definite is True and
@@ -75,6 +98,13 @@ def combined_commuting_positive_definite_hint(operator_a, operator_b):
 
 
 def combined_non_singular_hint(operator_a, operator_b):
+  # [FUNCTION DOC]
+  # HELPER: hint combination for compositions.
+  # KNOWN ISSUE: the docstring is truncated ("for when ."). Also the last line returns the
+  # logical and of the two hints, which may yield a null/unknown value or false rather than a
+  # strict boolean.
+  # Returns false if either operator is known singular; otherwise the logical and of the two
+  # hints (true if both true, else unknown or false-like value). Pure function.
   """Get combined hint for when ."""
   # If either operator is not-invertible the composition isn't.
 

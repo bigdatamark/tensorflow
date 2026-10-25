@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: helper module implementing batch slicing for LinearOperator classes.
+# Exposes batch_slice, which builds a new operator of the same type whose parameters are sliced
+# along the batch dimensions (the operator's item access delegates here). Private helpers
+# broadcast parameters to full batch rank, sanitize slices so they do not overflow broadcast
+# (size one) dimensions, and slice one parameter (recursing into nested operators). No import-time
+# side effects.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,6 +35,10 @@ __all__ = ['batch_slice']
 
 
 def _prefer_static_where(condition, x, y):
+  # [FUNCTION DOC]
+  # HELPER: element selection that stays static when possible.
+  # If condition, x and y all have statically known values, returns the numpy selection of x where
+  # condition holds else y; otherwise returns the graph selection op result. No side effects.
   args = [condition, x, y]
   constant_args = [tensor_util.constant_value(a) for a in args]
   # Do this statically.
@@ -39,6 +50,13 @@ def _prefer_static_where(condition, x, y):
 
 def _broadcast_parameter_with_batch_shape(
     param, param_ndims_to_matrix_ndims, batch_shape):
+  # [FUNCTION DOC]
+  # HELPER: gives parameters the full batch rank before slicing.
+  # If param is an operator (has a batch shape method), recursively broadcasts each of its own
+  # parameters (as listed by its parameter-ndims mapping) and rebuilds an operator of the same
+  # type from its parameters. Otherwise param is a tensor: broadcasts it against a shape made of
+  # the batch shape followed by ones for the matrix dimensions (param_ndims_to_matrix_ndims says
+  # how many trailing dims belong to the matrix part). Returns the broadcast tensor or new operator.
   """Broadcasts `param` with the given batch shape, recursively."""
   if hasattr(param, 'batch_shape_tensor'):
     # Recursively broadcast every parameter inside the operator.
@@ -61,6 +79,14 @@ def _broadcast_parameter_with_batch_shape(
 
 
 def _sanitize_slices(slices, intended_shape, deficient_shape):
+  # [FUNCTION DOC]
+  # HELPER: adapts user slices to a parameter whose batch dims may be size one (broadcast).
+  # Walks the slices: the ellipsis switches to negative indexing (a second ellipsis raises a value
+  # error), new-axis entries are passed through, and for other entries it checks whether the
+  # intended size exceeds the actual size at that position (a broadcast dimension); if so, indices
+  # become zero and slice stop and step become one, with start zero, so the slice does not overflow.
+  # Returns the list of sanitized slice objects. intended_shape and deficient_shape are integer
+  # shape tensors of equal rank.
   """Restricts slices to avoid overflowing size-1 (broadcast) dimensions.
 
   Args:
@@ -104,6 +130,14 @@ def _sanitize_slices(slices, intended_shape, deficient_shape):
 
 def _slice_single_param(
     param, param_ndims_to_matrix_ndims, slices, batch_shape):
+  # [FUNCTION DOC]
+  # HELPER: slices the batch dimensions of one operator parameter.
+  # Broadcasts param to full batch rank, determines its batch shape (trimming the matrix dims),
+  # and returns it unchanged if it is an atomic object with no batch rank while the operator has
+  # one. Otherwise sanitizes the slices, appends an ellipsis and full slices for the trailing
+  # matrix dimensions, and returns the parameter indexed with the final slices. Inputs: the
+  # parameter (tensor or operator), the number of trailing matrix dims, the slices, and the
+  # operator batch shape tensor.
   """Slices into the batch shape of a single parameter.
 
   Args:
@@ -153,6 +187,13 @@ def _slice_single_param(
 
 
 def batch_slice(linop, params_overrides, slices):
+  # [FUNCTION DOC]
+  # Slices a LinearOperator along its batch dimensions. Wraps a single non-sequence slice into a
+  # tuple. If the slices are just an ellipsis no parameters are sliced; otherwise each non-null
+  # parameter listed in the operator's parameter-ndims mapping is sliced with the single-parameter
+  # helper. Entries in params_overrides (mapping from parameter names to values) then replace
+  # those results. Returns a new operator of the same type built from the original parameters
+  # updated by these overrides. Does not modify the input operator.
   """Slices `linop` along its batch dimensions.
 
   Args:

@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Public API surface for the linalg sparse namespace. Re-exports the preconditioned conjugate
+# gradient solver and, through wildcard imports, everything public from the sparse CSR matrix
+# gradient module and the sparse CSR matrix ops module (importing those also registers their
+# gradients). Only the conjugate gradient solver is listed in the module export list.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

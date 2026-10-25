@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Defines LinearOperatorZeros, a linear operator acting like a (batch of) zero matrices of a given
+# number of rows and columns, without materialising them. Products, determinants, traces,
+# diagonals and eigenvalues are produced as freshly built zero tensors, possibly broadcast to the
+# operator batch shape; solves, inverses and positive-definiteness assertions are unsupported.
+# Exported publicly and registered as a composite tensor. No other import-time side effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -39,6 +45,13 @@ __all__ = [
 @tf_export("linalg.LinearOperatorZeros")
 @linear_operator.make_composite_tensor
 class LinearOperatorZeros(linear_operator.LinearOperator):
+  # [CLASS DOC]
+  # Linear operator representing a (possibly batched, possibly non-square) all-zero matrix.
+  # Holds the number of rows and columns (tensors plus statically known values), an optional
+  # batch shape tensor, and a flag that adds run-time shape assertions. The operator is always
+  # singular, self-adjoint when square and never positive definite; the constructor rejects hints
+  # that contradict this. Matmul returns zeros of the right shape, broadcasting batch dimensions
+  # only when needed. Decorated for public export and composite-tensor support.
   """`LinearOperator` acting like a [batch] zero matrix.
 
   This operator acts like a [batch] zero matrix `A` with shape
@@ -132,6 +145,19 @@ class LinearOperatorZeros(linear_operator.LinearOperator):
                is_square=True,
                assert_proper_shapes=False,
                name="LinearOperatorZeros"):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says a value error is raised if any of the self-adjoint,
+    # non-singular and positive-definite hints is not true; actually the error is raised when
+    # is_non_singular or is_positive_definite is true (the zero matrix is singular and not
+    # positive definite), or when is_self_adjoint is false while is_square is true.
+    # Constructor. num_rows is a scalar non-negative integer; num_columns defaults to num_rows;
+    # batch_shape is an optional one-dimensional integer tensor of leading dimensions (none by
+    # default); dtype defaults to 32-bit float. The hint arguments default to the only valid
+    # values for a zero matrix. assert_proper_shapes, when true, adds graph assertions when static
+    # checks are inconclusive. name scopes the ops. Rejects reference-type (variable) shape
+    # arguments with a type error, stores the shape tensors and their static values, validates
+    # them, and raises a value error if square but the static row and column counts differ. Also
+    # raises value or type errors from the shape checks (non-scalar, negative, non-integer).
     r"""Initialize a `LinearOperatorZeros`.
 
     The `LinearOperatorZeros` is initialized with arguments defining `dtype`
@@ -244,6 +270,9 @@ class LinearOperatorZeros(linear_operator.LinearOperator):
         self._check_batch_shape_possibly_add_asserts()
 
   def _shape(self):
+    # [FUNCTION DOC]
+    # Returns the static shape: the batch shape (when one was given) followed by the static row and
+    # column counts, with unknown entries where not statically known.
     matrix_shape = tensor_shape.TensorShape((self._num_rows_static,
                                              self._num_columns_static))
     if self._batch_shape_arg is None:
@@ -253,6 +282,9 @@ class LinearOperatorZeros(linear_operator.LinearOperator):
     return batch_shape.concatenate(matrix_shape)
 
   def _shape_tensor(self):
+    # [FUNCTION DOC]
+    # Returns the dynamic shape as a one-dimensional integer tensor: the batch shape (if given)
+    # concatenated with the row and column counts.
     matrix_shape = array_ops_stack.stack(
         (self._num_rows, self._num_columns), axis=0)
     if self._batch_shape_arg is None:
@@ -261,19 +293,34 @@ class LinearOperatorZeros(linear_operator.LinearOperator):
     return array_ops.concat((self._batch_shape_arg, matrix_shape), 0)
 
   def _assert_non_singular(self):
+    # [FUNCTION DOC]
+    # Always raises an invalid-argument error stating that zero operators are non-invertible,
+    # since the assertion can never hold.
     raise errors.InvalidArgumentError(
         node_def=None, op=None, message="Zero operators are always "
         "non-invertible.")
 
   def _assert_positive_definite(self):
+    # [FUNCTION DOC]
+    # Always raises an invalid-argument error stating that zero operators are not positive
+    # definite, since the assertion can never hold.
     raise errors.InvalidArgumentError(
         node_def=None, op=None, message="Zero operators are always "
         "non-positive definite.")
 
   def _assert_self_adjoint(self):
+    # [FUNCTION DOC]
+    # Returns a no-op: a zero matrix is trivially self-adjoint, so there is nothing to check.
     return control_flow_ops.no_op("assert_self_adjoint")
 
   def _possibly_broadcast_batch_shape(self, x):
+    # [FUNCTION DOC]
+    # HELPER: batch broadcasting for matmul and add_to_tensor.
+    # Returns x unchanged if the operator has no batch shape, or if static shapes show that
+    # broadcasting with the operator batch shape would not change x. Otherwise adds a tensor of
+    # zeros (of operator dtype and shape batch plus two singleton dims, static or dynamic) to x so
+    # that ordinary broadcasting produces the full result; the dynamic path always adds to avoid
+    # a data-dependent branch. Returns the possibly broadcast tensor.
     """Return 'x', possibly after broadcasting the leading dimensions."""
     # If we have no batch shape, our batch shape broadcasts with everything!
     if self._batch_shape_arg is None:
@@ -307,6 +354,15 @@ class LinearOperatorZeros(linear_operator.LinearOperator):
     return x + zeros
 
   def _matmul(self, x, adjoint=False, adjoint_arg=False):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: when assert_proper_shapes is true and adjoint_arg is true, x is replaced by
+    # its adjoint for the shape assertion and then the output shape is computed as if x were
+    # still un-adjointed, so the swap of the last two dimensions is applied twice.
+    # Returns the product with x (adjoint flags say whether the operator and x are adjointed): a
+    # zero tensor of the product's shape and x's dtype, broadcast to the operator batch shape.
+    # Square case: output shape equals x's shape (last two dims swapped when adjoint_arg is
+    # set). Non-square case: rows come from the column count when adjoint is set, else from the
+    # row count; columns from x. Optionally adds a run-time dimension compatibility assertion.
     if self._assert_proper_shapes:
       x = linalg.adjoint(x) if adjoint_arg else x
       aps = linear_operator_util.assert_compatible_matrix_dimensions(self, x)
@@ -337,18 +393,26 @@ class LinearOperatorZeros(linear_operator.LinearOperator):
       left_operator: "LinearOperatorZeros",
       right_operator: linear_operator.LinearOperator
     ) -> linear_operator.LinearOperator:
+    # [FUNCTION DOC]
+    # Operator-by-operator product hook. Takes the left operator (this zeros operator) and the
+    # right operator; if either is not square raises a value error (unsupported). Otherwise the
+    # product with a zero matrix is again zero, so returns the left operator itself.
     if not left_operator.is_square or not right_operator.is_square:
       raise ValueError("Matmul with non-square `LinearOperator`s or non-square "
                        "`LinearOperatorZeros` not supported at this time.")
     return left_operator
 
   def _determinant(self):
+    # [FUNCTION DOC]
+    # Returns zeros of the batch shape (static if fully defined, else dynamic) and operator dtype.
     if self.batch_shape.is_fully_defined():
       return array_ops.zeros(shape=self.batch_shape, dtype=self.dtype)
     else:
       return array_ops.zeros(shape=self.batch_shape_tensor(), dtype=self.dtype)
 
   def _trace(self):
+    # [FUNCTION DOC]
+    # Returns zeros of the batch shape (static if fully defined, else dynamic) and operator dtype.
     # Get Tensor of all zeros of same shape as self.batch_shape.
     if self.batch_shape.is_fully_defined():
       return array_ops.zeros(shape=self.batch_shape, dtype=self.dtype)
@@ -356,9 +420,16 @@ class LinearOperatorZeros(linear_operator.LinearOperator):
       return array_ops.zeros(shape=self.batch_shape_tensor(), dtype=self.dtype)
 
   def _diag_part(self):
+    # [FUNCTION DOC]
+    # Returns the main diagonal, which is all zeros (see the zero-diagonal helper).
     return self._zeros_diag()
 
   def add_to_tensor(self, mat, name="add_to_tensor"):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says this is equivalent to adding the identity (I + mat), but
+    # the operator is a zero matrix, so the result is just mat (broadcast to the batch shape).
+    # Adds this (zero) operator to tensor mat: returns mat, broadcast over the operator batch
+    # shape when needed. The name argument is accepted but not used.
     """Add matrix represented by this operator to `mat`.  Equiv to `I + mat`.
 
     Args:
@@ -371,6 +442,12 @@ class LinearOperatorZeros(linear_operator.LinearOperator):
     return self._possibly_broadcast_batch_shape(mat)
 
   def _check_domain_range_possibly_add_asserts(self):
+    # [FUNCTION DOC]
+    # HELPER: constructor validation of the row and column counts.
+    # If run-time assertions are enabled, wraps the stored counts so that they must be rank-zero
+    # and non-negative when used. Always performs static checks: raises a type error if either is
+    # not an integer type, and a value error if a statically known value is not a scalar or is
+    # negative. Mutates the stored row and column tensors when assertions are enabled.
     """Static check of init arg `num_rows`, possibly add asserts."""
     # Possibly add asserts.
     if self._assert_proper_shapes:
@@ -423,6 +500,12 @@ class LinearOperatorZeros(linear_operator.LinearOperator):
                          " %s" % num_columns_static)
 
   def _check_batch_shape_possibly_add_asserts(self):
+    # [FUNCTION DOC]
+    # HELPER: constructor validation of the batch shape.
+    # Does nothing when there is no batch shape. If run-time assertions are enabled, wraps the
+    # stored batch shape so it must be one-dimensional and non-negative when used. Static checks
+    # raise a type error for a non-integer dtype and a value error if the static value is not
+    # one-dimensional or has negative entries. Mutates the stored batch shape tensor.
     """Static check of init arg `batch_shape`, possibly add asserts."""
     if self._batch_shape_arg is None:
       return
@@ -456,6 +539,9 @@ class LinearOperatorZeros(linear_operator.LinearOperator):
                        "%s" % self._batch_shape_static)
 
   def _min_matrix_dim(self):
+    # [FUNCTION DOC]
+    # HELPER: diagonal length computation. Returns the smaller of the static domain and range
+    # dimensions, or null if either is unknown.
     """Minimum of domain/range dimension, if statically available, else None."""
     domain_dim = self.domain_dimension.value
     range_dim = self.range_dimension.value
@@ -464,10 +550,17 @@ class LinearOperatorZeros(linear_operator.LinearOperator):
     return min(domain_dim, range_dim)
 
   def _min_matrix_dim_tensor(self):
+    # [FUNCTION DOC]
+    # HELPER: diagonal length computation. Returns, as a scalar tensor, the smaller of the last two
+    # entries of the dynamic shape.
     """Minimum of domain/range dimension, as a tensor."""
     return math_ops.reduce_min(self.shape_tensor()[-2:])
 
   def _zeros_diag(self):
+    # [FUNCTION DOC]
+    # HELPER: shared by diagonal and eigenvalue methods.
+    # Returns a zero tensor of the operator dtype whose shape is the batch shape followed by the
+    # smaller matrix dimension (static when the full shape is known, otherwise dynamic).
     """Returns the diagonal of this operator as all zeros."""
     if self.shape.is_fully_defined():
       d_shape = self.batch_shape.concatenate([self._min_matrix_dim()])
@@ -479,18 +572,36 @@ class LinearOperatorZeros(linear_operator.LinearOperator):
     return array_ops.zeros(shape=d_shape, dtype=self.dtype)
 
   def _eigvals(self):
+    # [FUNCTION DOC]
+    # Returns the eigenvalues, all zeros, in the same form as the zero diagonal.
     return self._zeros_diag()
 
   @property
   def _composite_tensor_prefer_static_fields(self):
+    # [FUNCTION DOC]
+    # HELPER: composite-tensor support hook.
+    # Property naming the constructor arguments (rows, columns, batch shape) whose static values
+    # are preferred over tensors when flattening the operator.
     return ("num_rows", "num_columns", "batch_shape")
 
   @property
   def _composite_tensor_fields(self):
+    # [FUNCTION DOC]
+    # HELPER: composite-tensor support hook.
+    # Property naming the constructor arguments (rows, columns, batch shape, dtype and the
+    # assertion flag) that make up the composite tensor representation.
     return ("num_rows", "num_columns", "batch_shape", "dtype",
             "assert_proper_shapes")
 
   def __getitem__(self, slices):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the inline comment says a new identity operator is returned, but a new zeros
+    # operator is built. Also, if the operator has no batch shape the stored batch shape is null,
+    # so slicing fails when building the proxy tensor.
+    # Slices the batch dimensions. Builds a ones tensor of the batch shape, slices it with the
+    # given slices, takes the resulting shape as the new batch shape, and returns a new zeros
+    # operator constructed from the original parameters with that batch shape. Does not modify
+    # this operator.
     # Slice the batch shape and return a new LinearOperatorIdentity.
     # Use a proxy shape and slice it. Use this as the new batch shape
     new_batch_shape = array_ops.shape(

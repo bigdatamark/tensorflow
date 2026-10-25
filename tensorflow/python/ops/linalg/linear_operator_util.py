@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# HELPER: internal utility module shared by the LinearOperator classes in this package.
+# Collects small helpers: conversion of non-reference inputs to tensors and detection of
+# reference (variable or module) objects, dtype helpers, assertion builders (nonzero modulus,
+# zero imaginary part, compatible matrix dimensions, batch-matrix rank), broadcasting versions of
+# solve and batch-dimension alignment (with a memory-saving reshape trick), hint-combining
+# helpers for operator meta-classes (adjoint pairs, A A-adjoint form, merging provided and
+# operator hints), and helpers for blockwise operators (detecting blockwise input and splitting
+# arguments into blocks). No import-time side effects.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,6 +44,16 @@ from tensorflow.python.util import nest
 
 
 def convert_nonref_to_tensor(value, dtype=None, dtype_hint=None, name=None):
+  # [FUNCTION DOC]
+  # HELPER: used by operator constructors to store parameters without copying variables.
+  # KNOWN ISSUE: the docstring says a value error is raised for a mismatched dtype; for reference
+  # objects (variables and modules) a mismatch raises a type error instead, and the docstring
+  # example comparisons on identity are only informal.
+  # Returns nothing-value if value is null. If value has reference semantics (variable or module
+  # with dtype and shape) it is returned unchanged, after checking that an explicitly given dtype
+  # matches its base dtype (raising a type error otherwise). Any other value is converted to a
+  # tensor using the optional dtype, soft preference dtype_hint and op name. Conversion errors
+  # come from the standard conversion machinery. No side effects.
   """Converts the given `value` to a `Tensor` if input is nonreference type.
 
   This function converts Python objects of various types to `Tensor` objects
@@ -118,6 +137,10 @@ def convert_nonref_to_tensor(value, dtype=None, dtype_hint=None, name=None):
 
 
 def base_dtype(dtype):
+  # [FUNCTION DOC]
+  # HELPER: dtype normalisation.
+  # Converts the argument to a data type object and returns its non-reference base type (or the
+  # type itself if it has no base type notion).
   """Returns a non-reference `dtype` based on this `dtype`."""
   dtype = dtypes.as_dtype(dtype)
   if hasattr(dtype, "base_dtype"):
@@ -126,6 +149,10 @@ def base_dtype(dtype):
 
 
 def dtype_name(dtype):
+  # [FUNCTION DOC]
+  # HELPER: used to format dtype names in error messages.
+  # Converts the argument to a data type object and returns its name string, falling back to a
+  # class name or the string form when no name attribute exists.
   """Returns the string name for this `dtype`."""
   dtype = dtypes.as_dtype(dtype)
   if hasattr(dtype, "name"):
@@ -136,6 +163,10 @@ def dtype_name(dtype):
 
 
 def check_dtype(arg, dtype):
+  # [FUNCTION DOC]
+  # HELPER: dtype validation for operator arguments.
+  # Raises a type error if the base dtype of arg (a tensor-like with a dtype) differs from the
+  # expected dtype; otherwise returns nothing.
   """Check that arg.dtype == self.dtype."""
   if arg.dtype.base_dtype != dtype:
     raise TypeError(
@@ -144,6 +175,12 @@ def check_dtype(arg, dtype):
 
 
 def is_ref(x):
+  # [FUNCTION DOC]
+  # HELPER: reference-semantics test used when converting operator parameters.
+  # KNOWN ISSUE: the docstring's return description says the result indicates the input has
+  # nonreference semantics; the code returns true exactly when x HAS reference semantics.
+  # Returns true if x is a variable, or a module that exposes both dtype and shape attributes;
+  # false otherwise. No side effects.
   """Evaluates if the object has reference semantics.
 
   An object is deemed "reference" if it is a `tf.Variable` instance or is
@@ -165,6 +202,9 @@ def is_ref(x):
 
 
 def assert_not_ref_type(x, arg_name):
+  # [FUNCTION DOC]
+  # HELPER: argument validation. Raises a type error naming arg_name if x has reference semantics
+  # (a variable or suitable module); otherwise returns nothing.
   if is_ref(x):
     raise TypeError(
         f"Argument {arg_name} cannot be reference type. Found: {type(x)}.")
@@ -177,6 +217,11 @@ def assert_not_ref_type(x, arg_name):
 
 def assert_no_entries_with_modulus_zero(
     x, message=None, name="assert_no_entries_with_modulus_zero"):
+  # [FUNCTION DOC]
+  # HELPER: assertion builder used for non-singularity checks.
+  # Converts x (numeric tensor, real, integer or complex) to a tensor and returns an assertion op
+  # that fails at run time (with the optional message prepended) unless every entry has strictly
+  # positive absolute value. The name argument scopes the created ops.
   """Returns `Op` that asserts Tensor `x` has no entries with modulus zero.
 
   Args:
@@ -198,6 +243,14 @@ def assert_no_entries_with_modulus_zero(
 
 
 def assert_zero_imag_part(x, message=None, name="assert_zero_imag_part"):
+  # [FUNCTION DOC]
+  # HELPER: assertion builder used for self-adjointness checks.
+  # KNOWN ISSUE: the docstring's Returns text says the op asserts no entries with modulus zero,
+  # which is wrong; the op asserts the imaginary part is zero.
+  # Converts x to a tensor. If its dtype is floating, returns a no-op (nothing to check).
+  # Otherwise returns an assertion op that every imaginary part equals zero, failing at run time
+  # with the optional message. The name argument scopes the created ops. Note that integer dtypes
+  # reach the imaginary-part path as well.
   """Returns `Op` that asserts Tensor `x` has no non-zero imaginary parts.
 
   Args:
@@ -222,6 +275,11 @@ def assert_zero_imag_part(x, message=None, name="assert_zero_imag_part"):
 
 
 def assert_compatible_matrix_dimensions(operator, x):
+  # [FUNCTION DOC]
+  # HELPER: run-time shape check used by operator matmul and solve.
+  # Returns an assertion op that fails at run time if the second-to-last dimension of tensor x
+  # differs from the operator's domain dimension (as a tensor). Static checks are left to the base
+  # class. Does not modify its inputs.
   """Assert that an argument to solve/matmul has proper domain dimension.
 
   If `operator.shape[-2:] = [M, N]`, and `x.shape[-2:] = [Q, R]`, then
@@ -249,6 +307,9 @@ def assert_compatible_matrix_dimensions(operator, x):
 
 
 def assert_is_batch_matrix(tensor):
+  # [FUNCTION DOC]
+  # HELPER: static rank validation. Raises a value error if the tensor's static rank is known and
+  # below two; returns nothing (unknown rank passes silently).
   """Static assert that `tensor` has rank `2` or higher."""
   sh = tensor.shape
   if sh.ndims is not None and sh.ndims < 2:
@@ -258,6 +319,11 @@ def assert_is_batch_matrix(tensor):
 
 
 def shape_tensor(shape, name=None):
+  # [FUNCTION DOC]
+  # HELPER: shape argument conversion.
+  # Converts a shape (list, tuple or tensor-like) to a tensor, forcing 32-bit integer type when the
+  # shape is an empty list or tuple (so an empty shape does not become a float). The optional name
+  # names the op. Returns the tensor.
   """Convert Tensor using default type, unless empty list or tuple."""
   # Works just like random_ops._ShapeTensor.
   if isinstance(shape, (tuple, list)) and not shape:
@@ -276,6 +342,14 @@ def shape_tensor(shape, name=None):
 
 
 def broadcast_matrix_batch_dims(batch_matrices, name=None):
+  # [FUNCTION DOC]
+  # HELPER: aligns batch dimensions before batched matrix operations.
+  # Takes an iterable of tensors (each of rank two or more), converts them, and returns a list
+  # where every tensor's leading batch dimensions are broadcast to the common batch shape while
+  # the last two (matrix) dimensions are left alone. Uses static shapes when fully known,
+  # otherwise dynamic broadcasting, which copies data. A list with fewer than two entries is
+  # returned after conversion. Raises a value error if a tensor has static rank below two, and an
+  # error if the argument is not a proper iterable. name optionally scopes the ops.
   """Broadcast leading dimensions of zero or more [batch] matrices.
 
   Example broadcasting one batch dim of two simple matrices.
@@ -371,6 +445,12 @@ def broadcast_matrix_batch_dims(batch_matrices, name=None):
 
 
 def matrix_solve_with_broadcast(matrix, rhs, adjoint=False, name=None):
+  # [FUNCTION DOC]
+  # HELPER: batch-broadcasting wrapper around the matrix solve op, used by dense-based operators.
+  # Converts matrix and rhs (rhs cast to the matrix dtype), optionally reshapes extra leading dims
+  # of rhs to save memory, broadcasts batch dimensions, solves (using the adjoint of matrix when
+  # adjoint is true and it was not already applied by the reshape), and maps the solution back to
+  # the expected shape. Returns the solution tensor. name optionally scopes the ops.
   """Solve systems of linear equations."""
   with ops.name_scope(name, "MatrixSolveWithBroadcast", [matrix, rhs]):
     matrix = tensor_conversion.convert_to_tensor_v2_with_dispatch(
@@ -399,8 +479,22 @@ def _reshape_for_efficiency(a,
                             transpose_b=False,
                             adjoint_a=False,
                             adjoint_b=False):
+  # [FUNCTION DOC]
+  # HELPER: memory optimisation for matmul/solve with broadcasting.
+  # KNOWN ISSUE: in the final transpose step for b, the code tests the transpose_a flag instead of
+  # transpose_b, so a requested transpose of b is applied only when transpose_a is set (and is
+  # wrongly applied when only transpose_a is set).
+  # When b has more leading dimensions than a and those extra dimensions are worth flipping,
+  # returns a with b reshaped so the extra dims are folded into the trailing columns, plus a
+  # function that undoes this reshaping on a result, and a flag saying whether the caller still
+  # needs to transpose or adjoint a (and b). In the no-reshape cases (unknown rank, a rank at
+  # least b rank, small extra dims) returns the inputs, an identity function and a true flag.
+  # If it flips, requested transposes and adjoints are applied here and the flag is false.
+  # Returns a tuple of (a, b, inverse function, flag). Pure with respect to its inputs.
   """Maybe reshape a, b, and return an inverse map.  For matmul/solve."""
   def identity(x):
+    # [FUNCTION DOC]
+    # HELPER: no-op inverse mapping used when no reshaping was done; returns its argument as is.
     return x
 
   # At this point, we have not taken transpose/adjoint of a/b.
@@ -475,6 +569,11 @@ def _reshape_for_efficiency(a,
       b_extra_on_end, array_ops.concat((b_main_sh[:-1], [-1]), 0))
 
   def reshape_inv(y):
+    # [FUNCTION DOC]
+    # HELPER: inverse of the reshaping done in the enclosing function.
+    # Takes a result tensor y whose last dimension holds the folded extra dims, unfolds them to
+    # the original extra dimensions at the end, then transposes them back to the front using the
+    # inverse of the earlier permutation. Returns the reshaped tensor.
     # Expand the extra dims hanging off the end, "b_extra_sh".
     # Note we use y_sh[:-1] + [b_main_sh[-1]] rather than b_main_sh, because y
     # Could have different batch dims than a and b, because of broadcasting.
@@ -493,6 +592,11 @@ def _reshape_for_efficiency(a,
 
 
 def is_adjoint_pair(x, y):
+  # [FUNCTION DOC]
+  # HELPER: hint inference for composed operators.
+  # Returns true if the two operators are known to be adjoints by identity: the same object that
+  # is self-adjoint, or one is the adjoint wrapper of the other. Returns false when the same
+  # object is explicitly marked not self-adjoint. Entries are never compared.
   """True iff x and y are adjoints of each other (by id, not entries)."""
   if x is y:  # Note that if x is y then all of their hints are the same!
     if x.is_self_adjoint is False:  # pylint:disable=g-bool-id-comparison
@@ -504,6 +608,11 @@ def is_adjoint_pair(x, y):
 
 
 def is_aat_form(operators):
+  # [FUNCTION DOC]
+  # HELPER: hint inference for composition operators (detects A times adjoint of A structure).
+  # Takes an iterable of operators. Raises a value error if it is empty. Returns false for an odd
+  # count; otherwise returns true if every operator i and its mirror from the end form an adjoint
+  # pair.
   """Returns True if operators is of the form A @ A.H, possibly recursively."""
   operators = list(operators)
   if not operators:
@@ -520,6 +629,12 @@ def is_aat_form(operators):
 
 def use_operator_or_provided_hint_unless_contradicting(
     operator, hint_attr_name, provided_hint_value, message):
+  # [FUNCTION DOC]
+  # HELPER: hint merging for wrapper operators such as adjoint and inverse.
+  # Reads the named hint attribute of the operator (true, false or unknown) and combines it with
+  # the user-provided hint (true, false or null). Raises a value error with the given message when
+  # one is true and the other is false. Otherwise returns true if either is true, false if either
+  # is false, and null when both are unknown.
   """Get combined hint in the case where operator.hint should equal hint.
 
   Args:
@@ -554,6 +669,17 @@ def use_operator_or_provided_hint_unless_contradicting(
 
 
 def arg_is_blockwise(block_dimensions, arg, arg_split_dim):
+  # [FUNCTION DOC]
+  # HELPER: input-structure detection for blockwise operators.
+  # KNOWN ISSUE: a comment near the end ("input is not blockwise") is dangling and the nesting
+  # of the conditions is hard to follow, but the logic below returns as described here.
+  # Decides whether arg should be treated as a list of per-block tensors. Returns false for
+  # anything that is not a list or tuple of the same length as block_dimensions. A flat list of
+  # non-nested items is blockwise (true). For nested items, compares the sizes along arg_split_dim
+  # against the known block dimensions: all-unknown blocks are blockwise if sizes differ (false
+  # for a single element, and a value error if all equal because the structure is ambiguous);
+  # matching known dimensions mean blockwise; equal sizes at least the sum of known dimensions
+  # mean not blockwise; otherwise raises a value error about mismatched dimensions.
   """Detect if input should be interpreted as a list of blocks."""
   # Tuples and lists of length equal to the number of operators may be
   # blockwise.
@@ -606,6 +732,11 @@ def arg_is_blockwise(block_dimensions, arg, arg_split_dim):
 
 
 def split_arg_into_blocks(block_dims, block_dims_fn, arg, axis=-1):
+  # [FUNCTION DOC]
+  # HELPER: argument splitting for blockwise operators.
+  # Splits tensor arg along axis (default last) into pieces sized by the block dimensions. block_dims
+  # is an iterable of static dimensions; if any value is unknown, block_dims_fn (a callback that
+  # returns the dynamic sizes) is called instead. Returns the list of split tensors.
   """Split `x` into blocks matching `operators`'s `domain_dimension`.
 
   Specifically, if we have a blockwise lower-triangular matrix, with block

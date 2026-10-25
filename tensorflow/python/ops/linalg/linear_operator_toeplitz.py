@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Defines LinearOperatorToeplitz, a linear operator that behaves like a (batch of) square Toeplitz
+# matrices (constant diagonals) described only by their first column and first row. The dense
+# matrix is never stored; matrix multiplication embeds the Toeplitz matrix in a circulant
+# operator and uses FFTs. Exported publicly as the linalg Toeplitz operator and registered as a
+# composite tensor type. Importing has no side effects beyond the export/registration decorators.
+# Solve and determinant are not specialised here (a TODO mentions Levinson recursion).
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,6 +40,13 @@ __all__ = ["LinearOperatorToeplitz",]
 @tf_export("linalg.LinearOperatorToeplitz")
 @linear_operator.make_composite_tensor
 class LinearOperatorToeplitz(linear_operator.LinearOperator):
+  # [CLASS DOC]
+  # Linear operator representing a (possibly batched) square Toeplitz matrix built from a first
+  # column tensor and a first row tensor (last dimension is the matrix size, leading dimensions
+  # are batch dimensions). Holds the tensors as the row and col attributes plus the matrix
+  # property hints handled by the base class. Only square operators are supported. Matrix
+  # multiplication goes through a circulant embedding and FFT; other operations use base-class
+  # defaults or dense conversion. Decorated for public export and composite-tensor support.
   """`LinearOperator` acting like a [batch] of toeplitz matrices.
 
   This operator acts like a [batch] Toeplitz matrix `A` with shape
@@ -114,6 +128,17 @@ class LinearOperatorToeplitz(linear_operator.LinearOperator):
                is_positive_definite=None,
                is_square=None,
                name="LinearOperatorToeplitz"):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says is_self_adjoint is auto-set to true for real dtype (and
+    # refers to a diag argument); the code does no such thing and passes the flag unchanged.
+    # Also the docstring does not mention that is_square is forced to true.
+    # Constructor. Takes col (first column) and row (first row) tensors of identical trailing
+    # size, converts non-reference inputs to tensors, validates them, and initialises the base
+    # class with the row dtype and the property hints. Optional hints is_non_singular,
+    # is_self_adjoint, is_positive_definite, is_square default to unknown; name is the scope name.
+    # Raises a value error if is_square is explicitly false, or from the shape check when row or
+    # col are scalars or have mismatched last dimensions; the base class may raise if hints
+    # conflict (positive definite with non-singular false). Stores row and col on the instance.
     r"""Initialize a `LinearOperatorToeplitz`.
 
     Args:
@@ -172,6 +197,11 @@ class LinearOperatorToeplitz(linear_operator.LinearOperator):
           name=name)
 
   def _check_row_col(self, row, col):
+    # [FUNCTION DOC]
+    # HELPER: static argument validation for the constructor.
+    # Checks statically known shapes: both row and col must have at least one dimension, and if
+    # both last dimensions are known they must be equal. Raises a value error otherwise. Returns
+    # nothing and has no side effects.
     """Static check of row and column."""
     for name, tensor in [["row", row], ["col", col]]:
       if tensor.shape.ndims is not None and tensor.shape.ndims < 1:
@@ -185,12 +215,19 @@ class LinearOperatorToeplitz(linear_operator.LinearOperator):
             "dimensions.")
 
   def _shape(self):
+    # [FUNCTION DOC]
+    # Returns the static shape of the operator: the broadcast of the row and col static shapes,
+    # with the last dimension repeated to make the matrix square.
     # If d_shape = [5, 3], we return [5, 3, 3].
     v_shape = array_ops.broadcast_static_shape(
         self.row.shape, self.col.shape)
     return v_shape.concatenate(v_shape[-1:])
 
   def _shape_tensor(self, row=None, col=None):
+    # [FUNCTION DOC]
+    # Returns the dynamic shape as a one-dimensional integer tensor: the broadcast of the shapes
+    # of row and col, with the last dimension appended again. Optional row and col override the
+    # stored tensors (used to avoid reconverting them); when omitted the instance values are used.
     row = self.row if row is None else row
     col = self.col if col is None else col
     v_shape = array_ops.broadcast_dynamic_shape(
@@ -200,6 +237,10 @@ class LinearOperatorToeplitz(linear_operator.LinearOperator):
     return array_ops.concat((v_shape, [k]), 0)
 
   def _assert_self_adjoint(self):
+    # [FUNCTION DOC]
+    # Returns an assertion op that checks row equals col element-wise (a Toeplitz matrix is
+    # symmetric exactly then; for complex data this checks symmetry, not conjugate symmetry).
+    # The assertion fails at run time with an explanatory message if they differ.
     return check_ops.assert_equal(
         self.row,
         self.col,
@@ -210,6 +251,12 @@ class LinearOperatorToeplitz(linear_operator.LinearOperator):
   # class (based on Levinson recursion.)
 
   def _matmul(self, x, adjoint=False, adjoint_arg=False):
+    # [FUNCTION DOC]
+    # Multiplies the operator (or its adjoint when adjoint is true) by the batch matrix x (or its
+    # adjoint when adjoint_arg is true). Embeds the Toeplitz matrix into a circulant operator of
+    # twice the size built from col and row via an FFT of the circulant first column, pads x with
+    # zeros, multiplies with the circulant operator and keeps the first n rows, cast to the
+    # operator dtype. Returns a tensor of the product. No side effects.
     # Given a Toeplitz matrix, we can embed it in a Circulant matrix to perform
     # efficient matrix multiplications. Given a Toeplitz matrix with first row
     # [t_0, t_1, ... t_{n-1}] and first column [t0, t_{-1}, ..., t_{-(n-1)},
@@ -239,16 +286,29 @@ class LinearOperatorToeplitz(linear_operator.LinearOperator):
         self.dtype)
 
   def _trace(self):
+    # [FUNCTION DOC]
+    # Returns the trace per batch member: the matrix size times the first entry of col (the
+    # constant main diagonal), cast to the operator dtype.
     return math_ops.cast(
         self.domain_dimension_tensor(),
         dtype=self.dtype) * self.col[..., 0]
 
   def _diag_part(self):
+    # [FUNCTION DOC]
+    # Returns the main diagonal as a tensor whose last dimension is the matrix size: the first
+    # entry of col repeated n times (broadcast over batch dimensions).
     diag_entry = self.col[..., 0:1]
     return diag_entry * array_ops.ones(
         [self.domain_dimension_tensor()], self.dtype)
 
   def _to_dense(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: an inline comment says the combined vector has 2*n + 1 elements, but the code
+    # builds reversed col plus row without its first entry, which is 2*n - 1 elements.
+    # Materialises the dense matrix. Broadcasts row and col to a common shape, concatenates the
+    # reversed column with the row minus its first entry, builds a matrix of gather indices
+    # (row i shifted by i, taken modulo 2n-1) and gathers along the last axis. Returns a tensor of
+    # shape batch dimensions plus n by n. Does not modify the operator.
     row = tensor_conversion.convert_to_tensor_v2_with_dispatch(self.row)
     col = tensor_conversion.convert_to_tensor_v2_with_dispatch(self.col)
     total_shape = array_ops.broadcast_dynamic_shape(
@@ -277,22 +337,38 @@ class LinearOperatorToeplitz(linear_operator.LinearOperator):
 
   @property
   def col(self):
+    # [FUNCTION DOC]
+    # Property returning the stored first-column tensor.
     return self._col
 
   @property
   def row(self):
+    # [FUNCTION DOC]
+    # Property returning the stored first-row tensor.
     return self._row
 
   @property
   def _composite_tensor_fields(self):
+    # [FUNCTION DOC]
+    # HELPER: composite-tensor support hook.
+    # Property naming the constructor arguments (col and row) that are treated as tensor
+    # components when this operator is flattened as a composite tensor.
     return ("col", "row")
 
   @property
   def _experimental_parameter_ndims_to_matrix_ndims(self):
+    # [FUNCTION DOC]
+    # HELPER: batch-slicing support hook.
+    # Property returning a mapping saying that col and row each contribute one dimension to the
+    # matrix part of the shape (the rest are batch dimensions).
     return {"col": 1, "row": 1}
 
 
 def _to_complex(x):
+  # [FUNCTION DOC]
+  # HELPER: dtype conversion for the FFT in the matrix-multiply path.
+  # Casts tensor x to complex128 if its dtype is float64 or complex128, otherwise to complex64,
+  # and returns the result.
   dtype = dtypes.complex64
   if x.dtype in [dtypes.float64, dtypes.complex128]:
     dtype = dtypes.complex128
