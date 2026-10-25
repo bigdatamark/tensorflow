@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Version and dependency compatibility checker for the TensorFlow Builder. Reads an ini-style
+# requirements file with sections Required, Optional, Unsupported and Dependency, where each entry
+# lists supported versions or a range with optional include and exclude lists, then validates a
+# user supplied mapping of configuration names to version lists against those rules.
+# Exposes the ConfigCompatChecker class (with a nested requirement holder class) and private
+# helpers for comparing dotted version strings. Records successes, failures, warnings and errors.
+# Import-time side effects: none beyond defining the directory path constant.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,6 +35,17 @@ PATH_TO_DIR = "tensorflow/tools/tensorflow_builder/compat_checker"
 
 
 def _compare_versions(v1, v2):
+  # [FUNCTION DOC]
+  # HELPER: version ordering utility for ConfigCompatChecker.in_range.
+  # Inputs: v1 and v2, dotted version strings of integers; the special value "inf" stands for
+  # infinity (treated as one more than the other version's first component). Compares component
+  # by component over the shorter list; if all shared components are equal, the longer version is
+  # larger unless its remaining components are all zero, in which case both are "equal".
+  # Returns a mapping with keys "larger" and "smaller" holding the corresponding version strings
+  # (or "equal" for both); values stay null if undecided. Raises a runtime error when both are
+  # "inf", and a value error if components are not integers.
+  # KNOWN ISSUE: when comparing "inf" with a version, the "inf" entry is replaced inside the
+  # returned strings by the substituted number, so callers see a number, not "inf".
   """Compare two versions and return information on which is smaller vs. larger.
 
   Args:
@@ -88,6 +107,10 @@ def _compare_versions(v1, v2):
 
 
 def _list_to_string(l, s):
+  # [FUNCTION DOC]
+  # HELPER: joins pieces of a version for _compare_versions.
+  # Inputs: l, a list of strings, and s, the separator string. Returns the items of l joined with
+  # s in one string. No side effects.
   """Concatenates list items into a single string separated by `s`.
 
   Args:
@@ -102,6 +125,12 @@ def _list_to_string(l, s):
 
 
 def _get_func_name():
+  # [FUNCTION DOC]
+  # HELPER: used to build error messages that name the calling function.
+  # Takes no inputs. Inspects the call stack and returns the name of the function that called the
+  # function which invoked this helper (stack entry one, the name field). Returns a string.
+  # KNOWN ISSUE: docstring says it returns the name of the "current function"; since it reads
+  # the caller's frame, it actually returns the name of the function that called it.
   """Get the name of current function.
 
   Returns:
@@ -111,6 +140,14 @@ def _get_func_name():
 
 
 class ConfigCompatChecker:
+  # [CLASS DOC]
+  # Validates a user configuration (mapping from config names such as compiler or platform to
+  # lists of version strings) against the rules in an ini requirements file. On construction it
+  # parses the file into four mappings (required, optional, unsupported, dependency) of
+  # requirement holders. State: usr_config, req_file, warning_msg and error_msg (message lists),
+  # successes and failures (lists of name plus detail pairs). Typical use: construct, then call
+  # the compatibility check and inspect failures or call the private print method.
+  # Nested class: _Reqs, one parsed requirement.
   """Class that checks configuration versions and dependency compatibilities.
 
   `ConfigCompatChecker` checks a given set of configurations and their versions
@@ -121,6 +158,13 @@ class ConfigCompatChecker:
   """
 
   class _Reqs(object):
+    # [CLASS DOC]
+    # HELPER: data holder for ConfigCompatChecker.
+    # Represents one parsed requirement from the ini file for one configuration name. Attributes:
+    # req (raw definition), config (name), include and exclude (lists of version strings or null),
+    # range (minimum and maximum version strings, both null when no range was given), plus private
+    # request type, section name, initialization status and list of error messages. Parsing
+    # happens in the constructor.
     """Class that stores specifications related to a single requirement.
 
     `_Reqs` represents a single version or dependency requirement specified in
@@ -130,6 +174,12 @@ class ConfigCompatChecker:
     """
 
     def __init__(self, req, config, section):
+      # [FUNCTION DOC]
+      # Constructor. Inputs: req (a list holding either a single range definition string or
+      # individual version strings), config (configuration name) and section (ini section name
+      # it came from). Stores them, initializes include, exclude and range to unset, then
+      # immediately parses the requirement. Parse failures do not raise; they set the status to
+      # failed and record messages (readable through the status property). Logs errors.
       """Initializes a version or dependency requirement object.
 
       Args:
@@ -159,6 +209,10 @@ class ConfigCompatChecker:
 
     @property
     def get_status(self):
+      # [FUNCTION DOC]
+      # Read-only property (accessed without parentheses). Returns a pair: the initialization
+      # flag (true on successful parse, false on failure, null if parsing never completed) and
+      # the list of error message strings collected while parsing. No side effects.
       """Get status of `_Reqs` initialization.
 
       Returns:
@@ -171,6 +225,11 @@ class ConfigCompatChecker:
       return self._initialized, self._error_message
 
     def __str__(self):
+      # [FUNCTION DOC]
+      # Returns a multi-line human readable description of the requirement: section, config name,
+      # request type, raw requirement, range, exclude list, include list and initialization
+      # state. No side effects.
+      # KNOWN ISSUE: docstring says it "prints"; it only builds and returns the string.
       """Prints a requirement and its components.
 
       Returns:
@@ -199,6 +258,18 @@ class ConfigCompatChecker:
       return req_str.format(**info)
 
     def parse_single_req(self):
+      # [FUNCTION DOC]
+      # Parses the stored requirement and fills in range, include and exclude. Takes no inputs
+      # besides instance state; returns nothing. If the requirement is empty, records an error
+      # and marks initialization failed. If the first entry contains the word range, matches it
+      # against a pattern; on no match, or when the range does not contain exactly one comma,
+      # records an error and marks failure. A range with empty bounds uses zero as minimum and
+      # "inf" as maximum; optional include and exclude lists (comma separated, spaces removed)
+      # are stored too. Otherwise the requirement must be a list and is stored as the include
+      # list. Errors are logged and appended to the error message list, never raised.
+      # KNOWN ISSUE: in the range branch the status is set to true inside the loop, so a
+      # later-parsed piece cannot undo it, and a match whose pieces are all empty leaves the
+      # status null instead of failed.
       """Parses a requirement and stores information.
 
       `self.req` _initialized in `__init__` is called for retrieving the
@@ -319,6 +390,13 @@ class ConfigCompatChecker:
       return
 
   def __init__(self, usr_config, req_file):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: usr_config (mapping from config names to lists of version strings to
+    # validate) and req_file (path of the ini requirements file). Initializes empty warning and
+    # error message lists, parses the file via the requirements reader and stores the four
+    # resulting mappings (required, optional, unsupported, dependency), and starts empty lists of
+    # successes and failures. Side effects: reads the file; if it cannot be opened the process
+    # exits with status 1; logs.
     """Initializes a configuration compatibility checker.
 
     Args:
@@ -344,6 +422,19 @@ class ConfigCompatChecker:
     self.failures = []
 
   def get_all_reqs(self):
+    # [FUNCTION DOC]
+    # Reads the ini requirements file and builds requirement holders for every entry. Takes no
+    # inputs besides instance state. Exits the process (status 1) if the file cannot be opened.
+    # For the Dependency section, each entry is split on comma-newline into rules, the outer
+    # square brackets are stripped (a missing one adds a warning), each rule is split into config
+    # name, config spec, dependency name and dependency spec, and a pair of holders is stored as
+    # a four element list. Other sections (Required, Optional, Unsupported) store one holder per
+    # config; an unknown section name records an error. An empty file or any holder that fails
+    # to initialize records errors and stops parsing early. Returns a mapping with keys required,
+    # optional, unsupported and dependency, each a mapping from config names to holders (or lists
+    # of rules for dependency). Messages go to the warning and error lists and the log.
+    # KNOWN ISSUE: the opened file handle used for the existence check is never closed, and the
+    # docstring claims a tuple is returned while a dictionary is returned.
     """Parses all compatibility specifications listed in the `.ini` config file.
 
     Reads and parses each and all compatibility specifications from the `.ini`
@@ -527,6 +618,14 @@ class ConfigCompatChecker:
     return return_dict
 
   def filter_dependency(self, line):
+    # [FUNCTION DOC]
+    # HELPER: rule splitter used by get_all_reqs for the Dependency section.
+    # Input: line, one dependency rule string of the form config, its spec, the word requires,
+    # dependency name, its spec. Strips newlines and matches a pattern with named groups.
+    # Returns a mapping with keys cfg, cfg_spec, cfgd and cfgd_spec. Raises an attribute error
+    # (from using the empty match result) if the line does not fit the format.
+    # KNOWN ISSUE: the docstring example shows dependency version "4.8" for a different rule;
+    # no validation or friendly error is produced for malformed lines.
     """Filters dependency compatibility rules defined in the `.ini` config file.
 
     Dependency specifications are defined as the following:
@@ -557,6 +656,14 @@ class ConfigCompatChecker:
     return r.groupdict()
 
   def convert_to_list(self, item, separator):
+    # [FUNCTION DOC]
+    # HELPER: normalizes a requirement spec into a list for the requirement holder.
+    # Inputs: item (a string, or a list) and separator (string to split on). A string containing
+    # the word range becomes a one element list; other strings are split on the separator and
+    # commas are removed from every piece; a list is wrapped in another list.
+    # Returns the resulting list. No side effects.
+    # KNOWN ISSUE: docstring says a list input "will take no effect", but code wraps it in an
+    # extra list (nesting it); the docstring example also shows numbers where strings result.
     """Converts a string into a list with a separator.
 
     Args:
@@ -592,6 +699,15 @@ class ConfigCompatChecker:
     return out
 
   def filter_line(self, line):
+    # [FUNCTION DOC]
+    # HELPER: strips list brackets from a requirement for get_all_reqs.
+    # Input: line, the raw multi-line value of an ini entry. Splits on newlines, drops a leading
+    # bracket (own line or inside the first line) and a trailing bracket, and returns the list of
+    # remaining lines. Missing brackets add a warning to the warning list and the log.
+    # KNOWN ISSUE: if the first line has no opening bracket the result list stays empty and the
+    # following access to its last item raises an index error; when the first line contains the
+    # bracket the result is a string, not a list, so later indexing takes a character.
+    # Also the empty-line warning condition can never be true for split results.
     """Removes `[` or `]` from the input line.
 
     Args:
@@ -645,6 +761,16 @@ class ConfigCompatChecker:
     return filtered
 
   def in_range(self, ver, req):
+    # [FUNCTION DOC]
+    # Decides whether a user version satisfies one requirement holder. Inputs: ver (list of
+    # version strings; for ranges only the first is used) and req (requirement holder). Order of
+    # checks: any version in the exclude list gives false; any version in the include list gives
+    # true; then, if a range is set, the first version must be at least the minimum and at most
+    # the maximum (maximum may be "inf") giving true, otherwise a warning is recorded and false is
+    # returned; with no range, records a warning (outside range if an include list existed,
+    # else missing specification) and returns false. Returns a boolean. Side effects: appends to
+    # the warning list and logs warnings.
+    # KNOWN ISSUE: the messages are labelled "[Error]" but are logged and stored as warnings.
     """Checks if a version satisfies a version and/or compatibility requirement.
 
     Args:
@@ -716,6 +842,14 @@ class ConfigCompatChecker:
       return False
 
   def _print(self, *args):
+    # [FUNCTION DOC]
+    # HELPER: debugging output for check results.
+    # Inputs: any number of selector strings among failures, successes, failure_msgs and
+    # warning_msgs. For each, prints a titled table of the matching list (with totals) to standard
+    # output. Returns nothing. Raises a generic exception naming the calling function for an
+    # unknown selector; earlier selectors will already have been printed.
+    # KNOWN ISSUE: the docstring's Raises section lists "warning_msg" but the accepted selector is
+    # "warning_msgs".
     """Prints compatibility check status and failure or warning messages.
 
     Prints to console without using `logging`.
@@ -732,6 +866,11 @@ class ConfigCompatChecker:
     """
 
     def _format(name, arr):
+      # [FUNCTION DOC]
+      # HELPER: formatter for the print method.
+      # Inputs: name (title word) and arr (list of pairs whose second item is a string or list).
+      # Prints a boxed title, the count, then each pair as first item plus detail (list details are
+      # joined with commas), or a "No <name>" line when empty. Returns nothing.
       """Prints compatibility check results with a format.
 
       Args:
@@ -772,6 +911,18 @@ class ConfigCompatChecker:
             "[Error] Wrong input provided for %s." % _get_func_name())
 
   def check_compatibility(self):
+    # [FUNCTION DOC]
+    # Runs the full compatibility check over every user configuration. Takes no inputs; returns
+    # true if all passed, false otherwise. For each config name: if unknown to all four sections
+    # it is a failure; if in Unsupported and the version is in range, failure; if in Required or
+    # Optional and not in range, failure; if it has Dependency rules, each rule whose config part
+    # is satisfied requires the dependency part (looked up in the user config) to be satisfied,
+    # else failure (a missing user entry for the rule's config or dependency is also a failure).
+    # Passing configs are appended to successes as name plus spec pairs. Failures and messages
+    # are appended to failures, error and warning lists, and logged. Does not stop at first failure.
+    # KNOWN ISSUE: the initial "required config found" loop compares the user keys with themselves
+    # and can never fail, so absent Required configs are not detected; the docstring says it
+    # returns immediately on first failure, but it continues through all configs.
     """Checks version and dependency compatibility for a given configuration.
 
     `check_compatibility` immediately returns with `False` (or failure status)

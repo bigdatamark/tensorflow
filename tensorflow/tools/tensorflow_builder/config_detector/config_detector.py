@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# Command-line tool that auto-detects the machine configuration relevant to building TensorFlow
+# (platform, CPU type, architecture and instruction sets, OS distribution and version, GPU type
+# and count, CUDA versions and compute capability, cuDNN, GCC, glibc, libstdc++ and Python
+# versions) by running shell commands, prints a status table, and optionally saves a JSON file.
+# Only Linux is supported; other systems cause the program to exit. Detection functions each
+# return a raw value (often bytes) or nothing when undetected.
+# Import-time side effects: defines absl flags (save_output, filename, debug), builds the command
+# tables, and declares module globals for the detected platform and GPU type.
+# Relies on the cuda_compute_capability data module for the golden GPU capability table.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -127,6 +137,12 @@ PATH_TO_DIR = "tensorflow/tools/tensorflow_builder/config_detector"
 
 
 def run_shell_cmd(args):
+  # [FUNCTION DOC]
+  # HELPER: shell runner used by all detection functions.
+  # Input: args, a command line string run through the shell. Standard error is merged into
+  # standard output. Waits for completion and returns the pair of captured output and error data
+  # (both bytes; the error part is empty or null because of the merge). Side effect: spawns a
+  # subprocess.
   """Executes shell commands and returns output.
 
   Args:
@@ -145,6 +161,13 @@ def run_shell_cmd(args):
 
 
 def get_platform():
+  # [FUNCTION DOC]
+  # Detects the operating system by running the system name command. Takes no inputs. If the
+  # lower-cased result is linux, stores it in the module platform global and returns it.
+  # Otherwise prints an error (plus stderr text in debug mode) and terminates the process with
+  # exit status 1. Side effects: sets the platform global, runs a subprocess, may exit.
+  # KNOWN ISSUE: the output is bytes, so comparing it with the text "linux" is never equal on
+  # Python 3, and the function would always exit; also the stored value is bytes.
   """Retrieves platform information.
 
   Currently the script only support linux. If other platoforms such as Windows
@@ -171,6 +194,11 @@ def get_platform():
 
 
 def get_cpu_type():
+  # [FUNCTION DOC]
+  # Detects the CPU vendor from the processor info file (first unique vendor line). Takes no
+  # inputs. Returns the text after the colon, stripped, as bytes (for example GenuineIntel).
+  # Prints stderr text in debug mode. Raises an index error if the output has no colon (e.g. no
+  # vendor line). Runs a subprocess.
   """Retrieves CPU (type) information.
 
   Returns:
@@ -187,6 +215,11 @@ def get_cpu_type():
 
 
 def get_cpu_arch():
+  # [FUNCTION DOC]
+  # Detects the machine hardware name (for example x86_64) with the machine-name command. Takes
+  # no inputs. Returns the output bytes with surrounding newlines removed. Prints stderr text
+  # in debug mode. Runs a subprocess.
+  # KNOWN ISSUE: docstring talks about 32-bit or 64-bit, but the value is the raw machine name.
   """Retrieves processor architecture type (32-bit or 64-bit).
 
   Returns:
@@ -202,6 +235,11 @@ def get_cpu_arch():
 
 
 def get_distrib():
+  # [FUNCTION DOC]
+  # Detects the OS distribution name by reading the release files under the system config
+  # directory for the distribution id entry. Takes no inputs. Returns the bytes value with
+  # newlines trimmed (empty if the entry is absent, as on non-Ubuntu systems). Prints stderr
+  # text in debug mode. Runs a subprocess.
   """Retrieves distribution name of the operating system.
 
   Returns:
@@ -217,6 +255,10 @@ def get_distrib():
 
 
 def get_distrib_version():
+  # [FUNCTION DOC]
+  # Detects the OS distribution release number from the release files (distribution release
+  # entry). Takes no inputs. Returns the bytes value with newlines trimmed (empty when absent).
+  # Prints stderr text in debug mode. Runs a subprocess.
   """Retrieves distribution version of the operating system.
 
   Returns:
@@ -234,6 +276,17 @@ def get_distrib_version():
 
 
 def get_gpu_type():
+  # [FUNCTION DOC]
+  # Detects the GPU model via the PCI listing (no superuser needed) and checks it against the
+  # golden table of known GPU names. Takes no inputs. Returns a pair: the PCI id of the device
+  # (bytes) and the GPU type, which is the cleaned model name (bytes) if known or the text
+  # "unknown". Also stores the type in the module GPU type global. Prints stderr text in debug
+  # mode. Runs a subprocess and reads the golden file.
+  # KNOWN ISSUE: the bracket test is written so that it is always true (a non-empty text literal
+  # is truthy), so the else branch is dead; a missing GPU makes the model fields absent and
+  # raises an index error; and the bytes name is compared against text keys of the golden table,
+  # so it will always be reported as unknown on Python 3. The docstring says a string is returned
+  # but a pair is.
   """Retrieves GPU type.
 
   Returns:
@@ -272,6 +325,11 @@ def get_gpu_type():
 
 
 def get_gpu_count():
+  # [FUNCTION DOC]
+  # Counts display and 3D controller devices in the PCI listing. Takes no inputs. Returns the
+  # count as bytes text with newlines trimmed (not an integer). Prints stderr text in debug mode.
+  # Runs a subprocess.
+  # KNOWN ISSUE: docstring claims an integer is returned; it is bytes.
   """Retrieves total number of GPU's available in the system.
 
   Returns:
@@ -286,6 +344,15 @@ def get_gpu_count():
 
 
 def get_cuda_version_all():
+  # [FUNCTION DOC]
+  # Lists CUDA installation directories under the local install prefix and extracts version
+  # numbers from directory names that carry one. Takes no inputs. Returns a list of version
+  # strings (for example 10.1). Directories without a version suffix (the default link) are
+  # skipped. Prints stderr text in debug mode. Runs a subprocess.
+  # KNOWN ISSUE: raises an attribute error if an output line does not match the pattern (an empty
+  # trailing line is only filtered if it equals text, but the items are bytes so it is not
+  # filtered), and the docstring says the default version is excluded, though a bare cuda
+  # directory is merely ignored.
   """Retrieves all additional CUDA versions available (other than default).
 
   For retrieving default CUDA version, use `get_cuda_version` function.
@@ -319,6 +386,15 @@ def get_cuda_version_all():
 
 
 def get_cuda_version_default():
+  # [FUNCTION DOC]
+  # Detects the default CUDA version by trying each command in order (compiler version query,
+  # then reading the version file in the default install directory). Takes no inputs. Each
+  # failed or empty attempt is reported only in debug mode. Returns the output of the last
+  # command run with newlines trimmed (empty if none produced output).
+  # KNOWN ISSUE: the loop does not stop at the first success, so the last command always runs
+  # and overwrites the output (an empty result from it replaces an earlier good one); the output
+  # is bytes, so stripping with a text argument raises a type error; the compiler output is not
+  # reduced to a version number; and the docstring's claim of fallback only on failure is wrong.
   """Retrieves default CUDA version.
 
   Default version is the version found in `/usr/local/cuda/` installation.
@@ -360,6 +436,14 @@ def get_cuda_version_default():
 
 
 def get_cuda_compute_capability(source_from_url=False):
+  # [FUNCTION DOC]
+  # Looks up the CUDA compute capabilities of the detected GPU. Input: source_from_url, optional
+  # boolean (default false): true scrapes the NVIDIA website, false reads the golden file. If the
+  # GPU type global is unset or "unknown", prints a warning in debug mode and returns nothing.
+  # Otherwise returns the list of capability strings for the GPU type from the chosen table.
+  # Raises a key error if the type is absent from the table. Side effects: network or file read.
+  # KNOWN ISSUE: get_all_configs passes the GPU type text as this argument, which is truthy, so
+  # the web source is always selected there; and get_gpu_type must be called first.
   """Retrieves CUDA compute capability based on the detected GPU type.
 
   This function uses the `cuda_compute_capability` module to retrieve the
@@ -394,6 +478,11 @@ def get_cuda_compute_capability(source_from_url=False):
 
 
 def get_cudnn_version():
+  # [FUNCTION DOC]
+  # Detects the cuDNN version. Takes no inputs. First locates the cuDNN header with a path
+  # lookup; if a path is found, runs a pipeline that reads the major, minor and patch macros and
+  # joins them with dots. Returns that output as bytes with newlines trimmed, or nothing if the
+  # header was not found. Prints stderr text in debug mode. Runs subprocesses.
   """Retrieves the version of cuDNN library detected.
 
   Returns:
@@ -418,6 +507,10 @@ def get_cudnn_version():
 
 
 def get_gcc_version():
+  # [FUNCTION DOC]
+  # Detects the GCC version from the compiler version output (last word of the first line).
+  # Takes no inputs. Returns bytes with newlines trimmed. Prints stderr text in debug mode.
+  # Runs a subprocess.
   """Retrieves version of GCC detected.
 
   Returns:
@@ -433,6 +526,11 @@ def get_gcc_version():
 
 
 def get_glibc_version():
+  # [FUNCTION DOC]
+  # Detects the GNU C library version from the first line of the dynamic linker version output
+  # (last word). Takes no inputs. Returns bytes with newlines trimmed. Prints stderr text in
+  # debug mode. Runs a subprocess.
+  # KNOWN ISSUE: the debug error message wrongly says it failed detecting the GCC version.
   """Retrieves version of GLIBC detected.
 
   Returns:
@@ -448,6 +546,11 @@ def get_glibc_version():
 
 
 def get_libstdcpp_version():
+  # [FUNCTION DOC]
+  # Detects the libstdc++ version by searching the library found through the linker cache for
+  # version symbols. Takes no inputs. Takes the second-to-last symbol line, keeps the part after
+  # the last underscore and removes newlines. Returns bytes (for example the dotted version).
+  # Prints stderr text in debug mode. Runs a subprocess.
   """Retrieves version of libstdc++ detected.
 
   Returns:
@@ -464,6 +567,13 @@ def get_libstdcpp_version():
 
 
 def get_cpu_isa_version():
+  # [FUNCTION DOC]
+  # Checks which of the required instruction set extensions (avx, avx2, avx512f, sse4, sse4_1)
+  # the CPU advertises, using the flags line of the processor info file. Takes no inputs.
+  # Returns a pair: list of found extensions (as text) and list of missing ones (unordered).
+  # Prints stderr text in debug mode. Runs a subprocess.
+  # KNOWN ISSUE: the flags are split from bytes and compared to text names, so nothing ever
+  # matches on Python 3 and everything is reported missing.
   """Retrieves all Instruction Set Architecture(ISA) available.
 
   Required ISA(s): 'avx', 'avx2', 'avx512f', 'sse4', 'sse4_1'
@@ -492,6 +602,11 @@ def get_cpu_isa_version():
 
 
 def get_python_version():
+  # [FUNCTION DOC]
+  # Reports the version of the running Python interpreter as a dotted major, minor, micro
+  # string, obtained by matching the textual version info. Takes no inputs; no side effects.
+  # KNOWN ISSUE: the major and minor pattern accepts one digit only, so a two-digit minor
+  # version (such as 3.10 or 3.12) makes the match fail and raises an attribute error.
   """Retrieves default Python version.
 
   Returns:
@@ -504,6 +619,16 @@ def get_python_version():
 
 
 def get_all_configs():
+  # [FUNCTION DOC]
+  # Runs every detector and classifies the results. Takes no inputs. Returns four items: a list
+  # of rows (name and value or colored status text) for the table, a list of missing
+  # configurations (with explanation for instruction sets), a list of configurations with
+  # warnings (those whose value is "unknown"), and a mapping from config name to value for JSON
+  # output (empty string for missing). Falsy values count as missing; instruction set results
+  # are shown as found when none are missing. Side effects: runs all detection subprocesses, may
+  # exit the process on unsupported platforms, network or file access via the capability lookup.
+  # KNOWN ISSUE: all detectors are called eagerly while building the ordered mapping (the GPU type
+  # detector runs twice), so a failure in any one aborts everything.
   """Runs all functions for detecting user machine configurations.
 
   Returns:
@@ -573,6 +698,11 @@ def get_all_configs():
 
 
 def print_all_configs(configs, missing, warning):
+  # [FUNCTION DOC]
+  # Prints the detection results as a two column table. Inputs: configs (list of rows of name and
+  # value; list values are joined with commas), missing (rows to report as errors) and warning
+  # (rows to report as warnings). After the table prints an error list, a warning list, or an
+  # all-found info line when both are empty. Returns nothing; writes to standard output only.
   """Prints the status and info on all configurations in a table format.
 
   Args:
@@ -616,6 +746,13 @@ def print_all_configs(configs, missing, warning):
 
 
 def save_to_file(json_data, filename):
+  # [FUNCTION DOC]
+  # Writes the detected configurations as JSON. Inputs: json_data (mapping of config names to
+  # values) and filename (output name; a json suffix is appended if missing). The file goes into
+  # the config detector directory path constant, with sorted keys and four-space indentation.
+  # Prints a success message. Returns nothing. Raises an OS error if the directory is not
+  # writable and a type error if values (such as bytes) are not JSON serializable.
+  # Overwrites an existing file.
   """Saves all detected configuration(s) into a JSON file.
 
   Args:
@@ -633,6 +770,10 @@ def save_to_file(json_data, filename):
 
 
 def manage_all_configs(save_results, filename):
+  # [FUNCTION DOC]
+  # Orchestrates detection. Inputs: save_results (boolean, whether to write the JSON file) and
+  # filename (output file name). Runs all detectors, prints the table, and if requested saves the
+  # JSON mapping. Returns nothing. Side effects: subprocesses, console output, optional file.
   """Manages configuration detection and retrieval based on user input.
 
   Args:
@@ -649,6 +790,10 @@ def manage_all_configs(save_results, filename):
 
 
 def main(argv):
+  # [FUNCTION DOC]
+  # Script entry point. Input: argv, command-line argument list from the absl runner. Raises a
+  # usage error if more than three arguments are given. Otherwise runs detection with the
+  # save_output and filename flag values. Returns nothing.
   if len(argv) > 3:
     raise app.UsageError("Too many command-line arguments.")
 

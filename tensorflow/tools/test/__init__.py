@@ -1,3 +1,9 @@
+# [PACKAGE DOC]
+# Package marker for the tensorflow.tools.test package. It contains small tools used when running
+# and benchmarking TensorFlow tests: gathering GPU and machine information, running a test binary
+# and collecting its logs, uploading benchmark results, and a file-name case-collision check.
+# The file defines and re-exports nothing and has no import-time side effects; it only makes the
+# directory importable and carries a one-line package docstring.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

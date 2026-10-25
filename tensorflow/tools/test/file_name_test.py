@@ -1,4 +1,9 @@
 #!/usr/bin/python
+# [MODULE DOC]
+# Standalone script (run as a test) that checks the TensorFlow source tree for directories that
+# contain two entries whose names differ only by letter case, which would break checkouts on
+# case-insensitive filesystems. Exposes a base directory constant, an error message template and
+# a main function. No import-time side effects beyond computing the base directory path.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +30,13 @@ Files with same name but different case detected in directory: {}
 
 
 def main():
+  # [FUNCTION DOC]
+  # Walks the whole source tree under the base directory (following symbolic links) and verifies
+  # that within each directory the lower-cased names of subdirectories and files are all distinct.
+  # Takes no inputs and returns nothing.
+  # Raises an assertion error if the base directory name does not end with "tensorflow" (meaning
+  # the path was probably computed wrongly), or if any directory has names that collide when
+  # lower-cased (the message names that directory). Only reads the filesystem.
   # Make sure BASE_DIR ends with tensorflow.  If it doesn't, we probably
   # computed the wrong directory.
   if os.path.split(BASE_DIR)[-1] != 'tensorflow':

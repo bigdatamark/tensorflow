@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# HELPER: library used by the test-log gathering tools (run_and_gather_logs_lib) to describe GPUs.
+# Detects NVIDIA GPUs on the machine, first by reading the driver information files under the
+# proc filesystem (gives model, UUID and bus id) and falling back to the CUDA runtime shared
+# library through ctypes (gives model and PCI bus id, no UUID). Exposes the public function
+# gather_gpu_devices plus a ctypes structure mirroring the CUDA device properties record.
+# No import-time side effects.
+# KNOWN ISSUE: the module docstring is copied from the system info library ("getting system
+# information"); this module only reports GPU devices.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +33,14 @@ from tensorflow.python.platform import gfile
 
 
 def _gather_gpu_devices_proc():
+  # [FUNCTION DOC]
+  # HELPER: first detection strategy used by gather_gpu_devices.
+  # Takes no inputs. Finds every NVIDIA driver information file under the proc filesystem, parses
+  # its colon-separated key/value lines (tabs removed, keys lower-cased, values trimmed) and builds
+  # one GPU info message per file with model, UUID (both default to "Unknown") and the bus id
+  # taken from the directory name in the path. Returns a list of those messages, empty if there
+  # are no such files. Errors reading or parsing files (IO, value or TensorFlow op errors)
+  # propagate to the caller. Only reads files.
   """Try to gather NVidia GPU device information via /proc/driver."""
   dev_info = []
   for f in gfile.Glob("/proc/driver/nvidia/gpus/*/information"):
@@ -41,6 +58,14 @@ def _gather_gpu_devices_proc():
 
 
 class CUDADeviceProperties(ct.Structure):
+  # [CLASS DOC]
+  # HELPER: ctypes mapping used by the CUDA runtime fallback detection.
+  # Binary layout mirror of the CUDA runtime device properties record (device name, memory sizes,
+  # limits, compute capability, PCI ids and so on). An instance is passed by reference to the
+  # runtime library to be filled in. A large trailing padding buffer protects against crashes if
+  # newer CUDA versions enlarge the real record.
+  # KNOWN ISSUE: the field list matches an old CUDA release (6.5 era); newer runtimes reorder or
+  # change fields, so values other than the leading name may be unreliable.
   # See $CUDA_HOME/include/cuda_runtime_api.h for the definition of
   # the cudaDeviceProp struct.
   _fields_ = [
@@ -113,6 +138,17 @@ class CUDADeviceProperties(ct.Structure):
 
 
 def _gather_gpu_devices_cudart():
+  # [FUNCTION DOC]
+  # HELPER: fallback detection strategy used by gather_gpu_devices.
+  # Takes no inputs. Loads the CUDA runtime shared library appropriate for the operating system
+  # (Linux, macOS or Windows), checks that the runtime version is at least 6.5, counts devices,
+  # and for each one queries its properties and PCI bus id, producing a GPU info message with
+  # model name and bus id (no UUID is available). Returns the list of messages.
+  # Raises NotImplementedError for an unknown operating system or CUDA older than 6.5, ValueError
+  # when a runtime call returns a nonzero status, and OSError if the library cannot be loaded.
+  # Side effect: loads a native library into the process.
+  # KNOWN ISSUE: the version error message says "between >= 6.5", which is garbled wording; and
+  # the bus id buffer is passed as a text string, which fails on Python 3 where bytes are needed.
   """Try to gather NVidia GPU device information via libcudart."""
   dev_info = []
 
@@ -157,6 +193,12 @@ def _gather_gpu_devices_cudart():
 
 
 def gather_gpu_devices():
+  # [FUNCTION DOC]
+  # Public entry point for GPU discovery. Takes no inputs. Tries the proc filesystem strategy
+  # first (it provides UUIDs); if that fails or finds no devices, falls back to the CUDA runtime
+  # strategy. Returns a list of GPU info messages, or an empty list if neither works. Swallows IO,
+  # value, OS, not-implemented and TensorFlow op errors from both strategies, so it never raises
+  # for those. Side effects are only file reads and possibly loading the CUDA library.
   """Gather gpu device info.
 
   Returns:

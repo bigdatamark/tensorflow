@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Command-line test runner for TensorFlow benchmarks. Runs a bazel test target through
+# run_and_gather_logs_lib, collects the benchmark logs into a test results record, adds the build
+# configuration (compilation mode and compiler flags) and the process environment variables, and
+# either prints the record as text, or writes it as a JSON file in the requested output directory.
+# Import-time side effects: defines absl flags (name, test_name, test_args, output directory and
+# filename, temp dir option, benchmark type, compilation mode, cc flags, skip_export), and
+# exits the process softly with status zero (logging an error) if the cpuinfo or psutil packages
+# are not installed.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -71,6 +80,11 @@ flags.DEFINE_boolean("skip_export", False,
 
 
 def gather_build_configuration():
+  # [FUNCTION DOC]
+  # HELPER: builds the build-configuration part of the results for main.
+  # Takes no arguments; reads the compilation mode and cc flags command-line flags. Splits the
+  # flags string shell-style, drops every flag beginning with "-i" (include paths), and returns a
+  # build configuration message holding the mode and the remaining compiler flags. No side effects.
   build_config = test_log_pb2.BuildConfiguration()
   build_config.mode = FLAGS.compilation_mode
   # Include all flags except includes
@@ -82,6 +96,17 @@ def gather_build_configuration():
 
 
 def main(unused_args):
+  # [FUNCTION DOC]
+  # Program entry point (command-line arguments are ignored; configuration comes from flags).
+  # Runs the named test via the logs library (skipping log processing when skip_export is set, in
+  # which case it returns right after the run). Otherwise fills in the build configuration and
+  # copies all environment variables into the results. With no output directory flag it prints
+  # the results as text and returns. Else chooses a file name (the filename flag, or the sanitized
+  # benchmark name plus a UTC timestamp), places it in the output directory (under the test temp
+  # directory if the temp dir flag is set, else the absolute path of the directory), writes the
+  # results as JSON with a ".json" suffix and logs the location. Returns nothing.
+  # Errors from the test run (invalid target, failed test, missing logs) propagate.
+  # KNOWN ISSUE: the file handle used for writing the JSON is never explicitly closed.
   name = FLAGS.name
   test_name = FLAGS.test_name
   test_args = " ".join(FLAGS.test_args)

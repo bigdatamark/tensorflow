@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# HELPER: maintenance script supporting the config detector (it refreshes the golden data file).
+# Scrapes the NVIDIA CUDA GPU web page for GPU names and their compute capability numbers, builds
+# an ordered mapping from GPU name to a list of capabilities, writes it as a csv file in the data
+# directory and compares it with the checked-in golden csv, printing a warning on differences.
+# Also offers a loader for the golden file and a table printer. Run as a script through absl.
+# Import-time side effects: none beyond defining path constants and the flags object.
+# KNOWN ISSUE: the web retrieval uses the aliased urllib.request module through a double
+# "request" attribute lookup and compares text with bytes, so it likely fails on Python 3.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -47,6 +56,15 @@ CUDA_CC_GOLDEN_DIR = PATH_TO_DIR + "/data/golden/compute_capability_golden.csv"
 
 
 def retrieve_from_web(generate_csv=False):
+  # [FUNCTION DOC]
+  # Downloads the NVIDIA CUDA GPUs page and extracts GPU names and capabilities line by line
+  # using patterns, stopping at the closing html tag. Input: generate_csv, optional boolean
+  # (default false) passed on to request csv output. Returns the ordered mapping built by
+  # create_gpu_capa_map (GPU name to list of capability strings in page order). Side effects:
+  # network access; optionally writes a csv file.
+  # KNOWN ISSUE: the module is imported as an alias for the request module, so the call that
+  # accesses its "request" attribute fails with an attribute error; and lines read from the
+  # response are bytes, so the text pattern searches raise a type error on Python 3.
   """Retrieves list of all CUDA compute capability from NVIDIA webpage.
 
   Args:
@@ -82,6 +100,11 @@ def retrieve_from_web(generate_csv=False):
 
 
 def retrieve_from_golden():
+  # [FUNCTION DOC]
+  # Loads the golden csv file (path constant for the golden compute capability file). Takes no
+  # inputs. Each line is split on commas: first item is the GPU name, the rest (newline stripped)
+  # are its capability strings. Returns a plain mapping from GPU name to list of capabilities.
+  # Raises an OS error if the file is missing. Only reads the file.
   """Retrieves list of all CUDA compute capability from a golden file.
 
   The following file is set as default:
@@ -111,6 +134,15 @@ def retrieve_from_golden():
 def create_gpu_capa_map(match_list,
                         generate_csv=False,
                         filename="compute_capability"):
+  # [FUNCTION DOC]
+  # HELPER: post-processing step of retrieve_from_web.
+  # Inputs: match_list (alternating GPU name and capability strings scraped from the page, with
+  # marker entries), generate_csv (optional boolean, default false) and filename (csv base name
+  # without extension, default "compute_capability"). Starts collecting after an entry containing
+  # "Products" and stops at one containing "www"; pairs a name with the following capability and
+  # appends repeated names' capabilities to the same list. Returns an ordered mapping from GPU
+  # name to list of capabilities. If requested, writes the csv (which also compares to golden).
+  # KNOWN ISSUE: the counters for mismatches are computed but never used or reported.
   """Generates a map between GPU types and corresponding compute capability.
 
   This method is used for retrieving CUDA compute capability from the web only.
@@ -163,6 +195,12 @@ def create_gpu_capa_map(match_list,
 
 
 def write_csv_from_dict(filename, input_dict):
+  # [FUNCTION DOC]
+  # Writes the mapping as a csv file named filename inside the data directory: one line per GPU
+  # with the name followed by its comma-separated capabilities. Inputs: filename (output file
+  # name) and input_dict (mapping from name to list of strings). Flushes, prints a confirmation
+  # and then runs the golden comparison. Returns nothing. Overwrites an existing file.
+  # KNOWN ISSUE: the file is flushed but never closed explicitly.
   """Writes out a `.csv` file from an input dictionary.
 
   After writing out the file, it checks the new list against the golden
@@ -186,6 +224,12 @@ def write_csv_from_dict(filename, input_dict):
 
 
 def check_with_golden(filename):
+  # [FUNCTION DOC]
+  # Compares a newly written csv in the data directory with the golden csv. Input: filename of
+  # the new file. If both files exist, computes a unified diff and prints either a warning with
+  # the list of diff lines or a message that no difference was found. Does nothing if either file
+  # is missing. Returns nothing. Only reads files and prints.
+  # KNOWN ISSUE: the "no difference" message misspells golden as "golen".
   """Checks the newly created CUDA compute capability file with the golden.
 
   If differences are found, then it prints a list of all mismatches as
@@ -218,6 +262,9 @@ def check_with_golden(filename):
 
 
 def print_dict(py_dict):
+  # [FUNCTION DOC]
+  # HELPER: debugging aid. Input: py_dict, mapping from GPU name to capability value. Prints one
+  # line per entry as a two column table, each column padded to 25 characters. Returns nothing.
   """Prints dictionary with formatting (2 column table).
 
   Args:
@@ -228,6 +275,11 @@ def print_dict(py_dict):
 
 
 def main(argv):
+  # [FUNCTION DOC]
+  # Script entry point. Input: argv, the command-line argument list from the absl runner.
+  # Raises a usage error if more than two arguments are given; otherwise scrapes the NVIDIA page
+  # and writes the csv file (default name compute_capability) in the data directory, then
+  # compares with the golden file. Returns nothing.
   if len(argv) > 2:
     raise app.UsageError("Too many command-line arguments.")
 

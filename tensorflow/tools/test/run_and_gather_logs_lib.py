@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# HELPER: library behind the run_and_gather_logs command-line tool.
+# Runs a bazel test executable as a subprocess with an environment variable pointing at a log
+# file prefix, then collects the benchmark entry files the test wrote, and packages them with git
+# commit, GPU and machine configuration into a test results record. Exposes a missing-logs
+# exception, get_git_commit_sha, process_test_logs, process_benchmarks and run_and_gather_logs.
+# No import-time side effects.
+# KNOWN ISSUE: the module docstring ("getting system information") is copied from another module
+# and does not describe this one.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,10 +37,16 @@ from tensorflow.tools.test import system_info_lib
 
 
 class MissingLogsError(Exception):
+  # [CLASS DOC]
+  # Exception raised by run_and_gather_logs when the test ran successfully but produced no
+  # benchmark log files. Plain subclass of the base exception class with no extra state.
   pass
 
 
 def get_git_commit_sha():
+  # [FUNCTION DOC]
+  # Takes no inputs. Returns the value of the GIT_COMMIT environment variable (set by CI build
+  # agents), or nothing/null if it is unset. Only reads the environment.
   """Get git commit SHA for this build.
 
   Attempt to get the SHA from environment variable GIT_COMMIT, which should
@@ -46,6 +61,16 @@ def get_git_commit_sha():
 
 def process_test_logs(name, test_name, test_args, benchmark_type,
                       start_time, run_time, log_files):
+  # [FUNCTION DOC]
+  # Builds a test results record. Inputs: name (benchmark identifier), test_name (bazel target),
+  # test_args (arguments the target ran with), benchmark_type (name of a benchmark-type enum
+  # value, case-insensitive), start_time (epoch seconds), run_time (wall seconds) and log_files
+  # (paths of benchmark log files). Sets those fields, the git commit if available, the parsed
+  # benchmark entries, the arguments and the machine configuration. Returns the results record.
+  # Raises a value error for an unknown benchmark type, and propagates parse errors from
+  # process_benchmarks. Side effects: reads files and inspects the machine.
+  # KNOWN ISSUE: the docstring says test_args is a string, but run_and_gather_logs passes the
+  # already split list, which is what extending the argument list expects.
   """Gather test information and put it in a TestResults proto.
 
   Args:
@@ -83,6 +108,11 @@ def process_test_logs(name, test_name, test_args, benchmark_type,
 
 
 def process_benchmarks(log_files):
+  # [FUNCTION DOC]
+  # HELPER: merges benchmark log files for process_test_logs.
+  # Input: list of paths to binary serialized benchmark-entries files. Reads each file and merges
+  # it into one benchmark-entries message. Returns the merged message. Raises a generic exception
+  # naming the file if the content cannot be fully parsed.
   benchmarks = test_log_pb2.BenchmarkEntries()
   for f in log_files:
     content = gfile.GFile(f, "rb").read()
@@ -96,6 +126,22 @@ def run_and_gather_logs(name,
                         test_args,
                         benchmark_type,
                         skip_processing_logs=False):
+  # [FUNCTION DOC]
+  # Runs a bazel test binary and gathers its benchmark logs. Inputs: name (benchmark identifier),
+  # test_name (unique bazel target such as a path plus colon plus target), test_args (one string
+  # of arguments, split shell-style), benchmark_type (benchmark-type enum name) and optional
+  # skip_processing_logs (default false). Validates the target (must start with two slashes, be
+  # a single concrete target, no wildcards). Locates the executable under the bazel output
+  # directory or the current directory (also trying a python3 suffixed variant). Appends a GPU
+  # short name (for a few Tesla/NVIDIA models) to the name, makes a temp directory, sets an
+  # environment variable telling the test where to write reports, runs the test and, unless
+  # skipping, collects log files and builds the results.
+  # Returns a pair: the results record (null if skipped) and the adjusted benchmark name.
+  # Raises value error for bad target or missing executable, called-process error if the test
+  # fails, and a missing-logs error if no logs were written. Side effects: modifies the process
+  # environment, creates and finally deletes the temp directory.
+  # KNOWN ISSUE: the docstring calls the second return value "mangled_test_name" in one place and
+  # "test_adjusted_name" in another; the code returns the unmangled adjusted name.
   """Run the bazel test given by test_name.  Gather and return the logs.
 
   Args:

@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Small command-line entry point that gathers the machine configuration (via the system_info_lib
+# helper module) and prints it to standard output. Exposes only a main function; running it as a
+# script starts the absl application runner. No import-time side effects.
+# KNOWN ISSUE: the module docstring says "Library for getting system information" but this file is
+# a thin executable wrapper, the actual library is system_info_lib.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,6 +25,11 @@ from tensorflow.tools.test import system_info_lib
 
 
 def main(unused_args):
+  # [FUNCTION DOC]
+  # Application entry point. Ignores the command-line arguments passed in by the app runner,
+  # asks the system information library to collect the machine configuration (CPU, GPU, platform
+  # and similar details) and prints the resulting record to standard output. Returns nothing.
+  # Any error raised while gathering the configuration propagates to the caller.
   config = system_info_lib.gather_machine_configuration()
   print(config)
 
