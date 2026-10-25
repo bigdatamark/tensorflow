@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Jacobian computation helpers built on the parallel-for (pfor) machinery. Exposes two public
+# functions: one that computes the full jacobian of an output tensor with respect to one or more
+# inputs, and one that computes stacked per-example (batch) jacobians. Both can either vectorize
+# the per-element gradient computation with pfor or run it sequentially with a while loop.
+# Depends on the array, check and gradient ops plus the parallel_for control-flow ops. No
+# import-time side effects beyond imports.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +30,19 @@ from tensorflow.python.util import nest
 
 
 def jacobian(output, inputs, use_pfor=True, parallel_iterations=None):
+  # [FUNCTION DOC]
+  # Computes the jacobian of a tensor with respect to one tensor or a nested structure of tensors.
+  # The output is flattened to one dimension, then for every output element the gradient with
+  # respect to all flattened inputs is computed, either vectorized with pfor (use_pfor true) or
+  # with a sequential for-loop. Each resulting gradient stack is reshaped to the output shape
+  # followed by the input shape, and its static shape is set accordingly. Dense results are
+  # produced even if gradients are sparse. Entries that are not tensors (for example nothing/null
+  # for unconnected inputs) are passed through unchanged.
+  # Inputs: output is a tensor; inputs is a tensor or nested structure; use_pfor selects pfor
+  # versus loop; parallel_iterations optionally limits how many iterations run in parallel.
+  # Returns a structure matching inputs. Adds ops to the current graph; no other side effects.
+  # Exceptions from the underlying gradient or pfor ops propagate. If the static output size is
+  # unknown the dynamic size is used.
   """Computes jacobian of `output` w.r.t. `inputs`.
 
   Args:
@@ -48,6 +68,10 @@ def jacobian(output, inputs, use_pfor=True, parallel_iterations=None):
   output = array_ops.reshape(output, [-1])
 
   def loop_fn(i):
+    # [FUNCTION DOC]
+    # HELPER: per-iteration body for jacobian, passed to pfor or for_loop.
+    # Takes an iteration index, picks that element of the flattened output and returns the list
+    # of gradients of that element with respect to every flattened input.
     y = array_ops.gather(output, i)
     return gradient_ops.gradients(y, flat_inputs)
 
@@ -78,6 +102,20 @@ def jacobian(output, inputs, use_pfor=True, parallel_iterations=None):
 
 
 def batch_jacobian(output, inp, use_pfor=True, parallel_iterations=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says a value error is raised when the first dimensions differ, but
+  # that only happens when the static sizes are known and incompatible; with unknown sizes only a
+  # runtime assertion is added, so an invalid-argument error appears when the graph is run.
+  # The docstring also omits that nothing/null is returned when there is no gradient path.
+  # Computes per-example jacobians of output with respect to inp, assuming output row i depends
+  # only on inp row i. Output is flattened to a two-dimensional tensor (batch by row size), then
+  # for each column the gradient with respect to inp is taken (via pfor or a for-loop) and the
+  # results are reshaped and transposed to batch, output dims, input dims.
+  # Inputs: output and inp are tensors sharing the first (batch) dimension; use_pfor chooses
+  # vectorization; parallel_iterations optionally bounds parallelism.
+  # Returns the stacked jacobian tensor, or nothing/null if the gradient is unconnected.
+  # Raises a value error if the static first dimensions are incompatible. Adds ops (including an
+  # equality assertion) to the graph.
   """Computes and stacks jacobians of `output[i,...]` w.r.t. `input[i,...]`.
 
   e.g.
@@ -124,6 +162,10 @@ def batch_jacobian(output, inp, use_pfor=True, parallel_iterations=None):
     output = array_ops.reshape(output, [batch_size, output_row_size])
 
   def loop_fn(i):
+    # [FUNCTION DOC]
+    # HELPER: per-iteration body for batch_jacobian, passed to pfor or for_loop.
+    # Takes a column index, selects that column of the flattened two-dimensional output for all
+    # batch rows and returns the gradient of it with respect to inp (the first gradient only).
     y = array_ops.gather(output, i, axis=1)
     return gradient_ops.gradients(y, inp)[0]
 
