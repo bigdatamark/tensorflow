@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Functional tests for the FTRL-proximal optimizer of the training package. Each test builds
+# small variables (dense, resource or sparse) in a fresh graph, applies the optimizer with
+# various regularization settings (none, L1, L2, beta, L2 shrinkage) for several steps, and
+# compares against precomputed values or against Adagrad / gradient descent, to which FTRL is
+# equivalent in special configurations. No import-time registrations.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,8 +37,19 @@ from tensorflow.python.training import gradient_descent
 
 
 class FtrlOptimizerTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the FTRL optimizer: numerical results with different regularization
+  # settings, dense and sparse gradients, reference and resource variables, half and 32-bit
+  # float types, and equivalence to Adagrad and gradient descent. Has a shared helper that
+  # applies a given optimizer for a few steps to zero-initialized variables.
 
   def doTestFtrlwithoutRegularization(self, use_resource=False):
+    # [FUNCTION DOC]
+    # HELPER: shared body for the plain and resource variants of the no-regularization test.
+    # Input use_resource (default false) selects resource or ordinary variables. For half and
+    # 32-bit float, two zero-initialized pairs of variables get constant gradients and FTRL with
+    # learning rate 3.0 and accumulator 0.1 and no L1 or L2. Asserts the initial zeros, runs 3
+    # steps and asserts the values match precomputed numbers (looser tolerance for half).
     # The v1 optimizers do not support eager execution
     with ops.Graph().as_default():
       for dtype in [dtypes.half, dtypes.float32]:
@@ -70,12 +87,22 @@ class FtrlOptimizerTest(test.TestCase):
               np.array([-0.28432083, -0.56694895]), v1_val)
 
   def testFtrlWithoutRegularization(self):
+    # [FUNCTION DOC]
+    # Runs the shared no-regularization scenario with ordinary (reference) variables and checks
+    # the values after 3 steps against expected numbers.
     self.doTestFtrlwithoutRegularization(use_resource=False)
 
   def testResourceFtrlWithoutRegularization(self):
+    # [FUNCTION DOC]
+    # Runs the shared no-regularization scenario with resource variables and checks the values
+    # after 3 steps against expected numbers.
     self.doTestFtrlwithoutRegularization(use_resource=True)
 
   def testFtrlwithoutRegularization2(self):
+    # [FUNCTION DOC]
+    # Scenario: variables start at non-zero values (1,2 and 4,3), constant gradients, FTRL with
+    # learning rate 3.0, accumulator 0.1 and no L1 or L2, for half and 32-bit float. Asserts the
+    # initial values, runs 3 steps, and asserts the results equal precomputed numbers.
     # The v1 optimizers do not support eager execution
     with ops.Graph().as_default():
       for dtype in [dtypes.half, dtypes.float32]:
@@ -107,6 +134,11 @@ class FtrlOptimizerTest(test.TestCase):
               np.array([-0.28232238, -0.56096673]), v1_val)
 
   def testMinimizeSparseResourceVariable(self):
+    # [FUNCTION DOC]
+    # Scenario: a resource variable row is looked up by embedding lookup, multiplied by a
+    # constant and squared to form a loss; FTRL with learning rate 1.0 minimizes it for one
+    # step, for half, 32-bit and 64-bit floats. Asserts the initial value (1, 2) and that the
+    # updated value is about (0, 1) within 0.01.
     # The v1 optimizers do not support eager execution
     with ops.Graph().as_default():
       for dtype in [dtypes.half, dtypes.float32, dtypes.float64]:
@@ -128,6 +160,10 @@ class FtrlOptimizerTest(test.TestCase):
                                              atol=0.01)
 
   def testFtrlWithL1(self):
+    # [FUNCTION DOC]
+    # Scenario: FTRL with learning rate 3.0, accumulator 0.1, L1 strength 0.001 and no L2 on two
+    # small variables with constant gradients. Asserts initial values, runs 10 steps and asserts
+    # the values match precomputed numbers for half and 32-bit float.
     # The v1 optimizers do not support eager execution
     with ops.Graph().as_default():
       for dtype in [dtypes.half, dtypes.float32]:
@@ -159,6 +195,10 @@ class FtrlOptimizerTest(test.TestCase):
               np.array([-0.93460727, -1.86147261]), v1_val)
 
   def testFtrlWithBeta(self):
+    # [FUNCTION DOC]
+    # Scenario: FTRL with learning rate 3.0, accumulator 0.1 and beta 0.1 (no L1 or L2).
+    # Asserts initial values, runs 10 steps and asserts precomputed results for half and 32-bit
+    # float.
     # The v1 optimizers do not support eager execution
     with ops.Graph().as_default():
       for dtype in [dtypes.half, dtypes.float32]:
@@ -186,6 +226,10 @@ class FtrlOptimizerTest(test.TestCase):
               np.array([-0.717741, -1.425132]), v1_val)
 
   def testFtrlWithL2_Beta(self):
+    # [FUNCTION DOC]
+    # Scenario: FTRL with learning rate 3.0, accumulator 0.1, no L1, L2 strength 0.1 and beta
+    # 0.1. Asserts initial values, runs 10 steps and asserts precomputed results for half and
+    # 32-bit float.
     # The v1 optimizers do not support eager execution
     with ops.Graph().as_default():
       for dtype in [dtypes.half, dtypes.float32]:
@@ -218,6 +262,10 @@ class FtrlOptimizerTest(test.TestCase):
               np.array([-0.294335, -0.586556]), v1_val)
 
   def testFtrlWithL1_L2(self):
+    # [FUNCTION DOC]
+    # Scenario: FTRL with learning rate 3.0, accumulator 0.1, L1 strength 0.001 and L2 strength
+    # 2.0. Asserts initial values, runs 10 steps and asserts that the strong L2 keeps the values
+    # small, matching precomputed numbers, for half and 32-bit float.
     # The v1 optimizers do not support eager execution
     with ops.Graph().as_default():
       for dtype in [dtypes.half, dtypes.float32]:
@@ -250,6 +298,10 @@ class FtrlOptimizerTest(test.TestCase):
               np.array([-0.02406147, -0.04830509]), v1_val)
 
   def testFtrlWithL1_L2_L2Shrinkage(self):
+    # [FUNCTION DOC]
+    # Scenario: same as the L1 plus L2 test but also with L2 shrinkage strength 0.1, which
+    # selects the shrinkage version of the op. Asserts initial values, runs 10 steps and asserts
+    # the results equal precomputed numbers (smaller magnitudes than without shrinkage).
     """Test the new FTRL op with support for l2 shrinkage.
 
     The addition of this parameter which places a constant pressure on weights
@@ -289,6 +341,10 @@ class FtrlOptimizerTest(test.TestCase):
               np.array([-0.14378493, -0.13229476]), v1_val)
 
   def testFtrlWithL1_L2_L2ShrinkageSparse(self):
+    # [FUNCTION DOC]
+    # Scenario: the shrinkage configuration applied with sparse (indexed-slices) gradients, each
+    # touching a single different row of a two-row variable. Asserts initial values, runs 10
+    # steps and asserts only the touched rows changed, matching precomputed numbers.
     """Tests the new FTRL op with support for l2 shrinkage on sparse grads."""
     # The v1 optimizers do not support eager execution
     with ops.Graph().as_default():
@@ -325,6 +381,11 @@ class FtrlOptimizerTest(test.TestCase):
           self.assertAllCloseAccordingToType([[4.], [-0.13229476]], v1_val)
 
   def testFtrlWithL2ShrinkageDoesNotChangeLrSchedule(self):
+    # [FUNCTION DOC]
+    # Scenario: two optimizers with identical settings except that one has L2 shrinkage 0.1, each
+    # applied for 10 steps to equal variables with equal gradients. Asserts that the shrinkage
+    # variable ends smaller in magnitude elementwise, and that the accumulator slots of both
+    # optimizers are equal, i.e. shrinkage does not change accumulator updates.
     """Verifies that l2 shrinkage in FTRL does not change lr schedule."""
     # The v1 optimizers do not support eager execution
     with ops.Graph().as_default():
@@ -369,6 +430,14 @@ class FtrlOptimizerTest(test.TestCase):
           self.assertAllCloseAccordingToType(accum0, accum1)
 
   def applyOptimizer(self, opt, dtype, steps=5, is_sparse=False):
+    # [FUNCTION DOC]
+    # HELPER: shared by the equivalence tests.
+    # Inputs: opt (optimizer to apply), dtype (variable dtype), steps (default 5), is_sparse
+    # (default false; use indexed-slices gradients on two-row variables instead of dense ones).
+    # Creates two zero-initialized variables with fixed gradients, applies the optimizer,
+    # initializes variables, asserts they start at zero, runs the update for the given number of
+    # steps and returns the two resulting variable values. Needs a default session.
+    # KNOWN ISSUE: a local session variable obtained from the default session is never used.
     if is_sparse:
       var0 = variables.Variable([[0.0], [0.0]], dtype=dtype)
       var1 = variables.Variable([[0.0], [0.0]], dtype=dtype)
@@ -411,6 +480,10 @@ class FtrlOptimizerTest(test.TestCase):
   # So, basing on these two properties, we test if our implementation of
   # FTRL-Proximal performs same updates as Adagrad or GradientDescent.
   def testEquivAdagradwithoutRegularization(self):
+    # [FUNCTION DOC]
+    # Scenario: with zero-initialized variables, no L1 or L2 and learning rate power -0.5, FTRL
+    # should behave like Adagrad. Applies both optimizers (rate 3.0, accumulator 0.1) with dense
+    # gradients and asserts the resulting values agree, with looser tolerance for half.
     # The v1 optimizers do not support eager execution
     with ops.Graph().as_default():
       for dtype in [dtypes.half, dtypes.float32]:
@@ -434,6 +507,9 @@ class FtrlOptimizerTest(test.TestCase):
         self.assertAllCloseAccordingToType(val1, val3, half_rtol=2e-3)
 
   def testEquivSparseAdagradwithoutRegularization(self):
+    # [FUNCTION DOC]
+    # Same as the dense Adagrad equivalence test but with sparse gradients; asserts FTRL and
+    # Adagrad produce equal values.
     # The v1 optimizers do not support eager execution
     with ops.Graph().as_default():
       for dtype in [dtypes.half, dtypes.float32]:
@@ -459,6 +535,10 @@ class FtrlOptimizerTest(test.TestCase):
         self.assertAllCloseAccordingToType(val1, val3)
 
   def testEquivSparseGradientDescentwithoutRegularization(self):
+    # [FUNCTION DOC]
+    # Scenario: with zero-initialized variables, no L1 or L2 and a learning rate power of zero
+    # (fixed rate), FTRL should match plain gradient descent. Applies both with sparse gradients
+    # and rate 3.0 and asserts equal values.
     # The v1 optimizers do not support eager execution
     with ops.Graph().as_default():
       for dtype in [dtypes.half, dtypes.float32]:
@@ -484,6 +564,9 @@ class FtrlOptimizerTest(test.TestCase):
         self.assertAllCloseAccordingToType(val1, val3)
 
   def testEquivGradientDescentwithoutRegularization(self):
+    # [FUNCTION DOC]
+    # Same as the sparse gradient descent equivalence test but with dense gradients; asserts FTRL
+    # with a fixed rate and gradient descent produce equal values.
     # The v1 optimizers do not support eager execution
     with ops.Graph().as_default():
       for dtype in [dtypes.half, dtypes.float32]:

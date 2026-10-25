@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Defines the FTRL-proximal optimizer (v1 graph-mode API, exported as the train Ftrl optimizer
+# under the v1 namespace). It exposes one class that subclasses the base training Optimizer and
+# applies updates through the generated FTRL training ops (dense, sparse, resource variants,
+# with or without L2 shrinkage). The only import-time side effect is the export registration
+# done by the export decorator. Not a helper module.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +30,14 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export(v1=["train.FtrlOptimizer"])
 class FtrlOptimizer(optimizer.Optimizer):
+  # [CLASS DOC]
+  # Optimizer implementing Follow-The-Regularized-Leader with proximal updates for large sparse
+  # models, supporting L1, L2 and an optional L2 shrinkage penalty plus a beta term. Instances
+  # are created with a learning rate and regularization hyper-parameters, then used through the
+  # base optimizer minimize / apply-gradients flow. It keeps hyper-parameters, their tensor
+  # versions (built in the prepare step) and per-variable "accum" and "linear" slots. Overrides
+  # slot creation, preparation and the dense, sparse and resource apply methods. Class-level
+  # side effect: exported in the v1 train namespace.
   """Optimizer that implements the FTRL algorithm.
 
   This version has support for both online L2 (McMahan et al., 2013) and
@@ -48,6 +62,20 @@ class FtrlOptimizer(optimizer.Optimizer):
                linear_name=None,
                l2_shrinkage_regularization_strength=0.0,
                beta=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says the learning rate power and regularization strengths
+    # "must be" within ranges and the docstring Raises section is generic; the check for
+    # learning_rate_power rejects only positive values, and no check at all is made on beta or
+    # learning_rate.
+    # Constructor. Inputs: learning_rate (float or scalar tensor), learning_rate_power (default
+    # -0.5, must be zero or negative), initial_accumulator_value (default 0.1, must be
+    # non-negative), l1_regularization_strength and l2_regularization_strength (default 0, must
+    # be non-negative), use_locking (default false), name (default "Ftrl"), accum_name and
+    # linear_name (optional slot name suffixes, falling back to the optimizer name), the
+    # l2_shrinkage_regularization_strength (default 0, non-negative) and beta (optional, treated
+    # as zero when null). Calls the base constructor, validates the arguments and stores them;
+    # tensor versions are left null until the prepare step. Raises a value error when any
+    # validated argument is out of range. Returns nothing.
     r"""Construct a new FTRL optimizer.
 
     Args:
@@ -130,8 +158,17 @@ class FtrlOptimizer(optimizer.Optimizer):
     self._linear_name = linear_name
 
   def _create_slots(self, var_list):
+    # [FUNCTION DOC]
+    # Override of the base slot creation. For every variable in var_list (list of variables) it
+    # creates an "accum" slot initialized to the initial accumulator value and a zero-filled
+    # "linear" slot, named using the accum / linear name suffix or the optimizer name. Returns
+    # nothing; side effect is creating slot variables.
     # Create the "accum" and "linear" slots.
     def _accum_initializer(shape, dtype=dtypes.float32, partition_info=None):
+      # [FUNCTION DOC]
+      # HELPER: initializer for the accumulator slot. Takes a shape, a dtype (default 32-bit
+      # float) and an ignored partition info; returns a tensor of that shape filled with the
+      # initial accumulator value.
       del partition_info
       return array_ops.ones(
           shape=shape, dtype=dtype) * self._initial_accumulator_value
@@ -142,6 +179,13 @@ class FtrlOptimizer(optimizer.Optimizer):
       self._zeros_slot(v, "linear", self._linear_name or self._name)
 
   def _prepare(self):
+    # [FUNCTION DOC]
+    # Override of the base prepare step, called before applying gradients. Converts the
+    # learning rate, L1 strength, L2 shrinkage strength, learning rate power and beta into
+    # tensors, and builds an adjusted L2 strength equal to the L2 strength plus beta divided by
+    # twice the learning rate (the learning rate is floored at a tiny positive value to avoid
+    # division by zero) so the underlying ops need no beta input. Returns nothing; stores the
+    # tensors on the instance.
     self._learning_rate_tensor = ops.convert_to_tensor(
         self._learning_rate, name="learning_rate")
     self._l1_regularization_strength_tensor = ops.convert_to_tensor(
@@ -161,6 +205,12 @@ class FtrlOptimizer(optimizer.Optimizer):
         self._learning_rate_power, name="learning_rate_power")
 
   def _apply_dense(self, grad, var):
+    # [FUNCTION DOC]
+    # Applies a dense FTRL update to a reference variable. Inputs: grad (dense gradient tensor)
+    # and var (variable). Fetches the accum and linear slots and runs the FTRL training op, or
+    # its L2-shrinkage version when the shrinkage strength is positive, casting all
+    # hyper-parameter tensors to the variable dtype. Returns the update operation. Uses
+    # locking as configured.
     accum = self.get_slot(var, "accum")
     linear = self.get_slot(var, "linear")
     if self._l2_shrinkage_regularization_strength <= 0.0:
@@ -193,6 +243,11 @@ class FtrlOptimizer(optimizer.Optimizer):
           use_locking=self._use_locking)
 
   def _resource_apply_dense(self, grad, var):
+    # [FUNCTION DOC]
+    # Applies a dense FTRL update to a resource variable. Inputs: grad (dense gradient) and var
+    # (resource variable, whose handle and slot handles are passed). Chooses the plain or
+    # L2-shrinkage resource op depending on the shrinkage strength, casting hyper-parameters to
+    # the variable dtype. Returns the update operation.
     accum = self.get_slot(var, "accum")
     linear = self.get_slot(var, "linear")
     if self._l2_shrinkage_regularization_strength <= 0.0:
@@ -225,6 +280,14 @@ class FtrlOptimizer(optimizer.Optimizer):
           use_locking=self._use_locking)
 
   def _apply_sparse(self, grad, var):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: in the shrinkage branch the shrinkage strength is cast to the gradient dtype
+    # while all other hyper-parameters are cast to the variable dtype; harmless when the dtypes
+    # match, inconsistent otherwise.
+    # Applies a sparse FTRL update to a reference variable. Inputs: grad (indexed-slices
+    # gradient with values and indices) and var (variable). Uses the sparse FTRL op, or its
+    # L2-shrinkage version when the shrinkage strength is positive. Returns the update
+    # operation.
     accum = self.get_slot(var, "accum")
     linear = self.get_slot(var, "linear")
     if self._l2_shrinkage_regularization_strength <= 0.0:
@@ -259,6 +322,11 @@ class FtrlOptimizer(optimizer.Optimizer):
           use_locking=self._use_locking)
 
   def _resource_apply_sparse(self, grad, var, indices):
+    # [FUNCTION DOC]
+    # Applies a sparse FTRL update to a resource variable. Inputs: grad (gradient values for
+    # the touched rows), var (resource variable) and indices (row indices being updated).
+    # Chooses the plain or L2-shrinkage resource sparse op by the shrinkage strength; here the
+    # hyper-parameters are cast to the gradient dtype. Returns the update operation.
     accum = self.get_slot(var, "accum")
     linear = self.get_slot(var, "linear")
     if self._l2_shrinkage_regularization_strength <= 0.0:
