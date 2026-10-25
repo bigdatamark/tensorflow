@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# Mid level (v2) API for TPU embeddings. Exposes the public TPUEmbedding trackable class
+# (exported as the experimental TPU embedding API), plus helpers used to create sharded
+# embedding variables across TPU hosts and to load/retrieve table values to/from the TPU.
+# The class builds a TPU embedding configuration from user feature and table configs,
+# creates (sharded) table and optimizer slot variables, and provides enqueue, dequeue and
+# apply_gradients operations for use inside custom training loops under a TPU strategy.
+# Under a non-TPU strategy it only exposes the table variables, for CPU serving.
+# Import-time side effects: registers a checkpoint saver ("TPUEmbeddingCallback") so that
+# saving retrieves variables from the TPU and restoring loads them back onto the TPU.
+# Also relies on the sibling utils module for feature, table and optimizer configuration.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -61,19 +72,43 @@ _NAME_KEY = "_tpu_embedding_layer"
 
 
 class TPUEmbeddingVariable(sharded_variable.ShardedVariableMixin):
+  # [CLASS DOC]
+  # Sharded variable type used for TPU embedding tables and slot variables. It holds a list
+  # of per-host variable shards (created by the sharded variable creator) and behaves as a
+  # single logical variable through the sharded-variable mixin. Created by
+  # make_sharded_variable_creator; adds only the graph-mode query below.
   """A ShardedVariable class for TPU."""
 
   @property
   def _in_graph_mode(self):
+    # [FUNCTION DOC]
+    # HELPER: lets the sharded-variable machinery ask whether the variable is graph based.
+    # Property returning whether the first shard variable is in graph mode (a boolean).
+    # Takes no inputs and has no side effects; assumes at least one shard exists, otherwise
+    # indexing the empty shard list fails.
     return self.variables[0]._in_graph_mode  # pylint: disable=protected-access
 
 
 def _add_key_attr(op, name):
+  # [FUNCTION DOC]
+  # HELPER: tags enqueue, dequeue and apply-gradients ops with the user supplied name.
+  # Sets a private string attribute on the given operation holding the given name (text,
+  # converted to bytes). Mutates the operation in place; returns nothing.
   op._set_attr(_NAME_KEY, attr_value_pb2.AttrValue(s=compat.as_bytes(name)))  # pylint: disable=protected-access
 
 
 @tf_export("tpu.experimental.embedding.TPUEmbedding")
 class TPUEmbedding(autotrackable.AutoTrackable):
+  # [CLASS DOC]
+  # Public mid level TPU embedding API (trackable, so it can be checkpointed). Created from
+  # a nested structure of feature configs and an optimizer, optionally under a TPU strategy.
+  # State: the strategy, whether TPU is used, the output shapes, the ordered list of unique
+  # tables, dynamic (callable) learning rates, host devices, the config proto, the created
+  # variables (mapping from table name to parameters and slot variables) and a built flag.
+  # Under a TPU strategy it supports build, enqueue, dequeue and apply_gradients; otherwise
+  # only embedding_tables (for CPU lookups). Variables are lazily created in build, which
+  # also initializes the TPU embedding engine. Saving and restoring go through a registered
+  # checkpoint saver that retrieves from or loads to the TPU.
   """The TPUEmbedding mid level API.
 
   NOTE: When instantiated under a TPUStrategy, this class can only be created
@@ -241,6 +276,18 @@ class TPUEmbedding(autotrackable.AutoTrackable):
       feature_config: Union[tpu_embedding_v2_utils.FeatureConfig, Iterable],  # pylint:disable=g-bare-generic
       optimizer: Optional[tpu_embedding_v2_utils._Optimizer],  # pylint:disable=protected-access
       pipeline_execution_with_tensor_core: bool = False):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: feature_config, a nested structure of feature configs; optimizer,
+    # an optimizer config applied to every table without its own optimizer (may be nothing
+    # when not under a TPU strategy); pipeline_execution_with_tensor_core, a flag (default
+    # false) to overlap embedding work with tensor core work. Records the current strategy
+    # and whether it is a TPU strategy, the per-feature output shapes, and the number of
+    # cores per replica (from the device assignment, if any). Collects the unique tables in
+    # order of first use, assigns the default optimizer to tables lacking one (this mutates
+    # the user's table configs) and generates names "table_N" for unnamed tables. Under TPU,
+    # also collects distinct callable learning rates and the list of host devices.
+    # Raises a value error for an unsupported optimizer (when one is needed) or for
+    # duplicate table names. Does not create variables; marks the object as not built.
     """Creates the TPUEmbedding mid level API object.
 
     ```python
@@ -351,6 +398,16 @@ class TPUEmbedding(autotrackable.AutoTrackable):
     self._verify_output_shapes_on_enqueue = True
 
   def build(self, per_replica_input_shapes=None, per_replica_batch_size=None):  # pylint:disable=g-bare-generic
+    # [FUNCTION DOC]
+    # Creates the table and slot variables and, under a TPU strategy, initializes the TPU
+    # embedding engine. Inputs: per_replica_input_shapes, optional nested structure of shapes
+    # matching the feature config (or, deprecated, a plain integer batch size);
+    # per_replica_batch_size, optional deprecated batch size. Does nothing if already built.
+    # Under TPU: raises a runtime error if the embedding engine is already initialized,
+    # resolves and validates output shapes, builds the config proto, logs it and runs a
+    # traced function that initializes the engine. Then creates variables, marks the object
+    # built and loads variable values onto the TPU. May raise a value error for inconsistent
+    # or not fully defined output shapes. Returns nothing.
     """Create the underlying variables and initializes the TPU for embeddings.
 
     This method creates the underlying variables (including slot variables). If
@@ -404,6 +461,10 @@ class TPUEmbedding(autotrackable.AutoTrackable):
 
       @def_function.function
       def load_config():
+        # [FUNCTION DOC]
+        # Nested helper of build: traced function that initializes the TPU system for
+        # embeddings using the already created config proto. Takes no inputs, returns nothing;
+        # side effect is configuring the TPU embedding engine.
         tpu.initialize_system_for_tpu_embedding(self._config_proto)
 
       load_config()
@@ -422,6 +483,13 @@ class TPUEmbedding(autotrackable.AutoTrackable):
 
   def _maybe_build(self,
                    output_shapes: Optional[Union[List[int], Iterable]] = None):  # pylint:disable=g-bare-generic
+    # [FUNCTION DOC]
+    # HELPER: lazily builds the object for enqueue and embedding_tables.
+    # If not yet built, calls build with the given shapes inside an init scope so that the
+    # initialization runs eagerly once even when invoked while tracing a function.
+    # KNOWN ISSUE: the parameter is named output_shapes but it is forwarded to build as the
+    # per-replica input shapes (enqueue passes input shapes), so the name is misleading.
+    # Input: optional shapes. Returns nothing; does nothing when already built.
     if not self._built:
       # This can be called while tracing a function, so we wrap the
       # initialization code with init_scope so it runs eagerly, this means that
@@ -435,6 +503,14 @@ class TPUEmbedding(autotrackable.AutoTrackable):
       self,
       per_replica_input_shapes: Optional[List[TensorShape]] = None,
       per_replica_batch_size: Optional[int] = None):
+    # [FUNCTION DOC]
+    # HELPER: part of build; resolves the per replica output shapes from user supplied input.
+    # Inputs: optional per replica input shapes (nested structure, or a plain integer batch
+    # size which is deprecated) and optional deprecated batch size. Logs deprecation
+    # warnings, converts the given input or batch size to output shapes, checks them against
+    # the existing output shapes (value error on mismatch), merges them into the stored
+    # output shapes (existing ones win) and finally requires all output shapes to be fully
+    # defined (value error otherwise). Mutates the stored output shapes; returns nothing.
     """Get and update the per replica output shapes from the input."""
     per_replica_output_shapes = None
     if per_replica_batch_size and per_replica_input_shapes is None:
@@ -487,6 +563,13 @@ class TPUEmbedding(autotrackable.AutoTrackable):
 
   def _get_output_shapes_from_input_shapes(
       self, input_shapes: List[TensorShape]) -> List[TensorShape]:
+    # [FUNCTION DOC]
+    # HELPER: converts flat per feature input shapes into output shapes.
+    # Input: list of input shapes in feature order. For each, raises a value error when the
+    # rank is unknown or below one. For rank 2 shapes whose last dimension is not one, with
+    # no output shape in the feature config and a positive max sequence length, inserts the
+    # sequence length as the second to last dimension. Rank one shapes are kept as is; others
+    # drop their last dimension. Returns the list of output shapes; no side effects.
     """Get output shapes from the flattened input shapes list."""
     output_shapes = []
     for input_shape, feature in zip(input_shapes,
@@ -515,6 +598,12 @@ class TPUEmbedding(autotrackable.AutoTrackable):
   def embedding_tables(
       self
   ) -> Dict[tpu_embedding_v2_utils.TableConfig, tf_variables.Variable]:
+    # [FUNCTION DOC]
+    # Property giving the embedding table variables keyed by table config, for CPU lookups.
+    # Under a TPU strategy it raises a runtime error, except while saving a model, where it
+    # returns the first shard of each table's parameters. Otherwise it lazily builds the
+    # object and returns a mapping from each table config to its parameter variable (slot
+    # variables are not included). Side effect: may trigger build.
     """Returns a dict of embedding tables, keyed by `TableConfig`.
 
     This property only works when the `TPUEmbedding` object is created under a
@@ -549,6 +638,15 @@ class TPUEmbedding(autotrackable.AutoTrackable):
   def _create_config_proto(
       self
   ) -> tpu_embedding_configuration_pb2.TPUEmbeddingConfiguration:
+    # [FUNCTION DOC]
+    # HELPER: part of build; produces the configuration used to initialize the engine.
+    # Builds a new configuration message: one table descriptor per table (using the number
+    # of hosts and the dynamic learning rate index mapping), one feature descriptor per
+    # feature (name, table id, input shape taken from the output shape), training mode,
+    # number of hosts, number of tensor cores (replicas times cores per replica), default
+    # division sharding, the pipelining flag, and SPMD sharding when cores per replica is set.
+    # Takes no inputs besides state; returns the message. Table descriptors are filled by
+    # table configs.
     """Creates the TPUEmbeddingConfiguration proto.
 
     This proto is used to initialize the TPU embedding engine.
@@ -615,6 +713,16 @@ class TPUEmbedding(autotrackable.AutoTrackable):
     return config_proto
 
   def apply_gradients(self, gradients, name: Optional[Text] = None):
+    # [FUNCTION DOC]
+    # Sends gradients for the embedding activations to the TPU so tables are updated.
+    # Inputs: gradients, nested structure matching the feature config whose entries are
+    # tensors or nothing; name, optional op name tag. A missing gradient is replaced with a
+    # zero tensor and a warning is logged. Each gradient is reshaped to fix its static shape
+    # and is validated against the output shape times cores per replica plus table dimension.
+    # Raises runtime error when not under a TPU strategy or not built; value error for
+    # non-tensor gradients or wrong shapes; structure mismatches raise from the nest check.
+    # Side effect: creates the send-gradients op with the current dynamic learning rates and
+    # tags it with the name if given. Returns nothing.
     """Applies the gradient update to the embedding tables.
 
     If a gradient of `None` is passed in any position of the nested structure,
@@ -722,6 +830,12 @@ class TPUEmbedding(autotrackable.AutoTrackable):
       _add_key_attr(op, name)
 
   def dequeue(self, name: Optional[Text] = None):
+    # [FUNCTION DOC]
+    # Receives the embedding lookup results from the TPU. Input: optional op name tag.
+    # Raises a runtime error when not created under a TPU strategy or not yet built.
+    # Creates a receive-activations op with one output per feature descriptor, tags the first
+    # output's op with the name if given, and returns the activations packed into the same
+    # nested structure as the feature config.
     """Get the embedding results.
 
     Returns a nested structure of `tf.Tensor` objects, matching the structure of
@@ -801,6 +915,13 @@ class TPUEmbedding(autotrackable.AutoTrackable):
   def _create_variables_and_slots(
       self
   ) -> Dict[Text, Dict[Text, tf_variables.Variable]]:
+    # [FUNCTION DOC]
+    # HELPER: part of build; creates parameter and optimizer slot variables for every table.
+    # Returns a mapping from table name to a mapping from "parameters" and each slot name to
+    # the created variable. Under a TPU strategy creation happens inside a variable creator
+    # scope that shards variables across hosts (non-trainable on TPU); otherwise ordinary
+    # trainable variables are created. Variables are registered through the trackable
+    # custom getter mechanism so checkpoints can restore before creation.
     """Create variables for TPU embeddings.
 
     Note under TPUStrategy this will ensure that all creations happen within a
@@ -812,10 +933,19 @@ class TPUEmbedding(autotrackable.AutoTrackable):
     """
 
     def create_variables(table):
+      # [FUNCTION DOC]
+      # HELPER: creates the parameter variable and all slot variables for one table.
+      # Input: a table config. Returns a mapping from "parameters" and slot names to variables
+      # (slots come from the table's optimizer, none if it has no optimizer).
       """Create all variables."""
       variable_shape = (table.vocabulary_size, table.dim)
 
       def getter(name, shape, dtype, initializer, trainable):
+        # [FUNCTION DOC]
+        # HELPER: custom getter creating one variable of the full table shape.
+        # Inputs: name, ignored shape (the outer table shape is used instead because the
+        # trackable machinery may clear it), dtype, initializer and trainable flag.
+        # Returns a new variable initialized lazily by the initializer.
         del shape
         # _add_variable_with_custom_getter clears the shape sometimes, so we
         # take the global shape from outside the getter.
@@ -829,6 +959,10 @@ class TPUEmbedding(autotrackable.AutoTrackable):
             trainable=trainable)
 
       def variable_creator(name, initializer, trainable=True):
+        # [FUNCTION DOC]
+        # HELPER: registers a float32 variable on the TPUEmbedding object via the trackable
+        # custom getter so it is tracked and can be restored before creation. Inputs: name,
+        # initializer, trainable flag (default true). Returns the variable.
         # use add_variable_with_custom_getter here so that we take advantage of
         # the checkpoint loading to allow restore before the variables get
         # created which avoids double initialization.
@@ -844,6 +978,9 @@ class TPUEmbedding(autotrackable.AutoTrackable):
                                     trainable=not self._using_tpu)
 
       def slot_creator(name, initializer):
+        # [FUNCTION DOC]
+        # HELPER: callback handed to the optimizer to create a non-trainable slot variable
+        # named after the table and slot name. Inputs: slot name, initializer. Returns it.
         return variable_creator(table.name + "/" + name,
                                 initializer,
                                 False)
@@ -869,6 +1006,11 @@ class TPUEmbedding(autotrackable.AutoTrackable):
     return variables
 
   def _load_variables(self):
+    # [FUNCTION DOC]
+    # HELPER: pushes the host variable values onto the TPU (used by build and restore).
+    # Only acts when using TPU, built, and not in graph-mode save context; then calls the
+    # module level load implementation with the serialized config, hosts, variables and
+    # tables. Returns nothing.
     # Only load the variables if we are:
     # 1) Using TPU
     # 2) Variables are created
@@ -881,6 +1023,10 @@ class TPUEmbedding(autotrackable.AutoTrackable):
                            self._table_config)
 
   def _retrieve_variables(self):
+    # [FUNCTION DOC]
+    # HELPER: copies table values from the TPU back into host variables (used when saving).
+    # Same conditions as loading: TPU in use, built, and not in graph-mode save context.
+    # Calls the module level retrieve implementation. Returns nothing.
     # Only retrieve the variables if we are:
     # 1) Using TPU
     # 2) Variables are created
@@ -895,6 +1041,12 @@ class TPUEmbedding(autotrackable.AutoTrackable):
   # Some helper functions for the below enqueue function.
   def _add_data_for_tensor(self, tensor, weight, indices, values, weights,
                            int_zeros, float_zeros, path):
+    # [FUNCTION DOC]
+    # HELPER: appends dense tensor data for the enqueue op. Inputs: the dense tensor, its
+    # weight (must be nothing), and the parallel output lists for indices, values and weights,
+    # empty int and float placeholder tensors, and the feature path for messages.
+    # Appends placeholder indices, the flattened values cast to 64-bit integers and a
+    # placeholder weight. Raises a value error if a weight is supplied. Mutates the lists.
     if weight is not None:
       raise ValueError(
           "Weight specified for dense input {}, which is not allowed. "
@@ -907,6 +1059,13 @@ class TPUEmbedding(autotrackable.AutoTrackable):
   def _add_data_for_sparse_tensor(self, tensor, weight, indices, values,
                                   weights, int_zeros, float_zeros, path,
                                   feature):
+    # [FUNCTION DOC]
+    # HELPER: appends sparse tensor data for the enqueue op. Inputs as for the dense variant
+    # plus the feature config. Appends the indices (cast to 32-bit integers; for rank 2 inputs
+    # with a max sequence length and no output shape an extra zero column is added), values
+    # cast to 64-bit integers, and weight values cast to float32 or a placeholder. Logs a
+    # warning if rank is above 2 and a max sequence length is set (ignored). Raises a value
+    # error if a weight is given that is not a sparse tensor. Mutates the lists.
     sample_indices = math_ops.cast(tensor.indices, dtypes.int32)
     if tensor.shape.rank == 2:
       if not feature.output_shape and feature.max_sequence_length > 0:
@@ -937,6 +1096,11 @@ class TPUEmbedding(autotrackable.AutoTrackable):
   def _add_data_for_ragged_tensor(self, tensor, weight, row_splits, values,
                                   weights, int_zeros, float_zeros, path,
                                   feature):
+    # [FUNCTION DOC]
+    # HELPER: appends ragged tensor data for the enqueue op. Appends the row splits (32-bit),
+    # values (64-bit) and the weight values (float32) or a placeholder. Raises a value error
+    # if a weight is given that is not a ragged tensor. The feature and integer placeholder
+    # arguments are unused. Mutates the given lists; returns nothing.
     row_splits.append(math_ops.cast(tensor.row_splits, dtypes.int32))
     values.append(math_ops.cast(tensor.values, dtypes.int64))
     # If we have weights they must be a RaggedTensor.
@@ -957,6 +1121,16 @@ class TPUEmbedding(autotrackable.AutoTrackable):
       device_ordinal: int,
       mode_override: Text
   ) -> ops.Operation:
+    # [FUNCTION DOC]
+    # HELPER: builds the single enqueue op for a batch. Inputs: flat lists of inputs, weights
+    # (entries may be nothing) and (path, feature config) pairs, all of equal length; the
+    # device ordinal to enqueue for; and the mode override (train or inference string/tensor).
+    # Dispatches each input by type (dense, sparse, ragged) to fill parallel lists of indices
+    # or row splits, values and weights, with empty placeholders where no data applies;
+    # raises a value error for any other input type. Uses per table combiners in table order.
+    # Returns the arbitrary-tensor-batch enqueue operation.
+    # KNOWN ISSUE: the docstring says it outputs "a the enqueue op"; also the flat_features
+    # entries are actually (path, config) pairs, not plain FeatureConfigs as the type hint says.
     """Outputs a the enqueue op given the inputs and weights.
 
     Args:
@@ -1018,6 +1192,13 @@ class TPUEmbedding(autotrackable.AutoTrackable):
         combiners=combiners)
 
   def _raise_error_for_incorrect_control_flow_context(self):
+    # [FUNCTION DOC]
+    # HELPER: validates where enqueue is called from. Walks the current graph and its outer
+    # graphs looking for a TPU replicate control flow context. Returns true if one is found,
+    # false otherwise. Raises a runtime error if the context belongs to a different graph than
+    # the current one (enqueue inside control flow or a nested function within a strategy run).
+    # KNOWN ISSUE: the docstring says it raises when not in a TPU replicate context, but it
+    # only raises for a graph mismatch and otherwise returns a boolean.
     """Raises an error if we are not in the TPUReplicateContext."""
     # Do not allow any XLA control flow (i.e. control flow in between a
     # TPUStrategy's run call and the call to this function), as we can't
@@ -1045,6 +1226,12 @@ class TPUEmbedding(autotrackable.AutoTrackable):
     return in_tpu_ctx
 
   def _raise_error_for_non_direct_inputs(self, features):
+    # [FUNCTION DOC]
+    # HELPER: ensures inputs inside a strategy run come directly from the function arguments.
+    # Input: nested structure of features. Every component tensor (composites expanded) must
+    # be a placeholder or the output of an op carrying the TPU input identity attribute;
+    # otherwise raises a value error describing likely causes (dynamic batch size, keras
+    # dtype mismatch). Returns nothing.
     """Checks all tensors in features to see if they are a direct input."""
 
     # expand_composites here is important: as composite tensors pass through
@@ -1077,9 +1264,17 @@ class TPUEmbedding(autotrackable.AutoTrackable):
                                                  input_tensor.op.type))
 
   def _raise_error_for_inputs_not_on_cpu(self, flat_inputs, flat_paths):
+    # [FUNCTION DOC]
+    # HELPER: verifies that enqueue inputs live on the host. Inputs: flat list of input
+    # tensors (possibly composite) and the parallel list of feature paths. Checks the device
+    # of every underlying tensor (looking through replicated-input identities to each
+    # replica's device) and raises a value error if any is on a TPU. Returns nothing.
     """Checks all tensors in features to see are placed on the CPU."""
 
     def check_device(path, device_string):
+      # [FUNCTION DOC]
+      # HELPER: raises a value error naming the feature path if the device string denotes a
+      # TPU device. Inputs: feature path and device string. Returns nothing.
       spec = tf_device.DeviceSpec.from_string(device_string)
       if spec.device_type == "TPU":
         raise ValueError(
@@ -1112,6 +1307,24 @@ class TPUEmbedding(autotrackable.AutoTrackable):
       training: bool = True,
       name: Optional[Text] = None,
       device: Optional[Text] = None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says inputs are downcast to int32, but dense and sparse ids
+    # are cast to 64-bit integers before the enqueue op (row splits are 32-bit). The Args
+    # entries for name and device are also indented wrongly, and the finer grained example
+    # refers to a non-existent per-core function name. Also the list of enqueue ops built in
+    # the per-replica branch is collected but never returned or used.
+    # Enqueues a batch of ids (and optional weights) for lookup. Inputs: features, nested
+    # structure of dense, sparse or ragged tensors matching the feature config; weights,
+    # optional matching structure of float tensors; training, bool default true selecting
+    # train or inference mode; name, optional op name tag; device, optional TPU device name
+    # used when not in a TPU context and features are not per replica values.
+    # Raises runtime error when not under a TPU strategy or in XLA control flow, value error
+    # for non-direct inputs, inputs on TPU, shape mismatches, unknown types, ragged inputs
+    # with SPMD splitting, or a non-TPU device. Lazily builds the object from the detected
+    # input shapes, validates them against stored output shapes. In a TPU context it adds
+    # the enqueue via outside compilation; with no device it creates an enqueue op per
+    # replica and core on the matching host (splitting inputs when cores per replica is set);
+    # with a device it creates one op on that device's host. Returns nothing.
     """Enqueues id tensors for embedding lookup.
 
     This function enqueues a structure of features to be looked up in the
@@ -1279,6 +1492,11 @@ class TPUEmbedding(autotrackable.AutoTrackable):
       self._raise_error_for_non_direct_inputs(features)
 
       def generate_enqueue_ops():
+        # [FUNCTION DOC]
+        # Nested helper of enqueue run through outside compilation. Builds the train or
+        # inference mode selection value from the training flag, generates the enqueue op
+        # with device ordinal -1 (fixed by a later rewrite) and tags it with the name if
+        # given. No inputs; returns nothing.
         """Generate enqueue ops for outside compilation."""
         # Note that we put array_ops.where_v2 rather than a python if so that
         # the op is explicitly create and the constant ops are both in the graph
@@ -1309,6 +1527,11 @@ class TPUEmbedding(autotrackable.AutoTrackable):
       enqueue_ops = []
 
       def _split_fn(ts, idx):
+        # [FUNCTION DOC]
+        # HELPER: takes the idx-th slice of an input along the batch axis when splitting for
+        # SPMD cores. Inputs: a tensor, sparse tensor or nothing, and the core index. Returns
+        # nothing for nothing, the slice for dense or sparse inputs, and raises a value error
+        # for ragged tensors (unsupported).
         if ts is None:
           return None
         elif isinstance(ts, tensor_lib.Tensor):
@@ -1325,6 +1548,9 @@ class TPUEmbedding(autotrackable.AutoTrackable):
           raise ValueError("SPMD does not support raggedTensor yet.")
 
       def _maybe_split(ts_inputs, core_id):
+        # [FUNCTION DOC]
+        # HELPER: returns the inputs unchanged when cores per replica is not set, otherwise
+        # maps the split function over the nested inputs to get the slice for core_id.
         if self._num_cores_per_replica is None:
           return ts_inputs
         else:
@@ -1380,6 +1606,12 @@ class TPUEmbedding(autotrackable.AutoTrackable):
   def _get_input_shapes(
       self, tensors, per_replica: bool, in_tpu_context: bool
   ) -> List[TensorShape]:
+    # [FUNCTION DOC]
+    # HELPER: computes the flat list of input shapes for enqueue. Inputs: nested structure
+    # of features, whether shapes are per replica, and whether in a TPU context (otherwise
+    # the first replica's value is used). Dispatches by tensor type to the shape helpers.
+    # KNOWN ISSUE: a feature of an unrecognized type is silently skipped, so the returned list
+    # can be shorter than the feature list.
     """Get the input shapes from the input tensor."""
     input_shapes = []
     for (path, maybe_tensor), feature in zip(
@@ -1411,6 +1643,12 @@ class TPUEmbedding(autotrackable.AutoTrackable):
   def _get_input_shape_for_tensor(
       self, tensor, feature, per_replica, path
   ) -> TensorShape:
+    # [FUNCTION DOC]
+    # HELPER: input shape of a dense feature. Inputs: tensor, feature config (unused), per
+    # replica flag and feature path. Requires rank one or more and, for rank two and above,
+    # a last dimension of one; otherwise raises a value error. When cores per replica is set
+    # and per replica is requested, divides the batch dimension by it. Returns the shape.
+    # KNOWN ISSUE: the rank error message wrongly says "sparse tensor" for a dense tensor.
     """Get the input shape for the dense tensor."""
     shape = tensor.shape.as_list()
     if len(shape) < 1:
@@ -1431,6 +1669,12 @@ class TPUEmbedding(autotrackable.AutoTrackable):
   def _get_input_shape_for_sparse_tensor(
       self, tensor, feature, per_replica, path
   ) -> TensorShape:
+    # [FUNCTION DOC]
+    # HELPER: input shape of a sparse feature. Inputs: tensor, feature config, per replica
+    # flag, feature path. Requires rank two or more (value error otherwise). For rank two with
+    # no configured output shape and a positive max sequence length, inserts the sequence
+    # length before the last dimension. Divides a known batch dimension by cores per replica
+    # when per replica applies. Returns the shape.
     """Get the input shape for the sparse tensor."""
     shape = tensor.shape.as_list()
     # Only 2 and above rank sparse tensor is supported.
@@ -1455,6 +1699,11 @@ class TPUEmbedding(autotrackable.AutoTrackable):
   def _get_input_shape_for_ragged_tensor(
       self, tensor, feature, per_replica, path
   ) -> TensorShape:
+    # [FUNCTION DOC]
+    # HELPER: input shape of a ragged feature. Inputs: tensor, feature config, per replica
+    # flag (ignored), feature path. Requires rank two (value error otherwise). With no
+    # configured output shape and a positive max sequence length, inserts the sequence length
+    # before the last dimension. Returns the shape.
     """Get the input shape for the ragged tensor."""
     del per_replica  # unused.
     shape = tensor.shape.as_list()
@@ -1472,6 +1721,11 @@ class TPUEmbedding(autotrackable.AutoTrackable):
     return TensorShape(shape)
 
   def _update_output_shapes(self, incoming_output_shapes: List[TensorShape]):
+    # [FUNCTION DOC]
+    # HELPER: fills missing stored output shapes from newly detected ones. Input: list of
+    # incoming output shapes with the same structure as the stored ones (structure mismatch
+    # raises). Existing non-empty shapes win; empty ones are replaced. Replaces the stored
+    # list; returns nothing.
     """Update the existing output shapes based on the new output shapes.
 
     The existing output shapes always have higher piority than the new incoming
@@ -1491,6 +1745,12 @@ class TPUEmbedding(autotrackable.AutoTrackable):
     self._output_shapes = updated_output_shapes
 
   def _check_output_shapes(self, incoming_output_shapes: List[TensorShape]):
+    # [FUNCTION DOC]
+    # HELPER: validates incoming output shapes against stored ones. Input: list of incoming
+    # shapes (structure mismatch raises). Where both exist, skips the check if the incoming
+    # rank is one or two and the stored rank is larger (ragged sequences, checked later in
+    # the enqueue op); otherwise raises a value error naming the feature path when ranks
+    # differ or known dimensions disagree. Returns nothing.
     """Check the incoming output shapes against the output shapes stored."""
     # The incoming output shape should have the same structure with the existing
     # output shapes.
@@ -1516,6 +1776,9 @@ class TPUEmbedding(autotrackable.AutoTrackable):
               f"But got incoming output shape {incoming_output_shape}")
 
   def _check_output_shapes_fully_defined(self):
+    # [FUNCTION DOC]
+    # HELPER: raises a value error naming the feature path if any stored output shape is not
+    # fully defined, since shapes are needed for the configuration proto. Returns nothing.
     """Check if the output shape is fully defined."""
     for (path, _), output_shape in zip(
         nest.flatten_with_joined_string_paths(self._feature_config),
@@ -1529,6 +1792,10 @@ class TPUEmbedding(autotrackable.AutoTrackable):
 
   def _is_tensor_shape_match(self, shape_a: TensorShape,
                              shape_b: TensorShape) -> bool:
+    # [FUNCTION DOC]
+    # HELPER: compares two shapes dimension by dimension, ignoring unknown (empty) dimensions.
+    # Returns true if all pairs of known dimensions are equal, false otherwise. Only the
+    # common prefix length is compared (extra dimensions are ignored).
     """Check if shape b matches with shape a."""
     for s_a, s_b in zip(shape_a.as_list(), shape_b.as_list()):
       if s_a and s_b and s_a != s_b:
@@ -1536,6 +1803,11 @@ class TPUEmbedding(autotrackable.AutoTrackable):
     return True
 
   def _get_output_shapes_from_batch_size(self, per_replica_batch_size):
+    # [FUNCTION DOC]
+    # HELPER: builds output shapes from a legacy per replica batch size. Input: integer batch
+    # size. For each feature without an output shape and with a positive max sequence length
+    # the shape is batch size by sequence length; otherwise it is just the batch size (rank
+    # one). Returns the list of shapes.
     """Get the output shapes from the batch size."""
     output_shapes = []
     for feature in nest.flatten(self._feature_config):
@@ -1548,6 +1820,10 @@ class TPUEmbedding(autotrackable.AutoTrackable):
 
   def _create_copy_for_async_checkpoint(
       self, feature_config, optimizer, pipeline_execution_with_tensor_core):
+    # [FUNCTION DOC]
+    # HELPER: factory used by the async checkpoint helper to make a fresh TPUEmbedding.
+    # Inputs: feature config, optimizer and pipelining flag, passed to the constructor.
+    # Returns the new object (not built).
     """Create a TPUEmbedding copy for checkpoint/async_checkpoint_helper.py."""
     return TPUEmbedding(
         feature_config=feature_config,
@@ -1561,6 +1837,15 @@ def _load_variables_impl(
     hosts: List[Tuple[int, Text]],
     variables: Dict[Text, Dict[Text, tf_variables.Variable]],
     table_config: tpu_embedding_v2_utils.TableConfig):
+  # [FUNCTION DOC]
+  # HELPER: traced function that loads host variable values into the TPU embedding engine.
+  # Inputs: serialized config proto, list of host devices, mapping from table name to
+  # mapping of parameter and slot names to sharded variables, and the tables.
+  # For each host, selects that host's shard (zeros shaped like the first shard when there
+  # are more hosts than shards) and calls each table optimizer's load op with the table name,
+  # shard count and id. The config is passed only on the first call to avoid bloating the
+  # graph. Returns nothing; side effect is writing table state onto the TPU.
+  # KNOWN ISSUE: table_config is annotated as a single TableConfig but is iterated as a list.
   """Load embedding tables to onto TPU for each table and host.
 
   Args:
@@ -1571,8 +1856,15 @@ def _load_variables_impl(
     table_config: A list of tf.tpu.experimental.embedding.TableConfig objects.
   """
   def select_fn(host_id):
+    # [FUNCTION DOC]
+    # HELPER: given a host index, returns a function choosing that host's shard variable.
+    # Input: host index. Returns the selector function.
 
     def select_or_zeros(x):
+      # [FUNCTION DOC]
+      # HELPER: selector returned by the enclosing function. Input: a sharded variable.
+      # Returns its shard for the host, or zeros shaped like the first shard when the host
+      # index is beyond the available shards.
       if host_id >= len(x.variables):
         # In the edge case where we have more hosts than variables, due to using
         # a small number of rows, we load zeros for the later hosts. We copy
@@ -1606,6 +1898,14 @@ def _retrieve_variables_impl(
     hosts: List[Tuple[int, Text]],
     variables: Dict[Text, Dict[Text, tf_variables.Variable]],
     table_config: tpu_embedding_v2_utils.TableConfig):
+  # [FUNCTION DOC]
+  # HELPER: traced function that copies table values from the TPU into host variables.
+  # Inputs as for the load counterpart. For each host and table, calls the optimizer's
+  # retrieve op, wraps a single result into a tuple, and assigns each returned tensor
+  # (parameters first, then slots) to the matching shard variable, skipping hosts without a
+  # shard. Config is passed only on the first call. Returns nothing; side effect is assigning
+  # the host variables.
+  # KNOWN ISSUE: table_config is annotated as a single TableConfig but is iterated as a list.
   """Retrieve embedding tables from TPU to host memory.
 
   Args:
@@ -1646,12 +1946,20 @@ def _retrieve_variables_impl(
 
 
 def _save_callback(trackables, **unused_kwargs):
+  # [FUNCTION DOC]
+  # HELPER: checkpoint saver hook. Input: mapping of names to TPUEmbedding objects; extra
+  # keyword arguments ignored. Retrieves every object's variables from the TPU so the host
+  # copies are current before saving. Returns an empty list (no extra save operations).
   for trackable in trackables.values():
     trackable._retrieve_variables()  # pylint: disable=protected-access
   return []
 
 
 def _restore_callback(trackables, **unused_kwargs):
+  # [FUNCTION DOC]
+  # HELPER: checkpoint restore hook. Input: mapping of names to TPUEmbedding objects; extra
+  # keyword arguments ignored. Loads each object's restored host variables onto the TPU.
+  # Returns nothing.
   for trackable in trackables.values():
     trackable._load_variables()  # pylint: disable=protected-access
 
@@ -1670,6 +1978,14 @@ registration.register_tf_checkpoint_saver(
 
 def extract_variable_info(
     kwargs) -> Tuple[Text, Tuple[int, ...], dtypes.DType, Callable[[], Any]]:
+  # [FUNCTION DOC]
+  # HELPER: used by the sharded variable creator to recover how to initialize shards.
+  # Input: keyword arguments given to a variable creator (name, dtype, initial value, shape).
+  # If the initial value is a partial application with the shape set by keyword or first
+  # positional argument, returns the name, that shape, its dtype keyword (falling back to the
+  # dtype argument) and the wrapped initializer function. Otherwise, if the shape is missing
+  # or the initial value is not callable, raises a value error; else returns name, shape,
+  # dtype and initial value as given.
   """Extracts the variable creation attributes from the kwargs.
 
   Args:
@@ -1706,6 +2022,13 @@ def extract_variable_info(
 
 def make_sharded_variable_creator(
     hosts: List[Text]) -> Callable[..., TPUEmbeddingVariable]:
+  # [FUNCTION DOC]
+  # Builds a variable creator that shards a table row-wise across hosts. Input: list of host
+  # device names. Returns a creator function suitable for a variable creator scope.
+  # The creator splits rows as evenly as possible (earlier hosts get an extra row), creates a
+  # variable per non-empty partition on its host via the next creator, with names suffixed by
+  # shard index, and supports shard-aware initializers (passing shard info with offsets) or
+  # plain ones (called with the shard shape), then wraps all shards in one sharded variable.
   """Makes a sharded variable creator given a list of hosts.
 
   Args:
@@ -1717,6 +2040,14 @@ def make_sharded_variable_creator(
 
   def sharded_variable_creator(
       next_creator: Callable[..., tf_variables.Variable], *args, **kwargs):
+    # [FUNCTION DOC]
+    # The creator returned by the enclosing factory. Inputs: the next creator in the chain
+    # plus positional and keyword arguments of a variable creation request. Marks the request
+    # to skip the mirrored creator, extracts name, shape, dtype and initializer, partitions
+    # the rows over the hosts, creates one shard per non-empty partition on its host
+    # (mutating the keyword arguments for each) and returns a sharded TPU embedding variable.
+    # Raises a value error (via the extraction helper) when shape or initializer cannot be
+    # determined; also assumes a rank two shape.
     """The sharded variable creator."""
     kwargs["skip_mirrored_creator"] = True
 
