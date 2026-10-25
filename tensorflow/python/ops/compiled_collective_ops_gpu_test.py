@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# GPU test for collective all-reduce inside an XLA-compiled function run through a mirrored
+# strategy over two GPUs. Defines one test case class. Importing has no side effects beyond
+# imports; running as a script first enables eager execution, then starts the test runner.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,9 +33,17 @@ from tensorflow.python.platform import test
 
 
 class CompiledCollectiveOpGPUTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for compiled (XLA) collective ops on two GPUs. Class-level state holds the group
+  # size (two) and the two GPU device names, set in the class setup; each test resets the
+  # eager context through a helper that skips when too few GPUs exist.
 
   @classmethod
   def setUpClass(cls):
+    # [FUNCTION DOC]
+    # Class-level fixture run once. Takes the class; returns nothing. Stores group size two and
+    # the names of GPU 0 and GPU 1 on the class, and sets process environment variables for
+    # informational NCCL logging and parallel NCCL launch mode (global side effect).
     """Set group_size = num_gpus = 2 for all tests in this class."""
     super(CompiledCollectiveOpGPUTest, cls).setUpClass()
     # Group size is the number of devices in a group communicating collectively.
@@ -42,6 +54,10 @@ class CompiledCollectiveOpGPUTest(test.TestCase):
     os.environ['NCCL_LAUNCH_MODE'] = 'PARALLEL'
 
   def _setup_context(self, num_gpus=2):
+    # [FUNCTION DOC]
+    # HELPER: per-test setup. Resets the global eager context, counts physical GPUs and skips
+    # the running test if fewer than num_gpus (default two) exist; otherwise initializes the
+    # context. Returns nothing.
     context._reset_context()
     gpus = config.list_physical_devices('GPU')
     if len(gpus) < num_gpus:
@@ -50,9 +66,17 @@ class CompiledCollectiveOpGPUTest(test.TestCase):
     context.ensure_initialized()
 
   def testCompiledAllReduce(self):
+    # [FUNCTION DOC]
+    # Builds a mirrored strategy over GPU 0 and GPU 1 and an XLA-compiled function containing a
+    # five-iteration while loop whose body all-reduces (sum) a starting value of one across the
+    # two replicas. Runs it per replica via the strategy and expects the reduced value of the
+    # first replica to be thirty-two (doubling five times).
     self._setup_context()
 
     def all_reduce_sum(v):
+      # [FUNCTION DOC]
+      # HELPER: input is a tensor; returns its sum all-reduce across a fixed group of two
+      # members (group key one, instance key one, identity final step) using the v2 op.
       return collective_ops.all_reduce_v2(
           t=v,
           group_size=2,
@@ -65,12 +89,19 @@ class CompiledCollectiveOpGPUTest(test.TestCase):
 
     @def_function.function(jit_compile=True)
     def f():
+      # [FUNCTION DOC]
+      # HELPER: XLA-compiled function; takes no arguments. Runs a loop of five iterations that
+      # all-reduces a float starting at one each time. Returns the pair of final counter and
+      # reduced value.
       return while_loop.while_loop(
           lambda i, _: i < 5, lambda i, t: (i + 1, all_reduce_sum(t)),
           (array_ops.zeros([]), constant_op.constant(1.0)))
 
     @def_function.function
     def run():
+      # [FUNCTION DOC]
+      # HELPER: function wrapper; takes no arguments and runs the compiled function on every
+      # replica of the strategy, returning the per-replica results.
       return strategy.run(f)
 
     _, reduce = strategy.experimental_local_results(run())[0]

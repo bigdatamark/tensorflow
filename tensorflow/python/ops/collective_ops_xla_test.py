@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test of collective all-reduce combined with XLA-compiled functions and the scoped-allocator
+# graph rewrite on CPU devices. Defines one test case class with a single graph-mode test.
+# Importing has no side effects beyond imports; running as a script starts the TensorFlow
+# test runner.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,8 +30,17 @@ from tensorflow.python.platform import test
 
 
 class CollectiveOpXlaTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case checking that collective all-reduce works on outputs of XLA-compiled functions
+  # when the scoped-allocator optimization is on. Holds no shared state.
 
   def testScopedAllocatorWithXla(self):
+    # [FUNCTION DOC]
+    # Configures a session with two CPU devices, constant folding off and the scoped-allocator
+    # rewrite enabled for collective reduce. On each device applies an XLA-compiled function
+    # (twice the input plus one) to a constant of ten elements valued device index plus one,
+    # feeds two identity copies to two all-reduces (add, identity) with different instance
+    # keys, and runs them. Expects every element of every result to equal eight.
     group_size = 2
     group_key = 1
     instance_key1 = 1
@@ -54,6 +68,9 @@ class CollectiveOpXlaTest(test.TestCase):
 
           @def_function.function(jit_compile=True)
           def f(x):
+            # [FUNCTION DOC]
+            # HELPER: XLA-compiled function for the test. Input: a tensor. Returns twice the
+            # input plus one.
             return 2 * x + 1
 
           input_tensor1 = array_ops.identity(f(constant))

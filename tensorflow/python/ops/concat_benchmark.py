@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# KNOWN ISSUE: the module docstring says "split and grad of split", but the code benchmarks the
+# concatenation operation and its gradient.
+# Benchmark for concatenating many tensors and (optionally) differentiating the concatenation.
+# Provides a graph builder and a benchmark class that runs a grid of shapes and axes on the CPU,
+# prints timings and reports them to the benchmark framework. Running as a script starts the
+# test runner. No import-time side effects.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +36,16 @@ from tensorflow.python.platform import test
 
 
 def build_graph(device, input_shape, variable, num_inputs, axis, grad):
+  # [FUNCTION DOC]
+  # HELPER: graph builder for the concat benchmark.
+  # Inputs: device (device type name such as cpu; zero-th device of that type is used),
+  # input_shape (two-element shape), variable (when true, the size along the non-concat
+  # dimension is randomized within five of the base size, using Python's random generator),
+  # num_inputs (count of zero tensors), axis (zero or one; only the value one is treated
+  # specially), grad (also compute gradients of each output with respect to the inputs).
+  # Creates the zero input tensors and one hundred concat ops, then returns a single grouping
+  # op depending on either all gradients (grad true) or all concat outputs. Adds ops to the
+  # current default graph.
   """Build a graph containing a sequence of concat operations.
 
   Args:
@@ -72,10 +89,24 @@ def build_graph(device, input_shape, variable, num_inputs, axis, grad):
 
 
 class ConcatBenchmark(test.Benchmark):
+  # [CLASS DOC]
+  # Benchmark class for concatenation. Holds no state; a helper builds and times a graph for
+  # one configuration and the benchmark method sweeps configurations.
   """Benchmark concat."""
 
   def _run_graph(self, device, input_shape, variable, num_inputs, axis, grad,
                  num_iters):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says variable means the input shape should be fixed, but in
+    # the graph builder true means the shape is randomized. Also, the name template used for
+    # the report has no placeholder for the iteration count, so the iterations value passed to
+    # formatting is ignored. The returned duration is the total over all timed iterations, not
+    # per iteration.
+    # Inputs: device, input_shape, variable, num_inputs, axis, grad (see the graph builder) and
+    # num_iters (number of timed runs). Builds the graph in a fresh graph object, creates a
+    # session with the optimizer level set to zero, runs once to warm up, then times the
+    # iterations. Prints a summary line with the per-iteration time and a derived bandwidth
+    # figure, reports the benchmark under a generated name, and returns the total seconds.
     """Run the graph and print its execution time.
 
     Args:
@@ -126,6 +157,12 @@ class ConcatBenchmark(test.Benchmark):
     return duration
 
   def benchmark_concat(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the printed title says "Forward vs backward concat", but every run passes the
+    # gradient flag as true, so only the forward-plus-backward case is measured.
+    # Takes no arguments, returns nothing. For eight shapes, both concat axes and fixed or
+    # randomized shapes, runs the helper on the CPU with twenty inputs and ten iterations each.
+    # Prints progress and reports each benchmark result.
     print("Forward vs backward concat")
     shapes = [[2000, 8], [8, 2000], [100, 18], [1000, 18], [100, 97],
               [1000, 97], [10000, 1], [1, 10000]]

@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Conditional execution for TensorFlow control flow. Provides the public conditional op, in a
+# legacy (version one) flavor that accepts deprecated branch arguments and a strict-by-default
+# version two flavor, plus private helpers for the eager path, unpacking single-element results
+# and reconciling index dtypes of sparse-gradient values. Dispatches between eager evaluation,
+# the function-based (control flow v2) implementation, and the older graph implementation built
+# from switch and merge ops. Import-time side effect: registers the public functions for export
+# under the cond name in the respective API versions.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -48,6 +56,26 @@ def cond(pred,
          name=None,
          fn1=None,
          fn2=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says pred is just a scalar, but in the legacy graph path a
+  # Python boolean raises a type error, while in eager mode and the function-based path other
+  # values are accepted. It also does not mention that strict defaults to false here, unlike the
+  # version-two wrapper.
+  # Version-one conditional. Inputs: pred (scalar boolean tensor), true_fn and false_fn (callables
+  # taking no arguments, required unless the deprecated fn1/fn2 aliases are given), strict
+  # (when false, single-element lists or tuples returned by the branches are unwrapped), name
+  # (optional scope name), fn1 and fn2 (deprecated aliases for true_fn and false_fn).
+  # Raises a type error if both an alias and its modern argument are set, if either branch is
+  # missing or not callable, if pred is a Python bool in the graph path, or if the branches
+  # return incompatible structures; raises a value error if a branch returns nothing, returns
+  # nothing in the merge, or the branches' outputs have different dtypes.
+  # Behavior: when executing eagerly delegates to the eager helper (evaluates only the chosen
+  # branch). When building a function, or when control flow v2 is enabled, delegates to the v2
+  # implementation. Otherwise builds switch/merge graph ops with two branch contexts, checks both
+  # branches have the same structure (casting sparse index dtypes if needed), prevents fetching
+  # branch-only tensors, registers the contexts in the graph collection for top-level conds and
+  # returns the merged output structure. Side effects: adds ops to the default graph.
+  # Returns the tensors (or nested structure) from the selected branch.
   """Return `true_fn()` if the predicate `pred` is true else `false_fn()`.
 
   `true_fn` and `false_fn` both return lists of output tensors. `true_fn` and
@@ -243,6 +271,15 @@ def cond(pred,
 @tf_export("cond", v1=[])
 @dispatch.add_dispatch_support
 def cond_for_tf_v2(pred, true_fn=None, false_fn=None, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the second docstring example is named as fun2 but prints the result of fun1,
+  # so it does not actually exercise the explicit conditional call.
+  # Version-two public conditional. Inputs: pred (scalar boolean tensor), true_fn and false_fn
+  # (callables taking no arguments; passing them is effectively required because the legacy
+  # function raises a type error if missing), name (optional scope name). Simply calls the
+  # version-one function with strict mode on, so single-element lists are not unpacked and the
+  # deprecated aliases are unavailable. Returns the selected branch's tensors or nested
+  # structure; raises the same type and value errors as the version-one function.
   """Return `true_fn()` if the predicate `pred` is true else `false_fn()`.
 
   Note: This op is automatically used in a `tf.function` to convert Python
@@ -344,6 +381,10 @@ def cond_for_tf_v2(pred, true_fn=None, false_fn=None, name=None):
 
 
 def _UnpackIfSingleton(res):
+  # [FUNCTION DOC]
+  # HELPER: used by the conditional functions when strict mode is off.
+  # Input: res, any value. If it is a list or tuple with exactly one element, returns that
+  # element; otherwise returns the input unchanged. No side effects.
   if isinstance(res, (list, tuple)) and len(res) == 1:
     return res[0]
   else:
@@ -351,6 +392,16 @@ def _UnpackIfSingleton(res):
 
 
 def _eager_cond_implementation(pred, true_fn, false_fn, strict, name):
+  # [FUNCTION DOC]
+  # HELPER: eager-mode implementation behind the public conditional.
+  # Inputs: pred (value convertible to a tensor), true_fn and false_fn (callables), strict (bool,
+  # whether to skip unwrapping single-element results), name (optional scope name). If the
+  # predicate has a known constant value, calls only the matching branch eagerly inside a name
+  # scope and returns its result (unwrapped if not strict). If it has no constant value (for
+  # example on a parallel device), both branches must be compiled-function wrappers, otherwise
+  # raises a type error. In that case it temporarily turns off the "run functions eagerly"
+  # setting (logging a warning if it was on), builds the function-based conditional, and restores
+  # the previous setting afterwards.
   """Special cases for `cond` when executing eagerly."""
   pred = ops.convert_to_tensor(pred)
   pred_constant_value = tensor_util.constant_value(pred)
@@ -391,6 +442,12 @@ def _eager_cond_implementation(pred, true_fn, false_fn, strict, name):
 
 
 def _cast_indexed_slice_indices(a, b):
+  # [FUNCTION DOC]
+  # HELPER: reconciles branch outputs in the graph conditional implementation.
+  # Inputs: a and b, any values (typically leaves from the two branches). If both are sparse
+  # index-slice values whose index dtypes differ, replaces both index tensors by 64-bit casts,
+  # mutating the objects in place through their private attribute. Otherwise does nothing.
+  # Returns nothing.
   """Cast IndexedSlice.indices from int32 to int64 where necessary.
 
   If `a` and `b` are both IndexedSlices, and their indices have different
