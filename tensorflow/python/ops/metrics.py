@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# HELPER: thin re-export shim that exposes the evaluation metric implementations under a public module name.
+# Purpose: provides the public module for evaluation-related metrics (streaming accuracy, precision,
+# recall, AUC, mean, and similar). It contains no logic of its own.
+# Exposes: every public name defined in the metrics implementation module, via a wildcard import.
+# Relation to the package: the real code lives in the metrics implementation module in this same
+# ops package; this file only forwards those names so callers can import them from here.
+# Import-time side effects: importing this module imports the implementation module (and thereby
+# registers whatever that module registers, such as local variables and collections used by metrics).
+# Lint warnings for the wildcard import are disabled around the import line.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
