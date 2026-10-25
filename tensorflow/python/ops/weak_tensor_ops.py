@@ -1,3 +1,16 @@
+# [MODULE DOC]
+# Adds WeakTensor support to TensorFlow ops by monkey patching. At import time this module wraps
+# a long list of existing unary ops (math, array, nn, image, clip, special-math, and TF-NumPy
+# functions) and binary ops (add, sub, multiply, matmul, divide, maximum, minimum, equal, the
+# variable assign methods, and the tensor constant constructor) with wrappers that apply the
+# automatic dtype conversion (type promotion) rules, and returns a weak tensor when the promoted
+# type is weak. The originals in their home modules are replaced in place and the wrappers are
+# recorded in module-level lists of unary and binary patched APIs. It also refreshes legacy
+# aliases (real division, truncate division and so on), installs unary dunder methods and the
+# inherited operator overloads on the weak tensor class, and enables numpy-style methods on it.
+# Import-time side effects: global mutation of many other modules, the dispatch registry
+# dictionary, and the weak tensor class. Nothing is exported for direct use except the two
+# wrapper factories and the module-level lists.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -52,6 +65,13 @@ _TF_BINARY_APIS = []
 # ==============================================================================
 # pylint: disable=g-doc-args,g-doc-return-or-yield
 def _convert_or_cast(x, dtype, name):
+  # [FUNCTION DOC]
+  # HELPER: internal glue for the weak tensor op wrappers (final conversion of inputs).
+  # Converts x to the given dtype. A weak tensor is first turned into a plain tensor. Tensors and
+  # composite tensors go through the cast op (so composite-specific dispatch can apply); any
+  # other value (python or numpy data) goes through tensor conversion with the dtype and name.
+  # Inputs: x (any value), dtype (target type), name (op name). Returns a tensor of that dtype.
+  # Casting is used for tensors to avoid infinite recursion with the constant op, which is patched.
   """Converts/casts the input x to dtype."""
   # math_ops.cast calls convert_to_tensor(x) under the hood, which can cause
   # infinite recursion if non-Tensor inputs are passed into tf.constant.
@@ -70,6 +90,19 @@ def _convert_or_cast(x, dtype, name):
 
 
 def weak_tensor_unary_op_wrapper(op, x_arg_name=None):
+  # [FUNCTION DOC]
+  # Decorator-style factory that adds weak tensor support to a unary op. Inputs: op (the function
+  # to wrap) and x_arg_name (optional name of the parameter holding the operand; defaults to the
+  # first parameter of op). Returns a wrapper made via the decorator utility so that it keeps the
+  # original function's metadata. Side effects: registers the wrapper in the dispatch dictionary
+  # via the helper below and appends it to the module-level list of unary patched APIs.
+  # The wrapper behaves as follows: if auto dtype conversion is disabled, it calls op unchanged.
+  # Otherwise it binds arguments with defaults; if the operand is already a tensor or an explicit
+  # dtype argument was given, op is called directly. Else the result type and weakness of the
+  # operand are inferred, the operand is converted to that type, op is called, and the result is
+  # converted to a weak tensor (when weak) or a tensor. If the operand type is unsupported
+  # (for example a composite tensor), a warning is logged and op is called with the original
+  # arguments. Errors from signature binding (wrong arguments) propagate as type errors.
   """Infers input type and adds WeakTensor support to unary ops.
 
   This wrapper infers input type according to the auto dtype conversion
@@ -84,6 +117,13 @@ def weak_tensor_unary_op_wrapper(op, x_arg_name=None):
     x_arg_name = next(arg_names)
 
   def wrapper(*args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: inner closure of the unary wrapper factory; this is the function actually installed
+    # in place of the op. Accepts any positional and keyword arguments of the wrapped op and
+    # returns the op result, converted to a weak tensor when the inferred input type is weak and
+    # the op has no explicit dtype argument, otherwise the plain op result. Falls back to the
+    # unmodified op (with a logged warning) for input types the promotion logic does not support.
+    # Raises a type error if the arguments do not match the op signature.
     if not ops.is_auto_dtype_conversion_enabled():
       return op(*args, **kwargs)
     bound_arguments = signature.bind(*args, **kwargs)
@@ -125,6 +165,20 @@ def weak_tensor_unary_op_wrapper(op, x_arg_name=None):
 
 
 def weak_tensor_binary_op_wrapper(op, y_arg_name=None, special_handling=None):
+  # [FUNCTION DOC]
+  # Decorator-style factory that adds weak tensor support to a binary op. Inputs: op (function to
+  # wrap), y_arg_name (optional name of the second operand; defaults to the second parameter of
+  # op), and special_handling (optional mode string: variable method, constant, comparison
+  # method, or nothing for the default behavior). The first operand name is the first parameter
+  # of op. Returns a wrapper that keeps the original metadata. Side effects: registers the
+  # wrapper in the dispatch dictionary and appends it to the module-level list of binary APIs.
+  # Modes: the default converts both operands to the common promoted type and returns a weak
+  # tensor if the promoted type is weak. Comparison method does the same but the result is never
+  # weak. Variable method only converts the second operand and raises a type error if the
+  # promoted type differs from the variable dtype (variable dtype is immutable). Constant mode
+  # converts weak tensors to tensors, and when a dtype is given only allows promotion of the
+  # value into that dtype, otherwise falls back to the original op; when no dtype is given the
+  # promoted type is used as the dtype.
   """Determines result promotion type and adds WeakTensor support to binary ops.
 
   This wrapper first infers dtype of any Tensor, WeakTensor, python/numpy
@@ -138,6 +192,13 @@ def weak_tensor_binary_op_wrapper(op, y_arg_name=None, special_handling=None):
     y_arg_name = next(arg_names)
 
   def wrapper(*args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: inner closure of the binary wrapper factory; this is the function installed in place
+    # of the op. Takes any positional and keyword arguments of the wrapped op and returns its
+    # result with inputs promoted according to the special handling mode (see the factory).
+    # Unsupported input types (such as composite tensors) log a warning and call the op unchanged.
+    # Raises a type error for signature mismatch, and for the variable-method mode when the
+    # promoted type differs from the variable dtype.
     if not ops.is_auto_dtype_conversion_enabled():
       return op(*args, **kwargs)
     bound_arguments = signature.bind(*args, **kwargs)
@@ -214,6 +275,13 @@ def weak_tensor_binary_op_wrapper(op, y_arg_name=None, special_handling=None):
 
 # TODO(b/290672237): Investigate if there is a more elegant solution.
 def _update_weak_tensor_patched_ops_in_dispatch_dict(patched_op):
+  # [FUNCTION DOC]
+  # HELPER: registration glue for the wrapper factories above.
+  # Given a freshly created patched op, looks up the original (unpatched) function through its
+  # wrapped-function attribute and, if the original has an entry in the type-based dispatch
+  # signature dictionary, adds the same entry under the patched op. This lets dispatch handlers be
+  # registered and unregistered against the monkey-patched function. Mutates that private
+  # dictionary of the dispatch module; returns nothing. Does nothing if the original has no entry.
   """Update dispatch dictionary to store WeakTensor patched op references.
 
   _TYPE_BASED_DISPATCH_SIGNATURES in dispatch.py stores mappings from op
