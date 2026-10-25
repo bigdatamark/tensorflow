@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test module for checkpointing of the V2 TPU embedding mid-level API. Covers saving a model whose
+# embedding values live on the TPU, restoring into a new embedding (including before variables are
+# created), exporting to a CPU model for serving, and name parity between TPU and CPU checkpoints.
+# Needs a TPU; runs with v2 behavior via the test main entry. Builds on the shared base test module.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,8 +42,20 @@ from tensorflow.python.training import checkpoint_utils
 
 
 class TPUEmbeddingCheckpointTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
+  # [CLASS DOC]
+  # Test case for V2 embedding checkpoint behavior, derived from the shared TPU embedding base test.
+  # Adds a helper to save a checkpoint and fetch the single table variable from it. Uses base fixtures
+  # (strategy creation, resolver, temp directory helper, skip helper).
 
   def make_checkpoint_and_get_embedding(self, name, model, num_rows):
+    # [FUNCTION DOC]
+    # HELPER: saves a model checkpoint and reads back the embedding table values.
+    # Inputs: name, a sub-directory name under the temp dir; model, the object to checkpoint; num_rows,
+    # number of table rows expected. Saves a checkpoint under the name, lists variables in it, keeps those
+    # whose shape is num_rows by 4 (found by shape because the key can change), and loads that variable.
+    # Raises a runtime error unless exactly one such variable exists. Returns the loaded array.
+    # KNOWN ISSUE: the in-code comment mentions a shape of 8 by 4 while the shape actually matched is
+    # rows-by-4 using the given row count.
     """Saves model to checkpoint name, retrieves embedding variables."""
     checkpoint = util.Checkpoint(model=model)
     checkpoint.save(self._get_tmpdir(name, 'save'))
@@ -55,6 +72,12 @@ class TPUEmbeddingCheckpointTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
     return checkpoint_utils.load_variable(self._get_tmpdir(name), variables[0])
 
   def test_checkpoint_save_retrieves(self):
+    # [FUNCTION DOC]
+    # Scenario: saving a checkpoint retrieves the current TPU values. Builds an embedding with one table
+    # (rows equal to replica count, dim 4, sum combiner) initialized to ones, loads its variables to the
+    # TPU, and checks a saved checkpoint holds ones. Reinitializes the TPU, builds a second embedding
+    # initialized to twos and loads it to the TPU. Then checkpointing the first embedding must now yield
+    # twos because the checkpoint retrieves from the TPU. Asserts both with explanatory messages.
     strategy = self._get_strategy()
     num_rows = strategy.num_replicas_in_sync
 
@@ -118,10 +141,18 @@ class TPUEmbeddingCheckpointTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
         msg='Checkpoint should contain values from the second api object.')
 
   def test_checkpoint_restore_loads(self):
+    # [FUNCTION DOC]
+    # Scenario: restoring a checkpoint loads values onto the TPU. Builds an embedding initialized to ones,
+    # loads and checkpoints it, reinitializes the TPU, builds a second embedding initialized to twos and
+    # loads it. Asserts the second embedding holds its initial twos, restores the first checkpoint into
+    # it, retrieves variables from the TPU, and asserts the second embedding now holds the ones.
     strategy = self._get_strategy()
     num_rows = strategy.num_replicas_in_sync
 
     def get_values(mid):
+      # [FUNCTION DOC]
+      # HELPER: nested accessor. Input: mid, a TPU embedding. Returns the first underlying variable of the
+      # table parameters converted to a tensor.
       return ops.convert_to_tensor(
           mid._variables['table']['parameters'].variables[0])
 
@@ -191,11 +222,26 @@ class TPUEmbeddingCheckpointTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
     )
 
   def test_checkpoint_restore_before_variable_creation(self):
+    # [FUNCTION DOC]
+    # Scenario: restore into a module whose embedding variables are not yet created. Skipped when the
+    # project or zone flag is set. Builds a module with an embedding initialized to ones (twice the
+    # replica count rows), creates the embedding, and saves a checkpoint. Reinitializes the TPU and
+    # creates a second module initialized to zeros, restores the checkpoint before creating its embedding,
+    # then creates the embedding. Asserts the values are ones, retrieves variables from the TPU, and
+    # asserts they are still ones.
     self.skip_if_oss()
 
     class TestModule(module.Module):
+      # [CLASS DOC]
+      # HELPER: small module used by the restore-before-creation test.
+      # Module holding the initializer, the row count and a TPU embedding (one table, one feature, plain
+      # gradient descent) created in the constructor; the embedding itself is built later on request.
 
       def __init__(self, initializer, rows):
+        # [FUNCTION DOC]
+        # Constructor. Inputs: initializer for table values; rows, vocabulary size. Stores both, creates a
+        # one-table configuration (dim 4, sum combiner), one feature, a default gradient descent optimizer,
+        # and a TPU embedding object stored as an attribute. Returns nothing.
         self._initializer = initializer
         self._rows = rows
 
@@ -213,6 +259,9 @@ class TPUEmbeddingCheckpointTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
             feature_config, optimizer)
 
       def create_embedding(self):
+        # [FUNCTION DOC]
+        # Builds the embedding with a nominal batch size of 64 (irrelevant because no training happens),
+        # which creates its variables. Returns nothing.
         # We aren't training so batch_size here doesn't matter.
         self.tpu_embedding.build(64)
 
@@ -239,6 +288,9 @@ class TPUEmbeddingCheckpointTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
       module2.create_embedding()
 
     def get_values(mid):
+      # [FUNCTION DOC]
+      # HELPER: nested accessor. Input: mid, a TPU embedding. Returns the numpy array of the first
+      # underlying variable of the table parameters.
       return mid._variables['table']['parameters'].variables[0].numpy()
 
     self.assertAllClose(
@@ -253,6 +305,12 @@ class TPUEmbeddingCheckpointTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
         get_values(module2.tpu_embedding))
 
   def test_model_export_cpu(self):
+    # [FUNCTION DOC]
+    # Scenario: export a TPU-trained embedding to a CPU serving model. Builds a TPU embedding (ones) and a
+    # second embedding for the CPU with the same config, loads the first to the TPU, saves its checkpoint
+    # and restores it into the CPU one. Defines a serving function that does a CPU embedding lookup, saves
+    # the CPU model with a signature for an int32 vector of length two, loads it back and predicts for
+    # ids one and zero. Asserts the prediction equals the matching rows of the original contents.
     strategy = self._get_strategy()
     num_rows = strategy.num_replicas_in_sync
 
@@ -292,6 +350,9 @@ class TPUEmbeddingCheckpointTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
 
     @def_function.function
     def serve_tensors(features):
+      # [FUNCTION DOC]
+      # HELPER: serving function traced into the exported signature. Input: features. Performs a CPU
+      # embedding lookup over the CPU tables and returns the first feature's activations.
       features = tpu_embedding_for_serving.cpu_embedding_lookup(
           features, None, cpu_mid_level.embedding_tables,
           cpu_mid_level._feature_config)
@@ -323,6 +384,11 @@ class TPUEmbeddingCheckpointTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
                             tpu_embedding_v2_utils.FTRL)
   def test_check_checkpoint_variable_names_are_same_on_cpu_and_tpu(
       self, optimizer):
+    # [FUNCTION DOC]
+    # Parameterized over optimizer classes (gradient descent, adagrad, adam, ftrl). Input: optimizer
+    # class. Non-gradient-descent classes are skipped when the project or zone flag is set. Builds two
+    # embeddings with the same config and optimizer, saves each into its own temp directory, lists each
+    # checkpoint's variables, and asserts the lists are equal.
     # Reinitialize the TPU so that we can re-initialize the embeddings with the
     # given optimizer.
     if optimizer != tpu_embedding_v2_utils.SGD:

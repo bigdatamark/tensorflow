@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# HELPER: generated gRPC glue used by the TPU profiler analysis client and server code.
+# KNOWN ISSUE: the message module is imported from the core profiler package while its alias
+# still carries an old third-party path prefix; harmless leftover of the code generator.
+# Generated gRPC bindings for the ProfileAnalysis service (marked do-not-edit by the generator).
+# Defines a client stub class, a servicer base class whose methods all answer "unimplemented",
+# and a function that registers a servicer implementation on a gRPC server. Imports grpc and the
+# generated message module at import time; no other import-time side effects.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +30,9 @@ from tensorflow.core.profiler import profiler_analysis_pb2 as third__party_dot_t
 
 
 class ProfileAnalysisStub(object):
+  # [CLASS DOC]
+  # Client stub for the ProfileAnalysis service; instances expose one callable per remote method,
+  # created from a gRPC channel at construction time.
   """//////////////////////////////////////////////////////////////////////////////
 
   ProfileAnalysis service provide entry point for profiling TPU and for
@@ -30,6 +41,10 @@ class ProfileAnalysisStub(object):
   """
 
   def __init__(self, channel):
+    # [FUNCTION DOC]
+    # Constructor. Input: channel, a gRPC channel. Creates three unary-unary callables on the instance
+    # (new session, enumerate sessions, get session tool data) bound to their method paths and the
+    # generated serializers. Returns nothing.
     """Constructor.
 
     Args:
@@ -59,6 +74,9 @@ class ProfileAnalysisStub(object):
 
 
 class ProfileAnalysisServicer(object):
+  # [CLASS DOC]
+  # Base class for a server implementation of the ProfileAnalysis service. Every method reports
+  # "unimplemented" until overridden; pass an instance to the registration function.
   """//////////////////////////////////////////////////////////////////////////////
 
   ProfileAnalysis service provide entry point for profiling TPU and for
@@ -67,6 +85,10 @@ class ProfileAnalysisServicer(object):
   """
 
   def NewSession(self, request, context):
+    # [FUNCTION DOC]
+    # Server-side placeholder for starting a profiling session. Inputs: request message and call
+    # context. Sets an unimplemented status on the context and raises a not-implemented error.
+    # Subclasses override it to run the profiler and store results.
     """Starts a profiling session, blocks until it completes.
 
     TPUProfileAnalysis service delegate this to TPUProfiler service.
@@ -77,12 +99,20 @@ class ProfileAnalysisServicer(object):
     raise NotImplementedError('Method not implemented!')
 
   def EnumSessions(self, request, context):
+    # [FUNCTION DOC]
+    # Server-side placeholder for listing existing sessions and their available tools. Inputs: request
+    # message and call context. Sets an unimplemented status on the context and raises a
+    # not-implemented error. Subclasses override it.
     """Enumerate existing sessions and return available profile tools."""
     context.set_code(grpc.StatusCode.UNIMPLEMENTED)
     context.set_details('Method not implemented!')
     raise NotImplementedError('Method not implemented!')
 
   def GetSessionToolData(self, request, context):
+    # [FUNCTION DOC]
+    # Server-side placeholder for fetching one tool's data for one session. Inputs: request message and
+    # call context. Marks the context with an unimplemented status code and details, then raises a
+    # not-implemented error. Subclasses are expected to override it.
     """Retrieve specific tool's data for specific session."""
     context.set_code(grpc.StatusCode.UNIMPLEMENTED)
     context.set_details('Method not implemented!')
@@ -90,6 +120,13 @@ class ProfileAnalysisServicer(object):
 
 
 def add_ProfileAnalysisServicer_to_server(servicer, server):
+  # [FUNCTION DOC]
+  # HELPER: glue that wires a servicer implementation into a gRPC server.
+  # Inputs: servicer, an object implementing the three ProfileAnalysis methods; server, a gRPC server.
+  # Builds a mapping from method names (new session, enumerate sessions, get session tool data) to
+  # unary-unary handlers with the matching request deserializers and response serializers, wraps it in
+  # a generic handler for the ProfileAnalysis service, and registers it on the server. Returns nothing;
+  # mutates the server by adding the handler.
   rpc_method_handlers = {
       'NewSession':
           grpc.unary_unary_rpc_method_handler(

@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Correctness test module for dense (plain id tensor) lookups through the V2 TPU embedding API, in
+# regular and high-dimensional form. Needs a TPU; runs with v2 behavior via the test main entry.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,9 +28,19 @@ from tensorflow.python.tpu.tests import tpu_embedding_v2_correctness_base_test
 
 class TPUEmbeddingCorrectnessTest(
     tpu_embedding_v2_correctness_base_test.TPUEmbeddingCorrectnessBaseTest):
+  # [CLASS DOC]
+  # Test case deriving from the shared correctness base test; holds one parameterized dense lookup test.
 
   @parameterized.parameters([True, False])
   def test_dense_lookup(self, is_high_dimensional):
+    # [FUNCTION DOC]
+    # Parameterized over is_high_dimensional (true or false). Scenario: dequeue activations for dense id
+    # inputs without training. Creates a gradient descent setup, picks the high-dimensional or regular
+    # dense dataset, distributes it without fetching to device, and runs a compiled function that enqueues
+    # a batch (no training) and runs a per-replica dequeue. Unpacks the three activations from replicas
+    # and compares them with rows picked directly from the numpy-shaped video (8 by 4) and user (16 by 2)
+    # tables using the feature values repeated for the number of replicas divided by two; for the
+    # high-dimensional case the gathered rows are reshaped to include the extra dimension. Asserts closeness.
     strategy, mid_level_api, _ = self._create_strategy_and_mid_level('sgd')
 
     if is_high_dimensional:
@@ -41,7 +54,12 @@ class TPUEmbeddingCorrectnessTest(
 
     @def_function.function
     def test_fn():
+      # [FUNCTION DOC]
+      # HELPER: compiled function of the test. Enqueues the next distributed batch with training off and
+      # returns the result of running the dequeue step on all replicas.
       def step():
+        # [FUNCTION DOC]
+        # HELPER: per-replica body of the test. Returns the embedding activations from a dequeue.
         return mid_level_api.dequeue()
 
       mid_level_api.enqueue(next(dist_iter), training=False)

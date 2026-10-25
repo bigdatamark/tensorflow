@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Correctness test module for sequence (padded, fixed max length) features in the V2 TPU embedding
+# API: lookups return per-position activations and the update from gradients is verified. Needs a
+# TPU; runs with v2 behavior via the test main entry. Builds on the shared correctness base module.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,9 +33,21 @@ from tensorflow.python.util import nest
 
 class TPUEmbeddingCorrectnessTest(
     tpu_embedding_v2_correctness_base_test.TPUEmbeddingCorrectnessBaseTest):
+  # [CLASS DOC]
+  # Test case deriving from the shared correctness base test; holds one parameterized sequence test.
 
   @parameterized.parameters([True, False])
   def test_sequence_embeddings(self, sparse):
+    # [FUNCTION DOC]
+    # Parameterized over sparse (true) or ragged (false) inputs. Scenario: embeddings with maximum
+    # sequence lengths 2, 2 and 3 for watched, favorited and friends. Builds a gradient descent (learning
+    # rate 0.1) embedding under the strategy and calls build with the batch size up front because the
+    # shapes of data obtained outside a compiled function are not known at tracing time. Gets one
+    # distributed batch (sparse or ragged, no fetch to device). Runs one compiled function that enqueues,
+    # dequeues and applies an all-ones gradient, and another that only looks up without training; compares
+    # core 0 outputs before and after. Expected: rows looked up update by 0.3 times replicas for the two
+    # video features and 0.1 times replicas for the user feature, only in non-padding positions given by
+    # fixed masks (padding positions are zero). Asserts closeness of the golden values and the later lookup.
     feature_config = (
         tpu_embedding_v2_utils.FeatureConfig(
             table=self.table_video, name='watched',
@@ -66,7 +82,13 @@ class TPUEmbeddingCorrectnessTest(
 
     @def_function.function
     def embedding_and_set_gradients(data):
+      # [FUNCTION DOC]
+      # HELPER: compiled function of the test. Input: data, a batch. Enqueues the batch (training default),
+      # runs the per-replica function on all replicas and returns the activations.
       def tpu_fn():
+        # [FUNCTION DOC]
+        # HELPER: per-replica body. Dequeues activations, applies gradients of ones with the same structure,
+        # and returns the activations.
         activations = mid_level.dequeue()
         mid_level.apply_gradients(nest.map_structure(array_ops.ones_like,
                                                      activations))
@@ -76,7 +98,12 @@ class TPUEmbeddingCorrectnessTest(
 
     @def_function.function
     def embedding_only(data):
+      # [FUNCTION DOC]
+      # HELPER: compiled function of the test. Input: data. Enqueues with training off, runs the dequeue
+      # on all replicas and returns the activations.
       def tpu_fn():
+        # [FUNCTION DOC]
+        # HELPER: per-replica body that just dequeues and returns the activations.
         return mid_level.dequeue()
       mid_level.enqueue(data, training=False)
       return strategy.run(tpu_fn)

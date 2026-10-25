@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Packaging script for the Cloud TPU profiler pip distribution (cloud_tpu_profiler).
+# Reads the version from the package version module, strips dashes from it, and calls the
+# setuptools setup routine declaring metadata, classifiers, and a console script entry point
+# named capture_tpu_profile. Running the module performs the packaging action (import-time
+# side effect); it is a build helper and not part of the runtime library.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

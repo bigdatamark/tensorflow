@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Negative tests for high-dimensional input shapes in the V2 TPU embedding API: inconsistent or
+# partially undefined output shapes must raise value errors on build or enqueue. Needs a TPU; runs
+# with v2 behavior via the test main entry. Uses the shared base module.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,8 +27,14 @@ from tensorflow.python.tpu.tests import tpu_embedding_base_test
 
 
 class TPUEmbeddingTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
+  # [CLASS DOC]
+  # Test case for invalid high-dimensional shape handling, derived from the shared base test.
 
   def test_build_incorrect_output_shapes(self):
+    # [FUNCTION DOC]
+    # Scenario: output shapes set on the embedding object (2 by 4 for each of three features) disagree
+    # with the shapes passed to build (1 by 1 by 1). Sets the private output shapes attribute directly
+    # and expects a value error mentioning an inconsistent shape for an input feature.
     _, mid_level_api, _ = self._create_strategy_and_mid_level('sgd')
     # Output shapes is set in the mid_level_api, but build with incorrect output
     # shapes.
@@ -35,6 +45,11 @@ class TPUEmbeddingTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
       mid_level_api.build([TensorShape([1, 1, 1]) for _ in range(3)])
 
   def test_enqueue_incorrect_shape_feature(self):
+    # [FUNCTION DOC]
+    # Scenario: build succeeds with consistent shapes but data has a different shape. Distributes a
+    # high-dimensional sparse dataset, sets output shapes to 1 by 1, builds with 1 by 1 by 1, and defines
+    # a compiled function that enqueues the next batch (training off) and runs a dequeue per replica.
+    # Calling it must raise a value error about an inconsistent shape for an input feature.
     strategy, mid_level_api, _ = self._create_strategy_and_mid_level('sgd')
 
     sparse = self._create_high_dimensional_sparse_dataset(strategy)
@@ -50,8 +65,13 @@ class TPUEmbeddingTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
 
     @def_function.function
     def test_fn():
+      # [FUNCTION DOC]
+      # HELPER: compiled function of the test. Enqueues the next distributed batch with training off and
+      # returns the result of running the dequeue step on the replicas.
 
       def step():
+        # [FUNCTION DOC]
+        # HELPER: per-replica body; returns a dequeue.
         return mid_level_api.dequeue()
 
       mid_level_api.enqueue(next(sparse_iter), training=False)
@@ -63,6 +83,9 @@ class TPUEmbeddingTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
       test_fn()
 
   def test_not_fully_defined_output_shapes_in_feature_config(self):
+    # [FUNCTION DOC]
+    # Scenario: output shapes in the feature configuration are fully unknown. Sets them directly and
+    # expects build with no arguments to raise a value error mentioning the input feature.
     _, mid_level_api, _ = self._create_strategy_and_mid_level('sgd')
 
     # Feature config sets undefined output shapes
@@ -71,6 +94,9 @@ class TPUEmbeddingTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
       mid_level_api.build()
 
   def test_not_fully_defined_output_shapes_for_build(self):
+    # [FUNCTION DOC]
+    # Scenario: shapes passed to build contain unknown dimensions. Expects a value error mentioning the
+    # input feature.
     _, mid_level_api, _ = self._create_strategy_and_mid_level('sgd')
 
     # Build with undefined output shape

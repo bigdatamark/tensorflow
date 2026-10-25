@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test module for checkpoint behaviour of the V0 TPU embedding mid-level API (the variant that keeps
+# tables in TPU variables without the enqueue path). Covers saving and restoring, exporting a model
+# to CPU serving, and variable-name parity between TPU and CPU checkpoints. Runs through the test
+# main entry with v2 behavior enabled; requires a TPU. Imports the shared base test module.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -34,8 +39,18 @@ from tensorflow.python.training import checkpoint_utils
 
 
 class TPUEmbeddingCheckpointTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
+  # [CLASS DOC]
+  # Test case for V0 embedding checkpointing, derived from the shared TPU embedding base test.
+  # Overrides the strategy getter (cached strategy reuse) and the mid-level factory (builds the V0
+  # embedding object, default optimizer plain gradient descent with learning rate 0.1). Uses the base
+  # class fixtures (tables, feature config, temp directory helper).
 
   def _get_strategy(self):
+    # [FUNCTION DOC]
+    # HELPER: strategy getter override for these tests.
+    # Returns the strategy cached on the test instance if present (the V0 API needs no TPU
+    # reconfiguration, so it can be reused); otherwise delegates to the base class, which initializes the
+    # TPU and creates a new strategy.
     # We can cache the strategy as TPUEmbeddingV0 doesn't require
     # reconfiguration to the tpu.
     if hasattr(self, 'strategy'):
@@ -43,6 +58,10 @@ class TPUEmbeddingCheckpointTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
     return super(TPUEmbeddingCheckpointTest, self)._get_strategy()
 
   def _create_mid_level(self, optimizer=None):
+    # [FUNCTION DOC]
+    # HELPER: factory override that builds the V0 embedding object.
+    # Input: optimizer, optional; defaults to gradient descent with learning rate 0.1 when nothing is
+    # given. Returns a V0 TPU embedding built from the test's feature config and that optimizer.
     # Create `TPUEmbedding` object.
     if optimizer is None:
       optimizer = tpu_embedding_v2_utils.SGD(learning_rate=0.1)
@@ -51,6 +70,12 @@ class TPUEmbeddingCheckpointTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
         feature_config=self.feature_config, optimizer=optimizer)
 
   def test_checkpoint_save_and_restore(self):
+    # [FUNCTION DOC]
+    # Scenario: save a V0 embedding and restore it into a different one. Under the strategy scope builds
+    # a one-feature, one-table (4 rows, dim 4, sum combiner) embedding initialized to all ones and builds
+    # it, then saves a checkpoint. Builds a second embedding with the same layout initialized to all twos,
+    # restores the first checkpoint into it. Asserts the second embedding's parameter variable equals the
+    # first one's ones, with a message explaining the expectation. Side effects: files in the temp dir.
     strategy = self._get_strategy()
     with strategy.scope():
       first_mid_level_contents = np.ones((4, 4))
@@ -99,6 +124,13 @@ class TPUEmbeddingCheckpointTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
         msg='Second mid level api should have restored the first model values.')
 
   def test_model_export_cpu(self):
+    # [FUNCTION DOC]
+    # Scenario: export a TPU-trained V0 embedding to a CPU serving model. Builds a V0 embedding (ones,
+    # 4 by 4), a CPU serving embedding with the same config and optimizer, saves the TPU checkpoint and
+    # restores it onto the CPU object. Defines a serving function doing a CPU embedding lookup, saves the
+    # CPU model with a serving signature for an int32 vector input of length two, loads it back and calls
+    # the signature with the ids one and zero. Asserts the prediction equals the corresponding rows of
+    # the original table contents. Side effects: writes checkpoints and an exported model to temp dirs.
     strategy = self._get_strategy()
 
     with strategy.scope():
@@ -135,6 +167,10 @@ class TPUEmbeddingCheckpointTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
 
     @def_function.function
     def serve_tensors(features):
+      # [FUNCTION DOC]
+      # HELPER: serving function of the export test, traced into the saved model signature.
+      # Input: features, the id tensors. Runs the CPU embedding lookup over the CPU embedding tables with
+      # the feature config and returns the first feature's activations.
       features = tpu_embedding_for_serving.cpu_embedding_lookup(
           features, None, cpu_mid_level.embedding_tables,
           cpu_mid_level._feature_config)
@@ -166,6 +202,12 @@ class TPUEmbeddingCheckpointTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
                             tpu_embedding_v2_utils.FTRL)
   def test_check_checkpoint_variable_names_are_same_on_cpu_and_tpu(
       self, optimizer):
+    # [FUNCTION DOC]
+    # Parameterized scenario over optimizer classes (gradient descent, adagrad, adam, ftrl): checks that a
+    # TPU V0 embedding and a CPU serving embedding produce checkpoints with identical variable names.
+    # Input: optimizer, an optimizer class. Non-gradient-descent optimizers are skipped when the project
+    # or zone flags are set. Builds both embeddings with the same single table, saves each checkpoint to
+    # its own temp directory, lists variables in each, and asserts the two listings are equal.
     # Reinitialize the TPU so that we can re-initialize the embeddings with the
     # given optimizer.
     if optimizer != tpu_embedding_v2_utils.SGD:

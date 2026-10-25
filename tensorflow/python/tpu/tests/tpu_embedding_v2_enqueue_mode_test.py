@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test module for the enqueue modes of the V2 TPU embedding API: enqueue inside or outside TPU
+# compilation, enqueue under nested control flow, non-direct inputs, and automatic training-mode
+# detection. Needs a TPU; runs with v2 behavior via the test main entry. Uses the shared base module.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,9 +32,18 @@ from tensorflow.python.util import nest
 
 
 class TPUEmbeddingTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
+  # [CLASS DOC]
+  # Test case for enqueue behaviors, derived from the shared TPU embedding base test, using its
+  # strategy, dataset and numpy helpers.
 
   @parameterized.parameters([True, False])
   def test_enqueue_with_outside_compilation(self, use_mlir):
+    # [FUNCTION DOC]
+    # Parameterized over use_mlir. KNOWN ISSUE: when use_mlir is true it turns on the MLIR bridge through
+    # global configuration and never turns it off, which can leak into later tests in the process.
+    # Scenario: enqueue called inside the per-replica function (outside compilation) must match the
+    # usual enqueue outside it. Builds the embedding with explicit input shapes, takes one sparse batch,
+    # runs both compiled variants without training, extracts core 0 numpy outputs, asserts they match.
     if use_mlir:
       config.enable_mlir_bridge()
 
@@ -49,14 +62,24 @@ class TPUEmbeddingTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
 
     @def_function.function
     def enqueue_with_outside_compilation(data):
+      # [FUNCTION DOC]
+      # HELPER: compiled function. Input: data. Runs a per-replica function which enqueues the features
+      # with training off inside the replica and returns the dequeued activations.
       def get_activations(features):
+        # [FUNCTION DOC]
+        # HELPER: per-replica body. Input: features. Enqueues them with training off, returns dequeue output.
         mid_level_api.enqueue(features, training=False)
         return mid_level_api.dequeue()
       return strategy.run(get_activations, args=(data,))
 
     @def_function.function
     def enqueue_without_outside_compilation(data):
+      # [FUNCTION DOC]
+      # HELPER: compiled function. Input: data. Enqueues outside the replica function (training off), then
+      # runs a per-replica dequeue and returns activations.
       def get_activations():
+        # [FUNCTION DOC]
+        # HELPER: per-replica body without inputs; returns the result of a dequeue.
         return mid_level_api.dequeue()
       mid_level_api.enqueue(data, training=False)
       return strategy.run(get_activations)
@@ -74,6 +97,11 @@ class TPUEmbeddingTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
 
   @parameterized.parameters(True, False)
   def test_enqueue_with_outside_compilation_in_control_flow(self, use_mlir):
+    # [FUNCTION DOC]
+    # Parameterized over use_mlir. KNOWN ISSUE: enabling the MLIR bridge is global and never undone.
+    # Skipped when project or zone flag is set. Scenario: enqueue wrapped inside a separate compiled
+    # function (not inlined into the caller) is a form of control flow. Calling it in a replica function
+    # must raise a runtime error saying the graph does not match the one containing the replicate context.
     self.skip_if_oss()
     if use_mlir:
       config.enable_mlir_bridge()
@@ -91,11 +119,18 @@ class TPUEmbeddingTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
     # place the enqueue in a switch_v2 or something similar.
     @def_function.function
     def enqueue_fn(features):
+      # [FUNCTION DOC]
+      # HELPER: compiled function. Input: features. Enqueues with training off; returns nothing.
       mid_level_api.enqueue(features, training=False)
 
     @def_function.function
     def enqueue_with_outside_compilation():
+      # [FUNCTION DOC]
+      # HELPER: compiled function without inputs. Runs a per-replica function that calls the enqueue
+      # function and dequeues, using the next distributed batch; returns the activations.
       def get_activations(features):
+        # [FUNCTION DOC]
+        # HELPER: per-replica body. Input: features. Calls the enqueue function, then returns a dequeue.
         enqueue_fn(features)
         return mid_level_api.dequeue()
       return strategy.run(get_activations, args=(next(dataset_iter),))
@@ -106,6 +141,10 @@ class TPUEmbeddingTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
       enqueue_with_outside_compilation()
 
   def test_enqueue_with_outside_compilation_non_direct_input(self):
+    # [FUNCTION DOC]
+    # Scenario: enqueue inside the replica function with inputs that were transformed on the TPU. Builds
+    # with explicit shapes, doubles every feature before enqueue so inputs are not direct dataset inputs,
+    # and expects a value error complaining the input lacks the TPU input identity attribute.
     strategy, mid_level_api, _ = self._create_strategy_and_mid_level('sgd')
     mid_level_api.build([
         TensorShape((self.batch_size, 2)),
@@ -121,7 +160,13 @@ class TPUEmbeddingTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
 
     @def_function.function
     def enqueue_with_outside_compilation():
+      # [FUNCTION DOC]
+      # HELPER: compiled function without inputs. Runs the replica function on the next distributed batch
+      # and returns its activations.
       def get_activations(features):
+        # [FUNCTION DOC]
+        # HELPER: per-replica body. Input: features. Multiplies each by two (to break direct input), enqueues
+        # with training off, returns a dequeue.
         # This inserts a mul operation on the TPU to trigger the direct input
         # error.
         features = (features[0]*2, features[1]*2, features[2]*2)
@@ -134,6 +179,14 @@ class TPUEmbeddingTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
       enqueue_with_outside_compilation()
 
   def test_enqueue_with_outside_compilation_auto_mode(self):
+    # [FUNCTION DOC]
+    # Scenario: the embedding detects training or inference mode automatically from the ops sharing an
+    # operation name. Builds with explicit shapes, then runs one compiled function that enqueues,
+    # dequeues and applies an all-ones gradient under name call2, and another that enqueues and dequeues
+    # under name call1 without gradients (training flag not set, left default). Runs the gradient one
+    # first and the other after on the same batch, and compares core 0 results. Expected: the later
+    # activations equal the earlier minus updates of 0.3 times replicas (scaled by lookup counts, 2x for
+    # rows looked up twice) for the video features and 0.1-based values for the user feature. Asserts closeness.
     strategy, mid_level_api, _ = self._create_strategy_and_mid_level('sgd')
     mid_level_api.build([
         TensorShape((self.batch_size, 2)),
@@ -149,7 +202,12 @@ class TPUEmbeddingTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
 
     @def_function.function
     def enqueue_with_no_gradient_apply(data):
+      # [FUNCTION DOC]
+      # HELPER: compiled function. Input: data. Runs a replica function and returns activations.
       def get_activations(features):
+        # [FUNCTION DOC]
+        # HELPER: per-replica body. Input: features. Enqueues and dequeues under the name call1 without
+        # applying gradients or setting a training flag; returns activations.
         # Note the lack of setting training=False, so training defaults to true
         # here even though we don't have apply gradients.
         # We detect the correct mode based on which ops exist that share the
@@ -160,7 +218,12 @@ class TPUEmbeddingTest(tpu_embedding_base_test.TPUEmbeddingBaseTest):
 
     @def_function.function
     def enqueue_with_gradient_apply(data):
+      # [FUNCTION DOC]
+      # HELPER: compiled function. Input: data. Runs a replica function and returns activations.
       def get_activations(features):
+        # [FUNCTION DOC]
+        # HELPER: per-replica body. Input: features. Enqueues and dequeues under the name call2, applies
+        # gradients of all ones, and returns the activations obtained before the update.
         mid_level_api.enqueue(features, name='call2')
         activations = mid_level_api.dequeue(name='call2')
         # Apply an all ones gradient

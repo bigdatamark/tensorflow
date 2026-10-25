@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Correctness test module for the V2 TPU embedding API: sparse inputs, regular two-dimensional, mode where the embedding
+# trains (applies gradients). Contains a single parameterized test case class delegating to the shared correctness driver in
+# the base test module. Needs a TPU; runs with v2 behavior via the test main entry.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,10 +26,18 @@ from tensorflow.python.tpu.tests import tpu_embedding_v2_correctness_base_test
 
 class TPUEmbeddingCorrectnessTest(
     tpu_embedding_v2_correctness_base_test.TPUEmbeddingCorrectnessBaseTest):
+  # [CLASS DOC]
+  # Test case for sparse regular two-dimensional inputs in training mode; derived from the shared correctness base test, so it
+  # only supplies the parameterized test method that calls the common driver.
 
   @parameterized.parameters(
       ['sgd', 'adagrad', 'adam', 'ftrl', 'adagrad_momentum'])
   def test_embedding(self, optimizer_name):
+    # [FUNCTION DOC]
+    # Parameterized over optimizer names: sgd, adagrad, adam, ftrl and adagrad_momentum. Input:
+    # optimizer_name. Any optimizer other than sgd is skipped when the project or zone flag is set. Calls
+    # the common driver with training mode training, the sparse input type and the high-dimensional flag set to no.
+    # The driver builds the setup, runs the lookups, and checks activations, loss and the updated embedding and slot variables against numpy reference values.
     if optimizer_name != 'sgd':
       self.skip_if_oss()
     self._test_embedding(

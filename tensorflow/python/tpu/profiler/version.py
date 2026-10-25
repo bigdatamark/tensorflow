@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Holds the version string of the Cloud TPU profiler tool as a single module-level constant.
+# Uses semantic versioning (major, minor, patch plus build metadata). Read by the pip package
+# setup script. No import-time side effects.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
