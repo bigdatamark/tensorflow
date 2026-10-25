@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Compatibility alias module for the legacy (graph-mode, TF1 style) learning rate decay functions.
+# It defines no logic of its own: it imports the legacy learning rate decay module from the keras
+# optimizer_v2 package and re-exports nine of its functions under the same names in the training
+# package: exponential decay, piecewise constant, polynomial decay, natural exponential decay,
+# inverse time decay, cosine decay, cosine decay with restarts, linear cosine decay and noisy
+# linear cosine decay. Each takes a base learning rate and a global step and returns a learning
+# rate tensor (or a callable when eager execution is enabled).
+# Import-time side effect: importing the keras legacy module; otherwise only name bindings.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

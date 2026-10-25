@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Defines the legacy (TF1 style) momentum optimizer, exported as the v1 train momentum optimizer.
+# It builds on the base optimizer class and uses the generated training kernels for dense and
+# sparse, reference-variable and resource-variable updates. Import-time side effect: the export
+# decorator registers the class in the public v1 API.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +28,12 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export(v1=["train.MomentumOptimizer"])
 class MomentumOptimizer(optimizer.Optimizer):
+  # [CLASS DOC]
+  # Optimizer implementing gradient descent with momentum, optionally Nesterov momentum. Holds the
+  # learning rate and momentum (numbers, tensors or, in eager mode, callables returning them) and
+  # the nesterov flag; creates one "momentum" accumulator slot per variable. Dense updates apply
+  # to the whole accumulator; sparse updates touch only the used slices. Instances are used via
+  # the inherited minimize / apply_gradients methods, which call the private apply hooks below.
   """Optimizer that implements the Momentum algorithm.
 
   Computes (if `use_nesterov = False`):
@@ -115,6 +126,11 @@ class MomentumOptimizer(optimizer.Optimizer):
 
   def __init__(self, learning_rate, momentum,
                use_locking=False, name="Momentum", use_nesterov=False):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: learning_rate and momentum (tensor, number, or callable in eager mode,
+    # required); use_locking (boolean, default false) for update locking; name (string, default
+    # "Momentum"); use_nesterov (boolean, default false). Calls the base constructor with locking
+    # and name, and stores the three values for later use. Returns nothing; no graph ops created.
     """Construct a new Momentum optimizer.
 
     Args:
@@ -148,10 +164,19 @@ class MomentumOptimizer(optimizer.Optimizer):
     self._use_nesterov = use_nesterov
 
   def _create_slots(self, var_list):
+    # [FUNCTION DOC]
+    # HELPER: slot creation hook called by the base optimizer when applying gradients.
+    # Input: list of variables to be trained. For each, creates a zero-initialized slot named
+    # "momentum" (scoped under the optimizer name). Returns nothing.
     for v in var_list:
       self._zeros_slot(v, "momentum", self._name)
 
   def _prepare(self):
+    # [FUNCTION DOC]
+    # HELPER: pre-update hook called by the base optimizer before applying gradients.
+    # Resolves the learning rate and momentum (calling them if they are callables) and converts
+    # each to a tensor named "learning_rate" and "momentum", stored as private attributes used by
+    # the apply methods. Returns nothing; creates constant ops in the current graph.
     learning_rate = self._learning_rate
     if callable(learning_rate):
       learning_rate = learning_rate()
@@ -163,6 +188,11 @@ class MomentumOptimizer(optimizer.Optimizer):
     self._momentum_tensor = ops.convert_to_tensor(momentum, name="momentum")
 
   def _apply_dense(self, grad, var):
+    # [FUNCTION DOC]
+    # HELPER: update hook for dense gradients on reference variables.
+    # Inputs: grad (dense gradient tensor) and var (variable). Looks up the momentum slot, casts
+    # learning rate and momentum to the variable's base dtype, and runs the fused apply-momentum
+    # kernel with the locking and nesterov settings. Returns the operation performing the update.
     mom = self.get_slot(var, "momentum")
     return gen_training_ops.apply_momentum(
         var, mom,
@@ -173,6 +203,11 @@ class MomentumOptimizer(optimizer.Optimizer):
         use_nesterov=self._use_nesterov).op
 
   def _resource_apply_dense(self, grad, var):
+    # [FUNCTION DOC]
+    # HELPER: update hook for dense gradients on resource variables.
+    # Inputs: grad (dense gradient tensor) and var (resource variable). Like the reference version
+    # but passes the variable and slot handles and casts hyperparameters to the gradient dtype.
+    # Returns the update operation (or nothing meaningful in eager mode).
     mom = self.get_slot(var, "momentum")
     return gen_training_ops.resource_apply_momentum(
         var.handle, mom.handle,
@@ -183,6 +218,11 @@ class MomentumOptimizer(optimizer.Optimizer):
         use_nesterov=self._use_nesterov)
 
   def _apply_sparse(self, grad, var):
+    # [FUNCTION DOC]
+    # HELPER: update hook for sparse gradients on reference variables.
+    # Inputs: grad (indexed slices with values and indices) and var (variable). Runs the sparse
+    # apply-momentum kernel so only the referenced rows of variable and accumulator are updated;
+    # hyperparameters cast to the variable's base dtype. Returns the update operation.
     mom = self.get_slot(var, "momentum")
     return gen_training_ops.sparse_apply_momentum(
         var, mom,
@@ -193,6 +233,11 @@ class MomentumOptimizer(optimizer.Optimizer):
         use_nesterov=self._use_nesterov).op
 
   def _resource_apply_sparse(self, grad, var, indices):
+    # [FUNCTION DOC]
+    # HELPER: update hook for sparse gradients on resource variables.
+    # Inputs: grad (values tensor), var (resource variable), indices (row indices to update).
+    # Runs the resource sparse apply-momentum kernel using the variable and slot handles, with
+    # hyperparameters cast to the gradient dtype. Returns the update operation.
     mom = self.get_slot(var, "momentum")
     return gen_training_ops.resource_sparse_apply_momentum(
         var.handle, mom.handle,

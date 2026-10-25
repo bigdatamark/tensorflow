@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Unit tests for the legacy momentum optimizer (training package, momentum module). Covers basic
+# dense updates (reference and resource variables, plain and callable hyperparameters), sharing
+# of optimizer state across graphs, Nesterov momentum (dense and sparse) compared with a numpy
+# reference, minimizing with sparse resource variables and embedding lookups, tensor-valued
+# hyperparameters, agreement with recorded dist-belief reference values, sparse gradients, and
+# applying one optimizer to the same variables twice. Running as a main program starts the
+# standard test runner. No import-time side effects beyond imports.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,8 +40,17 @@ from tensorflow.python.training import momentum as momentum_lib
 
 
 class MomentumOptimizerTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the momentum optimizer. No shared fixtures; helper methods provide numpy
+  # reference computations, a shared scenario driver and recorded reference values.
 
   def _update_nesterov_momentum_numpy(self, var, accum, g, lr, momentum):
+    # [FUNCTION DOC]
+    # HELPER: numpy reference implementation for the Nesterov momentum tests.
+    # Inputs: current variable value, accumulator, gradient, learning rate and momentum. Applies
+    # the look-ahead form of one Nesterov step (add back the momentum-scaled accumulator, update
+    # accumulator with gradient, subtract learning-rate-scaled accumulator, then subtract the
+    # momentum look-ahead term). Returns a pair: new variable value and new accumulator.
     var = var + accum * lr * momentum
     accum = accum * momentum + g
     var = var - lr * accum
@@ -41,6 +58,16 @@ class MomentumOptimizerTest(test.TestCase):
     return var, accum
 
   def doTestBasic(self, use_resource=False, use_callable_params=False):
+    # [FUNCTION DOC]
+    # HELPER: shared scenario driver for the basic update tests (not itself a test).
+    # Inputs: use_resource (boolean, default false) chooses resource variables over reference
+    # variables; use_callable_params (boolean, default false) passes learning rate 2.0 and
+    # momentum 0.9 as callables instead of numbers. For half, float32 and float64, builds two
+    # variables with constant gradients, applies gradients with a momentum optimizer, and checks
+    # in graph mode the initial values, that exactly one slot named momentum exists with matching
+    # shape and is not trainable, then after step one that accumulators equal the gradients and
+    # variables moved by gradient times learning rate, and after step two that accumulators
+    # include the momentum-scaled previous value and variables moved accordingly.
     for i, dtype in enumerate([dtypes.half, dtypes.float32, dtypes.float64]):
       if use_resource:
         var0 = resource_variable_ops.ResourceVariable([1.0, 2.0],
@@ -119,18 +146,33 @@ class MomentumOptimizerTest(test.TestCase):
           ]), self.evaluate(var1))
 
   def testBasic(self):
+    # [FUNCTION DOC]
+    # Test: runs the basic scenario with reference variables inside a cached session; expects
+    # the two-step momentum updates described in the scenario driver.
     with self.cached_session():
       self.doTestBasic(use_resource=False)
 
   @test_util.run_in_graph_and_eager_modes
   def testResourceBasic(self):
+    # [FUNCTION DOC]
+    # Test (runs in both graph and eager modes): basic scenario with resource variables; expects
+    # the same two-step update results.
     self.doTestBasic(use_resource=True)
 
   def testBasicCallableParams(self):
+    # [FUNCTION DOC]
+    # Test: in eager mode, basic scenario with resource variables and learning rate and momentum
+    # given as callables; expects the same two-step update results.
     with context.eager_mode():
       self.doTestBasic(use_resource=True, use_callable_params=True)
 
   def testVariablesAcrossGraphs(self):
+    # [FUNCTION DOC]
+    # Test: one optimizer (learning rate 0.01, momentum 0.5) minimizes a sum-of-variables loss in
+    # a first graph with two resource variables, then in a second fresh graph with two other
+    # variables. Asserts that in each graph the optimizer's variable list has exactly two entries
+    # whose names start with that graph's variable names, in order, i.e. slots are tracked per
+    # graph and do not leak between graphs.
     optimizer = momentum_lib.MomentumOptimizer(0.01, 0.5)
     with ops.Graph().as_default():
       var0 = resource_variable_ops.ResourceVariable([1.0, 2.0],
@@ -161,6 +203,11 @@ class MomentumOptimizerTest(test.TestCase):
       self.assertEqual(2, len(optimizer_variables))
 
   def testNesterovMomentum(self):
+    # [FUNCTION DOC]
+    # Test (graph mode, float32 and float64): minimizes a quadratic-plus-linear cost over two
+    # variables with a Nesterov momentum optimizer (learning rate 2.0, momentum 0.9) and a global
+    # step, running four steps. After each step asserts the variables match the numpy Nesterov
+    # reference with gradients ten times the first variable and constant three for the second.
     for dtype in [dtypes.float32, dtypes.float64]:
       # train.MomentumOptimizer is V1 only API.
       with ops.Graph().as_default(), self.cached_session():
@@ -187,6 +234,12 @@ class MomentumOptimizerTest(test.TestCase):
           self.assertAllClose(var1_np, self.evaluate(var1))
 
   def testSparseNesterovMomentum(self):
+    # [FUNCTION DOC]
+    # Test (graph mode, float32 and float64): first precomputes, with the numpy Nesterov
+    # reference, the gradient sequence for four steps, then resets the numpy state. Applies a
+    # Nesterov momentum optimizer where the first variable receives an indexed-slices gradient fed
+    # through a placeholder and the second a dense constant. After each of four steps asserts the
+    # variables match the numpy reference.
     for dtype in [dtypes.float32, dtypes.float64]:
       # train.MomentumOptimizer is V1 only API.
       with ops.Graph().as_default(), self.cached_session():
@@ -228,6 +281,14 @@ class MomentumOptimizerTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testMinimizeSparseResourceVariable(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager modes; half, float32, float64): a one-by-two resource variable is
+    # pinned to the CPU (the sparse resource momentum kernel had no GPU kernel). A loss squares
+    # the product of its embedding-lookup row with a column constant; a momentum optimizer with
+    # learning rate 1 and zero momentum minimizes it for one step. Asserts the variable becomes
+    # the expected values minus 111 and minus 138.
+    # Nested function loss: builds that loss tensor; takes no inputs and returns the squared
+    # prediction (it closes over the loop's variable and dtype).
     for dtype in [dtypes.half, dtypes.float32, dtypes.float64]:
       # This test invokes the ResourceSparseApplyMomentum operation, which
       # did not have a registered GPU kernel as of April 2018. With graph
@@ -243,6 +304,10 @@ class MomentumOptimizerTest(test.TestCase):
 
       # pylint: disable=cell-var-from-loop
       def loss():
+        # [FUNCTION DOC]
+        # HELPER: loss closure for the minimize call. Takes no inputs; multiplies the embedding
+        # lookup of row zero of the variable by a fixed column of 4 and 5 and returns the
+        # square of that one-element product.
         x = constant_op.constant([[4.0], [5.0]], dtype=dtype)
         pred = math_ops.matmul(embedding_ops.embedding_lookup([var0], [0]), x)
         return pred * pred
@@ -259,6 +324,11 @@ class MomentumOptimizerTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testMinimizeWith2DIndicesForEmbeddingLookup(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager modes): a two-by-two ones resource variable pinned to the CPU is
+    # looked up with a two-dimensional index list selecting row one; the loss is the sum of the
+    # looked-up values. One momentum step (learning rate 1, momentum 0) is run. Asserts row one
+    # becomes zeros and row zero stays ones.
     # This test invokes the ResourceSparseApplyMomentum operation, which
     # did not have a registered GPU kernel as of April 2018. With graph
     # execution, the placement algorithm notices this and automatically
@@ -272,6 +342,9 @@ class MomentumOptimizerTest(test.TestCase):
       var0 = resource_variable_ops.ResourceVariable(array_ops.ones([2, 2]))
 
     def loss():
+      # [FUNCTION DOC]
+      # HELPER: loss closure; takes no inputs and returns the sum of the embedding lookup of
+      # row one (given as a nested index list) from the variable.
       return math_ops.reduce_sum(embedding_ops.embedding_lookup(var0, [[1]]))
 
     opt = momentum_lib.MomentumOptimizer(learning_rate=1.0, momentum=0.0)
@@ -281,6 +354,11 @@ class MomentumOptimizerTest(test.TestCase):
     self.assertAllCloseAccordingToType([[1, 1], [0, 0]], self.evaluate(var0))
 
   def testTensorLearningRateAndMomentum(self):
+    # [FUNCTION DOC]
+    # Test (graph mode; half, float32, float64): same two-step scenario as the basic test but
+    # with learning rate and momentum supplied as constant tensors. Asserts slot name, shape and
+    # non-trainability, initial values, and the expected accumulators and variable values after
+    # two update steps.
     for dtype in [dtypes.half, dtypes.float32, dtypes.float64]:
       # train.MomentumOptimizer is V1 only API.
       with ops.Graph().as_default(), self.cached_session():
@@ -343,6 +421,14 @@ class MomentumOptimizerTest(test.TestCase):
             ]), self.evaluate(var1))
 
   def _dbParamsMom01(self):
+    # [FUNCTION DOC]
+    # HELPER: supplies recorded reference data for the dist-belief comparison test.
+    # Takes no inputs. Returns a pair of lists of ten vectors each (ten values per vector): the
+    # gradients applied at each of ten steps and the expected parameter vector after each step,
+    # recorded for learning rate 0.1 and momentum 0.1 starting from zeros.
+    # KNOWN ISSUE: the lists are created by repeating a single empty list ten times, so all
+    # entries initially alias one object; this is harmless only because every entry is replaced
+    # by assignment afterwards.
     """Return dist-belief momentum values.
 
     Return values been generated from the dist-belief momentum unittest,
@@ -442,6 +528,11 @@ class MomentumOptimizerTest(test.TestCase):
     return db_grad, db_out
 
   def testLikeDistBeliefMom01(self):
+    # [FUNCTION DOC]
+    # Test (graph mode): loads recorded gradients and expected outputs, creates a zero variable
+    # of matching length and a momentum optimizer (learning rate 0.1, momentum 0.1). For each of
+    # ten steps feeds that step's gradient through a placeholder-like constant and runs the
+    # update, asserting the variable equals the recorded expected parameters.
     # train.MomentumOptimizer is V1 only API.
     with ops.Graph().as_default(), self.cached_session():
       db_grad, db_out = self._dbParamsMom01()
@@ -456,6 +547,12 @@ class MomentumOptimizerTest(test.TestCase):
         self.assertAllClose(np.array(db_out[i]), self.evaluate(var0))
 
   def testSparse(self):
+    # [FUNCTION DOC]
+    # Test (graph mode; half, float32, float64): a four-by-two zeros variable and a four-by-two
+    # ones variable receive indexed-slices gradients (row one, and rows two and three). With
+    # learning rate 2.0 and momentum 0.9, asserts the slot shape, initial values, and after two
+    # steps that only the referenced rows of accumulators and variables change, with expected
+    # momentum accumulation, while untouched rows stay unchanged.
     for dtype in [dtypes.half, dtypes.float32, dtypes.float64]:
       # train.MomentumOptimizer is V1 only API.
       with ops.Graph().as_default(), self.cached_session():
@@ -534,6 +631,11 @@ class MomentumOptimizerTest(test.TestCase):
             self.evaluate(var1)[2])
 
   def testSharing(self):
+    # [FUNCTION DOC]
+    # Test (graph mode; half, float32, float64): calls apply-gradients twice on the same
+    # optimizer and variables, producing two update ops that share the same slots. Runs the first
+    # op and asserts the step-one accumulators and variables, then runs the second op and asserts
+    # the step-two values, proving the second op continues from the first op's accumulators.
     for dtype in [dtypes.half, dtypes.float32, dtypes.float64]:
       # train.MomentumOptimizer is V1 only API.
       with ops.Graph().as_default(), self.cached_session():
