@@ -1,3 +1,18 @@
+# [MODULE DOC]
+# Core neural-network operations module backing the public nn namespace (exported as tf.nn).
+# It provides Python-level implementations and wrappers for convolutions (1-D/2-D/3-D, atrous,
+# transposed, depthwise), pooling (average, max, fractional, with argmax), activation helpers
+# (relu6, leaky relu, gelu, crelu), softmax and cross-entropy losses, dropout (stateful,
+# stateless and general), bias addition, top-k and approximate top-k, morphology (dilation and
+# erosion), in-top-k, isotonic regression, and helper classes that implement dilated
+# convolution through a space-to-batch transformation.
+# Most public functions come in a v1 and a v2 flavour that differ in argument names or defaults
+# and are exported under different API versions through the export decorators.
+# Import-time side effects: it wildcard-imports every generated op from the generated neural
+# network ops module (so those names are re-exposed here), imports the gradient module so that
+# gradients are registered, defines the local response normalization alias, registers FLOPs
+# statistics calculators for several ops, and attaches generated documentation to some v1
+# wrappers. It is not purely a helper module; underscore-prefixed items are internal helpers.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -219,6 +234,14 @@ _CHANNELS_LAST_FORMATS = frozenset({
 
 
 def _get_sequence(value, n, channel_index, name):
+  # [FUNCTION DOC]
+  # HELPER: normalizes stride/dilation style arguments for the generated convolution ops.
+  # Converts value (nothing, an integer, a list/tuple or other sized collection) into a list of
+  # length n + 2 that includes batch and channel entries. A nothing value yields all ones.
+  # A list already of length n + 2 is returned unchanged; a length-1 list is broadcast to the n
+  # spatial dimensions; a length-n list is used as is. The batch and channel entries are set to
+  # one, placed according to channel_index (1 means channels second, otherwise channels last).
+  # Raises a value error (mentioning the argument name) if the length is not 1, n or n + 2.
   """Formats a value input for gen_nn_ops."""
   # Performance is fast-pathed for common cases:
   # `None`, `list`, `tuple` and `int`.
@@ -264,6 +287,14 @@ def _non_atrous_convolution(
     data_format=None,  # pylint: disable=redefined-builtin
     strides=None,
     name=None):
+  # [FUNCTION DOC]
+  # HELPER: building block used by the generic convolution and pooling-style wrappers.
+  # Computes an N-D cross-correlation (no dilation) for N from 1 to 3. Converts input and filter
+  # to tensors inside a name scope, builds the internal non-atrous convolution object from the
+  # static shapes, padding ("VALID" or "SAME"), data format (nothing means channels last) and
+  # strides (nothing means all ones), then applies it to the tensors.
+  # Returns the output tensor. Raises a value error if ranks are unknown or incompatible or if
+  # the data format or strides are invalid. No other side effects beyond graph/eager op creation.
   """Computes sums of N-D convolutions (actually cross correlation).
 
   It is required that 1 <= N <= 3.
@@ -319,6 +350,13 @@ def _non_atrous_convolution(
 
 
 class _NonAtrousConvolution:
+  # [CLASS DOC]
+  # HELPER: internal implementation object for the non-atrous convolution function.
+  # Validates static input/filter shapes at construction and selects the right underlying
+  # convolution op (1-D adapter, 2-D, or 3-D with expanded batch dims) based on the number of
+  # spatial dimensions. Holds the attributes padding, name, strides (already expanded to the
+  # op's expected layout), data_format and conv_op. Instances are callable with an input and
+  # a filter tensor and return the convolution result.
   """Helper class for _non_atrous_convolution.
 
   Note that this class assumes that shapes of input and filter passed to
@@ -345,6 +383,16 @@ class _NonAtrousConvolution:
       strides=None,
       name=None,
       num_batch_dims=1):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: static input shape and filter shape (shape objects), padding string,
+    # optional data format, optional strides (list with one entry per spatial dimension), an
+    # optional name, and the number of leading batch dimensions (default one).
+    # Reconciles the ranks of the two shapes, derives the number of spatial dimensions, and
+    # expands strides and data format for the 1-D, 2-D or 3-D case, storing padding, name,
+    # strides, data_format and the selected convolution callable on the instance.
+    # Raises a value error if the rank is unknown, if the rank is outside the supported range,
+    # if the strides length does not match the spatial dimension count, or if the data format
+    # is not valid for that dimensionality.
     # filter shape is always rank num_spatial_dims + 2
     # and num_spatial_dims == input_shape.ndims - num_batch_dims - 1
     if input_shape.ndims is not None:
@@ -411,6 +459,10 @@ class _NonAtrousConvolution:
   # those for gen_nn_ops.conv2d and gen_nn_ops.conv3d.
   # pylint: disable=redefined-builtin
   def _conv1d(self, input, filter, strides, padding, data_format, name):
+    # [FUNCTION DOC]
+    # HELPER: adapter so the 1-D case can be called with the same keyword names as the 2-D and
+    # 3-D ops. Forwards input, filter, strides, padding, data format and name to the 1-D
+    # convolution function (renaming them to value, filters and stride) and returns its result.
     return conv1d(
         value=input,
         filters=filter,
@@ -421,6 +473,9 @@ class _NonAtrousConvolution:
   # pylint: enable=redefined-builtin
 
   def __call__(self, inp, filter):  # pylint: disable=redefined-builtin
+    # [FUNCTION DOC]
+    # Applies the selected convolution op to the input and filter tensors using the stored
+    # strides, padding, data format and name. Returns the convolution output tensor.
     return self.conv_op(
         input=inp,
         filter=filter,
@@ -431,6 +486,14 @@ class _NonAtrousConvolution:
 
 
 def squeeze_batch_dims(inp, op, inner_rank, name=None):
+  # [FUNCTION DOC]
+  # Applies a single-batch-dimension op to a tensor that has arbitrary leading batch dimensions.
+  # Inputs: the tensor, a callable mapping one tensor to one tensor, the number of trailing
+  # (inner) dimensions the op expects, and an optional name. It flattens all leading dims into
+  # one (using static shapes when fully defined, dynamic shape tensors otherwise), calls the op,
+  # then reshapes the result back to the original batch shape plus the op's output inner shape,
+  # and restores as much static shape information as possible.
+  # Returns the reshaped output tensor. Side effects: creates reshape/shape ops in a name scope.
   """Returns `unsqueeze_batch(op(squeeze_batch(inp)))`.
 
   Where `squeeze_batch` reshapes `inp` to shape
@@ -489,6 +552,13 @@ def dilation2d_v2(
     data_format,
     dilations,
     name=None):
+  # [FUNCTION DOC]
+  # Version-2 grayscale morphological dilation (exported as the nn dilation2d op for v2).
+  # Inputs: a 4-D input tensor, a 3-D filters tensor, strides, padding string, data format
+  # (only the channels-last 4-D layout is accepted), dilations (input strides) and an optional
+  # name. Delegates to the generated dilation op, mapping filters and dilations to its filter
+  # and rates arguments. Returns a tensor of the same type as the input.
+  # Raises a value error if data_format is anything other than the channels-last layout.
   """Computes the grayscale dilation of 4-D `input` and 3-D `filters` tensors.
 
   The `input` tensor has shape `[batch, in_height, in_width, depth]` and the
@@ -561,6 +631,12 @@ def dilation2d_v1(  # pylint: disable=missing-docstring
     name=None,
     filters=None,
     dilations=None):
+  # [FUNCTION DOC]
+  # Version-1 grayscale dilation wrapper. Accepts the old argument names (filter, rates) as well
+  # as the new names (filters, dilations); deprecated_argument_lookup picks whichever was given
+  # (the lookup raises a value error if both are supplied). Calls the generated dilation op and
+  # returns its tensor. Its documentation string is assigned from the generated op's doc right
+  # after the definition (module-level side effect).
   filter = deprecated_argument_lookup("filters", filters, "filter", filter)
   rates = deprecated_argument_lookup("dilations", dilations, "rates", rates)
   return gen_nn_ops.dilation2d(input, filter, strides, rates, padding, name)
@@ -579,6 +655,18 @@ def with_space_to_batch(
     filter_shape=None,
     spatial_dims=None,
     data_format=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the last docstring example (combining SAME-padded ops) ends by calling the
+  # combined op with "VALID" padding, which looks like a copy/paste slip; it should say "SAME".
+  # Public wrapper that runs a sliding-window op in "atrous" fashion: when dilation_rate is not
+  # all ones it converts the input with space-to-batch, runs op with VALID padding, and converts
+  # back with batch-to-space; when all ones it just calls op directly.
+  # Inputs: input tensor, dilation_rate (integer vector of known shape), padding ("VALID",
+  # "SAME" or explicit), op (callable taking input, number of spatial dims and padding),
+  # optional filter_shape (required for "SAME"), optional spatial_dims (increasing integers >= 1,
+  # default the consecutive dims after batch) and optional data_format.
+  # Returns the op's output tensor. Raises value errors for invalid padding, dilation rate,
+  # spatial dims, rank, or missing filter_shape. Builds a helper object internally and calls it.
   """Performs `op` on the space-to-batch representation of `input`.
 
   This has the effect of transforming sliding window operations into the
@@ -716,6 +804,11 @@ def with_space_to_batch(
   input_shape = input.shape
 
   def build_op(num_spatial_dims, padding):
+    # [FUNCTION DOC]
+    # HELPER: adapts the user's op (input, spatial dim count, padding) to the two-argument
+    # (input, filter) callable form expected by the internal space-to-batch helper. Takes the
+    # spatial dimension count and padding and returns a function that ignores its second
+    # argument and calls the user op.
     return lambda inp, _: op(inp, num_spatial_dims, padding)
 
   new_op = _WithSpaceToBatch(
@@ -730,6 +823,13 @@ def with_space_to_batch(
 
 
 class _WithSpaceToBatch:
+  # [CLASS DOC]
+  # HELPER: internal implementation for with_space_to_batch and dilated convolution/pooling.
+  # At construction it validates the dilation rate, spatial dims and input rank and computes
+  # base paddings (statically if possible). If the dilation rate is all ones it simply stores
+  # the plain op as its call target; otherwise it stores the shapes, spatial dims, dilation
+  # rate, data format, the VALID-padding op, and a call target that wraps the op in
+  # space-to-batch and batch-to-space conversions. Instances are callable with input and filter.
   """Helper class for with_space_to_batch.
 
   Note that this class assumes that shapes of input and filter passed to
@@ -757,6 +857,20 @@ class _WithSpaceToBatch:
                spatial_dims=None,
                data_format=None,
                num_batch_dims=1):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring is a copy of a class description ("Helper class for
+    # _with_space_to_batch", a name that does not exist) and says nothing about the arguments;
+    # also the final error message only mentions SAME or VALID although explicit padding is
+    # accepted by the code.
+    # Constructor. Inputs: static input shape, dilation rate (integer vector with fully known
+    # shape), padding (string or explicit list), build_op (function from spatial dim count and
+    # padding to an (input, filter) callable), optional filter_shape (needed for SAME), optional
+    # spatial_dims, optional data_format and number of batch dims (default one).
+    # Raises value errors for a non-vector or not fully defined dilation rate, non-increasing
+    # or non-positive spatial dims, too-small input rank, non-positive rates, SAME padding
+    # without a filter shape, or unknown padding. Sets the call attribute: the plain op when all
+    # rates are one, otherwise the space-to-batch based call. Computes base paddings from the
+    # filter shape when it is statically known, or leaves them to be computed at call time.
     """Helper class for _with_space_to_batch."""
     dilation_rate = ops.convert_to_tensor(
         dilation_rate, dtypes.int32, name="dilation_rate")
@@ -856,6 +970,14 @@ class _WithSpaceToBatch:
     self.call = self._with_space_to_batch_call
 
   def _with_space_to_batch_call(self, inp, filter):  # pylint: disable=redefined-builtin
+    # [FUNCTION DOC]
+    # HELPER: the dilated path used when the dilation rate is not all ones.
+    # Determines the input spatial shape (dynamically if not static), obtains base paddings
+    # (computing them from the dynamic filter shape if they were not known at build time),
+    # computes the required paddings and crops, expands them and the dilation rate to cover the
+    # non-spatial dims, converts the input with space-to-batch, applies the stored op to input
+    # and filter, converts back with batch-to-space, and for channels-first layouts restores
+    # the static channel dimension from the filter's last dimension. Returns the output tensor.
     """Call functionality for with_space_to_batch."""
     # Handle input whose shape is unknown during graph creation.
     input_spatial_shape = None
@@ -904,11 +1026,21 @@ class _WithSpaceToBatch:
     return result_converted
 
   def __call__(self, inp, filter):  # pylint: disable=redefined-builtin
+    # [FUNCTION DOC]
+    # Invokes the call target chosen at construction (plain op or space-to-batch wrapped op)
+    # with the input and filter tensors and returns its output.
     return self.call(inp, filter)
 
 
 def _with_space_to_batch_base_paddings(filter_shape, num_spatial_dims,
                                        rate_or_const_rate):
+  # [FUNCTION DOC]
+  # HELPER: computes the extra "SAME" padding needed to turn a dilated SAME convolution into a
+  # VALID one for the space-to-batch helper. Takes the filter shape (static values or a shape
+  # tensor), the number of spatial dims and the dilation rate. For each spatial dim the dilated
+  # filter extent minus one is split into a start part (half, rounded down) and end part (the
+  # rest, so odd totals pad more at the end, as the 2-D convolution does). Returns a stacked
+  # array of shape number-of-spatial-dims by two.
   """Helper function to compute base_paddings."""
   # Spatial dimensions of the filters and the upsampled filters in which we
   # introduce (rate - 1) zeros between consecutive filter values.
@@ -925,6 +1057,13 @@ def _with_space_to_batch_base_paddings(filter_shape, num_spatial_dims,
 
 
 def _with_space_to_batch_adjust(orig, fill_value, spatial_dims):
+  # [FUNCTION DOC]
+  # HELPER: expands per-spatial-dimension values (dilation rates, paddings or crops) to cover all
+  # dimensions up to the largest spatial dim, as required by the n-d space/batch ops.
+  # Inputs: a tensor whose first axis indexes the spatial dims, a fill value for dimensions that
+  # are not spatial, and the increasing list of spatial dim indices. Gaps are filled with
+  # constant arrays of the fill value; contiguous groups are copied in slices. Returns a numpy
+  # array if orig is statically constant, otherwise a concatenated tensor.
   """Returns an `adjusted` version of `orig` based on `spatial_dims`.
 
   Tensor of the same type as `orig` and with shape
@@ -984,6 +1123,12 @@ def _with_space_to_batch_adjust(orig, fill_value, spatial_dims):
 
 
 def _get_strides_and_dilation_rate(num_spatial_dims, strides, dilation_rate):
+  # [FUNCTION DOC]
+  # HELPER: argument validation shared by the convolution and pooling functions.
+  # Converts strides and dilation_rate (each optional; nothing means all ones) to integer
+  # arrays of length num_spatial_dims, checking lengths and positivity, and that strides and
+  # dilation rates are not both greater than one. Returns the pair (strides, dilation_rate).
+  # Raises a value error on wrong length, non-positive values, or both being greater than one.
   """Helper function for verifying strides and dilation_rate arguments.
 
   This is used by `convolution` and `pool`.
@@ -1042,6 +1187,16 @@ def convolution(
     data_format=None,
     filters=None,
     dilations=None):  # pylint: disable=g-doc-args
+  # [FUNCTION DOC]
+  # Version-1 public N-D convolution (cross-correlation) with optional strides or dilation.
+  # Inputs: input tensor of rank N+2, filter tensor of the same type, padding ("VALID" or
+  # "SAME"), optional strides (N ints), optional dilation_rate (N ints), optional name, optional
+  # data_format (channels last by default, or channels first when it starts with "NC"), and the
+  # newer alias names filters and dilations which, when given, take the place of filter and
+  # dilation_rate (the alias lookup raises a value error if both old and new are supplied).
+  # Delegates to the internal rank-agnostic convolution and returns the output tensor.
+  # Raises value errors for mismatched channels, invalid padding or data format, or strides and
+  # dilation both greater than one.
   """Computes sums of N-D convolutions (actually cross-correlation).
 
   This also supports either output striding via the optional `strides` parameter
@@ -1183,6 +1338,12 @@ def convolution_v2(  # pylint: disable=missing-docstring
     data_format=None,
     dilations=None,
     name=None):
+  # [FUNCTION DOC]
+  # Version-2 public N-D convolution. Same semantics as the version-1 function but with the new
+  # argument order and names: input, filters, strides, padding (default "VALID"), data_format,
+  # dilations and name. Simply forwards everything to the internal rank-agnostic convolution
+  # and returns the output tensor. Its documentation string is derived from the version-1
+  # docstring with argument names rewritten, assigned right after the definition.
   return convolution_internal(
       input,  # pylint: disable=redefined-builtin
       filters,
@@ -1209,6 +1370,19 @@ def convolution_internal(
     name=None,
     call_from_convolution=True,
     num_spatial_dims=None):
+  # [FUNCTION DOC]
+  # HELPER: shared engine behind the public convolution functions and the 1-D/2-D/3-D wrappers.
+  # KNOWN ISSUE: the docstring says call_from_convolution is described in "convolution", but
+  # that public function has no such parameter; it only selects the default op name on TPU (the
+  # generic name when true, a Conv2D/Conv3D/conv1d style name otherwise). Also both branches of
+  # the dilations-is-nothing check do the same normalization (redundant code).
+  # Converts filters and input to tensors if needed, infers the number of spatial dims from the
+  # filter rank (or input rank, or the explicit argument) and the number of batch dims from the
+  # input rank, and normalizes strides and dilations to full-length lists. Without dilation, or
+  # inside a TPU context, it dispatches directly to the 1-D, 2-D or 3-D convolution. Otherwise
+  # it builds the dilated convolution helper object and applies it.
+  # Returns the output tensor. Raises value errors if neither rank is known, if the explicit
+  # spatial dim count conflicts with the filter rank, or if it is not 1, 2 or 3.
   """Internal function which performs rank agnostic convolution.
 
   Args:
@@ -1345,6 +1519,13 @@ def convolution_internal(
 
 
 class Convolution:
+  # [CLASS DOC]
+  # HELPER: object form of a (possibly dilated) N-D convolution, used when dilation rates exceed
+  # one. The constructor validates shapes and infers batch/spatial dimension counts, stores
+  # input_shape, filter_shape, data_format, strides, padding, name, dilation_rate,
+  # num_batch_dims, num_spatial_dims and a conv_op built from the space-to-batch helper (whose
+  # inner op is the non-atrous convolution). Calling an instance runs the convolution on an
+  # input and a filter tensor.
   """Helper class for convolution.
 
   Note that this class assumes that shapes of input and filter passed to
@@ -1387,6 +1568,17 @@ class Convolution:
                name=None,
                data_format=None,
                num_spatial_dims=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring ("Helper function for convolution") does not describe the
+    # arguments or the validation performed; this is the class constructor.
+    # Inputs: static input and filter shapes, padding, optional strides and dilation rate (N ints
+    # each), optional name, optional data format and optional explicit spatial dim count.
+    # Infers the number of spatial and batch dimensions from the shapes, checks that the input
+    # channel count is divisible by the filter's output channel count (when known), validates
+    # strides and dilation rate, stores everything on the instance and builds the space-to-batch
+    # wrapped convolution as conv_op.
+    # Raises value errors if ranks are inconsistent or unknown, if batch dims are fewer than one,
+    # or if the channel counts are not divisible.
     """Helper function for convolution."""
     num_batch_dims = None
     filter_shape = tensor_shape.as_shape(filter_shape)
@@ -1479,6 +1671,10 @@ class Convolution:
         num_batch_dims=num_batch_dims)
 
   def _build_op(self, _, padding):
+    # [FUNCTION DOC]
+    # HELPER: callback passed to the space-to-batch helper. Ignores its first argument (the
+    # spatial dimension count) and, given the padding to use, returns a non-atrous convolution
+    # object configured with this instance's shapes, data format, strides, name and batch dims.
     return _NonAtrousConvolution(
         self.input_shape,
         filter_shape=self.filter_shape,
@@ -1489,6 +1685,11 @@ class Convolution:
         num_batch_dims=self.num_batch_dims)
 
   def __call__(self, inp, filter):  # pylint: disable=redefined-builtin
+    # [FUNCTION DOC]
+    # Runs the convolution on an input and a filter tensor and returns the output tensor.
+    # Inside a TPU context (which supports dilation natively) it calls the internal convolution
+    # directly with the stored strides, padding, data format and dilation rate; otherwise it
+    # uses the space-to-batch based conv_op built at construction.
     # TPU convolution supports dilations greater than 1.
     if device_context.enclosing_tpu_context() is not None:
       return convolution_internal(
@@ -1517,6 +1718,16 @@ def pool(
     name=None,
     data_format=None,
     dilations=None):
+  # [FUNCTION DOC]
+  # Version-1 generic N-D pooling (average or max) for N from 1 to 3.
+  # Inputs: input tensor of rank N+2, window_shape (N ints), pooling_type ("AVG" or "MAX",
+  # case-insensitive), padding ("SAME" or "VALID"), optional dilation_rate (alias dilations
+  # takes precedence handling via the deprecated-argument lookup), optional strides, optional
+  # name and data format. For unit dilation it dispatches to the matching average or max pooling
+  # op; with dilation it wraps the pooling op in the space-to-batch transformation.
+  # Returns the pooled tensor. Raises value errors for a window shape length outside 1-3, for
+  # SAME padding with dilation above one, for strides larger than the window, for an unknown
+  # pooling type, or for invalid strides/dilation combinations.
   """Performs an N-D pooling operation.
 
   In the case that `data_format` does not start with "NC", computes for
@@ -1663,6 +1874,12 @@ def pool(
       data_format_kwargs = dict(data_format=data_format)
 
     def op(converted_input, _, converted_padding):  # pylint: disable=missing-docstring
+      # [FUNCTION DOC]
+      # HELPER: closure handed to the space-to-batch wrapper by the pooling function.
+      # Takes the (possibly space-to-batch converted) input, an ignored spatial dim count and the
+      # padding to use. For 1-D pooling it inserts a dummy spatial dimension, calls the selected
+      # 2-D style pooling op with the adjusted window shape, strides, data format arguments and
+      # the enclosing name scope, and removes the dummy dimension again. Returns the pooled tensor.
       if num_spatial_dims == 1:
         converted_input = array_ops.expand_dims(converted_input,
                                                 spatial_dims[0])
@@ -1697,6 +1914,14 @@ def pool_v2(
     data_format=None,
     dilations=None,
     name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says padding "Defaults to SAME", but the signature default is
+  # "VALID".
+  # Version-2 generic N-D pooling (average or max). Inputs: input tensor of rank N+2, window
+  # shape (N ints), pooling type ("AVG" or "MAX"), optional strides, padding (default "VALID"),
+  # optional data format, optional dilations and name. Forwards to the version-1 pooling
+  # function (renaming dilations to dilation rate) and returns the pooled tensor; raises the
+  # same value errors for invalid arguments.
   # pylint: disable=line-too-long
   """Performs an N-D pooling operation.
 
@@ -1790,6 +2015,15 @@ def pool_v2(
 @tf_export("nn.atrous_conv2d")
 @dispatch.add_dispatch_support
 def atrous_conv2d(value, filters, rate, padding, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring's VALID output shape swaps the roles of the filter dimensions
+  # (it subtracts the filter width from the height and the filter height from the width); the
+  # actual result is the ordinary dilated convolution output.
+  # Backwards-compatible 2-D atrous (dilated) convolution on a 4-D channels-last value tensor
+  # and a 4-D filters tensor. Inputs: value, filters, an integer rate (applied to both height
+  # and width), padding ("VALID" or "SAME") and an optional name. Implemented by calling the
+  # generic convolution with the rate broadcast to two dilation entries. Returns a tensor of
+  # the same type as value. Value errors come from the underlying convolution.
   """Atrous convolution (a.k.a. convolution with holes or dilated convolution).
 
   This function is a simpler wrapper around the more general
@@ -1939,6 +2173,15 @@ def atrous_conv2d(value, filters, rate, padding, name=None):
 
 
 def convert_padding(padding, expected_length=4):
+  # [FUNCTION DOC]
+  # HELPER: translates the Python-level padding argument into the pair of attributes taken by
+  # ops that support explicit padding. If padding is a string (such as SAME or VALID) it is
+  # returned unchanged with an empty explicit list. If it is a list or tuple, each element must
+  # itself be a pair; the pairs are flattened into the explicit list and the padding string
+  # becomes the explicit marker. expected_length (default four) is the required number of
+  # pairs. Returns (padding string, flattened explicit paddings list).
+  # Raises a value error if padding is the literal explicit marker string, if an element is not
+  # a list/tuple of size two, or if the number of pairs differs from expected_length.
   """Converts Python padding to C++ padding for ops which take EXPLICIT padding.
 
   Args:
@@ -2001,6 +2244,14 @@ def conv1d(
     name=None,
     input=None,  # pylint: disable=redefined-builtin
     dilations=None):
+  # [FUNCTION DOC]
+  # Version-1 1-D convolution. Accepts value (or its alias input; the alias lookup raises a value
+  # error if both are given), filters, stride (int or list), padding, an optional cudnn flag,
+  # data format ("NWC"/"NCW"; the legacy 2-D names are accepted but deprecated and warn once),
+  # name and dilations. Adds a dummy height dimension to value and filters, calls the 2-D
+  # convolution op (through the batch-flattening helper if rank is above four), then removes the
+  # dummy dimension. Returns a tensor of the same type as the input.
+  # Raises a value error for an invalid data format; other errors come from the underlying op.
   r"""Computes a 1-D convolution of input with rank `>=3` and a `3-D` filter.
 
   Given an input tensor of shape
@@ -2106,6 +2357,11 @@ def conv1d_v2(
     data_format="NWC",
     dilations=None,
     name=None):
+  # [FUNCTION DOC]
+  # Version-2 1-D convolution with the newer signature (input, filters, stride, padding, data
+  # format defaulting to the channels-last layout, dilations, name). Calls the version-1
+  # function with the cudnn flag forced on and returns its output tensor. Raises a value error
+  # for an invalid data format.
   r"""Computes a 1-D convolution given 3-D input and filter tensors.
 
   Given an input tensor of shape
@@ -2177,6 +2433,14 @@ def conv1d_transpose(
     data_format="NWC",
     dilations=None,
     name=None):
+  # [FUNCTION DOC]
+  # Transposed 1-D convolution (gradient of conv1d with respect to its input). Inputs: a 3-D
+  # input tensor, a 3-D filters tensor, the desired output shape (three elements), strides (int
+  # or list), padding (default "SAME"), data format ("NWC" default or "NCW"), dilations and name.
+  # Inserts a dummy height dimension into the input, filters and output shape, calls the 2-D
+  # backprop-input op, and squeezes the dummy dimension from the result. Returns a tensor of the
+  # same type as input. Raises a value error for an invalid data format; other errors come from
+  # the underlying op.
   """The transpose of `conv1d`.
 
   This operation is sometimes called "deconvolution" after
@@ -2266,6 +2530,11 @@ def conv2d_v2(input,  # pylint: disable=redefined-builtin
               data_format="NHWC",
               dilations=None,
               name=None):
+  # [FUNCTION DOC]
+  # Version-2 2-D convolution accepting inputs of rank four or higher (extra leading dims are
+  # batch dims). Inputs: input, 4-D filters, strides, padding (string or explicit list), data
+  # format (default "NHWC"), dilations and name. Calls the version-1 conv2d with the cudnn
+  # flag forced on and returns the output tensor with the same outer batch shape.
   # pylint: disable=line-too-long
   r"""Computes a 2-D convolution given `input` and 4-D `filters` tensors.
 
@@ -2376,6 +2645,15 @@ def conv2d(  # pylint: disable=redefined-builtin,dangerous-default-value
     dilations=[1, 1, 1, 1],
     name=None,
     filters=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring describes input as a 4-D tensor, but the code also accepts higher
+  # ranks by flattening the leading batch dims through the batch-squeezing helper.
+  # Version-1 2-D convolution. Inputs: input, filter (or alias filters; supplying both raises a
+  # value error), strides (int or list of length 1, 2 or 4), padding (string or explicit pad
+  # list converted via the padding helper), cudnn flag, data format (nothing means "NHWC"),
+  # dilations and name. Normalizes strides and dilations to four entries, then calls the
+  # generated conv2d op directly for rank 4 or less (or unknown rank), else via the batch
+  # flattening helper. Returns the output tensor.
   r"""Computes a 2-D convolution given 4-D `input` and `filter` tensors.
 
   Given an input tensor of shape `[batch, in_height, in_width, in_channels]`
@@ -2498,6 +2776,12 @@ def conv2d_backprop_filter(  # pylint: disable=redefined-builtin,dangerous-defau
     data_format="NHWC",
     dilations=[1, 1, 1, 1],
     name=None):
+  # [FUNCTION DOC]
+  # Version-1 gradient of a 2-D convolution with respect to its filter. Inputs: the forward
+  # input, an integer vector with the filter shape, the gradient flowing from the output,
+  # strides, padding (string or explicit list), cudnn flag, data format, dilations and name.
+  # Converts padding via the padding helper and calls the generated filter-backprop op.
+  # Returns a tensor shaped like the filter with the input's type.
   r"""Computes the gradients of convolution with respect to the filter.
 
   Args:
@@ -2560,6 +2844,12 @@ def conv2d_backprop_input(  # pylint: disable=redefined-builtin,dangerous-defaul
     dilations=[1, 1, 1, 1],
     name=None,
     filters=None):
+  # [FUNCTION DOC]
+  # Version-1 gradient of a 2-D convolution with respect to its input. Inputs: integer vector
+  # with the input shape, filter (or alias filters; giving both raises a value error), the
+  # gradient flowing from the output, strides, padding (string or explicit list), cudnn flag,
+  # data format, dilations and name. Converts padding via the padding helper and calls the
+  # generated input-backprop op. Returns a tensor with the filter's type shaped like the input.
   r"""Computes the gradients of convolution with respect to the input.
 
   Args:
@@ -2625,6 +2915,14 @@ def conv2d_transpose(
     input=None,  # pylint: disable=redefined-builtin
     filters=None,
     dilations=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the batch and channel stride entries default to 0, but
+  # they are filled with 1 by the shared sequence helper.
+  # Version-1 transposed 2-D convolution ("deconvolution"). Inputs: value (alias input), filter
+  # (alias filters), the desired output shape, strides, padding (default "SAME"), data format
+  # (default "NHWC"), name and dilations; old/new alias pairs raise a value error if both are
+  # given. Opens a name scope and delegates to the version-2 function. Returns a tensor of the
+  # same type as value.
   """The transpose of `conv2d`.
 
   This operation is sometimes called "deconvolution" after
@@ -2700,6 +2998,17 @@ def conv2d_transpose_v2(
     data_format="NHWC",
     dilations=None,
     name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring calls this the transpose of atrous_conv2d, but it is the
+  # transpose (input gradient) of the ordinary 2-D convolution with optional dilations.
+  # Also the name scope is opened over a list containing the Python builtin filter function
+  # instead of the filters argument (a typo, harmless but wrong), and the batch/channel stride
+  # entries are documented as 0 although they are 1.
+  # Version-2 transposed 2-D convolution. Inputs: input (4-D), filters, output shape vector,
+  # strides, padding (string or explicit list, default "SAME"), data format (nothing means
+  # "NHWC"), dilations and name. Normalizes strides and dilations to four entries and calls the
+  # generated input-backprop op with the output shape as the input sizes. Returns a tensor of
+  # the same type as input.
   """The transpose of `conv2d`.
 
   This operation is sometimes called "deconvolution" after
@@ -2784,6 +3093,12 @@ def _conv2d_expanded_batch(
     data_format,
     dilations,
     name):
+  # [FUNCTION DOC]
+  # HELPER: used by the generic convolution to run a 2-D convolution on inputs that may have
+  # several leading batch dimensions. If the input rank is unknown or below five it calls the
+  # generated 2-D convolution directly; otherwise it flattens batch dims with the batch
+  # squeezing helper (inner rank three) and restores them. Inputs: input, filters, strides,
+  # padding, data format, dilations, name. Returns the output tensor.
   """Helper function for `convolution_internal`; handles expanded batches."""
   # Try really hard to avoid modifying the legacy name scopes - return early.
   input_rank = input.shape.rank
@@ -2819,6 +3134,18 @@ def atrous_conv2d_transpose(value,
                             rate,
                             padding,
                             name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the channel-mismatch error message for output_shape reports the filters'
+  # shape entry at index 3 (the input channels) as the "output channel count", while the check
+  # itself compares against index 2.
+  # Transpose of the 2-D atrous convolution. Inputs: 4-D channels-last value, 4-D filters,
+  # output shape (list, tuple, array or tensor of four entries), integer rate and padding
+  # ("VALID" or "SAME"), optional name. With rate one it defers to the plain transposed
+  # convolution. Otherwise it computes the padding (SAME is converted to VALID using the
+  # upsampled filter size), pads so the rate divides height and width, applies space-to-batch,
+  # the input-backprop op with VALID padding, and batch-to-space with matching crops.
+  # Returns a tensor with the type of value. Raises value errors for incompatible channel
+  # counts, rate below one, an output shape that is not a four-element vector, or bad padding.
   """The transpose of `atrous_conv2d`.
 
   This operation is sometimes called "deconvolution" after
@@ -2987,6 +3314,12 @@ def depthwise_conv2d_native(  # pylint: disable=redefined-builtin,dangerous-defa
     data_format="NHWC",
     dilations=[1, 1, 1, 1],
     name=None):
+  # [FUNCTION DOC]
+  # Version-1 native 2-D depthwise convolution (deprecated endpoint name). Applies a separate
+  # filter per input channel, giving in_channels times channel_multiplier output channels.
+  # Inputs: 4-D input, 4-D filter, strides, padding (string or explicit list), data format
+  # (default "NHWC"), dilations (default all ones) and name. Converts padding via the helper and
+  # calls the generated depthwise op. Returns a tensor with the input's type.
   r"""Computes a 2-D depthwise convolution.
 
   Given an input tensor of shape `[batch, in_height, in_width, in_channels]`
@@ -3068,6 +3401,11 @@ def depthwise_conv2d_native_backprop_input(  # pylint: disable=redefined-builtin
     data_format="NHWC",
     dilations=[1, 1, 1, 1],
     name=None):
+  # [FUNCTION DOC]
+  # Gradient of the 2-D depthwise convolution with respect to its input. Inputs: integer vector
+  # with the input shape, the filter, the gradient from the output, strides, padding (string or
+  # explicit list), data format, dilations and name. Converts padding via the helper and calls the
+  # generated depthwise input-backprop op. Returns a tensor with the filter's type.
   r"""Computes the gradients of depthwise convolution with respect to the input.
 
   Args:
@@ -3140,6 +3478,12 @@ def depthwise_conv2d_native_backprop_filter(  # pylint: disable=redefined-builti
     data_format="NHWC",
     dilations=[1, 1, 1, 1],
     name=None):
+  # [FUNCTION DOC]
+  # Gradient of the 2-D depthwise convolution with respect to its filter. Inputs: the forward
+  # input, an integer vector with the filter shape, the gradient from the output, strides,
+  # padding (string or explicit list), data format, dilations and name. Converts padding via the
+  # helper and calls the generated depthwise filter-backprop op. Returns a tensor with the
+  # input's type shaped like the filter.
   r"""Computes the gradients of depthwise convolution with respect to the filter.
 
   Args:
@@ -3204,6 +3548,13 @@ def _conv3d_expanded_batch(
     data_format,
     dilations=None,
     name=None):
+  # [FUNCTION DOC]
+  # HELPER: runs a 3-D convolution on inputs that may carry several leading batch dimensions.
+  # Determines the input rank (falling back to the length of the shape for array inputs). If the
+  # rank is five or smaller or unknown, calls the generated 3-D convolution directly; otherwise
+  # flattens the batch dims with the batch squeezing helper (inner rank four) and restores them.
+  # Inputs: input, filter, strides, padding, data format, optional dilations and name.
+  # Returns the output tensor.
   """Helper function for `conv3d`; handles expanded batches."""
   shape = input.shape
   # shape object may lack ndims, e.g., if input is an np.ndarray.  In that case,
@@ -3245,6 +3596,11 @@ def conv3d_v2(input,  # pylint: disable=redefined-builtin,missing-docstring
               data_format="NDHWC",
               dilations=None,
               name=None):
+  # [FUNCTION DOC]
+  # Version-2 3-D convolution. Inputs: input (rank five or more), filters, strides, padding,
+  # data format (default "NDHWC"), dilations (nothing means all ones, five entries) and name.
+  # Delegates to the 3-D expanded-batch helper and returns the output tensor. Its docstring is
+  # assigned after the definition from the generated op with the filter argument renamed.
   if dilations is None:
     dilations = [1, 1, 1, 1, 1]
   return _conv3d_expanded_batch(input, filters, strides, padding, data_format,
@@ -3262,6 +3618,12 @@ def conv3d_v1(  # pylint: disable=missing-docstring,dangerous-default-value
     dilations=[1, 1, 1, 1, 1],
     name=None,
     filters=None):
+  # [FUNCTION DOC]
+  # Version-1 3-D convolution wrapper. Accepts filter or its alias filters (the lookup raises a
+  # value error if both are given), strides, padding, data format (default "NDHWC"), dilations
+  # (default all ones) and name, then calls the generated 3-D convolution op directly (no
+  # expanded batch handling). Returns the output tensor. Its docstring is assigned from the
+  # generated op after the definition.
   filter = deprecated_argument_lookup("filters", filters, "filter", filter)
   return gen_nn_ops.conv3d(
       input, filter, strides, padding, data_format, dilations, name)
@@ -3285,6 +3647,11 @@ def conv3d_transpose(
     input=None,  # pylint: disable=redefined-builtin
     filters=None,
     dilations=None):
+  # [FUNCTION DOC]
+  # Version-1 transposed 3-D convolution. Inputs: value (alias input), filter (alias filters),
+  # output shape, strides, padding (default "SAME"), data format (default "NDHWC"), name and
+  # dilations. Resolves the old/new aliases (value error if both given) and forwards to the
+  # version-2 function. Returns a tensor with the type of value.
   """The transpose of `conv3d`.
 
   This operation is sometimes called "deconvolution" after
@@ -3354,6 +3721,16 @@ def conv3d_transpose_v2(input,  # pylint: disable=redefined-builtin
                         data_format="NDHWC",
                         dilations=None,
                         name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the name scope is opened over a list containing the Python builtin filter
+  # function rather than the filters argument (a typo), and the docstring claims the batch and
+  # channel stride entries default to 0 whereas they are filled with 1.
+  # Version-2 transposed 3-D convolution. Inputs: 5-D input, 5-D filters (depth, height, width,
+  # output channels, input channels), output shape vector, strides (int or list of length 1, 3
+  # or 5), padding (default "SAME"), data format ("NDHWC" default, or "NCDHW"; nothing means
+  # channels last), dilations and name. Normalizes strides and dilations to five entries and
+  # calls the generated 3-D input-backprop op, using the output shape as the input sizes.
+  # Returns a tensor with the type of input.
   """The transpose of `conv3d`.
 
   This operation is sometimes called "deconvolution" after
@@ -3435,6 +3812,17 @@ def conv_transpose(input,  # pylint: disable=redefined-builtin
                    data_format=None,
                    dilations=None,
                    name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the name scope is opened over a list containing the Python builtin filter
+  # function rather than the filters argument (a typo); the docstring says the result has the
+  # type of "value" although the argument is called input, and says N and C strides default to 0
+  # (they are 1).
+  # Rank-agnostic transposed convolution. Inputs: input tensor, filters, output shape (tensor or
+  # sized collection whose length is N+2), strides, padding (default "SAME"), data format
+  # (nothing allowed), dilations and name (default name conv_transpose). Chooses the 1-D, 2-D or
+  # 3-D transposed convolution implementation from the output shape length and forwards all
+  # arguments. Returns the resulting tensor. Raises a value error if output_shape is neither a
+  # tensor nor sized, or if its length is not 3, 4 or 5.
   """The transpose of `convolution`.
 
   This operation is sometimes called "deconvolution" after
@@ -3516,6 +3904,14 @@ def conv_transpose(input,  # pylint: disable=redefined-builtin
 @tf_export("nn.bias_add")
 @dispatch.add_dispatch_support
 def bias_add(value, bias, data_format=None, name=None):
+  # [FUNCTION DOC]
+  # Adds a one-dimensional bias vector to a tensor along its channel dimension. Inputs: value
+  # tensor, bias vector (converted to the value's dtype in graph mode), optional data format of
+  # the form channels-last (default) or channels-first, and an optional name. A data format
+  # starting with "NC" is mapped to the channels-first format, one starting with N and ending in
+  # C to the channels-last format. Calls the generated bias-add op and returns the sum, which
+  # has the type of value. Raises a value error for an unrecognized data format; shape errors
+  # come from the underlying op.
   """Adds `bias` to `value`.
 
   This is (mostly) a special case of `tf.add` where `bias` is restricted to 1-D.
@@ -3561,6 +3957,11 @@ def bias_add(value, bias, data_format=None, name=None):
 
 
 def bias_add_v1(value, bias, name=None):
+  # [FUNCTION DOC]
+  # Deprecated predecessor of the bias addition function: adds a 1-D bias vector to the last
+  # dimension of the value. Both inputs are converted to tensors (bias takes the value's dtype),
+  # then the generated version-1 bias-add op is called inside a name scope. Returns a tensor
+  # with the type of value. Shape errors come from the underlying op. Not exported publicly.
   """Adds `bias` to `value`.
 
   This is a deprecated version of bias_add and will soon to be removed.
@@ -3590,6 +3991,11 @@ def bias_add_v1(value, bias, name=None):
 @tf_export(v1=["nn.crelu"])
 @dispatch.add_dispatch_support
 def crelu(features, name=None, axis=-1):
+  # [FUNCTION DOC]
+  # Version-1 concatenated ReLU activation. Concatenates the features and their negation along
+  # the given axis (default last) and applies a ReLU, so the output has twice the size along
+  # that axis, holding the positive part and the negated-negative part. Inputs: features tensor,
+  # optional name, optional axis. Returns a tensor with the type of features.
   """Computes Concatenated ReLU.
 
   Concatenates a ReLU which selects only the positive part of the activation
@@ -3623,6 +4029,10 @@ def crelu(features, name=None, axis=-1):
 @tf_export("nn.crelu", v1=[])
 @dispatch.add_dispatch_support
 def crelu_v2(features, axis=-1, name=None):
+  # [FUNCTION DOC]
+  # Version-2 concatenated ReLU with the argument order (features, axis, name). Forwards to the
+  # version-1 function and returns its output. Its documentation string is copied from the
+  # version-1 function right after the definition.
   return crelu(features, name=name, axis=axis)
 crelu_v2.__doc__ = crelu.__doc__
 
@@ -3631,6 +4041,11 @@ crelu_v2.__doc__ = crelu.__doc__
 @dispatch.register_unary_elementwise_api
 @dispatch.add_dispatch_support
 def relu6(features, name=None):
+  # [FUNCTION DOC]
+  # Rectified linear unit capped at six: element-wise minimum of the maximum of features and
+  # zero, and six. Input: features (converted to a tensor), optional name. Returns a tensor with
+  # the same type. Registered as a unary element-wise API with dispatch support; creates the
+  # generated relu6 op inside a name scope.
   """Computes Rectified Linear 6: `min(max(features, 0), 6)`.
 
   In comparison with `tf.nn.relu`, relu6 activation functions have shown to
@@ -3668,6 +4083,13 @@ def relu6(features, name=None):
 @dispatch.register_unary_elementwise_api
 @dispatch.add_dispatch_support
 def leaky_relu(features, alpha=0.2, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring lists integer types among the accepted types, but integer inputs
+  # are silently cast to 32-bit float first, so the output type differs from the input type.
+  # Leaky ReLU activation: passes positive values and scales negative values by alpha (default
+  # 0.2). Inputs: features tensor, alpha slope (number; a numpy array is converted to a plain
+  # number), optional name. Returns the activation tensor (floating point). Registered as a
+  # unary element-wise API with dispatch support.
   """Compute the Leaky ReLU activation function.
 
   Source: [Rectifier Nonlinearities Improve Neural Network Acoustic Models.
@@ -3703,6 +4125,12 @@ def leaky_relu(features, alpha=0.2, name=None):
 @dispatch.register_unary_elementwise_api
 @dispatch.add_dispatch_support
 def gelu(features, approximate=False, name=None):
+  # [FUNCTION DOC]
+  # Gaussian Error Linear Unit activation. Inputs: features (must be a floating point tensor),
+  # approximate flag (default false), optional name. With the flag set it uses the tanh-based
+  # approximation; otherwise it uses the exact form based on the complementary error function.
+  # Returns a tensor with the type of features. Raises a value error if features is not a
+  # floating point tensor. Registered as a unary element-wise API (version-2 only).
   """Compute the Gaussian Error Linear Unit (GELU) activation function.
 
   Gaussian error linear unit (GELU) computes
@@ -3759,6 +4187,11 @@ def gelu(features, approximate=False, name=None):
 
 
 def _flatten_outer_dims(logits):
+  # [FUNCTION DOC]
+  # HELPER: reshapes a tensor of any rank into a matrix whose second dimension is the original
+  # last dimension and whose first dimension collapses all outer dimensions. In graph mode, when
+  # all outer dimension sizes are statically known, the static shape of the result is set to the
+  # product of them by the last size. Input: logits tensor. Returns the 2-D tensor.
   """Flattens logits' outer dimensions and keep its last dimension."""
   rank = array_ops.rank(logits)
   last_dim_size = array_ops.slice(
@@ -3786,6 +4219,18 @@ def _flatten_outer_dims(logits):
 
 
 def _wrap_2d_function(inputs, compute_op, dim=-1, name=None):
+  # [FUNCTION DOC]
+  # HELPER: lets last-axis-only ops (softmax, log softmax) work along any axis.
+  # KNOWN ISSUE: when dim is not the last axis and the static rank of the input is unknown, the
+  # code computes with an undefined rank and fails with a type error rather than a clear message.
+  # Also the docstring talks about reshaping to 2-D, but the code only transposes the chosen axis
+  # to the end (no reshape) and transposes back.
+  # Inputs: tensor, a callable that works on the last axis (called with the tensor, plus a name
+  # keyword only in the fast path), the axis (integer or scalar tensor, default last) and a name.
+  # If dim designates the last axis the callable is applied directly. Otherwise the axis is
+  # validated (negative values wrap), swapped with the last one, the callable applied, and each
+  # result (a single tensor or a tuple) is swapped back and given the original static shape.
+  # Raises an invalid-argument error if a statically known dim is outside the valid range.
   """Helper function for ops that accept and return 2d inputs of same shape.
 
   It reshapes and transposes the inputs into a 2-D Tensor and then invokes
@@ -3811,6 +4256,11 @@ def _wrap_2d_function(inputs, compute_op, dim=-1, name=None):
   """
 
   def _swap_axis(input_tensor, dim_index, last_index, name=None):
+    # [FUNCTION DOC]
+    # HELPER: exchanges two axes of a tensor via a transpose. Inputs: the tensor, the index of
+    # the axis to move, the index of the last axis and an optional op name. Builds the
+    # permutation that puts the last axis at dim_index and dim_index at the end. Returns the
+    # transposed tensor.
     """Swaps logits's dim_index and last_index."""
     return array_ops.transpose(
         input_tensor,
@@ -3857,6 +4307,10 @@ def _wrap_2d_function(inputs, compute_op, dim=-1, name=None):
 
   # Do the actual call on its last dimension.
   def fix_output(output):
+    # [FUNCTION DOC]
+    # HELPER: post-processing of the wrapped computation. Swaps the moved axis back to its
+    # original place (naming the op with the outer name) and restores the static shape of the
+    # original input, since the transpose may lose it. Takes one tensor, returns the fixed tensor.
     output = _swap_axis(
         output, dim_axis, math_ops.subtract(input_rank, 1), name=name)
 
@@ -3874,6 +4328,11 @@ def _wrap_2d_function(inputs, compute_op, dim=-1, name=None):
 @tf_export("nn.softmax", "math.softmax", v1=[])
 @dispatch.add_dispatch_support
 def softmax_v2(logits, axis=None, name=None):
+  # [FUNCTION DOC]
+  # Version-2 softmax activation along a chosen axis (nothing means the last axis). Inputs:
+  # logits tensor (half, float32 or float64), axis, optional name. Delegates to the generated
+  # softmax op through the axis-wrapping helper. Returns a tensor of the same type and shape.
+  # Raises an invalid-argument error for empty logits or an axis out of range.
   """Computes softmax activations.
 
   Used for multi-class predictions. The sum of all outputs generated by softmax
@@ -3916,6 +4375,11 @@ def softmax_v2(logits, axis=None, name=None):
 @dispatch.add_dispatch_support
 @deprecation.deprecated_args(None, "dim is deprecated, use axis instead", "dim")
 def softmax(logits, axis=None, name=None, dim=None):
+  # [FUNCTION DOC]
+  # Version-1 softmax. Same as the version-2 function but also accepts the deprecated alias dim
+  # for axis (the lookup raises a value error if both are given; using dim emits a deprecation
+  # warning). Axis defaults to the last one. Returns a tensor of the same type and shape as
+  # logits. Its documentation string is copied from the version-2 function after the definition.
   axis = deprecation.deprecated_argument_lookup("axis", axis, "dim", dim)
   if axis is None:
     axis = -1
@@ -3930,6 +4394,11 @@ softmax.__doc__ = softmax_v2.__doc__
 @dispatch.add_dispatch_support
 @deprecation.deprecated_args(None, "dim is deprecated, use axis instead", "dim")
 def log_softmax(logits, axis=None, name=None, dim=None):
+  # [FUNCTION DOC]
+  # Version-1 log softmax: logits minus the log of the sum of exponentials along an axis.
+  # Inputs: logits tensor, axis (nothing means last), name, and the deprecated alias dim (value
+  # error if both axis and dim are given; deprecation warning when dim is used). Returns a tensor
+  # of the same type and shape. Raises an invalid-argument error for empty logits or a bad axis.
   """Computes log softmax activations.
 
   For each batch `i` and class `j` we have
@@ -3960,6 +4429,10 @@ def log_softmax(logits, axis=None, name=None, dim=None):
 @tf_export("nn.log_softmax", "math.log_softmax", v1=[])
 @dispatch.add_dispatch_support
 def log_softmax_v2(logits, axis=None, name=None):
+  # [FUNCTION DOC]
+  # Version-2 log softmax along an axis (nothing means last). Inputs: logits tensor, axis, name.
+  # Delegates to the generated log-softmax op through the axis-wrapping helper. Returns a tensor
+  # of the same type and shape. Raises an invalid-argument error for empty logits or a bad axis.
   """Computes log softmax activations.
 
   For each batch `i` and class `j` we have
@@ -3986,6 +4459,12 @@ def log_softmax_v2(logits, axis=None, name=None):
 
 
 def _ensure_xent_args(name, labels, logits):
+  # [FUNCTION DOC]
+  # HELPER: argument check shared by the cross-entropy functions.
+  # KNOWN ISSUE: the message concatenates the function name and the word Received without a
+  # separating period or space.
+  # Raises a value error if either labels or logits is nothing, naming the calling function in
+  # the message. Returns nothing.
   if labels is None or logits is None:
     raise ValueError(f"Both `labels` and `logits` must be provided for {name}"
                      f"Received: labels={labels} and logits={logits}")
@@ -3994,6 +4473,11 @@ def _ensure_xent_args(name, labels, logits):
 @tf_export("nn.softmax_cross_entropy_with_logits", v1=[])
 @dispatch.add_dispatch_support
 def softmax_cross_entropy_with_logits_v2(labels, logits, axis=-1, name=None):
+  # [FUNCTION DOC]
+  # Public version-2 softmax cross entropy loss between labels (probability distributions along
+  # the class axis) and unscaled logits. Inputs: labels, logits, class axis (default last), name.
+  # Forwards by keyword to the shared helper implementation. Returns the loss tensor with the
+  # logits' type and the shape of labels without the class axis. Gradients flow to both inputs.
   """Computes softmax cross entropy between `logits` and `labels`.
 
   Measures the probability error in discrete classification tasks in which the
@@ -4059,6 +4543,16 @@ def softmax_cross_entropy_with_logits_v2(labels, logits, axis=-1, name=None):
 @deprecated_args(None, "dim is deprecated, use axis instead", "dim")
 def softmax_cross_entropy_with_logits_v2_helper(
     labels, logits, axis=None, name=None, dim=None):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation of the softmax cross entropy (gradient flows to labels too);
+  # also exported as the version-1 endpoint with a deprecated alias dim for axis.
+  # Inputs: labels, logits, axis (nothing means last), name, dim (deprecated alias; value error if
+  # both are given). Converts both to tensors, casts half/bfloat16 logits to 32-bit float for
+  # precision, casts labels to the same type, moves the class axis to the end if needed, flattens
+  # to matrices, and computes the loss either with the generated fused op or, when op determinism
+  # is enabled, as the negative sum of labels times log softmax. Reshapes the loss to the outer
+  # shape, restores static shape in graph mode, casts back to the original logits type, and
+  # returns it. Side effect: consults the global op-determinism setting.
   """Computes softmax cross entropy between `logits` and `labels`.
 
   Measures the probability error in discrete classification tasks in which the
@@ -4133,6 +4627,10 @@ def softmax_cross_entropy_with_logits_v2_helper(
     if axis != -1:
 
       def _move_dim_to_end(tensor, dim_index, rank):
+        # [FUNCTION DOC]
+        # HELPER: moves one axis of a tensor to the last position by transposing, keeping the
+        # order of the other axes. Inputs: tensor, index of the axis to move, rank of the tensor.
+        # Returns the transposed tensor.
         return array_ops.transpose(
             tensor,
             array_ops.concat([
@@ -4195,6 +4693,16 @@ def softmax_cross_entropy_with_logits(
     dim=-1,
     name=None,
     axis=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: dim defaults to -1 (not nothing) while axis is documented as an alias for dim;
+  # the argument-lookup helper raises a value error whenever both are non-null, so passing axis
+  # explicitly always fails because dim still holds its default.
+  # Deprecated version-1 softmax cross entropy where gradients flow only into logits. Inputs:
+  # labels and logits (both required, otherwise a value error), dim (class axis, default last),
+  # name, and axis (intended alias for dim). Emits a deprecation warning when called. Wraps the
+  # labels in a stop-gradient op inside a name scope, then calls the version-2 loss function
+  # with the class axis. Returns the loss tensor with the logits' type and the labels' shape
+  # minus the class axis.
   """Computes softmax cross entropy between `logits` and `labels`.
 
   Measures the probability error in discrete classification tasks in which the
@@ -4253,6 +4761,13 @@ def softmax_cross_entropy_with_logits(
 
 
 def _sparse_softmax_cross_entropy_with_rank_2_logits(logits, labels, name):
+  # [FUNCTION DOC]
+  # HELPER: core computation for the sparse softmax cross entropy on 2-D logits and 1-D labels.
+  # Inputs: logits matrix, integer label vector of class indices, op name. Normally calls the
+  # generated fused op and keeps only the loss. If op determinism is enabled it instead computes
+  # the negative log softmax gathered at the label indices, and forces the loss to NaN for any
+  # label that is negative or not below the class count (to match the GPU behaviour and avoid
+  # corrupting valid gradients). Returns the per-example loss vector.
   if config.is_op_determinism_enabled():
     # TODO(duncanriach): Implement a GPU-deterministic version of this op at
     #     the C++/CUDA level.
@@ -4287,6 +4802,17 @@ def sparse_softmax_cross_entropy_with_logits(
     labels=None,
     logits=None,
     name=None):
+  # [FUNCTION DOC]
+  # Version-1 sparse softmax cross entropy: labels hold integer class indices (not
+  # distributions). Inputs: labels (rank r), logits (rank r+1, last axis is the classes), name;
+  # both labels and logits are required. Half-precision logits are computed in 32-bit float and
+  # cast back. For rank-2 logits it calls the rank-2 helper directly; otherwise it flattens
+  # logits to a matrix and labels to a vector (adding a dynamic shape-equality assertion when
+  # static shapes are not fully defined), computes, then reshapes the loss to the labels' shape.
+  # Returns a loss tensor shaped like labels with the logits' type.
+  # Raises value errors for missing arguments, scalar logits, a labels rank different from the
+  # logits rank minus one, or static shapes that disagree. Invalid indices raise on CPU and give
+  # NaN on GPU.
   """Computes sparse softmax cross entropy between `logits` and `labels`.
 
   Measures the probability error in discrete classification tasks in which the
@@ -4407,6 +4933,10 @@ def sparse_softmax_cross_entropy_with_logits(
 @tf_export("nn.sparse_softmax_cross_entropy_with_logits", v1=[])
 @dispatch.add_dispatch_support
 def sparse_softmax_cross_entropy_with_logits_v2(labels, logits, name=None):
+  # [FUNCTION DOC]
+  # Version-2 sparse softmax cross entropy with the argument order (labels, logits, name).
+  # Forwards by keyword to the version-1 function and returns its loss tensor (shaped like
+  # labels, typed like logits). Raises the same value errors for scalar logits or rank mismatch.
   """Computes sparse softmax cross entropy between `logits` and `labels`.
 
   Measures the probability error in discrete classification tasks in which the
@@ -4468,6 +4998,15 @@ def sparse_softmax_cross_entropy_with_logits_v2(labels, logits, name=None):
 @tf_export("nn.avg_pool", v1=["nn.avg_pool_v2"])
 @dispatch.add_dispatch_support
 def avg_pool_v2(input, ksize, strides, padding, data_format=None, name=None):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the fallback that derives the rank from the data format is effectively
+  # unreachable because the shape attribute is never null for tensors, and a shape of unknown
+  # rank makes the length computation fail instead of reaching the clear error message.
+  # Version-2 rank-agnostic average pooling. Inputs: input tensor of rank 3, 4 or 5, ksize and
+  # strides (int or list of length 1, N or N+2), padding, optional data format, optional name.
+  # Determines N from the static rank, expands ksize and strides to full length, and dispatches
+  # to the 1-D wrapper, the generated 2-D op, or the generated 3-D op. Returns the pooled tensor.
+  # Raises a value error if the rank cannot be determined or is not 3, 4 or 5.
   """Performs the avg pooling on the input.
 
   Each entry in `output` is the mean of the corresponding size `ksize`
@@ -4536,6 +5075,12 @@ def avg_pool_v2(input, ksize, strides, padding, data_format=None, name=None):  #
 @dispatch.add_dispatch_support
 def avg_pool(value, ksize, strides, padding, data_format="NHWC",
              name=None, input=None):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # Version-1 2-D average pooling (also exported as the 2-D alias). Inputs: value (alias input;
+  # supplying both raises a value error), ksize and strides (int or list of length 1, 2 or 4),
+  # padding, data format (nothing means "NHWC"), name. Expands ksize and strides to four entries
+  # and calls the generated average pooling op inside a name scope. Returns the pooled tensor
+  # with the type of value.
   """Performs the average pooling on the input.
 
   Each entry in `output` is the mean of the corresponding size `ksize`
@@ -4580,6 +5125,11 @@ def avg_pool(value, ksize, strides, padding, data_format="NHWC",
 @tf_export("nn.avg_pool2d", v1=[])
 @dispatch.add_dispatch_support
 def avg_pool2d(input, ksize, strides, padding, data_format="NHWC", name=None):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # Version-2 2-D average pooling on a 4-D tensor. Inputs: input, ksize and strides (int or list
+  # of length 1, 2 or 4), padding, data format (nothing means "NHWC"), name. Expands ksize and
+  # strides to four entries and calls the generated average pooling op. Returns the pooled
+  # tensor with the input's type.
   """Performs the average pooling on the input.
 
   Each entry in `output` is the mean of the corresponding size `ksize`
@@ -4621,6 +5171,14 @@ def avg_pool2d(input, ksize, strides, padding, data_format="NHWC", name=None):  
 @tf_export("nn.avg_pool1d")
 @dispatch.add_dispatch_support
 def avg_pool1d(input, ksize, strides, padding, data_format="NWC", name=None):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the Returns section of the docstring says "The max pooled output tensor", but
+  # this function performs average pooling.
+  # 1-D average pooling on a 3-D tensor, implemented with the 2-D op. Inputs: input, ksize and
+  # strides (int or list of length 1 or 3), padding, data format ("NWC" default or "NCW";
+  # nothing means "NWC"), name. Inserts a dummy spatial dimension, maps the format to its 2-D
+  # equivalent, runs the generated average pooling op, and squeezes the dummy dimension.
+  # Returns the pooled tensor in the requested layout.
   """Performs the average pooling on the input.
 
   Each entry in `output` is the mean of the corresponding size `ksize`
@@ -4668,6 +5226,11 @@ def avg_pool1d(input, ksize, strides, padding, data_format="NWC", name=None):  #
 @tf_export("nn.avg_pool3d")
 @dispatch.add_dispatch_support
 def avg_pool3d(input, ksize, strides, padding, data_format="NDHWC", name=None):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # 3-D average pooling on a 5-D tensor. Inputs: input, ksize and strides (int or list of length
+  # 1, 3 or 5), padding, data format ("NDHWC" default or "NCDHW"; nothing means "NDHWC"), name.
+  # Expands ksize and strides to five entries and calls the generated 3-D average pooling op.
+  # Returns the pooled tensor with the input's type.
   """Performs the average pooling on the input.
 
   Each entry in `output` is the mean of the corresponding size `ksize`
@@ -4710,6 +5273,17 @@ def avg_pool3d(input, ksize, strides, padding, data_format="NDHWC", name=None): 
 @tf_export("nn.max_pool", v1=["nn.max_pool_v2"])
 @dispatch.add_dispatch_support
 def max_pool_v2(input, ksize, strides, padding, data_format=None, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: as in the average pooling counterpart, the fallback that derives the rank from
+  # the data format is effectively unreachable, and an input of unknown rank fails on the length
+  # computation rather than reaching the clear error message.
+  # Version-2 rank-agnostic max pooling. Inputs: input tensor of rank 3, 4 or 5, ksize and
+  # strides (int or list of length 1, N or N+2), padding (string, or explicit list for ranks 3
+  # and 4), optional data format, optional name. Determines N from the static rank, expands
+  # ksize and strides, and dispatches to the 1-D, 2-D or generated 3-D max pooling. Returns the
+  # pooled tensor.
+  # Raises a value error if the rank is unknown or not 3-5, if explicit padding is combined with
+  # the vectorized channel format, or if explicit padding is used with a rank-5 input.
   """Performs max pooling on the input.
 
   For a given window of `ksize`, takes the maximum value within that window.
@@ -4860,6 +5434,14 @@ def max_pool(value,
              data_format="NHWC",
              name=None,
              input=None):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # Version-1 2-D max pooling. Inputs: value (alias input; both given raises a value error),
+  # ksize and strides (int or list of length 1, 2 or 4), padding (string or explicit list),
+  # data format (nothing means "NHWC"; also supports the vectorized channel format when padding
+  # is a string), name. Expands ksize and strides, converts padding via the padding helper and
+  # calls the generated max pooling op. Returns the pooled tensor.
+  # Raises a value error if explicit padding is combined with the vectorized channel format or
+  # if a ksize entry is zero (the zero check is applied after expansion to a list).
   """Performs the max pooling on the input.
 
   Args:
@@ -4916,6 +5498,14 @@ def max_pool(value,
 @tf_export("nn.max_pool1d")
 @dispatch.add_dispatch_support
 def max_pool1d(input, ksize, strides, padding, data_format="NWC", name=None):
+  # [FUNCTION DOC]
+  # 1-D max pooling on a 3-D tensor, implemented with the 2-D op. Inputs: input, ksize and
+  # strides (int or list of length 1 or 3), padding (string or explicit list of three pairs),
+  # data format ("NWC" default or "NCW"; nothing means "NWC"), name. Expands ksize and strides,
+  # converts explicit padding (prepending a zero pair for the dummy dimension), inserts a dummy
+  # spatial dimension, runs the generated max pooling op, and squeezes the dummy dimension.
+  # Returns the pooled tensor. Raises a value error if explicit padding is combined with the
+  # vectorized channel format.
   """Performs the max pooling on the input.
 
   Note internally this op reshapes and uses the underlying 2d operation.
@@ -4976,6 +5566,13 @@ def max_pool1d(input, ksize, strides, padding, data_format="NWC", name=None):
 @tf_export("nn.max_pool2d")
 @dispatch.add_dispatch_support
 def max_pool2d(input, ksize, strides, padding, data_format="NHWC", name=None):
+  # [FUNCTION DOC]
+  # 2-D max pooling on a 4-D tensor (images). Inputs: input, ksize and strides (int or list of
+  # length 1, 2 or 4), padding (string or explicit list of four pairs), data format ("NHWC"
+  # default, "NCHW" or the vectorized channel format; nothing means "NHWC"), name. Expands ksize
+  # and strides, converts padding via the padding helper and calls the generated max pooling op.
+  # Returns the pooled tensor. Raises a value error if explicit padding is combined with the
+  # vectorized channel format.
   """Performs max pooling on 2D spatial data such as images.
 
   This is a more specific version of `tf.nn.max_pool` where the input tensor
@@ -5089,6 +5686,11 @@ def max_pool2d(input, ksize, strides, padding, data_format="NHWC", name=None):
 @tf_export("nn.max_pool3d")
 @dispatch.add_dispatch_support
 def max_pool3d(input, ksize, strides, padding, data_format="NDHWC", name=None):
+  # [FUNCTION DOC]
+  # 3-D max pooling on a 5-D tensor. Inputs: input, ksize and strides (int or list of length 1,
+  # 3 or 5), padding ("VALID" or "SAME"), data format ("NDHWC" default or "NCDHW"; nothing means
+  # "NDHWC"), name. Expands ksize and strides to five entries and calls the generated 3-D max
+  # pooling op. Returns the pooled tensor with the input's type.
   """Performs the max pooling on the input.
 
   Args:
@@ -5141,6 +5743,14 @@ def max_pool_with_argmax_v2(
     output_dtype=dtypes.int64,
     include_batch_in_index=False,
     name=None):
+  # [FUNCTION DOC]
+  # Version-2 max pooling that also returns the flattened position of each maximum.
+  # Inputs: 4-D input tensor (channels last only), ksize and strides (int or list of length 1,
+  # 2 or 4), padding ("SAME" or "VALID"), data format (only "NHWC" accepted), output dtype for
+  # the indices (int32 or int64, default int64), a flag to include the batch index in the
+  # flattened index (default false) and a name. Expands ksize and strides to four entries and
+  # calls the generated op. Returns a pair: the pooled values (input's type) and the indices.
+  # Raises a value error if the data format is not the supported channels-last one.
   """Performs max pooling on the input and outputs both max values and indices.
 
   The indices in `argmax` are flattened, so that a maximum value at position
@@ -5215,6 +5825,15 @@ def max_pool_with_argmax_v1(  # pylint: disable=missing-docstring,invalid-name
     name=None,
     output_dtype=None,
     include_batch_in_index=False):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: unlike the version-2 function, ksize and strides are passed to the generated op
+  # as given, without expansion to four entries, so scalar or two-element values are not
+  # normalized here.
+  # Version-1 max pooling with indices. Accepts the old argument name Targmax or the new
+  # output_dtype (the lookup raises a value error if both are given; the index type defaults to
+  # 64-bit integers). Inputs also include ksize, strides, padding, data format (only "NHWC"),
+  # name and the include-batch-in-index flag. Returns the pair (values, indices). Raises a value
+  # error for any other data format. Its docstring is copied from the generated op afterwards.
   if data_format != "NHWC":
     raise ValueError("`data_format` values other  than 'NHWC' are not "
                      f"supported. Received: data_format={data_format}")
@@ -5238,6 +5857,12 @@ max_pool_with_argmax_v1.__doc__ = gen_nn_ops.max_pool_with_argmax.__doc__
 
 @ops.RegisterStatistics("Conv3D", "flops")
 def _calc_conv3d_flops(graph, node):
+  # [FUNCTION DOC]
+  # HELPER: statistics callback registered for the 3-D convolution op's floating point operation
+  # count. Inputs: a graph and a node definition. Requires the input, filter and output shapes to
+  # be fully defined (otherwise the shape assertion raises). Returns an operation statistics
+  # object whose flops value is twice the product of the output element count, the filter
+  # depth/height/width extents and the filter's input channel count.
   """Calculates the compute resources needed for Conv3D."""
   input_shape = graph_util.tensor_shape_from_node_def_name(graph, node.input[0])
   input_shape.assert_is_fully_defined()
@@ -5257,6 +5882,11 @@ def _calc_conv3d_flops(graph, node):
 
 @ops.RegisterStatistics("Conv2D", "flops")
 def _calc_conv_flops(graph, node):
+  # [FUNCTION DOC]
+  # HELPER: statistics callback registered for the 2-D convolution op's flops count. Inputs: a
+  # graph and a node definition. Requires fully defined input, filter and output shapes
+  # (raising otherwise). Returns an operation statistics object whose flops value is twice the
+  # product of the output element count, the filter height and width and its input channels.
   """Calculates the compute resources needed for Conv2D."""
   input_shape = graph_util.tensor_shape_from_node_def_name(graph, node.input[0])
   input_shape.assert_is_fully_defined()
@@ -5276,6 +5906,11 @@ def _calc_conv_flops(graph, node):
 
 @ops.RegisterStatistics("DepthwiseConv2dNative", "flops")
 def _calc_depthwise_conv_flops(graph, node):
+  # [FUNCTION DOC]
+  # HELPER: statistics callback registered for the depthwise 2-D convolution op's flops count.
+  # Inputs: a graph and a node definition. Requires fully defined input, filter and output shapes
+  # (raising otherwise). Returns an operation statistics object whose flops value is twice the
+  # product of the output element count and the filter height and width.
   """Calculates the compute resources needed for DepthwiseConv2dNative."""
   input_shape = graph_util.tensor_shape_from_node_def_name(graph, node.input[0])
   input_shape.assert_is_fully_defined()
@@ -5292,6 +5927,10 @@ def _calc_depthwise_conv_flops(graph, node):
 
 @ops.RegisterStatistics("BiasAdd", "flops")
 def _calc_bias_add_flops(graph, node):
+  # [FUNCTION DOC]
+  # HELPER: statistics callback registered for the bias addition op's flops count. Inputs: a
+  # graph and a node definition. Requires a fully defined input shape (raising otherwise).
+  # Returns an operation statistics object whose flops value equals the number of input elements.
   """Calculates the computing needed for BiasAdd."""
   input_shape = graph_util.tensor_shape_from_node_def_name(graph, node.input[0])
   input_shape.assert_is_fully_defined()
@@ -5302,6 +5941,11 @@ def _calc_bias_add_flops(graph, node):
 @tf_export(v1=["nn.xw_plus_b"])
 @dispatch.add_dispatch_support
 def xw_plus_b(x, weights, biases, name=None):  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # Fully connected layer computation: matrix product of x and weights plus a bias vector.
+  # Inputs: 2-D x, 2-D weights, 1-D biases (all converted to tensors) and an optional name
+  # (default xw_plus_b). Uses the matrix multiplication op followed by the bias addition
+  # function. Returns a 2-D tensor (batch by output units). Shape errors come from the ops.
   """Computes matmul(x, weights) + biases.
 
   Args:
@@ -5324,6 +5968,10 @@ def xw_plus_b(x, weights, biases, name=None):  # pylint: disable=invalid-name
 
 
 def xw_plus_b_v1(x, weights, biases, name=None):
+  # [FUNCTION DOC]
+  # Deprecated variant of the fully connected computation: matrix product of x and weights plus
+  # a bias vector, but using the older version-1 bias addition. Inputs: 2-D x, 2-D weights, 1-D
+  # biases and an optional name (default xw_plus_b_v1). Returns a 2-D tensor. Not exported.
   """Computes matmul(x, weights) + biases.
 
   This is a deprecated version of that will soon be removed.
@@ -5348,6 +5996,15 @@ def xw_plus_b_v1(x, weights, biases, name=None):
 
 
 def _get_noise_shape(x, noise_shape):
+  # [FUNCTION DOC]
+  # HELPER: resolves the shape of the random keep/drop mask for the dropout functions.
+  # KNOWN ISSUE: if the noise shape converts to a shape of unknown rank, the length comparison
+  # operates on a null dimension list and raises a type error instead of returning the shape.
+  # Inputs: the tensor x and an optional noise shape (nothing, a list, a shape, or a tensor).
+  # Nothing gives the dynamic shape of x. If the noise shape cannot be converted to a static
+  # shape it is returned unchanged for the op to handle. If x has the same known rank as the
+  # noise shape, unknown noise dimensions are filled in with x's static sizes where known and a
+  # static shape is returned; otherwise the noise shape is returned unchanged.
   # If noise_shape is none return immediately.
   if noise_shape is None:
     return array_ops.shape(x)
@@ -5379,6 +6036,14 @@ def _get_noise_shape(x, noise_shape):
                              "keep_prob")
 def dropout(x, keep_prob=None, noise_shape=None, seed=None, name=None,
             rate=None):
+  # [FUNCTION DOC]
+  # Version-1 dropout with the deprecated keep probability argument (a warning is emitted when
+  # keep_prob is used). Inputs: floating point tensor x, keep_prob, noise_shape, seed, name and
+  # rate (probability of dropping an element). keep_prob is converted to a rate (one minus it);
+  # providing both raises a value error through the alias lookup. Delegates to the version-2
+  # dropout. Returns a tensor shaped like x. Raises a value error if keep_prob is not a number
+  # or tensor, if no rate can be determined, or (from the delegate) if the rate is outside the
+  # half-open range from zero to one or x is not floating point.
   """Computes dropout.
 
   For each element of `x`, with probability `rate`, outputs `0`, and otherwise
@@ -5430,6 +6095,14 @@ def dropout(x, keep_prob=None, noise_shape=None, seed=None, name=None,
 @tf_export("nn.dropout", v1=[])
 @dispatch.add_dispatch_support
 def dropout_v2(x, rate, noise_shape=None, seed=None, name=None):
+  # [FUNCTION DOC]
+  # Version-2 stateful dropout: randomly zeroes elements with probability rate and scales the
+  # rest by one over one minus rate. Inputs: floating point tensor x, rate (number or scalar
+  # tensor), optional noise shape, optional integer seed, optional name. Uses the stateful
+  # uniform random op with the seed as the sampler and a no-op-like step that still consumes a
+  # seed from the global seed machinery (so that the fast path for rate zero does not change
+  # random state behaviour). Returns a tensor shaped like x. Raises value errors from the shared
+  # implementation for an invalid rate or non-floating x.
   """Computes dropout: randomly sets elements to zero to prevent overfitting.
 
   Warning: You should consider using
@@ -5515,6 +6188,10 @@ def dropout_v2(x, rate, noise_shape=None, seed=None, name=None):
   """
   uniform_sampler = functools.partial(random_ops.random_uniform, seed=seed)
   def dummy_rng_step():
+    # [FUNCTION DOC]
+    # HELPER: called by the shared dropout implementation when it takes the rate-zero fast path.
+    # Requests a seed pair from the global seed machinery using the user's seed, so the stateful
+    # random state advances exactly as it would if random numbers had been drawn. Returns nothing.
     random_seed.get_seed(seed)
   return _dropout(x=x, rate=rate, noise_shape=noise_shape,
                   uniform_sampler=uniform_sampler,
@@ -5525,6 +6202,13 @@ def dropout_v2(x, rate, noise_shape=None, seed=None, name=None):
 @tf_export("nn.experimental.stateless_dropout")
 @dispatch.add_dispatch_support
 def stateless_dropout(x, rate, seed, rng_alg=None, noise_shape=None, name=None):
+  # [FUNCTION DOC]
+  # Stateless dropout: results depend only on the seed. Inputs: floating point tensor x, rate
+  # (number or scalar tensor), seed (integer tensor of shape two), optional random algorithm
+  # name (default automatic selection), optional noise shape, optional name. Uses the stateless
+  # uniform random op with the seed and algorithm as the sampler and a do-nothing fast-path
+  # step. Returns a tensor with x's shape and type. Raises value errors from the shared
+  # implementation for an invalid rate or non-floating x.
   """Computes dropout: randomly sets elements to zero to prevent overfitting.
 
   [Dropout](https://arxiv.org/abs/1207.0580) is useful for regularizing DNN
@@ -5659,6 +6343,9 @@ def stateless_dropout(x, rate, seed, rng_alg=None, noise_shape=None, name=None):
   uniform_sampler = functools.partial(
       stateless_random_ops.stateless_random_uniform, seed=seed, alg=rng_alg)
   def dummy_rng_step():
+    # [FUNCTION DOC]
+    # HELPER: fast-path hook for the shared dropout implementation. A stateless sampler has no
+    # random state to advance, so this does nothing and returns nothing.
     pass
   return _dropout(x=x, rate=rate, noise_shape=noise_shape,
                   uniform_sampler=uniform_sampler,
@@ -5669,6 +6356,13 @@ def stateless_dropout(x, rate, seed, rng_alg=None, noise_shape=None, name=None):
 @tf_export("nn.experimental.general_dropout")
 @dispatch.add_dispatch_support
 def general_dropout(x, rate, uniform_sampler, noise_shape=None, name=None):
+  # [FUNCTION DOC]
+  # Dropout with a caller-supplied random source. Inputs: floating point tensor x, rate (number
+  # or scalar tensor), uniform_sampler (callable taking a shape and a dtype and returning uniform
+  # random numbers in zero to one), optional noise shape, optional name. Delegates to the shared
+  # implementation with a do-nothing fast-path step, so the sampler is not called when the
+  # rate is the number zero. Returns a tensor with x's shape and type. Raises value errors from
+  # the shared implementation for an invalid rate or non-floating x.
   """Computes dropout: randomly sets elements to zero to prevent overfitting.
 
   Please see `tf.nn.experimental.stateless_dropout` for an overview
@@ -5730,6 +6424,9 @@ def general_dropout(x, rate, uniform_sampler, noise_shape=None, name=None):
       which is likely not what was intended.
   """
   def dummy_rng_step():
+    # [FUNCTION DOC]
+    # HELPER: fast-path hook for the shared dropout implementation; does nothing and returns
+    # nothing because the caller-supplied sampler manages its own state.
     pass
   return _dropout(x=x, rate=rate, noise_shape=noise_shape,
                   uniform_sampler=uniform_sampler,
@@ -5739,6 +6436,19 @@ def general_dropout(x, rate, uniform_sampler, noise_shape=None, name=None):
 
 def _dropout(x, rate, noise_shape, uniform_sampler, dummy_rng_step, name,
              default_name):
+  # [FUNCTION DOC]
+  # HELPER: common implementation behind all dropout variants.
+  # Inputs: x, rate, noise_shape, a uniform sampler callable, a fast-path hook, an op name and
+  # a default name. Validates that a numeric rate lies in zero (inclusive) to one (exclusive),
+  # converts x to a tensor and requires a floating dtype. If rate is the number zero it calls the
+  # hook and returns x unchanged. Otherwise it scales x by one over the keep probability (numeric
+  # rate, or a scalar tensor rate cast to x's dtype), resolves the noise shape, draws uniform
+  # random numbers of that shape with the sampler, keeps elements whose draw is at least the
+  # rate and zeroes the others (the mask broadcasts to x), and in graph mode restores x's static
+  # shape. Returns the resulting tensor.
+  # Raises value errors for an out-of-range rate, a rate that is neither a number nor a scalar
+  # tensor, incompatible rate and x dtypes, or a non-floating x; a non-scalar rate tensor fails
+  # the rank assertion.
   """Shared implementation of the various dropout functions.
 
   Args:
@@ -5820,6 +6530,12 @@ def _dropout(x, rate, noise_shape, uniform_sampler, dummy_rng_step, name,
 @tf_export("math.top_k", "nn.top_k")
 @dispatch.add_dispatch_support
 def top_k(input, k=1, sorted=True, index_type=dtypes.int32, name=None):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # Finds the k largest entries along the last dimension of the input. Inputs: input tensor of
+  # rank one or more whose last dimension is at least k, k (scalar integer, default one), a
+  # sorted flag (default true: descending order), index_type (dtype of returned indices, default
+  # 32-bit integer) and a name. Calls the generated top-k op. Returns a named pair (values,
+  # indices) with the last dimension replaced by k; ties favour the lower index.
   """Finds values and indices of the `k` largest entries for the last dimension.
 
   If the input is a vector (rank=1), finds the `k` largest entries in the vector
@@ -5893,6 +6609,13 @@ def approx_max_k(operand,
                  reduction_input_size_override=-1,
                  aggregate_to_topk=True,
                  name=None):
+  # [FUNCTION DOC]
+  # Approximate maximum-k search, optimized for TPU. Inputs: operand (floating point array), k,
+  # reduction_dimension (default last), recall_target (default 0.95), an optional override for
+  # the reduction size used in recall estimation, a flag to aggregate to exactly k results
+  # (default true) and a name. Calls the generated approximate top-k op in max mode. Returns a
+  # pair (values, indices) whose reduction dimension is k when aggregating, otherwise an
+  # implementation-defined size of at least k.
   """Returns max `k` values and their indices of the input `operand` in an approximate manner.
 
   See https://arxiv.org/abs/2206.14286 for the algorithm details. This op is
@@ -5956,6 +6679,13 @@ def approx_min_k(operand,
                  reduction_input_size_override=-1,
                  aggregate_to_topk=True,
                  name=None):
+  # [FUNCTION DOC]
+  # Approximate minimum-k search, optimized for TPU. Inputs: operand (floating point array), k,
+  # reduction_dimension (default last), recall_target (default 0.95), an optional override for
+  # the reduction size used in recall estimation, a flag to aggregate to exactly k results
+  # (default true) and a name. Calls the generated approximate top-k op in min mode. Returns a
+  # pair (values, indices) whose reduction dimension is k when aggregating, otherwise an
+  # implementation-defined size of at least k.
   """Returns min `k` values and their indices of the input `operand` in an approximate manner.
 
   See https://arxiv.org/abs/2206.14286 for the algorithm details. This op is
@@ -6015,6 +6745,14 @@ def approx_min_k(operand,
 
 
 def nth_element(input, n, reverse=False, name=None):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring gives the valid range of n as up to the input's leading shape,
+  # but n indexes into the last dimension (it must be below that dimension's size). Also this
+  # function is not decorated with an export tag in this file.
+  # Selects the n-th smallest value (zero-indexed; largest when reverse is true) along the last
+  # dimension. Inputs: input tensor of rank one or more, n (scalar integer), reverse flag
+  # (default false) and name. Calls the generated op. Returns a tensor of the input's type with
+  # the last dimension removed.
   r"""Finds values of the `n`-th smallest value for the last dimension.
 
   Note that n is zero-indexed.
@@ -6056,6 +6794,16 @@ def fractional_max_pool(value,
                         seed=0,
                         seed2=0,
                         name=None):   # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says this is a deprecated version of fractional_max_pool, i.e. of
+  # itself; the deprecation decorator actually points to the version-2 function.
+  # Deprecated version-1 fractional max pooling of a 4-D tensor. Inputs: value, pooling_ratio
+  # (floats, length at least four, first and last must be one), pseudo_random flag, overlapping
+  # flag, deterministic flag, seed and seed2 (integers; zero means random), name. Emits a
+  # deprecation warning. Calls the generated fractional max pooling op with the arguments as
+  # given. Returns three tensors: the pooled output (value's type) and the row and column pooling
+  # boundary sequences (64-bit integers). Raises a value error if op determinism is enabled and
+  # either seed is zero or the deterministic flag is false.
   r"""Performs fractional max pooling on the input.
 
   This is a deprecated version of `fractional_max_pool`.
@@ -6151,6 +6899,19 @@ def fractional_max_pool_v2(value,
                            overlapping=False,
                            seed=0,
                            name=None):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says pooling_ratio may be an int or a list of length 1, 2 or 4,
+  # but the validation requires the first and last elements of any list or tuple to equal 1.0,
+  # so a two-element list of spatial ratios is rejected; only four-element lists (or a scalar)
+  # pass. The expansion step for a scalar then produces ones for batch and channels.
+  # Version-2 fractional max pooling of a 4-D tensor. Inputs: value, pooling_ratio (a number or a
+  # list/tuple whose entries are all at least one and whose first and last are one), pseudo_random
+  # flag, overlapping flag, seed (zero means non-deterministic), name. Validates the ratio,
+  # expands it to four entries, then calls the generated op: with a zero seed it runs
+  # non-deterministically, with a non-zero seed it derives an operation seed pair from the
+  # global seed machinery and runs deterministically. Returns three tensors: the pooled output
+  # and the row and column pooling sequences. Raises a value error for an invalid or wrongly
+  # typed pooling ratio, or if the seed is zero while op determinism is enabled.
   r"""Performs fractional max pooling on the input.
 
   Fractional max pooling is slightly different than regular max pooling.  In
@@ -6269,6 +7030,14 @@ def fractional_avg_pool(value,
                         seed=0,
                         seed2=0,
                         name=None):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says this is a deprecated version of fractional_avg_pool, i.e. of
+  # itself; the deprecation decorator actually points to the version-2 function.
+  # Deprecated version-1 fractional average pooling of a 4-D tensor. Inputs: value, pooling_ratio
+  # (floats, length at least four), pseudo_random flag, overlapping flag, deterministic flag,
+  # seed and seed2 (zero means random), name. Emits a deprecation warning and forwards everything
+  # unchanged to the generated op (no op-determinism check, unlike the max pooling variant).
+  # Returns three tensors: pooled output and the row and column pooling sequences.
   r"""Performs fractional average pooling on the input.
 
   This is a deprecated version of `fractional_avg_pool`.
@@ -6331,6 +7100,14 @@ def fractional_avg_pool_v2(value,
                            overlapping=False,
                            seed=0,
                            name=None):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # Version-2 fractional average pooling of a 4-D tensor. Inputs: value, pooling_ratio (floats,
+  # first and last must be one; not validated here), pseudo_random flag, overlapping flag, seed
+  # (zero means non-deterministic), name. With a zero seed the generated op runs
+  # non-deterministically; with a non-zero seed an operation seed pair is derived from the
+  # global seed machinery and the op runs deterministically. Returns three tensors: the pooled
+  # output and the row and column pooling sequences. Unlike the max pooling variant it performs
+  # no pooling-ratio validation and no op-determinism check.
   r"""Performs fractional average pooling on the input.
 
   Fractional average pooling is similar to Fractional max pooling in the pooling
@@ -6388,6 +7165,11 @@ def fractional_avg_pool_v2(value,
 
 @ops.RegisterStatistics("Dilation2D", "flops")
 def _calc_dilation2d_flops(graph, node):
+  # [FUNCTION DOC]
+  # HELPER: statistics callback registered for the 2-D grayscale dilation op's flops count.
+  # Inputs: a graph and a node definition. Requires fully defined input, filter and output shapes
+  # (raising otherwise). Returns an operation statistics object whose flops value is twice the
+  # product of the output element count and the filter height and width.
   """Calculates the compute resources needed for Dilation2D."""
   input_shape = graph_util.tensor_shape_from_node_def_name(graph, node.input[0])
   input_shape.assert_is_fully_defined()
@@ -6405,6 +7187,13 @@ def _calc_dilation2d_flops(graph, node):
 @tf_export(v1=["nn.erosion2d"])
 @dispatch.add_dispatch_support
 def erosion2d(value, kernel, strides, rates, padding, name=None):
+  # [FUNCTION DOC]
+  # Version-1 grayscale morphological erosion of a 4-D channels-last tensor with a 3-D kernel.
+  # Inputs: value, kernel, strides (length four), rates (input strides, length four), padding
+  # ("SAME" or "VALID") and a name (default erosion2d). Implemented by duality: negates the
+  # value, runs the generated dilation op with the kernel reversed along both spatial axes, then
+  # negates the result. Returns a 4-D tensor of the value's type. Shape or padding errors come
+  # from the dilation op.
   """Computes the grayscale erosion of 4-D `value` and 3-D `kernel` tensors.
 
   The `value` tensor has shape `[batch, in_height, in_width, depth]` and the
@@ -6470,6 +7259,12 @@ def erosion2d_v2(value,
                  data_format,
                  dilations,
                  name=None):
+  # [FUNCTION DOC]
+  # Version-2 grayscale morphological erosion of a 4-D tensor with a 3-D filters tensor.
+  # Inputs: value, filters, strides, padding, data format (only "NHWC" accepted), dilations and
+  # an optional name (default erosion2d). Uses the same duality trick as the version-1 function:
+  # negate, dilate with the reversed filters, negate. Returns a 4-D tensor of the value's type.
+  # Raises a value error if the data format is not the supported one.
   """Computes the grayscale erosion of 4-D `value` and 3-D `filters` tensors.
 
   The `value` tensor has shape `[batch, in_height, in_width, depth]` and the
@@ -6537,6 +7332,12 @@ def erosion2d_v2(value,
 @tf_export(v1=["math.in_top_k", "nn.in_top_k"])
 @dispatch.add_dispatch_support
 def in_top_k(predictions, targets, k, name=None):
+  # [FUNCTION DOC]
+  # Version-1 check of whether each target class is among the top k predictions. Inputs:
+  # predictions (batch by classes float tensor), targets (vector of integer class ids), integer
+  # k and a name. Calls the generated in-top-k op inside a name scope. Returns a boolean vector,
+  # true where the target's prediction is finite and within the top k (ties at the boundary all
+  # count as in).
   r"""Says whether the targets are in the top `K` predictions.
 
   This outputs a `batch_size` bool array, an entry `out[i]` is `true` if the
@@ -6572,6 +7373,11 @@ def in_top_k(predictions, targets, k, name=None):
 @tf_export("math.in_top_k", "nn.in_top_k", v1=[])
 @dispatch.add_dispatch_support
 def in_top_k_v2(targets, predictions, k, name=None):
+  # [FUNCTION DOC]
+  # Version-2 in-top-k check with the argument order swapped relative to version 1: targets
+  # (vector of integer class ids), predictions (batch by classes float tensor), integer k, name.
+  # Forwards to the version-1 function with the arguments reordered. Returns a boolean tensor
+  # shaped like targets.
   """Outputs whether the targets are in the top `K` predictions.
 
   This outputs a `batch_size` bool array, an entry `out[i]` is `true` if the
@@ -6622,6 +7428,14 @@ quantized_max_pool = tf_export(v1=["nn.quantized_max_pool"])(
 @tf_export("nn.isotonic_regression", v1=[])
 @dispatch.add_dispatch_support
 def isotonic_regression(inputs, decreasing=True, axis=-1):
+  # [FUNCTION DOC]
+  # Solves isotonic regression (monotone least squares fit) independently for every vector along
+  # an axis. Inputs: inputs tensor, decreasing flag (default true: fit a non-increasing
+  # sequence; false flips the constraint by negating inputs and outputs) and the axis (default
+  # last). The output dtype is chosen by a promotion table: float32, half and bfloat16 stay,
+  # 8 and 16-bit integers become float32, everything else becomes float64. The solver is applied
+  # through the axis-wrapping helper. Returns a pair: the fitted values and an int32 tensor of
+  # segment ids (same shape as the input) marking positions that share the same fitted value.
   r"""Solves isotonic regression problems along the given axis.
 
   For each vector x, the problem solved is
@@ -6683,6 +7497,11 @@ def isotonic_regression(inputs, decreasing=True, axis=-1):
     output_dtype = dtypes.float64
 
   def compute_on_matrix(matrix, name=None):
+    # [FUNCTION DOC]
+    # HELPER: callback given to the axis-wrapping helper. Applies the generated isotonic
+    # regression op (with the already chosen output dtype and the optional name) to a tensor
+    # whose last axis holds the problems. If the decreasing flag is false, the matrix is negated
+    # before solving and the solution negated afterwards. Returns the pair (solution, segments).
     iso_fn = functools.partial(
         gen_nn_ops.isotonic_regression, output_dtype=output_dtype, name=name)
     if decreasing:
