@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Benchmark module for the transpose operation on GPU. Exposes a graph-building function and a
+# benchmark class that times transposes of many shapes, permutations and dtypes and reports
+# throughput. Running it as a script starts the test/benchmark runner. No import-time side
+# effects beyond imports.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,6 +33,14 @@ from tensorflow.python.platform import test
 
 
 def build_graph(device, input_shape, perm, datatype, num_iters):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it builds a sequence of conv2d operations, but the code
+  # builds a chain of transpose operations.
+  # Builds, on the first device of the given type (device name string such as cpu or gpu), a
+  # constant tensor of the given shape filled with ascending numbers of numpy type datatype,
+  # then num_iters transpose ops of it with permutation perm. Every transpose after the first
+  # has a control dependency on the previous one so they run serially. Returns a single grouped
+  # op depending on all outputs, suitable for running in a session. Raises nothing itself.
   """builds a graph containing a sequence of conv2d operations.
 
   Args:
@@ -56,9 +69,20 @@ def build_graph(device, input_shape, perm, datatype, num_iters):
 
 
 class TransposeBenchmark(test.Benchmark):
+  # [CLASS DOC]
+  # Benchmark class measuring the transpose op across many shapes, permutations and numpy
+  # dtypes. Holds no state; the benchmark runner invokes the benchmark method, which reports
+  # results through the benchmark reporting mechanism.
   """Benchmark transpose!"""
 
   def _run_graph(self, device, input_shape, perm, num_iters, datatype):
+    # [FUNCTION DOC]
+    # HELPER: runs one benchmark configuration for the transpose benchmark method.
+    # Builds the transpose graph in a fresh graph, runs it once as warm-up and once timed in a
+    # new session, computes per-iteration duration (seconds) and throughput (GB/s, counting each
+    # element read and written), prints a summary line, and reports a benchmark with a name
+    # encoding device, dtype, shape and permutation, iteration count and wall time.
+    # Returns the per-iteration duration in seconds.
     """runs the graph and print its execution time.
 
     Args:
@@ -104,6 +128,12 @@ class TransposeBenchmark(test.Benchmark):
     return duration
 
   def benchmark_transpose(self):
+    # [FUNCTION DOC]
+    # Benchmark entry point. Prints a header, then runs the configuration helper on the GPU
+    # device for: small and large shape/permutation sets across several dtypes (the large
+    # sets skip 128-bit complex and half precision), then shapes with a small inner dimension
+    # at 320 iterations (two dtype groups, one for large and one for small shapes). Inputs
+    # none; returns nothing; results are printed and reported. Requires a GPU device.
     print("transpose benchmark:")
 
     datatypes = [np.complex128, np.float64, np.float32, np.float16, np.int8]

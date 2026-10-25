@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Unit tests for the TensorArray implementation: concatenation of string elements with unknown
+# shapes in graph mode, eager mode and inside a compiled function, construction with a numpy
+# element shape, and static shape inference for stack and concat. Test module only; running it
+# as a script launches the test runner.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,9 +31,18 @@ from tensorflow.python.platform import test
 
 
 class TensorArrayOpsTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering TensorArray behaviors: concat of string arrays with unknown element
+  # shapes (graph, eager, in a function), numpy element shapes, and shape inference. No shared
+  # fixtures.
 
   @test_util.run_v1_only('Testing placeholders specifically.')
   def test_concat_graph(self):
+    # [FUNCTION DOC]
+    # Graph-mode test (v1 only). Builds a string TensorArray of size 4 with unknown element
+    # shape and shape inference disabled, writes two placeholder vectors at indices 0 and 2 and
+    # empty vectors at 1 and 3, then runs concat in a session feeding two string lists.
+    # Asserts the result is the six strings joined in order.
     values = tensor_array_ops.TensorArray(
         size=4, dtype=dtypes.string, element_shape=[None], infer_shape=False)
     a = array_ops.placeholder(dtypes.string, [
@@ -47,6 +61,10 @@ class TensorArrayOpsTest(test.TestCase):
 
   @test_util.run_v2_only
   def test_concat(self):
+    # [FUNCTION DOC]
+    # Eager-mode (v2 only) version of the concat test: writes two constant string vectors and
+    # two empty vectors into a size-4 string TensorArray with unknown element shape, then asserts
+    # concat returns the six strings in order.
     values = tensor_array_ops.TensorArray(
         size=4, dtype=dtypes.string, element_shape=[None], infer_shape=False)
     a = constant_op.constant(['a', 'b', 'c'], dtypes.string)
@@ -58,8 +76,16 @@ class TensorArrayOpsTest(test.TestCase):
 
   @test_util.run_v2_only
   def test_concat_in_function(self):
+    # [FUNCTION DOC]
+    # Same scenario as the eager concat test but the array construction, writes and concat run
+    # inside a compiled function taking two string vectors. Asserts the compiled call returns
+    # the six concatenated strings in order.
     @def_function.function
     def fn(a, b):
+      # [FUNCTION DOC]
+      # Nested function under test: builds a size-4 string TensorArray with unknown element
+      # shape, writes a, an empty vector, b and an empty vector, and returns the concatenation
+      # of all elements. Inputs are two string vectors.
       values = tensor_array_ops.TensorArray(
           size=4, dtype=dtypes.string, element_shape=[None], infer_shape=False)
       values = (values.write(0, a).write(
@@ -71,8 +97,15 @@ class TensorArrayOpsTest(test.TestCase):
                         [b'a', b'b', b'c', b'c', b'd', b'e'])
 
   def test_init_numpy_shape(self):
+    # [FUNCTION DOC]
+    # Checks that a TensorArray can be created with a numpy array as its element shape inside a
+    # compiled function. Asserts that writing a 2x3 array of ones and concatenating yields the
+    # 2x3 matrix of ones.
     @def_function.function
     def fn():
+      # [FUNCTION DOC]
+      # Nested function: creates a fixed-size (1, non-dynamic) float32 TensorArray with a numpy
+      # element shape of 2 by 3, writes a 2x3 array of ones at index 0, and returns concat.
       values = tensor_array_ops.TensorArray(
           np.float32,
           size=1,
@@ -83,6 +116,10 @@ class TensorArrayOpsTest(test.TestCase):
     self.assertAllEqual(fn(), [[1., 1., 1.], [1., 1., 1.]])
 
   def test_shape_inference_stack_concat(self):
+    # [FUNCTION DOC]
+    # Creates a float32 TensorArray of size 4 with no declared element shape, writes a 2x3
+    # array at index 0, and asserts that the static shape of stack is 4 by 2 by 3 and that of
+    # concat is 8 by 3, i.e. shape is inferred from the written element.
     arr = tensor_array_ops.TensorArray(size=4, dtype=dtypes.float32)
     new_arr = arr.write(0, np.ones((2, 3)))
     self.assertEqual(new_arr.stack().shape, (4, 2, 3))

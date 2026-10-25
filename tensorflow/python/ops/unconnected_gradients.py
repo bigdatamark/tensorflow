@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Defines the UnconnectedGradients enumeration, exported publicly as the unconnected-gradients
+# type. It is used by gradient computation APIs (gradient tapes and gradient functions) to choose
+# what is returned for a source when the target does not depend on it: a null value or zeros.
+# The only import-time side effect is registering the enum with the public API export machinery.
+# Not a helper module; it is part of the public gradients API surface.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +27,11 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export("UnconnectedGradients")
 class UnconnectedGradients(enum.Enum):
+  # [CLASS DOC]
+  # Enumeration with two members: NONE (string value "none") means a null value is returned as
+  # the gradient when no path connects target to source; ZERO (string value "zero") means a
+  # zero tensor shaped like the source is returned instead. Plain enum with no custom behavior;
+  # consumed by gradient APIs that accept an unconnected-gradients argument.
   """Controls how gradient computation behaves when y does not depend on x.
 
   The gradient of y with respect to x can be zero in two different ways: there

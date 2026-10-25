@@ -1,3 +1,15 @@
+# [MODULE DOC]
+# Defines the public TensorArray class: a dynamically sized, per-time-step array of tensors used
+# with while loops and map functions, plus its type specification (TensorArraySpec) and trace
+# type used by function tracing. TensorArray is a thin wrapper that picks one of three private
+# implementations at construction time: an eager implementation (a Python list of tensors) when
+# executing eagerly, a graph implementation backed by tensor lists (control flow v2 or a variant
+# flow), and the legacy graph implementation backed by dedicated tensor-array ops (control flow
+# v1). A helper rebuilds a TensorArray around a new flow tensor after each mutating operation,
+# giving the functional "returns a new array" API.
+# Import-time side effects: exports TensorArray and TensorArraySpec in the public API, registers
+# the spec name with the type spec registry, registers a codec for the spec with the nested
+# structure coder, and registers a value-to-spec converter so TensorArray values get a spec.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -51,6 +63,14 @@ from tensorflow.python.util.tf_export import tf_export
 # fact built to wrap these methods.
 # pylint: disable=protected-access
 class _GraphTensorArray:
+  # [CLASS DOC]
+  # HELPER: private implementation object behind TensorArray for legacy (v1) graph mode.
+  # Wraps a tensor-array handle plus a scalar float flow tensor that sequences operations. Keeps
+  # the dtype, dynamic-size flag, optional static size, a one-element list holding the (shared,
+  # mutable) element shape, the shape-inference flag, and a colocation list used to place the
+  # array on the device of the first tensor written. Every mutating method returns a new
+  # wrapper object built around a new flow. Created by TensorArray's constructor; the owning
+  # TensorArray sets a weak-reference attribute named parent on it.
   """Graph-mode implementation of TensorArray."""
 
   def __init__(self,
@@ -65,6 +85,21 @@ class _GraphTensorArray:
                element_shape=None,
                colocate_with_first_write_call=True,
                name=None):
+    # [FUNCTION DOC]
+    # Constructs the legacy graph implementation, either creating a new tensor-array op or
+    # wrapping an existing handle and flow. Inputs: dtype (required element type); size (scalar
+    # integer, required unless handle is given); dynamic_size (whether writes may grow the
+    # array; defaults to false); clear_after_read (defaults to true); tensor_array_name; handle
+    # (existing handle tensor, exclusive with size, element_shape, dynamic_size,
+    # clear_after_read and the array name); flow (float scalar, required with a handle);
+    # infer_shape (default true); element_shape (optional shape constraint);
+    # colocate_with_first_write_call (default true: the array is placed with the first written
+    # tensor, so creation happens with no device or colocation); name (op name scope).
+    # Raises a value error for each forbidden argument combination, for a missing size when
+    # there is no handle, and for a handle without a flow; raises a type error when the handle
+    # is not a tensor.
+    # Side effects: adds a tensor-array creation op to the current graph (when no handle),
+    # records dtype, shape and colocation state on the instance.
     """Constructs a graph mode TensorArray.
 
     Args:
@@ -158,6 +193,12 @@ class _GraphTensorArray:
         # write into the TensorArray from a Tensor with a set device
         # will retroactively set the device value of this op.
         def create():
+          # [FUNCTION DOC]
+          # HELPER: nested builder used by the constructor, possibly under a cleared device
+          # and colocation context. Creates the tensor-array op using the constructor's dtype,
+          # size, element shape, shape-inference flag, dynamic-size flag, clear-after-read flag
+          # and array name, with the enclosing name scope as op name. Returns the handle and
+          # flow tensors produced by the op.
           """Create the TensorArray op."""
           return gen_data_flow_ops.tensor_array_v3(
               dtype=dtype,
@@ -177,21 +218,35 @@ class _GraphTensorArray:
 
   @property
   def flow(self):
+    # [FUNCTION DOC]
+    # Property returning the scalar flow tensor that orders operations on this array.
     return self._flow
 
   @property
   def dtype(self):
+    # [FUNCTION DOC]
+    # Property returning the element data type (always the non-reference base type).
     return self._dtype
 
   @property
   def handle(self):
+    # [FUNCTION DOC]
+    # Property returning the tensor-array handle tensor.
     return self._handle
 
   @property
   def element_shape(self):
+    # [FUNCTION DOC]
+    # Property returning the current static element shape, read from the shared one-element
+    # list (so changes made through any copy sharing that list are visible).
     return self._element_shape[0]
 
   def _check_element_shape(self, shape):
+    # [FUNCTION DOC]
+    # HELPER: shape validation for the write, scatter and split methods.
+    # Input: shape, a shape object for a candidate element. Raises a value error if it is
+    # incompatible with the current element shape. If shape inference is enabled, replaces the
+    # shared element shape with the merge of the two (mutating the shared list). Returns nothing.
     """Changes the element shape of the array given a shape to merge with.
 
     Args:
@@ -209,6 +264,11 @@ class _GraphTensorArray:
 
   @contextlib.contextmanager
   def _maybe_colocate_with(self, value):
+    # [FUNCTION DOC]
+    # HELPER: context manager used by the write, scatter and split methods.
+    # If colocation with the first write is disabled, does nothing. Otherwise, the first call
+    # remembers the given value tensor in the colocation list (side effect), and the managed
+    # block always runs with ops colocated with that first remembered tensor. Yields nothing.
     """Colocate operations with an internal colocation group or `value`.
 
     Args:
@@ -229,11 +289,21 @@ class _GraphTensorArray:
         yield
 
   def identity(self):
+    # [FUNCTION DOC]
+    # Applies an identity op to the flow tensor (so control dependencies of the current context
+    # attach to later operations) and returns a new TensorArray built around that flow.
     """See TensorArray."""
     flow = array_ops.identity(self._flow)
     return build_ta_with_new_flow(self, flow)
 
   def grad(self, source, flow=None, name=None):
+    # [FUNCTION DOC]
+    # Creates the gradient array for this array. Inputs: source (string label identifying the
+    # gradient source), flow (optional flow tensor, defaults to this array's flow, needed so
+    # dynamically sized arrays are grad-ed only after their size is fixed), name (optional).
+    # Adds a tensor-array-grad op colocated with the handle, makes the returned flow depend on
+    # the gradient handle, and returns a new TensorArray wrapping the gradient handle that
+    # does not colocate with its first write and shares this array's element shape list.
     """See TensorArray."""
     # tensor_array_grad requires a flow input when forward
     # TensorArrays are dynamically sized.  This forces the creation
@@ -259,6 +329,10 @@ class _GraphTensorArray:
         return g
 
   def read(self, index, name=None):
+    # [FUNCTION DOC]
+    # Reads the element at a scalar integer index via a tensor-array read op using the current
+    # flow. If an element shape is known, sets the static shape of the result to it. Returns the
+    # element tensor. Errors for out-of-range indices occur at run time.
     """See TensorArray."""
     value = gen_data_flow_ops.tensor_array_read_v3(
         handle=self._handle,
@@ -271,6 +345,11 @@ class _GraphTensorArray:
     return value
 
   def write(self, index, value, name=None):
+    # [FUNCTION DOC]
+    # Writes value at the scalar integer index. Converts value to a tensor (preferring the
+    # array dtype), logs an error if its dtype differs, validates and possibly merges the
+    # element shape (value error on mismatch), and adds a tensor-array write op colocated per
+    # the first-write rule. Returns a new TensorArray around the resulting flow.
     """See TensorArray."""
     with ops.name_scope(name, "TensorArrayWrite", [self._handle, index, value]):
       # TODO(b/129870929): Fix after all callers provide proper init dtype.
@@ -288,6 +367,11 @@ class _GraphTensorArray:
       return build_ta_with_new_flow(self, flow_out)
 
   def stack(self, name=None):
+    # [FUNCTION DOC]
+    # Gathers elements at every index from zero up to the current size and returns them as one
+    # stacked tensor. When the array is fixed-size with a known constant size and known element
+    # shape, the static shape of the result is set to the size followed by the element shape.
+    # Runs colocated with the handle.
     """See TensorArray."""
     with ops.colocate_with(self._handle):
       with ops.name_scope(name, "TensorArrayStack", [self._handle]):
@@ -299,6 +383,10 @@ class _GraphTensorArray:
         return value
 
   def gather(self, indices, name=None):
+    # [FUNCTION DOC]
+    # Gathers the elements at the given 1-D integer indices into one packed tensor using a
+    # gather op, passing the known element shape (or an unknown shape). If the element shape is
+    # known, sets the static shape of the result to unknown leading size plus element shape.
     """See TensorArray."""
     if self._element_shape:
       element_shape = self._element_shape[0]
@@ -316,6 +404,12 @@ class _GraphTensorArray:
     return value
 
   def concat(self, name=None):
+    # [FUNCTION DOC]
+    # Concatenates all elements along the first dimension using a concat op (the second output,
+    # the element lengths, is discarded). If the element shape is known, sets the static shape
+    # of the result: the first dimension is the constant size times the first element dimension
+    # when shape inference is on and both are known, otherwise unknown; the other dimensions
+    # come from the element shape. Returns the concatenated tensor.
     """See TensorArray."""
     value, _ = gen_data_flow_ops.tensor_array_concat_v3(
         handle=self._handle,
@@ -334,6 +428,10 @@ class _GraphTensorArray:
 
   @tf_should_use.should_use_result
   def unstack(self, value, name=None):
+    # [FUNCTION DOC]
+    # Splits value along its first dimension into the array: computes the first-dimension
+    # length and scatters value at indices zero up to that length. Returns the new TensorArray
+    # produced by the scatter. The decorator warns if the result is unused.
     """See TensorArray."""
     with ops.name_scope(name, "TensorArrayUnstack", [self._handle, value]):
       num_elements = array_ops.shape(value)[0]
@@ -342,6 +440,12 @@ class _GraphTensorArray:
 
   @tf_should_use.should_use_result
   def scatter(self, indices, value, name=None):
+    # [FUNCTION DOC]
+    # Writes the slices of value (split along its first dimension) to the given indices. Converts
+    # value to a tensor preferring the array dtype, logs an error on dtype mismatch, validates
+    # and merges the element shape from value's trailing dimensions (graph mode only), and adds
+    # a scatter op colocated per the first-write rule. Returns a new TensorArray with the
+    # resulting flow. Raises a value error for incompatible shapes.
     """See TensorArray."""
     with ops.name_scope(name, "TensorArrayScatter",
                         [self._handle, value, indices]):
@@ -362,6 +466,13 @@ class _GraphTensorArray:
 
   @tf_should_use.should_use_result
   def split(self, value, lengths, name=None):
+    # [FUNCTION DOC]
+    # Splits value along its first dimension into pieces of the given lengths (1-D integers,
+    # cast to 64-bit) and stores one piece per array slot. Converts value to a tensor with
+    # exactly the array dtype. In graph mode, when lengths are constant and all equal, checks and
+    # merges the element shape from that common length plus value's trailing dimensions (value
+    # error if incompatible). Adds a split op colocated per the first-write rule. Returns a new
+    # TensorArray with the resulting flow.
     """See TensorArray."""
     with ops.name_scope(name, "TensorArraySplit",
                         [self._handle, value, lengths]):
@@ -384,6 +495,10 @@ class _GraphTensorArray:
       return build_ta_with_new_flow(self, flow_out)
 
   def size(self, name=None):
+    # [FUNCTION DOC]
+    # Returns the array size as an int32 scalar tensor: the stored static size converted to a
+    # constant if the array is fixed-size and the size is known, otherwise the result of a
+    # size op on the handle and flow.
     """See TensorArray."""
     if not self._dynamic_size and self._size is not None:
       return ops.convert_to_tensor(self._size, dtype=dtypes.int32)
@@ -393,12 +508,21 @@ class _GraphTensorArray:
 
   @tf_should_use.should_use_result
   def close(self, name=None):
+    # [FUNCTION DOC]
+    # Adds and returns an op that releases the resources of the array identified by the handle.
     """See TensorArray."""
     return gen_data_flow_ops.tensor_array_close_v3(
         handle=self._handle, name=name)
 
 
 class _GraphTensorArrayV2:
+  # [CLASS DOC]
+  # HELPER: private implementation object behind TensorArray for graph mode with control flow
+  # v2 (or whenever a variant flow is supplied). The whole array lives in a single variant
+  # tensor (a tensor list) stored as the flow; the handle is always null. Holds dtype, the
+  # dynamic-size flag, the optional static size, a one-element list with the shared element
+  # shape, and the shape-inference flag. Legacy colocation attributes exist only for backward
+  # compatibility and are null. Mutating methods return new TensorArray wrappers.
   """Graph-mode implementation of TensorArray backed by TensorLists.
 
   The backing tensor of this TensorArray is a TensorList variant tensor which is
@@ -419,6 +543,20 @@ class _GraphTensorArrayV2:
                element_shape=None,
                colocate_with_first_write_call=True,
                name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring's Raises section (value error for handle plus array name, type
+    # error for a non-tensor handle) does not match the code: handle must be null (asserted, so
+    # a non-null handle triggers an assertion failure), a type error is raised when flow is not
+    # a variant tensor (and the message reads the dtype of flow even if it is not a tensor), and
+    # value errors are raised for a missing size, size together with flow, or element_shape
+    # together with flow.
+    # Constructs the tensor-list backed implementation. Inputs: dtype (element type); size
+    # (scalar integer, required when no flow); dynamic_size (whether writes may grow the array);
+    # infer_shape (default true); element_shape (optional shape); flow (optional variant tensor
+    # holding an existing tensor list); name (op name scope). The inputs handle,
+    # clear_after_read, tensor_array_name and colocate_with_first_write_call are ignored.
+    # When flow is not given, adds an op reserving an empty tensor list of size elements;
+    # otherwise reuses flow. Sets the legacy colocation attributes to null.
     """Constructs a graph mode TensorArray.
 
     Args:
@@ -497,23 +635,37 @@ class _GraphTensorArrayV2:
 
   @property
   def flow(self):
+    # [FUNCTION DOC]
+    # Property returning the variant tensor holding the tensor list that stores the elements.
     return self._flow
 
   @property
   def dtype(self):
+    # [FUNCTION DOC]
+    # Property returning the element data type (non-reference base type).
     return self._dtype
 
   @property
   def element_shape(self):
+    # [FUNCTION DOC]
+    # Property returning the current static element shape from the shared one-element list.
     return self._element_shape[0]
 
   @property
   def handle(self):
+    # [FUNCTION DOC]
+    # Property that always returns the null value; no handle exists for this implementation. It
+    # deliberately does not raise so that legacy while loops do not complain.
     # We intentionally do not raise an error so that legacy while_loop does not
     # complain.
     return None
 
   def _check_element_shape(self, shape):
+    # [FUNCTION DOC]
+    # HELPER: shape validation for the write, unstack, scatter and split methods.
+    # Input: shape, a shape object for a candidate element. Raises a value error if it is
+    # incompatible with the current element shape; if shape inference is on, replaces the shared
+    # element shape with the merged shape. Returns nothing.
     """Changes the element shape of the array given a shape to merge with.
 
     Args:
@@ -530,15 +682,25 @@ class _GraphTensorArrayV2:
       self._element_shape[0] = self.element_shape.merge_with(shape)
 
   def identity(self):
+    # [FUNCTION DOC]
+    # Applies an identity op to the flow tensor and returns a new TensorArray built around the
+    # result, so context control dependencies attach to later operations.
     """See TensorArray."""
     flow = array_ops.identity(self._flow)
     return build_ta_with_new_flow(self, flow)
 
   def grad(self, source, flow=None, name=None):
+    # [FUNCTION DOC]
+    # Not supported for tensor-list backed arrays: always raises a not-implemented error
+    # regardless of the inputs (source, flow, name), since gradients flow through the list ops.
     """Not supported."""
     raise NotImplementedError()
 
   def read(self, index, name=None):
+    # [FUNCTION DOC]
+    # Reads the element at the scalar integer index from the tensor list using the array dtype
+    # and element shape, inside a name scope. Returns the element tensor. Out-of-range or unset
+    # indices fail at run time.
     """See TensorArray."""
     with ops.name_scope(name, "TensorArrayV2Read", [self._flow, index]):
       value = list_ops.tensor_list_get_item(
@@ -550,6 +712,11 @@ class _GraphTensorArrayV2:
       return value
 
   def write(self, index, value, name=None):
+    # [FUNCTION DOC]
+    # Writes value at the scalar integer index. Converts value to a tensor (preferring the array
+    # dtype), logs an error on dtype mismatch, validates and merges the element shape (value
+    # error if incompatible), and sets the list item, resizing the list if the index is out of
+    # bounds and the array is dynamically sized. Returns a new TensorArray around the new flow.
     """See TensorArray."""
     with ops.name_scope(name, "TensorArrayV2Write", [self._flow, index, value]):
       # TODO(b/129870929): Fix after all callers provide proper init dtype.
@@ -566,6 +733,10 @@ class _GraphTensorArrayV2:
       return build_ta_with_new_flow(self, flow_out)
 
   def stack(self, name=None):
+    # [FUNCTION DOC]
+    # Stacks all list elements into one tensor. The expected element count is the constant
+    # static size for fixed-size arrays with known size, otherwise unknown (negative one).
+    # Uses the array dtype and element shape. Returns the stacked tensor.
     """See TensorArray."""
     with ops.name_scope(name, "TensorArrayV2Stack", [self._flow]):
       # TODO(b/139941163): remove constant_value after changing num_elements to regular input
@@ -581,6 +752,9 @@ class _GraphTensorArrayV2:
       return value
 
   def gather(self, indices, name=None):
+    # [FUNCTION DOC]
+    # Gathers the list elements at the given 1-D integer indices into one packed tensor using
+    # the array dtype and element shape. Returns that tensor.
     """See TensorArray."""
     value = list_ops.tensor_list_gather(
         input_handle=self._flow,
@@ -591,6 +765,11 @@ class _GraphTensorArrayV2:
     return value
 
   def concat(self, name=None):
+    # [FUNCTION DOC]
+    # Concatenates all list elements along the first dimension. If the element shape is known,
+    # passes a shape with unknown first dimension and the known remaining dimensions; otherwise
+    # passes no shape. Uses the array dtype. Returns the concatenated tensor (the extra lengths
+    # output of the op is not returned).
     """See TensorArray."""
     if self.element_shape:
       element_shape = [None] + self.element_shape.dims[1:]
@@ -606,6 +785,12 @@ class _GraphTensorArrayV2:
 
   @tf_should_use.should_use_result
   def unstack(self, value, name=None):
+    # [FUNCTION DOC]
+    # Replaces the contents with the slices of value along its first dimension. Converts value
+    # to a tensor (preferring the array dtype), logs an error on dtype mismatch, checks and
+    # merges the element shape against value's trailing dimensions (value error if
+    # incompatible), and builds a new tensor list from value. Returns a new TensorArray around
+    # that list.
     """See TensorArray."""
     with ops.name_scope(name, "TensorArrayUnstack", [self._flow, value]):
       # TODO(b/129870929): Fix after all callers provide proper init dtype.
@@ -619,6 +804,12 @@ class _GraphTensorArrayV2:
 
   @tf_should_use.should_use_result
   def scatter(self, indices, value, name=None):
+    # [FUNCTION DOC]
+    # Writes the slices of value (along its first dimension) at the given indices of the tensor
+    # list. Converts value to a tensor (preferring the array dtype), logs an error on dtype
+    # mismatch, checks and merges the element shape against value's trailing dimensions (value
+    # error if incompatible), and applies a list scatter op onto the current list. Returns a new
+    # TensorArray around the resulting list.
     """See TensorArray."""
     with ops.name_scope(name, "TensorArrayScatter",
                         [self._flow, value, indices]):
@@ -636,6 +827,12 @@ class _GraphTensorArrayV2:
 
   @tf_should_use.should_use_result
   def split(self, value, lengths, name=None):
+    # [FUNCTION DOC]
+    # Splits value along its first dimension into pieces of the given lengths (1-D integers,
+    # cast to 64-bit) held in a new tensor list. Converts value preferring the array dtype and
+    # logs an error on dtype mismatch. In graph mode, when lengths are constant and all equal,
+    # checks and merges the element shape with that length plus value's trailing dimensions
+    # (value error if incompatible). Returns a new TensorArray around the new list.
     """See TensorArray."""
     with ops.name_scope(name, "TensorArraySplit", [self._flow, value, lengths]):
       # TODO(b/129870929): Fix after all callers provide proper init dtype.
@@ -658,6 +855,9 @@ class _GraphTensorArrayV2:
       return build_ta_with_new_flow(self, flow_out)
 
   def size(self, name=None):
+    # [FUNCTION DOC]
+    # Returns the size as an int32 scalar tensor: the static size as a constant for fixed-size
+    # arrays with a known size, otherwise the length of the tensor list computed by an op.
     """See TensorArray."""
     if not self._dynamic_size and self._size is not None:
       return ops.convert_to_tensor(self._size, dtype=dtypes.int32)
@@ -665,6 +865,9 @@ class _GraphTensorArrayV2:
       return list_ops.tensor_list_length(input_handle=self._flow, name=name)
 
   def close(self, name=None):
+    # [FUNCTION DOC]
+    # Closing is a no-op for tensor-list backed arrays: adds and returns a no-op operation with
+    # the optional name; nothing is released.
     """See TensorArray."""
     return gen_control_flow_ops.no_op(name=name)
 
@@ -673,6 +876,13 @@ class _GraphTensorArrayV2:
 
 
 class _EagerTensorArray:
+  # [CLASS DOC]
+  # HELPER: private implementation object behind TensorArray when executing eagerly. Stores
+  # the elements directly in a Python list of tensors (empty slots hold null), plus dtype,
+  # dynamic-size flag, clear-after-read flag, a list of indices already read and cleared,
+  # shape-inference flag and a single element shape object. The handle is null and the flow is a
+  # dummy int32 constant kept only for compatibility. Mutating methods change the list in place
+  # and return the owning TensorArray (reached via the parent weak reference set by TensorArray).
   """Eager-compatible implementation of TensorArray."""
 
   def __init__(self,
@@ -687,6 +897,13 @@ class _EagerTensorArray:
                element_shape=None,
                colocate_with_first_write_call=True,
                name=None):
+    # [FUNCTION DOC]
+    # Constructs the eager implementation. Inputs: dtype (element type); size (required;
+    # integer or eager scalar tensor, converted to a number); dynamic_size (default false);
+    # clear_after_read (default true); infer_shape (default true); element_shape (optional);
+    # colocate_with_first_write_call (recorded only). The inputs flow, tensor_array_name and name
+    # are ignored; handle must be null. Raises a value error if a handle is supplied or if size
+    # is missing. Creates a list of empty slots of the given size and a dummy flow constant.
     """Constructs a TensorArray compatible with eager execution.
 
     Args:
@@ -743,33 +960,52 @@ class _EagerTensorArray:
 
   @property
   def flow(self):
+    # [FUNCTION DOC]
+    # Property returning the dummy int32 constant flow, kept only for compatibility.
     """For compatibility; flows are not meaningful when eager is enabled."""
     return self._flow
 
   @property
   def dtype(self):
+    # [FUNCTION DOC]
+    # Property returning the element data type (non-reference base type).
     return self._dtype
 
   @property
   def handle(self):
+    # [FUNCTION DOC]
+    # Property returning the handle, which is always the null value in eager mode.
     """For compatibility; handles are not meaningful when eager is enabled."""
     return self._handle
 
   @property
   def element_shape(self):
+    # [FUNCTION DOC]
+    # Property returning the current element shape object (not wrapped in a list here).
     return self._element_shape
 
   def identity(self):
+    # [FUNCTION DOC]
+    # Returns the owning TensorArray itself (no copy is made, unlike graph modes).
     """See TensorArray."""
     return self.parent()
 
   def grad(self, source, flow=None, name=None):
+    # [FUNCTION DOC]
+    # Not supported when executing eagerly: always raises a not-implemented error whatever the
+    # inputs (source, flow, name), explaining that eager gradients do not use this function.
     raise NotImplementedError(
         "TensorArray.grad is not supported when executing eagerly; eager's "
         "gradient implementation does not use/need this function to compute "
         "gradients of operations that use TensorArrays.")
 
   def read(self, index, name=None):
+    # [FUNCTION DOC]
+    # Reads the element at index (integer or eager scalar tensor; name is ignored). Raises an
+    # out-of-range error for a negative index or an index beyond the array size. If the slot is
+    # empty: raises an invalid-argument error if it was previously read and cleared, otherwise
+    # fills it with a zeros tensor of the element shape. If clear-after-read is on, clears the
+    # slot and records the index as read. Returns the element tensor.
     """See TensorArray."""
     del name  # not meaningful when executing eagerly.
 
@@ -803,6 +1039,14 @@ class _EagerTensorArray:
     return tensor
 
   def _write(self, index, value):
+    # [FUNCTION DOC]
+    # HELPER: shared in-place write used by write and scatter.
+    # Stores value at index (integer or eager scalar tensor). Raises an out-of-range error for a
+    # negative index, or for an index past the end when the array is not dynamically sized; for
+    # dynamic arrays the list is extended with empty slots. Converts value to a tensor
+    # (preferring the array dtype); raises an invalid-argument error if its dtype differs from
+    # the array dtype and a value error if its shape is incompatible with the element shape. If
+    # shape inference is on, merges the element shape. Mutates the internal list; returns nothing.
     """Writes `value` into index named by `index`.
 
     Args:
@@ -853,12 +1097,19 @@ class _EagerTensorArray:
     self._tensor_array[index] = value
 
   def write(self, index, value, name=None):
+    # [FUNCTION DOC]
+    # Writes value at index in place via the internal write helper (name is ignored) and
+    # returns the same owning TensorArray. Errors are those of the helper.
     """See TensorArray."""
     del name  # not meaningful when executing eagerly.
     self._write(index, value)
     return self.parent()
 
   def _maybe_zero(self, ix):
+    # [FUNCTION DOC]
+    # HELPER: lazily materializes unwritten elements for read, stack, gather and concat.
+    # Returns the tensor at slot ix; if the slot is empty, stores and returns a zeros tensor of
+    # the element shape and array dtype (mutates the internal list).
     val = self._tensor_array[ix]
     if val is None:
       val = self._tensor_array[ix] = array_ops.zeros(
@@ -866,6 +1117,11 @@ class _EagerTensorArray:
     return val
 
   def stack(self, name=None):
+    # [FUNCTION DOC]
+    # Fills every empty slot with zeros and converts the list of elements into one stacked
+    # tensor with the array dtype and optional name. For an empty array with a fully defined
+    # element shape, returns an empty tensor whose leading dimension is zero followed by the
+    # element shape. Side effect: empty slots become zero tensors.
     """See TensorArray."""
     if self._tensor_array:
       for ix in range(len(self._tensor_array)):
@@ -878,6 +1134,10 @@ class _EagerTensorArray:
           self._tensor_array, name=name, dtype=self._dtype)
 
   def gather(self, indices, name=None):
+    # [FUNCTION DOC]
+    # Returns the elements at the given indices (list or eager tensor; name ignored) stacked
+    # into one tensor, filling empty slots with zeros first. Index errors from the underlying
+    # list propagate.
     """See TensorArray."""
     del name  # not meaningful when executing eagerly.
     if isinstance(indices, ops.EagerTensor):
@@ -885,6 +1145,11 @@ class _EagerTensorArray:
     return array_ops_stack.stack([self._maybe_zero(i) for i in indices])
 
   def concat(self, name=None):
+    # [FUNCTION DOC]
+    # Concatenates all elements (empty slots filled with zeros) along the first dimension and
+    # returns the result. If the concatenation fails with an op error and some element is a
+    # scalar, raises an invalid-argument error saying a vector is required at that index;
+    # otherwise re-raises the original error.
     """See TensorArray."""
     try:
       return array_ops.concat(
@@ -904,6 +1169,12 @@ class _EagerTensorArray:
         raise
 
   def unstack(self, value, name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: unlike the graph versions it does not convert dtypes or check or update the
+    # element shape and dtype; it simply replaces the list with the unstacked slices.
+    # Unstacks value along its first dimension and replaces the stored elements with the pieces.
+    # Raises a value error if there are more pieces than the static size of a non-dynamic array.
+    # Mutates the array in place and returns the owning TensorArray.
     """See TensorArray."""
     tensors = array_ops_stack.unstack(value, name=name)
     if len(tensors) > len(self._tensor_array) and not self._dynamic_size:
@@ -914,6 +1185,11 @@ class _EagerTensorArray:
     return self.parent()
 
   def scatter(self, indices, value, name=None):
+    # [FUNCTION DOC]
+    # Unstacks value along its first dimension and writes each piece, in order, to the
+    # corresponding entry of indices (list or eager tensor; name ignored) using the internal
+    # write helper, which can raise out-of-range, dtype or shape errors. Mutates the array in
+    # place and returns the owning TensorArray.
     """See TensorArray."""
     del name  # not meaningful when executing eagerly.
     if isinstance(indices, ops.EagerTensor):
@@ -923,6 +1199,13 @@ class _EagerTensorArray:
     return self.parent()
 
   def split(self, value, lengths, name=None):
+    # [FUNCTION DOC]
+    # Splits value along its first dimension into pieces of the given lengths and replaces the
+    # stored elements with them. Converts value to a tensor (preferring the array dtype) and
+    # logs an error on dtype mismatch. Raises an invalid-argument error if lengths is not a
+    # vector, value is a scalar, the lengths do not sum to the first dimension, or the number
+    # of lengths differs from the array size while the array is not dynamically sized.
+    # Mutates the array in place and returns the owning TensorArray.
     """See TensorArray."""
     # TODO(b/129870929): Fix after all callers provide proper init dtype.
     value = ops.convert_to_tensor(
@@ -955,11 +1238,15 @@ class _EagerTensorArray:
       return self.parent()
 
   def size(self, name=None):
+    # [FUNCTION DOC]
+    # Returns the current number of slots as a constant tensor (name ignored).
     """See TensorArray."""
     del name  # not meaningful when executing eagerly.
     return constant_op.constant(len(self._tensor_array))
 
   def close(self, name=None):
+    # [FUNCTION DOC]
+    # Empties the internal element list in place (name ignored). Returns nothing.
     del name  # not meaningful when executing eagerly.
     del self._tensor_array[:]
 
@@ -970,6 +1257,15 @@ class _EagerTensorArray:
 # pylint:disable=line-too-long
 @tf_export("TensorArray")
 class TensorArray:
+  # [CLASS DOC]
+  # Public wrapper for a dynamically sized array of tensors, exported in the public API. It
+  # holds a single implementation object chosen in the constructor (eager, tensor-list graph, or
+  # legacy graph) and forwards every operation to it; the implementation holds a weak reference
+  # back to the wrapper. Operations that modify content (write, unstack, scatter, split) return
+  # a new TensorArray carrying a new flow, so callers must use the returned object; result
+  # use is enforced by a decorator that warns about unused results. Properties expose the flow,
+  # dtype, handle, element shape and dynamic-size flag. Also implements the tracing-type hook so
+  # function tracing treats each instance as distinct.
   """Class wrapping dynamic-sized, per-time-step, Tensor arrays.
 
   This class is meant to be used with dynamic iteration primitives such as
@@ -1043,6 +1339,16 @@ class TensorArray:
                element_shape=None,
                colocate_with_first_write_call=True,
                name=None):
+    # [FUNCTION DOC]
+    # Constructs a TensorArray or wraps an existing handle or flow. Inputs are those of the
+    # implementations: dtype (required), size, dynamic_size, clear_after_read,
+    # tensor_array_name, handle, flow, infer_shape (default true), element_shape,
+    # colocate_with_first_write_call (default true) and name; see the chosen implementation for
+    # which are ignored. Implementation choice: the eager one when executing eagerly (unless
+    # flow is a variant tensor); the tensor-list graph one when flow is a variant tensor or
+    # control flow v2 is enabled for the default graph; otherwise the legacy graph one.
+    # Raises whatever the implementation raises (value or type errors for bad argument
+    # combinations). Side effect: stores a weak reference to this wrapper on the implementation.
     """Construct a new TensorArray or wrap an existing TensorArray handle.
 
     A note about the parameter `name`:
@@ -1114,37 +1420,55 @@ class TensorArray:
 
   @property
   def flow(self):
+    # [FUNCTION DOC]
+    # Property returning the flow tensor from the implementation (reads its private field).
     """The flow `Tensor` forcing ops leading to this TensorArray state."""
     return self._implementation._flow
 
   @property
   def dtype(self):
+    # [FUNCTION DOC]
+    # Property returning the element data type stored on the implementation.
     """The data type of this TensorArray."""
     return self._implementation._dtype
 
   @property
   def handle(self):
+    # [FUNCTION DOC]
+    # Property returning the handle of the implementation (null for eager and tensor-list
+    # graph arrays).
     """The reference to the TensorArray."""
     return self._implementation.handle
 
   @property
   def element_shape(self):
+    # [FUNCTION DOC]
+    # Property returning the current static element shape from the implementation.
     """The `tf.TensorShape` of elements in this TensorArray."""
     return self._implementation.element_shape
 
   @property
   def dynamic_size(self):
+    # [FUNCTION DOC]
+    # Property returning whether the array may grow when written past its size, read from the
+    # implementation.
     """Python bool; if `True` the TensorArray can grow dynamically."""
     return self._implementation._dynamic_size
 
   @property
   def _infer_shape(self):
+    # [FUNCTION DOC]
+    # HELPER: private property for the type specification code. Returns the shape-inference
+    # flag of the implementation.
     # TODO(slebedev): consider making public or changing TensorArrayStructure
     # to access _implementation directly. Note that dynamic_size is also
     # only used by TensorArrayStructure.
     return self._implementation._infer_shape
 
   def identity(self):
+    # [FUNCTION DOC]
+    # Forwards to the implementation, which returns a TensorArray with the same content whose
+    # flow is passed through an identity op (eager arrays return themselves).
     """Returns a TensorArray with the same content and properties.
 
     Returns:
@@ -1155,9 +1479,16 @@ class TensorArray:
     return self._implementation.identity()
 
   def grad(self, source, flow=None, name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: has no docstring. Forwards to the implementation to create the gradient
+    # array for the given source label, optional flow and name. Raises a not-implemented error
+    # for tensor-list graph and eager arrays; only the legacy graph array supports it.
     return self._implementation.grad(source, flow=flow, name=name)
 
   def read(self, index, name=None):
+    # [FUNCTION DOC]
+    # Forwards to the implementation to read the element at the scalar integer index; returns
+    # the element tensor. Errors depend on the implementation.
     """Read the value at location `index` in the TensorArray.
 
     Args:
@@ -1171,6 +1502,12 @@ class TensorArray:
 
   @tf_should_use.should_use_result(warn_in_eager=True)
   def write(self, index, value, name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says a value error is raised if there are more writers than
+    # specified; this wrapper raises nothing itself, errors (out-of-range, dtype or shape)
+    # come from the implementation and may be other error types or appear only at run time.
+    # Forwards to the implementation to write value at index and returns the resulting
+    # TensorArray. The decorator warns (also in eager mode) if the result is ignored.
     """Write `value` into index `index` of the TensorArray.
 
     Args:
@@ -1188,6 +1525,9 @@ class TensorArray:
     return self._implementation.write(index, value, name=name)
 
   def stack(self, name=None):
+    # [FUNCTION DOC]
+    # Forwards to the implementation and returns all elements stacked into one tensor with one
+    # extra leading dimension.
     """Return the values in the TensorArray as a stacked `Tensor`.
 
     All of the values must have been written and their shapes must all match.
@@ -1216,6 +1556,9 @@ class TensorArray:
     return self._implementation.stack(name=name)
 
   def gather(self, indices, name=None):
+    # [FUNCTION DOC]
+    # Forwards to the implementation and returns the elements at the given 1-D integer indices
+    # packed into one tensor.
     """Return selected values in the TensorArray as a packed `Tensor`.
 
     All of selected values must have been written and their shapes
@@ -1233,6 +1576,9 @@ class TensorArray:
     return self._implementation.gather(indices, name=name)
 
   def concat(self, name=None):
+    # [FUNCTION DOC]
+    # Forwards to the implementation and returns all elements concatenated along the first
+    # dimension as one tensor.
     """Return the values in the TensorArray as a concatenated `Tensor`.
 
     All of the values must have been written, their ranks must match, and
@@ -1248,6 +1594,10 @@ class TensorArray:
 
   @tf_should_use.should_use_result
   def unstack(self, value, name=None):
+    # [FUNCTION DOC]
+    # Forwards to the implementation to fill the array from the slices of value along its first
+    # dimension; returns the resulting TensorArray (must be used). Shape errors come from the
+    # implementation.
     """Unstack the values of a `Tensor` in the TensorArray.
 
     If input value shapes have rank-`R`, then the output TensorArray will
@@ -1268,6 +1618,9 @@ class TensorArray:
 
   @tf_should_use.should_use_result
   def scatter(self, indices, value, name=None):
+    # [FUNCTION DOC]
+    # Forwards to the implementation to write the slices of value at the given indices; returns
+    # the resulting TensorArray (must be used). Errors come from the implementation.
     """Scatter the values of a `Tensor` in specific indices of a `TensorArray`.
 
     Args:
@@ -1287,6 +1640,10 @@ class TensorArray:
 
   @tf_should_use.should_use_result
   def split(self, value, lengths, name=None):
+    # [FUNCTION DOC]
+    # Forwards to the implementation to split value along its first dimension into pieces of
+    # the given lengths; returns the resulting TensorArray (must be used). Errors come from the
+    # implementation.
     """Split the values of a `Tensor` into the TensorArray.
 
     Args:
@@ -1305,19 +1662,36 @@ class TensorArray:
     return self._implementation.split(value, lengths, name=name)
 
   def size(self, name=None):
+    # [FUNCTION DOC]
+    # Forwards to the implementation and returns the array size as a scalar tensor.
     """Return the size of the TensorArray."""
     return self._implementation.size(name=name)
 
   @tf_should_use.should_use_result
   def close(self, name=None):
+    # [FUNCTION DOC]
+    # Forwards to the implementation to close the array and returns its result (an op for
+    # legacy graph arrays, a no-op for tensor-list graph arrays, nothing for eager arrays).
     """Close the current TensorArray."""
     return self._implementation.close(name=name)
 
   def __tf_tracing_type__(self, _):
+    # [FUNCTION DOC]
+    # Tracing hook for function tracing: ignores its context argument and returns a trace type
+    # object wrapping this array, which compares equal only to the same instance.
     return TensorArrayTraceType(self)
 
 
 def build_ta_with_new_flow(old_ta, flow):
+  # [FUNCTION DOC]
+  # HELPER: used by every mutating method of the implementations to create the next array state.
+  # Inputs: old_ta (either a TensorArray or an implementation object) and flow (the new flow
+  # tensor). Builds a fresh TensorArray with the same dtype, handle, shape-inference flag and
+  # colocation setting, then copies over dynamic-size flag, size, colocation list and the
+  # element shape (the shape holder is shared, not copied) so shape refinements propagate.
+  # Raises a not-implemented error in graph mode with control flow v2 enabled when the old
+  # implementation is not the tensor-list kind (e.g. capturing an eager or v1 array inside a
+  # compiled function). Returns the new TensorArray.
   """Builds a TensorArray with a new `flow` tensor."""
   # Sometimes we get old_ta as the implementation, sometimes it's the
   # TensorArray wrapper object.
@@ -1352,6 +1726,12 @@ def build_ta_with_new_flow(old_ta, flow):
 
 
 def _check_dtypes(value, dtype):
+  # [FUNCTION DOC]
+  # HELPER: dtype validation for the write, scatter, split and unstack paths.
+  # KNOWN ISSUE: despite its name it does not raise; it only logs an error message (including
+  # the current stack trace) when the value dtype differs from the expected dtype and then
+  # returns nothing, leaving the mismatch to fail or misbehave later.
+  # Inputs: value (a tensor) and dtype (expected element type).
   if value.dtype != dtype:
     logging.error("Error: Input value {} has dtype {}, but expected dtype {}.  "
                   "This leads to undefined behavior and will be an error "
@@ -1363,6 +1743,13 @@ def _check_dtypes(value, dtype):
 @tf_export("TensorArraySpec")
 @type_spec_registry.register("tf.TensorArraySpec")
 class TensorArraySpec(type_spec.TypeSpec):
+  # [CLASS DOC]
+  # Type specification describing a TensorArray: element shape, element dtype, whether the
+  # array is dynamically sized and whether shape inference is on. Exported publicly and
+  # registered in the type spec registry under a fixed name; a codec for serialization is
+  # registered later in the module. Its value type is TensorArray and each array is encoded as
+  # a single variant tensor (the tensor list). Uses fixed slots for its four fields. Implements
+  # subtype, supertype and compatibility checks plus conversion between arrays and components.
   """Type specification for a `tf.TensorArray`."""
 
   __slots__ = ["_element_shape", "_dtype", "_dynamic_size", "_infer_shape"]
@@ -1374,6 +1761,11 @@ class TensorArraySpec(type_spec.TypeSpec):
                dtype=dtypes.float32,
                dynamic_size=False,
                infer_shape=True):
+    # [FUNCTION DOC]
+    # Builds the spec. Inputs: element_shape (shape of each element; anything convertible to a
+    # shape, default unknown), dtype (default 32-bit float), dynamic_size (default false),
+    # infer_shape (default true). Stores them on the instance, converting shape and dtype to
+    # canonical objects. Raises nothing itself beyond conversion errors for invalid shape/dtype.
     """Constructs a type specification for a `tf.TensorArray`.
 
     Args:
@@ -1388,12 +1780,24 @@ class TensorArraySpec(type_spec.TypeSpec):
     self._infer_shape = infer_shape
 
   def is_subtype_of(self, other):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: ignores the element shape and shape-inference flag; two specs with different
+    # element shapes but equal dtype and dynamic-size flag count as subtypes of each other.
+    # Returns true only when other is also a TensorArraySpec with the same dtype and the same
+    # dynamic-size flag.
     # pylint: disable=protected-access
     return (isinstance(other, TensorArraySpec) and
             self._dtype == other._dtype and
             self._dynamic_size == other._dynamic_size)
 
   def most_specific_common_supertype(self, others):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it returns null when no supertype exists, but when some
+    # element of others is not a TensorArraySpec it returns the boolean false instead of null.
+    # Computes a common supertype of this spec and the given sequence of specs. Returns null
+    # if the element shapes have no common supertype, or if dtypes or dynamic-size flags differ.
+    # Otherwise returns a new spec with the common shape, this spec's dtype and dynamic-size
+    # flag, and shape inference on only if it is on for this spec and all others.
     """Returns the most specific supertype of `self` and `others`.
 
     Args:
@@ -1423,6 +1827,11 @@ class TensorArraySpec(type_spec.TypeSpec):
                            infer_shape)
 
   def is_compatible_with(self, other):
+    # [FUNCTION DOC]
+    # Checks compatibility with other, which may be a spec or a value (values are first turned
+    # into their spec). True only if other is a TensorArraySpec whose dtype is compatible,
+    # element shape is compatible and dynamic-size flag is equal; the shape-inference flag is
+    # intentionally ignored.
     # pylint: disable=protected-access
     if not isinstance(other, type_spec.TypeSpec):
       other = type_spec.type_spec_from_value(other)
@@ -1434,14 +1843,25 @@ class TensorArraySpec(type_spec.TypeSpec):
             self._dynamic_size == other._dynamic_size)
 
   def _serialize(self):
+    # [FUNCTION DOC]
+    # Returns the tuple describing this spec: element shape, dtype, dynamic-size flag and
+    # shape-inference flag, used for equality, hashing and serialization.
     return (self._element_shape, self._dtype, self._dynamic_size,
             self._infer_shape)
 
   @property
   def _component_specs(self):
+    # [FUNCTION DOC]
+    # Property returning the component specs: a list with one scalar variant tensor spec (the
+    # tensor list holding all elements).
     return [tensor_lib.TensorSpec([], dtypes.variant)]
 
   def _to_components(self, value):
+    # [FUNCTION DOC]
+    # Converts a TensorArray into its single component. Raises a type error if value is not a
+    # TensorArray. If its flow is already a variant tensor, returns a list holding that flow;
+    # otherwise stacks the array and builds a tensor list from it under a name scope (adding
+    # ops) and returns a list holding that variant tensor.
     if not isinstance(value, TensorArray):
       raise TypeError("Expected value to be a TensorArray, but got: `{}`".format(
           type(value)))
@@ -1457,6 +1877,11 @@ class TensorArraySpec(type_spec.TypeSpec):
       return [flow]
 
   def _from_components(self, tensor_list):
+    # [FUNCTION DOC]
+    # Rebuilds a TensorArray from a list whose first entry is a variant tensor. Creates the
+    # array with this spec's dtype, dynamic-size flag and shape-inference flag around that flow
+    # (so a tensor-list graph array results) and overrides its stored element shape with this
+    # spec's element shape. Returns the array.
     # This will return a TF2 Graph-style TensorArray because tensor_list[0] is
     # a variant object.  size == -1 implies unknown size.
     ret = TensorArray(
@@ -1469,6 +1894,10 @@ class TensorArraySpec(type_spec.TypeSpec):
 
   @staticmethod
   def from_value(value):
+    # [FUNCTION DOC]
+    # Static method creating a spec from a TensorArray, copying its dtype, element shape,
+    # dynamic-size flag and shape-inference flag. Raises a type error if value is not a
+    # TensorArray.
     if not isinstance(value, TensorArray):
       raise TypeError("Expected value to be a TensorArray, but got: `{}`".format(
           type(value)))
@@ -1480,14 +1909,21 @@ class TensorArraySpec(type_spec.TypeSpec):
         infer_shape=value._infer_shape)  # pylint: disable=protected-access
 
   def _to_legacy_output_types(self):
+    # [FUNCTION DOC]
+    # Returns the element dtype as the legacy dataset output type.
     return self._dtype
 
   def _to_legacy_output_shapes(self):
+    # [FUNCTION DOC]
+    # Returns the legacy dataset output shape: a two-element shape holding the dynamic-size and
+    # shape-inference flags (smuggled in as dimension values) followed by the element shape.
     # Sneak the dynamic_size and infer_shape values into the legacy shape.
     return (tensor_shape.TensorShape([self._dynamic_size, self._infer_shape
                                      ]).concatenate(self._element_shape))
 
   def _to_legacy_output_classes(self):
+    # [FUNCTION DOC]
+    # Returns the TensorArray class as the legacy dataset output class.
     return TensorArray
 
 
@@ -1500,27 +1936,49 @@ nested_structure_coder.register_codec(
 
 # TODO(b/147450234): TensorArray has inconsistent tf.function semantics.
 class TensorArrayTraceType(trace.TraceType):
+  # [CLASS DOC]
+  # Trace type used when tracing functions that take a TensorArray argument. Holds the array
+  # instance; equality and hashing are by identity of that instance, so every distinct array
+  # causes a retrace. Placeholder values are the array itself, and it flattens to a single
+  # scalar variant tensor spec. Created by the array's tracing hook.
   """Represents TraceType of TensorArray."""
 
   def __init__(self, value):
+    # [FUNCTION DOC]
+    # Stores the TensorArray instance being traced (input value).
     self._value = value
 
   def is_subtype_of(self, other):
+    # [FUNCTION DOC]
+    # Returns true only when other equals this trace type (same array instance).
     return self == other
 
   def most_specific_common_supertype(self, types):
+    # [FUNCTION DOC]
+    # Returns this trace type if every given type equals it, otherwise null.
     return self if all(self == other for other in types) else None
 
   def placeholder_value(self, placeholder_context):
+    # [FUNCTION DOC]
+    # Returns the stored array itself as the placeholder; the context argument is unused.
     return self._value
 
   def flatten(self):
+    # [FUNCTION DOC]
+    # Returns a list with one scalar variant tensor spec describing the array's flow.
     return [tensor_lib.TensorSpec([], dtypes.variant)]
 
   def from_tensors(self, tensors):
+    # [FUNCTION DOC]
+    # Takes an iterator of tensors and returns the next item from it, consuming exactly one
+    # element, as the reconstructed value.
     return next(tensors)
 
   def __eq__(self, other):
+    # [FUNCTION DOC]
+    # Equality by identity of the wrapped array. Returns the not-implemented marker if other is
+    # not a trace type, false if it is a different kind of trace type, otherwise whether both
+    # wrap the very same array object (retracing for each instance).
     if not isinstance(other, trace.TraceType):
       return NotImplemented
 
@@ -1532,9 +1990,14 @@ class TensorArrayTraceType(trace.TraceType):
     return self._value is other._value
 
   def __hash__(self):
+    # [FUNCTION DOC]
+    # Hash based on the identity of the wrapped array, consistent with equality.
     return id(self._value)
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns a text representation showing the class name and the representation of the
+    # wrapped array.
     return f"{self.__class__.__name__}(value={self._value!r})"
 
 

@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Implements the indexing behavior of tensors (the get-item operator). It translates Python
+# indexing specifications (integers, slices, ellipsis, new-axis markers, scalar integer tensors,
+# boolean masks) into a strided-slice operation or a boolean-mask operation. It also provides a
+# variant bound to a variable so slice assignment can be built. Publicly exported as the
+# get-item operator function so other libraries can register dispatch for it.
+# Import-time side effect: installs the slice helper as the get-item operator on the Tensor class.
+# Tests live in the array ops kernel tests, not next to this file.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -43,10 +51,23 @@ _SUPPORTED_SLICE_DTYPES = (dtypes.int16, dtypes.int32, dtypes.int32_ref,
 
 
 def _is_undefined_dimension(d):
+  # [FUNCTION DOC]
+  # HELPER: slice-spec validation inside the tensor get-item implementation.
+  # Returns true when d is a Dimension object whose value is unknown (null); false for any other
+  # input, including plain integers and tensors. No exceptions or side effects.
   return isinstance(d, tensor_shape.Dimension) and d.value is None
 
 
 def _check_index(idx):
+  # [FUNCTION DOC]
+  # HELPER: validates individual slice components for the tensor get-item implementation.
+  # KNOWN ISSUE: the TODO in the code notes an index error would be more fitting than a type
+  # error, but the type error is kept for backward compatibility.
+  # Accepts integers and Dimension objects immediately. Otherwise requires an object with a
+  # dtype among the supported slice dtypes (16/32/64-bit integers and their reference
+  # variants) and a shape that is not one-dimensional. Returns nothing.
+  # Raises a type error (message lists the valid index kinds and the offending value) if the
+  # object has no dtype, has an unsupported dtype, or is a rank-1 tensor.
   """Check if a given value is a valid index into a tensor."""
   if isinstance(idx, (numbers.Integral, tensor_shape.Dimension)):
     return
@@ -65,6 +86,26 @@ def _check_index(idx):
 @tf_export("__operators__.getitem", v1=[])
 @dispatch.add_dispatch_support
 def _slice_helper(tensor, slice_spec, var=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says a value error is raised for a negative-size slice range, but
+  # this function never raises it itself; any such error comes from the underlying
+  # strided-slice operation. Also, the branch that casts int16 packed values to int16 is
+  # dead code: it is entered only when all three are already int16, so no cast happens.
+  # Implements indexing of a tensor. Inputs: tensor (anything convertible to a tensor),
+  # slice_spec (single index or a list/tuple of indices: integers, slices, ellipsis, new-axis
+  # marker, scalar integer tensors, dimensions), and optional var (the variable being sliced,
+  # for slice assignment; null by default).
+  # Behavior: converts input to a tensor. If numpy-style slicing is globally enabled and no
+  # variable is given, delegates to the tensor's numpy-style get-item. If the spec is a boolean,
+  # boolean tensor, or boolean numpy array, returns a boolean mask selection. Otherwise it
+  # walks the spec building begin, end and stride lists plus bit masks (begin, end, ellipsis,
+  # new-axis, shrink-axis); missing slice bounds become zero with the matching mask bit set.
+  # Slice bound dtypes are unified to the widest tensor dtype seen (64, then 32, then 16-bit).
+  # Each component is validated by the index checker. The lists are stacked (cast to 64-bit if
+  # any is 64-bit) inside a name scope for a strided-slice op; with an empty spec, empty
+  # int32 vectors are used. Returns the strided slice result (or the mask result).
+  # Raises a type error for invalid index components; may raise errors from the ops used.
+  # Registered for public export and dispatch support. No other side effects.
   """Overload for Tensor.__getitem__.
 
   This operation extracts the specified region from the tensor.
@@ -268,6 +309,14 @@ def _slice_helper(tensor, slice_spec, var=None):
 
 
 def _slice_helper_var(var, slice_spec):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring claims the result has an assign method for slice assignment and
+  # repeats "TypeError" in the Raises section; this function itself just forwards to the slice
+  # helper with the variable's current value and the variable, so any assign capability comes
+  # from the strided-slice op given the variable, not from code here.
+  # Inputs: var (a variable object) and slice_spec (the get-item argument). Reads the variable's
+  # value, then returns the result of the general slice helper called with that value, the
+  # slice spec and the variable. Errors propagate from the slice helper. No other side effects.
   """Creates a slice helper object given a variable.
 
   This allows creating a sub-tensor from part of the current contents
