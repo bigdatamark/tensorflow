@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Script-style test that checks every pip-testable Python test target in the build has its build
+# file loading the test rule from the TensorFlow macro file. It queries the build system for test
+# targets, drops those tagged as not for pip, collects their build files, and asks the buildozer
+# tool whether adding the load statement would change each file. Raises an error listing files
+# that lack the load, otherwise prints a pass message.
+# Import-time side effect: changes the working directory to the repository root.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +29,14 @@ os.chdir(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..')))
 
 
 def check_output_despite_error(args):
+  # [FUNCTION DOC]
+  # HELPER: runs buildozer and similar shell commands for the main check.
+  # Input: args, the command line passed to a subprocess run through a shell. Returns the
+  # combined standard output and error with surrounding whitespace removed, as bytes; if the
+  # command exits with an error the captured output is returned instead of raising.
+  # KNOWN ISSUE: passing a list together with the shell option makes only the first list item the
+  # shell command on POSIX systems, so the remaining items become shell arguments, not arguments
+  # of the tool; the docstring also claims the result is a string though it is bytes.
   """Get output of args from command line, even if there are errors.
 
   Args:
@@ -38,6 +53,15 @@ def check_output_despite_error(args):
 
 
 def main():
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the build query refers to a contrib directory that no longer exists in the
+  # repository, and the output of the helper is compared as bytes with a string kind name, so the
+  # filter on test kind can never match under Python 3.
+  # Takes no arguments. Queries the build system for Python test targets, filters by kind and
+  # the no-pip tag via buildozer, derives their build files, and checks each by running
+  # buildozer to add the load statement and comparing with the current file content. Raises a
+  # runtime error naming the files missing the load; otherwise prints a pass message.
+  # Runs external processes and reads build files; writes nothing.
   # Get all py_test target, note bazel query result will also include
   # cuda_py_test etc.
   try:

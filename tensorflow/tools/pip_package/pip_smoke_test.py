@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Smoke test ensuring that dependencies of the Python tests are shipped in the pip package. Uses
+# bazel queries to list everything the pip package build depends on and everything the eligible
+# Python tests depend on, and reports test dependencies missing from the package (except
+# denylisted or test-named ones), raising an error if any are missing.
+# Import-time side effects: changes the working directory to the repository root and runs
+# the query-building routine, defining the constants for targets and query expression, plus the
+# build and dependency denylists.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -44,6 +52,11 @@ BUILD_DENYLIST = [
 
 
 def GetBuild(dir_base):
+  # [FUNCTION DOC]
+  # HELPER: collects build targets for the smoke test queries.
+  # Input: dir_base, a directory to walk recursively. Returns a list of target patterns covering
+  # all targets of each build file found, skipping directories whose path contains any entry of
+  # the build denylist. Only reads the file system.
   """Get the list of BUILD file all targets recursively startind at dir_base."""
   items = []
   for root, _, files in os.walk(dir_base):
@@ -54,6 +67,12 @@ def GetBuild(dir_base):
 
 
 def BuildPyTestDependencies():
+  # [FUNCTION DOC]
+  # HELPER: constructs the query expressions used by the main routine.
+  # Takes no arguments. Gathers build targets under the python and tensorflow directories,
+  # builds a query selecting Python test targets under python excluding those tagged manual or
+  # no-pip, filters out benchmarks, and wraps it in a depth-one dependency query. Returns a pair:
+  # the list of python targets and the dependency query string. Only reads the file system.
   python_targets = GetBuild("tensorflow/python")
   tensorflow_targets = GetBuild("tensorflow")
   # Build list of test targets,
@@ -101,6 +120,16 @@ DEPENDENCY_DENYLIST = [
 
 
 def main():
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the affected-tests report splits the subprocess output, which is bytes under
+  # Python 3, using a string separator, which fails with a type error; and the denylist count
+  # printed is the size of the whole denylist rather than the number actually matched.
+  # Takes no arguments. Runs bazel configured queries for the pip package dependency superset and
+  # for the python test dependencies, takes the first token of each line, and ignores test-named
+  # entries. Any tensorflow dependency not in the package, not denylisted and not ignored is
+  # recorded as missing. Prints sizes and counts, and for each missing dependency tries to list
+  # tests that depend on it. Raises a runtime error if any are missing; otherwise prints a pass
+  # message. Runs external processes. Returns nothing.
   """This script runs the pip smoke test.
 
   Raises:

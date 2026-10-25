@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Command-line smoke test that exercises TensorFlow file I/O against a Google Cloud Storage bucket.
+# Defines flags for the bucket URL (must start with the gs scheme) and the number of examples.
+# Writes a record file, reads it back with an iterator and with a reader op inside a session, then
+# runs directory and object manipulation checks. Failures exit the process or fail assertions.
+# Import-time side effect: defines the two command-line flags. Run as a script via the app runner.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,6 +39,13 @@ FLAGS = flags.FLAGS
 
 
 def create_examples(num_examples, input_mean):
+  # [FUNCTION DOC]
+  # HELPER: builds the synthetic records written to GCS by the smoke test.
+  # KNOWN ISSUE: the id feature is built by converting an integer to a bytes object, which in
+  # Python 3 yields that many zero bytes instead of the textual number, so ids are not meaningful.
+  # Inputs: num_examples (count of examples) and input_mean (offset added to random normal
+  # inputs). Creates one example per row with an id, a target (inputs minus the mean) and
+  # an inputs feature. Returns the list of example protos. Uses the global random state.
   """Create ExampleProto's containing data."""
   ids = np.arange(num_examples).reshape([num_examples, 1])
   inputs = np.random.randn(num_examples, 1) + input_mean
@@ -48,6 +61,12 @@ def create_examples(num_examples, input_mean):
 
 
 def create_dir_test():
+  # [FUNCTION DOC]
+  # Takes no arguments; uses the bucket URL flag. Against the bucket it creates a timestamped
+  # directory, creates a nested directory recursively, writes ten small files, lists the
+  # directory and checks the listing equals the files plus the nested directory, renames a
+  # directory and checks old/new existence, then deletes the whole tree recursively and checks
+  # it is gone. Prints timings. Fails with assertion errors on any mismatch. Returns nothing.
   """Verifies file_io directory handling methods."""
 
   # Test directory creation.
@@ -122,6 +141,12 @@ def create_dir_test():
 
 
 def create_object_test():
+  # [FUNCTION DOC]
+  # Takes no arguments; uses the bucket URL flag. Creates a timestamped directory, writes five
+  # files for each of two name patterns, and checks that wildcard matching returns exactly the
+  # files of each pattern. Then writes a file, renames it and checks old and new existence,
+  # and finally deletes the directory recursively. Prints timings. Fails by assertion errors.
+  # Returns nothing.
   """Verifies file_io's object manipulation methods ."""
   starttime_ms = int(round(time.time() * 1000))
   dir_name = "%s/tf_gcs_test_%s" % (FLAGS.gcs_bucket_url, starttime_ms)
@@ -186,6 +211,13 @@ def create_object_test():
 
 
 def main(argv):
+  # [FUNCTION DOC]
+  # Entry point for the app runner. argv is ignored. Validates that the bucket URL flag starts
+  # with the gs scheme (otherwise prints an error and exits with status 1). Writes the requested
+  # number of example records to a randomly named record file in the bucket, counts them back via
+  # the record iterator (exit 1 on count mismatch), reads them through a reader op in a graph
+  # session and expects an out-of-range error after the last record (exit 1 if none is raised).
+  # Then runs the directory and object tests. Returns nothing.
   del argv  # Unused.
 
   # Sanity check on the GCS bucket URL.

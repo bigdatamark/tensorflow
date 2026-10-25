@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Unit tests for the doctest output checker in tf_doctest_lib. They verify that float values are
+# extracted from example output text, compared with a tolerance, that whitespace and dots around
+# numbers are tolerated, and that tensor reprs are reduced to their numpy part.
+# Defines one parameterized test class and runs under absltest when executed as a script.
+# No import-time side effects beyond imports.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +29,9 @@ from tensorflow.tools.docs import tf_doctest_lib
 
 
 class TfDoctestOutputCheckerTest(parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case covering the float extractor and the output checker from
+  # tf_doctest_lib. Holds no shared fixtures; each test builds its own extractor or checker.
 
   @parameterized.parameters(
       # Don't match ints.
@@ -85,6 +94,13 @@ class TfDoctestOutputCheckerTest(parameterized.TestCase):
       ['1e9', [1.000001e9]],
   )
   def test_extract_floats(self, text, expected_floats):
+    # [FUNCTION DOC]
+    # Parameterized test. Inputs: a text string and the list of floats expected to be found in it.
+    # Runs the float extractor on the text, then asserts that (1) the number of extracted floats
+    # equals the expected count, (2) the extracted floats match the expected ones within the
+    # checker's tolerance, and (3) joining the non-float text parts with wildcards yields a
+    # pattern that the standard doctest checker accepts for the original text. On failure the
+    # assertion message is extended with expected and found values and re-raised. Returns nothing.
     extract_floats = tf_doctest_lib._FloatExtractor()
     output_checker = tf_doctest_lib.TfDoctestOutputChecker()
 
@@ -127,6 +143,11 @@ class TfDoctestOutputCheckerTest(parameterized.TestCase):
       ['0.0', [1.001e-3]],
   )
   def test_fail_tolerences(self, text, expected_floats):
+    # [FUNCTION DOC]
+    # Parameterized test. Inputs: a text and a list of floats that lie just outside the allowed
+    # tolerance of the floats in that text. Asserts that the checker's closeness comparison
+    # reports them as NOT matching; on failure appends an explanatory message and re-raises.
+    # Returns nothing.
     extract_floats = tf_doctest_lib._FloatExtractor()
     output_checker = tf_doctest_lib.TfDoctestOutputChecker()
 
@@ -144,6 +165,10 @@ class TfDoctestOutputCheckerTest(parameterized.TestCase):
       raise e
 
   def test_want_no_floats(self):
+    # [FUNCTION DOC]
+    # Scenario: the expected output has an ellipsis wildcard and no floats while the actual
+    # output contains several floats. Asserts that the checker accepts the output with the
+    # ellipsis option enabled. Returns nothing.
     want = 'text ... text'
     got = 'text 1.0 1.2 1.9 text'
     output_checker = tf_doctest_lib.TfDoctestOutputChecker()
@@ -156,6 +181,10 @@ class TfDoctestOutputCheckerTest(parameterized.TestCase):
                             ['text [ 1.0 ] text', 'text [ 1.0] text'],
                             ['text [1.000] text', 'text [ 1.0 ] text'])
   def test_extra_spaces(self, want, got):
+    # [FUNCTION DOC]
+    # Parameterized test with an expected and actual string that differ only in padding spaces
+    # inside brackets or in the number of trailing zeros of a float. Asserts that the checker
+    # treats them as equal with the ellipsis option. Returns nothing.
     output_checker = tf_doctest_lib.TfDoctestOutputChecker()
     self.assertTrue(
         output_checker.check_output(
@@ -164,6 +193,10 @@ class TfDoctestOutputCheckerTest(parameterized.TestCase):
   @parameterized.parameters(['Hello. 2.0', 'Hello. 2.0000001'],
                             ['Hello... 2.0', 'Hello   2.0000001'])
   def test_extra_dots(self, want, got):
+    # [FUNCTION DOC]
+    # Parameterized test: a float followed by a sentence dot or an ellipsis in the expected
+    # text must still match a slightly different float in the actual text. Asserts the checker
+    # accepts each pair with the ellipsis option. Returns nothing.
     output_checker = tf_doctest_lib.TfDoctestOutputChecker()
     self.assertTrue(
         output_checker.check_output(
@@ -174,6 +207,13 @@ class TfDoctestOutputCheckerTest(parameterized.TestCase):
   @parameterized.parameters(['1.0, ..., 1.0', '1.0, 1.0, 1.0'],
                             ['1.0, 1.0..., 1.0', '1.0, 1.002, 1.0'])
   def test_wrong_float_counts(self, want, got):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the first call to the checker discards its result, so the pass/fail verdict is
+    # never asserted; only the text of the difference report is checked.
+    # Parameterized test where the expected and actual text contain a differing number of floats
+    # because of an ellipsis. Runs the checker, then builds a doctest example and asks for the
+    # difference report, asserting it contains the explanation that ellipsis does not work if
+    # only some of the floats are replaced. Returns nothing.
     output_checker = tf_doctest_lib.TfDoctestOutputChecker()
 
     output_checker.check_output(
@@ -212,6 +252,11 @@ class TfDoctestOutputCheckerTest(parameterized.TestCase):
       ],
   )
   def test_tf_tensor_numpy_output(self, string, expected_output):
+    # [FUNCTION DOC]
+    # Parameterized test. Input: a string (possibly a tensor repr, or a list of them) and the
+    # expected pair of resulting text and a flag telling whether a tensor repr was rewritten.
+    # Calls the checker's helper that extracts the numpy part from tensor reprs and asserts
+    # the returned pair equals the expected one. Returns nothing.
     output_checker = tf_doctest_lib.TfDoctestOutputChecker()
     output = output_checker._tf_tensor_numpy_output(string)
     self.assertEqual(expected_output, output)

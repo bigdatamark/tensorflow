@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Placeholder setup script for the retired gpu-suffixed TensorFlow package. It can produce a
+# source distribution, but at import time raises a generic exception carrying a removal notice
+# (install the plain tensorflow package instead) whenever the command line asks for a wheel,
+# egg or install. Otherwise, when run as a script, it calls the standard setup routine, which
+# takes its metadata from configuration files.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

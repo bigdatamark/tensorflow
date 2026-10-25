@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Defines the Python interface for splitting protos larger than 2GB into chunks and writing them
+# to disk. Contains an abstract splitter base class (version info, split, write) and a composable
+# implementation that stores chunks, tracks a chunked-message description, supports nested child
+# splitters that delegate to a parent, and writes a riegeli-format chunked file with metadata at
+# the end, or a plain serialized file when nothing was chunked. Uses the chunk, version and util
+# modules of the proto splitter package. No import-time side effects.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,6 +38,10 @@ from tensorflow.tools.proto_splitter import versions_pb2
 
 
 class Splitter(abc.ABC):
+  # [CLASS DOC]
+  # Abstract interface for splitters. Subclasses must provide the version definition property,
+  # a split method returning the chunks plus the chunked-message description, and a write method
+  # that serializes to disk and returns the path. Cannot be instantiated directly.
   """An abstract class for splitting and writing protos that are > 2GB.
 
   See the README on how to use or subclass this class.
@@ -39,16 +50,25 @@ class Splitter(abc.ABC):
   @property
   @abc.abstractmethod
   def version_def(self) -> versions_pb2.VersionDef:
+    # [FUNCTION DOC]
+    # Abstract read-only property. Implementations return the version definition describing the
+    # splitter and merge (join) versions required, plus incompatible consumer versions.
     """Version info about the splitter and merge implementation required."""
 
   @abc.abstractmethod
   def split(
       self,
   ) -> tuple[Sequence[Union[message.Message, bytes]], chunk_pb2.ChunkedMessage]:
+    # [FUNCTION DOC]
+    # Abstract method. Implementations split the proto and return a pair: the sequence of chunks
+    # (messages or raw bytes) and the chunked-message description of how the chunks fit together.
     """Splits proto message into a Sequence of protos/bytes."""
 
   @abc.abstractmethod
   def write(self, file_prefix: str) -> str:
+    # [FUNCTION DOC]
+    # Abstract method. Implementations serialize the proto to disk using file_prefix (a path
+    # prefix string) and return the actual path written.
     """Serializes proto to disk.
 
     Args:
@@ -60,6 +80,12 @@ class Splitter(abc.ABC):
 
 
 class ComposableSplitter(Splitter):
+  # [CLASS DOC]
+  # Concrete splitter that can be nested. A root instance owns the list of chunks and the
+  # chunked-message description; a child instance (created with a parent and the field path to its
+  # proto inside the parent) forwards added chunks to the parent. Holds the proto, parent, field
+  # path, a built flag, the order in which chunks were added and a flag for reindexing after
+  # out-of-order insertion. Subclasses override the chunk building method. Writes riegeli files.
   """A Splitter that can be composed with other splitters.
 
   This Splitter writes to the riegeli file format.
@@ -75,6 +101,13 @@ class ComposableSplitter(Splitter):
       parent_splitter: Optional["ComposableSplitter"] = None,
       fields_in_parent: Optional[util.FieldTypes] = None,
   ):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: proto (message to split); proto_as_initial_chunk (keyword, default
+    # true: root splitter starts with the whole proto as chunk zero, otherwise with no chunks);
+    # parent_splitter (optional parent; if given, this instance holds no chunks of its own);
+    # fields_in_parent (optional field path locating the proto within the parent's proto).
+    # Stores these, marks the splitter as not yet built, and initializes the chunk list and the
+    # chunked-message description for a root splitter. Returns nothing.
     """Initializes ComposableSplitter.
 
     Args:
@@ -113,6 +146,10 @@ class ComposableSplitter(Splitter):
       self._chunked_message = chunk_pb2.ChunkedMessage()
 
   def build_chunks(self) -> None:
+    # [FUNCTION DOC]
+    # Hook for subclasses to generate chunks, adding them through the add-chunk method. The base
+    # version does nothing. Called once by the split method; not meant to be called by users.
+    # Returns nothing.
     """Builds the Splitter object by generating chunks from the proto.
 
     Subclasses of `ComposableChunks` should only need to override this method.
@@ -123,6 +160,9 @@ class ComposableSplitter(Splitter):
 
   @property
   def version_def(self) -> versions_pb2.VersionDef:
+    # [FUNCTION DOC]
+    # Read-only property. Returns a version definition with splitter version one, join version
+    # zero, and the list of known bad consumer versions from the version module.
     """Version info about the splitter and join implementation required."""
     return versions_pb2.VersionDef(
         splitter_version=1,
@@ -133,6 +173,11 @@ class ComposableSplitter(Splitter):
   def split(
       self,
   ) -> tuple[Sequence[Union[message.Message, bytes]], chunk_pb2.ChunkedMessage]:
+    # [FUNCTION DOC]
+    # Returns the pair of the chunk list and the chunked-message description. On the first call
+    # builds the chunks (via the build hook) and fixes chunk indices if chunks were inserted out
+    # of order; later calls reuse the result. Raises a value error if called on a child splitter
+    # (the parent must be used). Fails an assertion if the root has no chunks or message.
     """Splits a proto message into a Sequence of protos/bytes."""
     if self._parent_splitter:
       raise ValueError(
@@ -153,6 +198,14 @@ class ComposableSplitter(Splitter):
   def write(
       self, file_prefix: str, writer_options: Optional[str] = None
   ) -> str:
+    # [FUNCTION DOC]
+    # Inputs: file_prefix (path prefix string) and writer_options (optional riegeli writer option
+    # string). Raises a value error when called on a child splitter. Splits the proto; if no
+    # fields were chunked, atomically writes the deterministic serialization to the prefix plus
+    # the plain suffix. Otherwise writes a riegeli file with the prefix plus the chunked suffix:
+    # each chunk as a message or raw record, recording its type, size and offset, then the
+    # metadata (chunked message and version) last. Logs the path, elapsed time and chunk count.
+    # Returns the path written.
     """Serializes a proto to disk.
 
     The writer writes all chunks into a riegeli file. The chunk metadata
@@ -230,6 +283,14 @@ class ComposableSplitter(Splitter):
       field_tags: util.FieldTypes,
       index=None,
   ) -> None:
+    # [FUNCTION DOC]
+    # Inputs: chunk (message or bytes), field_tags (field path of the chunked data within this
+    # splitter's proto), index (optional position to insert at). A child splitter forwards the
+    # chunk to its parent with the field path prefixed by its own path in the parent. A root
+    # splitter appends a chunked-field entry using the field tag derived from the proto, points it
+    # at the new chunk's index (the current chunk count), records the chunk identity in the
+    # addition order, and appends the chunk, or inserts it at the index and flags that chunk
+    # indices need fixing. Returns nothing.
     """Adds a new chunk and updates the ChunkedMessage proto.
 
     Args:
@@ -260,6 +321,13 @@ class ComposableSplitter(Splitter):
         self._fix_chunk_order = True
 
   def _fix_chunks(self) -> None:
+    # [FUNCTION DOC]
+    # HELPER: finalizes chunk indices for the split method.
+    # Does nothing unless chunks were inserted out of order. Otherwise maps each chunk identity to
+    # its final position, walks the chunked-message tree (including nested messages), and replaces
+    # each recorded chunk index with the final position of the chunk it referred to, failing an
+    # assertion if a chunk is unknown. Then resets the addition order to the final order and
+    # clears the reorder flag. Returns nothing.
     """Fixes chunk indices in the ChunkedMessage."""
     if not self._fix_chunk_order:
       return

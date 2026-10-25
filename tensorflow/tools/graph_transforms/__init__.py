@@ -1,3 +1,8 @@
+# [PACKAGE DOC]
+# Python package exposing the graph transform tool. It defines a single public function that
+# wraps the native transform routine: serialize a graph definition, run the named transforms
+# between given input and output nodes, and parse the result back. Imports the native wrapper,
+# the graph protobuf module and a compatibility helper; no other import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,6 +25,13 @@ from tensorflow.python.util._pywrap_transform_graph import TransformGraphWithStr
 
 
 def TransformGraph(input_graph_def, inputs, outputs, transforms):
+  # [FUNCTION DOC]
+  # Inputs: input_graph_def (graph definition message to transform), inputs (list of input node
+  # names, joined by commas), outputs (list of output node names, joined by commas) and
+  # transforms (list of transform specification strings, joined by spaces). Serializes the
+  # graph, calls the native transform routine with byte strings, and parses the returned bytes
+  # into a new graph definition, which is returned. The input graph is not modified. Errors from
+  # the native layer propagate to the caller.
   """Python wrapper for the Graph Transform Tool.
 
   Gives access to all graph transforms available through the command line tool.

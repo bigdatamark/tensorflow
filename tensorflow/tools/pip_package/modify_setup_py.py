@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Build helper script that fills in a setup template for the TensorFlow wheel. Replaces the
+# placeholder package version and injects NVIDIA wheel version requirements using a shared utility
+# module. Command-line options give the template path, output path, NVIDIA data, CUDA version
+# and TensorFlow version. Run as a script only; nothing happens at import except imports.
 # Copyright 2025 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +31,14 @@ def _update_setup_with_tf_and_nvidia_wheel_versions(
     tf_version: str,
     cuda_version: str,
 ):
+  # [FUNCTION DOC]
+  # HELPER: does the work of the command-line entry point of this script.
+  # Inputs: template_path (template file to read), output_path (file to write),
+  # nvidia_wheel_versions_data (text, one wheel name and version spec per line), tf_version
+  # (version string) and cuda_version (CUDA version string). Reads the template, replaces the
+  # placeholder zero version with the given version, passes the content through the utility that
+  # injects NVIDIA wheel versions, and writes the result to the output file, overwriting it.
+  # Raises file errors on I/O problems. Returns nothing.
   """Updates a setup.py template with TensorFlow and NVIDIA wheel versions.
 
   This function reads a setup.py template file, replaces placeholder versions

@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Build helper script that embeds the git version into the TensorFlow build. In configure mode it
+# creates a generated directory holding links (or copies) of the git HEAD and branch ref files
+# plus a JSON spec describing the repository. In generate mode it checks the branch has not
+# changed and writes a C header with the git version string. A raw mode does this without links.
+# Import-time side effect: parses command-line arguments and immediately performs the requested
+# action; raises an error when no mode is given. It is not meant to be imported.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,6 +39,12 @@ import subprocess
 
 
 def parse_branch_ref(filename):
+  # [FUNCTION DOC]
+  # HELPER: reads a git HEAD file for the configure and generate steps.
+  # KNOWN ISSUE: the file is opened without being closed.
+  # Input: path of a HEAD file. Returns nothing-value when HEAD holds a single token (detached),
+  # the reference path when it has the form of a ref marker followed by a path, and raises a
+  # runtime error for any other content.
   """Given a filename of a .git/HEAD file return ref path.
 
   In particular, if git is in detached head state, this will
@@ -60,6 +73,16 @@ def parse_branch_ref(filename):
 
 
 def configure(src_base_path, gen_path, debug=False):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the error message for a non-directory gen_path applies the percent operator to
+  # only the second string argument, so raising it fails with a formatting error instead of the
+  # intended runtime error. The debug print of the listing also contains a stray format marker.
+  # Inputs: src_base_path (source root that may contain a git directory), gen_path (output
+  # directory, deleted and recreated; an existing non-directory causes a runtime error, and a
+  # failed deletion also raises one), debug (print diagnostics). Writes a spec file recording
+  # whether git is usable, the path and branch, and creates head and branch_ref entries: symlinks
+  # to the git files, falling back to copies when links fail, or empty files when git is absent,
+  # detached or uses unsupported packed refs (then the git flag is set false). Returns nothing.
   """Configure `src_base_path` to embed git hashes if available."""
 
   # TODO(aselle): No files generated or symlinked here are deleted by
@@ -137,6 +160,13 @@ def configure(src_base_path, gen_path, debug=False):
 
 
 def get_git_version(git_base_path, git_tag_override):
+  # [FUNCTION DOC]
+  # Inputs: git_base_path (directory containing the git directory) and git_tag_override (optional
+  # tag text replacing the tag part). Runs the long tag description command, producing tag,
+  # commit count and short hash. With an override and a non-empty result it replaces the tag with
+  # the override and the count with zero, raising a generic exception if the output has fewer
+  # than three dash-separated parts. Returns a byte string; returns the bytes for unknown when
+  # the output is empty, the command fails or git cannot be run. Spawns a subprocess.
   """Get the git version from the repository.
 
   This function runs `git describe ...` in the path given as `git_base_path`.
@@ -183,6 +213,11 @@ def get_git_version(git_base_path, git_tag_override):
 
 
 def write_version_info(filename, git_version):
+  # [FUNCTION DOC]
+  # Inputs: filename (output path) and git_version (byte string). If the version contains a
+  # double quote or backslash it is replaced by an invalid-version marker so the build does not
+  # break. Writes a C header defining the git version, compiler version, C++ ABI flag, C++ version
+  # and monolithic-build macros, overwriting the file. Returns nothing.
   """Write a c file that defines the version functions.
 
   Args:
@@ -224,6 +259,13 @@ def write_version_info(filename, git_version):
 
 
 def generate(arglist, git_tag_override=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the output is a cc file; the content written is a C header.
+  # Inputs: arglist, a sequence of four items: spec file, HEAD link, ref link (ignored) and
+  # destination file; git_tag_override optional tag text. Loads the JSON spec; if git is not in
+  # use the version is unknown, otherwise it raises a runtime error asking to rerun configure when
+  # the current branch differs from the recorded one, else asks git for the version. Writes the
+  # header file to the destination. Returns nothing.
   """Generate version_info.cc as given `destination_file`.
 
   Args:
@@ -269,6 +311,10 @@ def generate(arglist, git_tag_override=None):
 
 
 def raw_generate(output_file, source_dir, git_tag_override=None):
+  # [FUNCTION DOC]
+  # Inputs: output_file (path of version header to write), source_dir (source root) and optional
+  # git_tag_override. Computes the git version directly and writes the header, without links or
+  # a spec file. Returns nothing.
   """Simple generator used for cmake/make build systems.
 
   This does not create any symlinks. It requires the build system

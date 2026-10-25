@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test module verifying that every API v2 package listed in the installed wheel's package list
+# file can be imported. Configures logging at info level on import. Defines one test case class.
+# Run with the unittest runner.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -47,10 +51,25 @@ logging.basicConfig(level=logging.INFO)
 
 
 class ImportApiPackagesTest(unittest.TestCase):
+  # [CLASS DOC]
+  # Test case holding the set of API v2 package names read from the wheel (api_packages_v2) and a
+  # list of names that are not importable and must be skipped (packages_for_skip), both created
+  # in the per-test setup.
   """ImportApiPackagesTest class. See description at the top of the file."""
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Per-test fixture. Calls the parent setup, loads the set of API v2 package names from the
+    # package list file inside the tensorflow distribution (logging the path) into the
+    # api_packages_v2 attribute, and defines the packages_for_skip list of names that are
+    # attributes or sub-modules rather than importable packages. Raises a file error if the
+    # package list is missing.
     def _get_api_packages_v2():
+      # [FUNCTION DOC]
+      # HELPER: reads the package list for the setup fixture.
+      # Takes no arguments. Reads the API v2 package list resource from the tensorflow package
+      # and returns the set of its lines. Logs the resource path. Raises if the resource is
+      # missing.
       api_packages_path = os.path.join("_api", "v2", "api_packages.txt")
       logging.info("Load api packages file: %s", api_packages_path)
       return set(
@@ -76,6 +95,11 @@ class ImportApiPackagesTest(unittest.TestCase):
     ]
 
   def test_import_runtime(self):
+    # [FUNCTION DOC]
+    # Scenario: for each package name in the loaded list, convert it to the public short name by
+    # removing the internal api version segment, skip names in the skip list, and import the rest
+    # one by one. Import errors are logged and collected. Asserts (by failing the test) that no
+    # package failed, reporting the failure count and names. Returns nothing.
     """Try to import all packages from api packages file one by one."""
     version = "v2"
     failed_packages = []

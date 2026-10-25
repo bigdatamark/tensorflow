@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Tiny script that starts a standard interactive Python console. Used in the pip package to give
+# a prompt where TensorFlow can be imported (the console itself does not import it). Run as a
+# script; its exit status is the value returned by the entry function.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,6 +24,10 @@ import sys
 
 
 def main(_):
+  # [FUNCTION DOC]
+  # Entry point. The single argument (the command line list) is ignored. Starts a blocking
+  # interactive console on the terminal until the user exits it, then returns zero as the exit
+  # status.
   """Run an interactive console."""
   code.interact()
   return 0

@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Command-line tool used by the build to assemble the TensorFlow pip wheel. Takes lists of header,
+# source, destination-mapping and xla aot files, copies them into a temporary directory while
+# excluding or relocating vendored and external paths, creates missing package init files,
+# moves manifest and notices to the root, patches shared-library search paths on Linux, renames
+# the core library files to major-version names, and finally runs the setup script to build
+# the wheel. Depends on helper functions in the pip package utils module.
+# Run as a script only: argument parsing and the build happen under the main guard.
 # Copyright 2023 The Tensorflow Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -41,6 +49,11 @@ from tensorflow.tools.pip_package.utils.utils import replace_inplace
 
 
 def parse_args() -> argparse.Namespace:
+  # [FUNCTION DOC]
+  # Parses the process command line (arguments may also come from a file prefixed with the
+  # at sign). Required: output name, project name, platform. Optional: repeatable headers, srcs,
+  # dests (default empty list) and xla_aot lists, a version string and a collaborator flag
+  # string. Returns the parsed namespace; invalid usage makes the parser exit.
   """Arguments parser."""
   parser = argparse.ArgumentParser(
       description="Helper for building pip package", fromfile_prefix_chars="@"
@@ -78,6 +91,12 @@ def parse_args() -> argparse.Namespace:
 def _copy_cuda_tree(
     srcs_dir: str, repo_relative_path: str, destination_relative_path: str
 ) -> None:
+  # [FUNCTION DOC]
+  # HELPER: used by the header preparation step to relocate CUDA component headers.
+  # Inputs: srcs_dir (root directory), repo_relative_path (source subtree relative to it),
+  # destination_relative_path (target subtree relative to it). If the source subtree exists,
+  # copies it recursively into the destination, merging with existing content. Does nothing
+  # otherwise. Returns nothing.
   source_path = os.path.join(srcs_dir, repo_relative_path)
   if os.path.exists(source_path):
     destination_path = os.path.join(srcs_dir, destination_relative_path)
@@ -89,6 +108,15 @@ def _copy_cuda_tree(
 
 
 def prepare_headers(headers: list[str], srcs_dir: str) -> None:
+  # [FUNCTION DOC]
+  # Inputs: headers (list of header file paths) and srcs_dir (destination directory). Skips
+  # generated include files and any path matching an exclusion list (virtual include dirs of CUDA
+  # components, external packages, python and llvm trees). Other files are copied into the
+  # destination, with some external prefixes stripped or remapped (xla and tsl go under the
+  # compiler and tensorflow trees). Then creates the local python config headers, copies the
+  # CUDA config tree and each CUDA component tree into the third-party gpus layout, and
+  # duplicates the vendored xla and tsl trees to top-level directories. Raises file-system errors
+  # if expected trees are missing. Returns nothing.
   """Copy and rearrange header files in the target directory.
 
   Filter out headers by their path and replace paths for some of them.
@@ -190,6 +218,13 @@ def prepare_headers(headers: list[str], srcs_dir: str) -> None:
 def prepare_srcs(
     deps: list[str], deps_destinations: list[str], srcs_dir: str
 ) -> None:
+  # [FUNCTION DOC]
+  # Inputs: deps (list of file paths), deps_destinations (list of json files mapping a file to a
+  # custom destination), srcs_dir (target directory). Merges all mapping files into one mapping.
+  # For each file: vendored xla and tsl paths are copied with the prefix remapped; other files are
+  # skipped if the path contains the external marker; files in the mapping are copied to their
+  # mapped destination (skipped when the destination is empty); the rest are copied as is.
+  # Returns nothing; raises on unreadable or invalid json.
   """Rearrange source files in target the target directory.
 
   Exclude `external` files and move vendored xla/tsl files accordingly.
@@ -228,6 +263,11 @@ def prepare_srcs(
 
 
 def prepare_aot(aot: list[str], srcs_dir: str) -> None:
+  # [FUNCTION DOC]
+  # Inputs: aot (list of xla aot file paths) and srcs_dir (target directory). Copies each file,
+  # stripping the tsl or xla external prefix when present. Afterwards moves the aot cmake file
+  # from its build subdirectory to the root of the target directory. Raises a file error if that
+  # file was not copied. Returns nothing.
   """Rearrange xla_aot files in target the target directory.
 
   Args:
@@ -258,6 +298,14 @@ def prepare_wheel_srcs(
     srcs_dir: str,
     version: str,
 ) -> None:
+  # [FUNCTION DOC]
+  # Orchestrates preparing the wheel contents. Inputs: headers, srcs, dests, aot (lists of file
+  # paths), srcs_dir (staging directory) and version (TensorFlow version string). Prepares headers
+  # under the include subdirectory, sources in the root and aot sources under the aot runtime
+  # directory, creates package init files, moves the manifest and third-party notices, and
+  # rewrites vendored xla/tsl imports. If dests is non-empty (pywrap build) it stops there;
+  # otherwise, on non-Windows renames the core libraries to major-version names and, on Linux,
+  # patches shared-library search paths. Returns nothing.
   """Rearrange source and header files.
 
   Args:
@@ -300,12 +348,24 @@ def prepare_wheel_srcs(
 
 
 def update_xla_tsl_imports(srcs_dir: str) -> None:
+  # [FUNCTION DOC]
+  # HELPER: compensates for the vendoring of tsl and xla in the wheel layout.
+  # Input: srcs_dir, the tree to rewrite. Edits files in place, replacing import prefixes from
+  # tsl with the tensorflow-qualified tsl package and from xla with the compiler xla package.
+  # Returns nothing.
   """Workaround for TSL and XLA vendoring."""
   replace_inplace(srcs_dir, "from tsl", "from tensorflow.tsl")
   replace_inplace(srcs_dir, "from xla", "from tensorflow.compiler.xla")
 
 
 def patch_so(srcs_dir: str) -> None:
+  # [FUNCTION DOC]
+  # HELPER: makes the wheel pass the auditwheel check on Linux.
+  # Input: srcs_dir, directory containing the shared libraries. For a fixed mapping of library
+  # files to extra search-path entries, reads the current runtime search path with the patchelf
+  # tool, appends the extra entry, sets it and then shrinks it. Runs external processes and
+  # modifies the libraries in place. Raises if patchelf fails or a library is missing.
+  # Returns nothing.
   """Patch .so files.
 
   We must patch some of .so files otherwise auditwheel will fail.
@@ -353,6 +413,14 @@ def patch_so(srcs_dir: str) -> None:
 
 
 def rename_libtensorflow(srcs_dir: str, version: str):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the argument is the major version, but the full version string
+  # is expected: the major part is derived from it by splitting at dots, and the full string is
+  # used in the source file names.
+  # Inputs: srcs_dir (directory with the libraries) and version (full version string). Moves the
+  # core and framework libraries from full-version names to major-version names, using dylib
+  # names on macOS and shared-object names elsewhere. Raises a file error if sources are missing.
+  # Returns nothing.
   """Update libtensorflow_cc file name.
 
   Bazel sets full TF version in name but libtensorflow_cc must contain only
@@ -393,6 +461,13 @@ def rename_libtensorflow(srcs_dir: str, version: str):
 
 
 def create_local_config_python(dst_dir: str) -> None:
+  # [FUNCTION DOC]
+  # HELPER: provides python and numpy headers inside the staged include tree.
+  # Input: dst_dir, destination directory (must not already exist). Copies the numpy include
+  # directory (the newer private-core location if present, else the older one) to a numpy
+  # subdirectory, and the first matching python include directory (different pattern on Windows)
+  # to a python subdirectory. Raises if the numpy directory is missing or no python include
+  # directory matches. Returns nothing.
   """Copy python and numpy header files to the destination directory."""
   numpy_include_dir = "external/pypi_numpy/site-packages/numpy/_core/include"
   if not os.path.exists(numpy_include_dir):
@@ -415,6 +490,15 @@ def build_wheel(
     platform: str,
     collab: str = False,
 ) -> None:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: when the collaborator flag is the string for true, the environment value is set
+  # to a boolean, but environment values must be strings, so launching the subprocess fails with a
+  # type error. The default of the collab parameter is a boolean though annotated as a string.
+  # Inputs: dir_path (output directory for the wheel), cwd (directory with staged sources),
+  # project_name and platform (passed to the setup script), collab (string flag). Copies the
+  # environment, sets a home path on Windows, exports the project name, and runs the setup script
+  # to build a wheel for the platform in the output directory, failing on non-zero exit.
+  # Returns nothing.
   """Build the wheel in the target directory.
 
   Args:

@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# HELPER: holds the shared maximum chunk size used by the proto splitter modules, kept just under
+# 2GB because the split algorithm is imprecise. Exposes a debug setter that overrides the limit in
+# module state and a getter that returns it.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +27,12 @@ _MAX_SIZE = 1 << 30
 
 
 def debug_set_max_size(value: int) -> None:
+  # [FUNCTION DOC]
+  # HELPER: debugging hook (for tests) to change the chunk size limit.
+  # KNOWN ISSUE: the module comment says the default is a little less than 2GB, but the value is
+  # one gibibyte (half of 2GB).
+  # Input: value, new limit in bytes. Replaces the module-level limit, affecting all later calls
+  # to the getter. Returns nothing.
   """Sets the max size allowed for each proto chunk (used for debugging only).
 
   Args:
@@ -33,5 +43,8 @@ def debug_set_max_size(value: int) -> None:
 
 
 def max_size() -> int:
+  # [FUNCTION DOC]
+  # Returns the current maximum size in bytes of each proto chunk (one gibibyte unless changed by
+  # the debug setter). Takes no arguments and has no side effects.
   """Returns the maximum size each proto chunk."""
   return _MAX_SIZE

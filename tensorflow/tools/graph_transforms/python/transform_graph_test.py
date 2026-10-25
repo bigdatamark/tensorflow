@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test module for the graph transform Python wrapper. Builds a small graph definition by hand and
+# checks that the strip-unused-nodes transform removes a node not needed for the chosen output.
+# Runs under the TensorFlow test runner when executed as a script.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,11 +27,19 @@ from tensorflow.tools import graph_transforms
 
 
 class TransformGraphTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the graph transform wrapper function. Has no shared fixtures; the single test
+  # builds its own graph definition.
 
   # This test constructs a graph with a relu op that's not used by the normal
   # inference path, and then tests that the strip_unused transform removes it as
   # expected.
   def testTransformGraph(self):
+    # [FUNCTION DOC]
+    # Scenario: build a graph with two float constants, an add of them, and a relu reading the
+    # add. Apply the strip-unused-nodes transform with no input names and the add as the only
+    # output. Asserts that no node of the relu type remains in the transformed graph.
+    # Returns nothing.
     input_graph_def = graph_pb2.GraphDef()
 
     const_op1 = input_graph_def.node.add()
