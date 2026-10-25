@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Public image ops module (documented as the tf.image API). It mostly re-exports everything from
+# the generated image op wrappers and from the image implementation module through wildcard
+# imports, plus two legacy private helpers kept for internal users. It also defines helpers that
+# convert between flat eight-number projective transforms and 3x3 matrices, and registers the
+# gradient functions for the projective transform ops (versions 2 and 3). Import-time side effects:
+# gradient registration. The module defines a private set of supported image data types used by
+# those gradients.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -172,6 +180,13 @@ _IMAGE_DTYPES = frozenset([
 
 
 def flat_transforms_to_matrices(transforms):
+  # [FUNCTION DOC]
+  # Converts projective transforms given as flat vectors of eight numbers into 3x3 matrices.
+  # Input transforms: a vector of length 8 or a batch of shape N by 8 (anything convertible to a
+  # tensor). Raises a value error if its rank is not 1 or 2. Reshapes to N by 8, appends a column
+  # of ones as the implicit ninth entry and reshapes to N by 3 by 3. Returns that tensor of
+  # matrices (always batched, even for a single input). Matrices map output coordinates to input
+  # coordinates. Creates a name scope; no other side effects.
   """Converts `tf.contrib.image` projective transforms to affine matrices.
 
   Note that the output matrices map output coordinates to input coordinates. For
@@ -204,6 +219,13 @@ def flat_transforms_to_matrices(transforms):
 
 
 def matrices_to_flat_transforms(transform_matrices):
+  # [FUNCTION DOC]
+  # Inverse of the flat-to-matrix conversion: turns 3x3 affine/projective matrices into flat
+  # vectors of eight numbers. Input transform_matrices: one matrix (3x3) or a batch (N by 3 by 3).
+  # Raises a value error if its rank is not 2 or 3. Flattens each matrix to nine entries, divides
+  # by the last entry (normalizing it to one; no check for zero, which would give non-finite
+  # values) and drops that entry. Returns a tensor of shape N by 8 (a single matrix yields a
+  # one-row result). Creates a name scope; no other side effects.
   """Converts affine matrices to `tf.contrib.image` projective transforms.
 
   Note that we expect matrices that map output coordinates to input coordinates.
@@ -238,6 +260,17 @@ def matrices_to_flat_transforms(transform_matrices):
 
 @ops.RegisterGradient("ImageProjectiveTransformV2")
 def _image_projective_transform_grad(op, grad):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient function for the version 2 projective transform op.
+  # KNOWN ISSUE: the docstring says it is the gradient for the plain projective transform op; it is
+  # registered only for version 2 and is nearly a duplicate of the version 3 gradient function.
+  # Inputs: op (the forward operation, read for its image and transform inputs and the
+  # interpolation and fill mode attributes) and grad (upstream gradient). Validates the image
+  # dtype is in the supported set (raises a type error otherwise) and that transforms have rank 1
+  # or 2 (type error otherwise). Inverts the transforms (through matrices and the matrix inverse),
+  # applies the version 2 projective transform to grad with output size equal to the original
+  # image height and width, and returns a list of three: that gradient for the images and null
+  # values for the transforms and output shape inputs.
   """Computes the gradient for ImageProjectiveTransform."""
   images = op.inputs[0]
   transforms = op.inputs[1]
@@ -272,6 +305,16 @@ def _image_projective_transform_grad(op, grad):
 
 @ops.RegisterGradient("ImageProjectiveTransformV3")
 def _image_projective_transform_v3_grad(op, grad):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient function for the version 3 projective transform op.
+  # KNOWN ISSUE: the docstring does not mention version 3, and the fill value is hard-coded to zero
+  # in the backward pass regardless of the forward op's fill value input; the gradient with respect
+  # to the fill value is reported as null.
+  # Inputs: op (forward operation: image, transform inputs, interpolation and fill mode attributes)
+  # and grad (upstream gradient). Raises a type error for an unsupported image dtype or transforms
+  # of rank other than 1 or 2. Inverts the transforms, applies the version 3 projective transform
+  # to grad with the original image height and width as output size, and returns a list of four:
+  # the image gradient and null values for transforms, output shape and fill value.
   """Computes the gradient for ImageProjectiveTransform."""
   images = op.inputs[0]
   transforms = op.inputs[1]
