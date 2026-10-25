@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Gradient definitions for the sparse operations declared in sparse_ops. Importing this module
+# registers gradient functions (by op type name) with the framework's gradient registry for
+# SparseReorder, SparseAdd, SparseTensorDenseAdd, SparseReduceSum, SparseSlice,
+# SparseTensorDenseMatMul, SparseDenseCwiseAdd/Mul/Div, SparseSoftmax, SparseSparseMaximum/Minimum,
+# SparseFillEmptyRows and SparseToDense, and marks SparseAddGrad and SparseConcat as not
+# differentiable. Not meant to be called directly; the autodiff machinery looks the functions up.
+# Each gradient function takes the forward op and upstream gradients and returns one gradient (or
+# nothing) per forward input.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,6 +40,13 @@ ops.NotDifferentiable("SparseConcat")
 def _SparseReorderGrad(
     op: ops.Operation, unused_output_indices_grad, output_values_grad
 ):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient function for the SparseReorder op (used by autodiff).
+  # Inputs: op (the forward op), the ignored gradient of the output indices, and the gradient of
+  # the output values. Rebuilds the permutation by reordering a sparse tensor whose values are
+  # entry numbers, inverts it, and gathers the incoming value gradient with the inverted
+  # permutation. Returns a three-item tuple: nothing for indices, the permuted value gradient, and
+  # nothing for the shape. Builds graph ops; no other side effects.
   """Gradients for the SparseReorder op.
 
   Args:
@@ -59,6 +75,15 @@ def _SparseReorderGrad(
 
 @ops.RegisterGradient("SparseAdd")
 def _SparseAddGrad(op: ops.Operation, *grads):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient function for the SparseAdd op (used by autodiff).
+  # KNOWN ISSUE: the docstring says six input tensors but lists and returns seven (including the
+  # threshold); the returned tuple has seven entries to match the op's seven inputs.
+  # Inputs: op (the forward op) and the upstream gradients, one per op output; only the gradient of
+  # the sum's values (second item) is used. Calls the sparse add gradient kernel with the two
+  # operands' indices and the sum indices to split it, and sets the static shapes of both results
+  # to those of the corresponding value inputs. Returns a seven-item tuple with gradients only for
+  # the two value inputs; nothing for indices, shapes and threshold.
   """The backward operator for the SparseAdd op.
 
   The SparseAdd op calculates A + B, where A, B, and the sum are all represented
@@ -93,6 +118,11 @@ def _SparseAddGrad(op: ops.Operation, *grads):
 
 @ops.RegisterGradient("SparseTensorDenseAdd")
 def _SparseTensorDenseAddGrad(op: ops.Operation, out_grad):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient function for SparseTensorDenseAdd (used by autodiff).
+  # Inputs: op (the forward op) and out_grad (gradient of the dense sum). Returns a four-item
+  # tuple: nothing for indices, the output gradient gathered at the sparse indices for the sparse
+  # values, nothing for the shape, and the unchanged output gradient for the dense operand.
   sp_indices = op.inputs[0]
   # (sparse_indices, sparse_values, sparse_shape, dense)
   return (None, array_ops.gather_nd(out_grad, sp_indices), None, out_grad)
@@ -100,6 +130,13 @@ def _SparseTensorDenseAddGrad(op: ops.Operation, out_grad):
 
 @ops.RegisterGradient("SparseReduceSum")
 def _SparseReduceSumGrad(op: ops.Operation, out_grad):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient function for SparseReduceSum (used by autodiff).
+  # Inputs: op (the forward op, whose inputs are indices, values, shape and reduction axes) and
+  # out_grad (gradient of the reduced result). Reshapes the gradient to the shape with reduced
+  # dimensions kept as size one, computes the per-dimension scale between the full and reduced
+  # shapes, and gathers the gradient at the integer-divided sparse indices. Returns a four-item
+  # tuple with a gradient only for the sparse values; nothing for indices, shape and axes.
   """Similar to gradient for the Sum Op (i.e. tf.reduce_sum())."""
   sp_indices = op.inputs[0]
   sp_shape = op.inputs[2]
@@ -113,6 +150,12 @@ def _SparseReduceSumGrad(op: ops.Operation, out_grad):
 
 @ops.RegisterGradient("SparseSlice")
 def _SparseSliceGrad(op: ops.Operation, *grads):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient function for the SparseSlice op (used by autodiff).
+  # Inputs: op (the forward op) and the upstream gradients, one per output; only the gradient of
+  # the sliced values (second item) is used. Calls the sparse slice gradient kernel with the input
+  # indices, slice start and output indices, then sets the static shape to that of the input
+  # values. Returns a five-item tuple with a gradient only for the values input.
   """The backward operator for the SparseSlice op.
 
   This op takes in the upstream gradient w.r.t. non-empty values of
@@ -142,6 +185,17 @@ def _SparseSliceGrad(op: ops.Operation, *grads):
 
 @ops.RegisterGradient("SparseTensorDenseMatMul")
 def _SparseTensorDenseMatMulGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient function for SparseTensorDenseMatMul (used by autodiff).
+  # KNOWN ISSUE: the docstring says it gives gradients for the dense tensor only, but it also
+  # computes and returns the gradient for the sparse values.
+  # Inputs: op (the forward op, reading its adjoint_a and adjoint_b attributes) and grad (the
+  # upstream gradient). Raises a type error if the sparse values and dense operand have different
+  # base dtypes. The dense gradient is a sparse-times-dense product with flipped adjoint of a,
+  # transposed (conjugated) if adjoint_b. The sparse-values gradient gathers rows of grad and rows
+  # (or columns) of the dense operand at the sparse indices and multiplies them batch-wise with
+  # matrix products chosen for each adjoint combination, then squeezes the result. Returns a
+  # four-item tuple: nothing for indices, the values gradient, nothing for shape, dense gradient.
   """Gradients for the dense tensor in the SparseTensorDenseMatMul op.
 
   Args:
@@ -232,11 +286,25 @@ def _SparseTensorDenseMatMulGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("SparseDenseCwiseAdd")
 def _SparseDenseCwiseAddGrad(unused_op, unused_grad):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient placeholder for SparseDenseCwiseAdd (used by autodiff).
+  # Both arguments are ignored. Always raises a not-implemented error stating that the gradient is
+  # not implemented, so differentiating through this op fails.
   raise NotImplementedError(
       "Gradient for SparseDenseCwiseAdd is not implemented.")
 
 
 def _SparseDenseCwiseMulOrDivGrad(op: ops.Operation, grad, is_mul):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation of the gradients for SparseDenseCwiseMul and SparseDenseCwiseDiv.
+  # Inputs: op (the forward op with sparse indices, values, shape and a dense operand), grad
+  # (gradient with respect to the sparse result values) and is_mul (true for multiplication,
+  # false for division). Pads the dense shape with leading ones to the sparse rank, maps sparse
+  # indices to dense positions by integer division, and gathers the dense values there. The sparse
+  # gradient is grad times the dense values (multiply) or grad divided by them (divide). The dense
+  # gradient is the per-entry contribution accumulated into a dense zeros tensor via sparse
+  # addition, because scaled indices can repeat. Returns a four-item tuple: nothing, sparse
+  # gradient, nothing, dense gradient.
   """Common code for SparseDenseCwise{Mul,Div} gradients."""
   x_indices = op.inputs[0]
   x_shape = op.inputs[2]
@@ -272,18 +340,31 @@ def _SparseDenseCwiseMulOrDivGrad(op: ops.Operation, grad, is_mul):
 
 @ops.RegisterGradient("SparseDenseCwiseMul")
 def _SparseDenseCwiseMulGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient for SparseDenseCwiseMul; delegates to the shared multiply/divide
+  # gradient helper with the multiply flag set. Returns its four-item gradient tuple.
   """Gradients for SparseDenseCwiseMul."""
   return _SparseDenseCwiseMulOrDivGrad(op, grad, True)
 
 
 @ops.RegisterGradient("SparseDenseCwiseDiv")
 def _SparseDenseCwiseDivGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient for SparseDenseCwiseDiv; delegates to the shared multiply/divide
+  # gradient helper with the multiply flag cleared. Returns its four-item gradient tuple.
   """Gradients for SparseDenseCwiseDiv."""
   return _SparseDenseCwiseMulOrDivGrad(op, grad, False)
 
 
 @ops.RegisterGradient("SparseSoftmax")
 def _SparseSoftmaxGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient function for SparseSoftmax (used by autodiff).
+  # Inputs: op (forward op; uses its indices, shape and softmax output values) and grad (upstream
+  # gradient with respect to the non-zero output values). Forms the elementwise product of output
+  # and gradient as a sparse tensor, reduces it over the last axis (negated, dimension kept),
+  # adds that to the sparse gradient with broadcasting, and multiplies by the softmax output.
+  # Returns a list of three: nothing for indices, the gradient for values, nothing for shape.
   """Gradients for SparseSoftmax.
 
   The calculation is the same as SoftmaxGrad:
@@ -318,6 +399,9 @@ def _SparseSoftmaxGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("SparseSparseMaximum")
 def _SparseSparseMaximumGrad(unused_op: ops.Operation, unused_grad):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient placeholder for SparseSparseMaximum (used by autodiff).
+  # Arguments are ignored; always raises a not-implemented error, so differentiation fails.
   raise NotImplementedError(
       "Gradient for SparseSparseMaximum is not implemented."
   )
@@ -325,6 +409,9 @@ def _SparseSparseMaximumGrad(unused_op: ops.Operation, unused_grad):
 
 @ops.RegisterGradient("SparseSparseMinimum")
 def _SparseSparseMinimumGrad(unused_op: ops.Operation, unused_grad):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient placeholder for SparseSparseMinimum (used by autodiff).
+  # Arguments are ignored; always raises a not-implemented error, so differentiation fails.
   raise NotImplementedError(
       "Gradient for SparseSparseMinimum is not implemented."
   )
@@ -338,6 +425,13 @@ def _SparseFillEmptyRowsGrad(
     unused_grad_empty_row_indicator,
     unused_grad_reverse_index_map,
 ):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient function for SparseFillEmptyRows (used by autodiff).
+  # Inputs: op (forward op; its fourth output is the reverse index map), the ignored gradients of
+  # the output indices, the empty-row indicator and the reverse index map, and the gradient of the
+  # output values. Calls the fill-empty-rows gradient kernel to split the value gradient into a
+  # gradient for the original values and one for the default value. Returns a list of four:
+  # nothing for indices, the values gradient, nothing for dense shape, the default value gradient.
   """Gradients for SparseFillEmptyRows."""
   reverse_index_map = op.outputs[3]
 
@@ -351,6 +445,13 @@ def _SparseFillEmptyRowsGrad(
 
 @ops.RegisterGradient("SparseToDense")
 def _SparseToDenseGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient function for SparseToDense (used by autodiff).
+  # Inputs: op (forward op with sparse indices, output shape, values, default value) and grad
+  # (gradient of the dense output). The values gradient is the gradient gathered at the sparse
+  # indices; the default value gradient is the total gradient minus the gathered part. Returns a
+  # list of four: zeros shaped like the indices, zeros shaped like the output shape, the values
+  # gradient and the default value gradient (zeros rather than nothing for the integer inputs).
   sparse_indices, output_shape, _, _ = op.inputs
 
   sparse_values_grad = array_ops.gather_nd(grad, sparse_indices)

@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Unit tests for the sparse bincount operations in sparse_ops (sparse_bincount and bincount).
+# Exercises dense and sparse inputs, optional minimum and maximum output length, binary output,
+# weights, reduction over the last axis or over all axes, very large values, and failure modes for
+# mismatched weights (wrong type, shape or indices). Results are compared with hand-written
+# expected indices, values, shapes or dense arrays. Contains small module-level helpers.
+# Running the file as a script enables v2 behavior before starting the test main.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,10 +34,19 @@ from tensorflow.python.platform import test
 
 
 def _sparse_factory(x):
+  # [FUNCTION DOC]
+  # HELPER: lets parameterized tests defer creation of sparse tensors until test run time.
+  # Input: x, a dense nested list or array. Returns a zero-argument callback that, when called,
+  # converts x to a sparse tensor via the sparse from-dense conversion. No side effects until called.
   return lambda: sparse_ops.from_dense(x)
 
 
 def _adjust_expected_rank1(x, minlength, maxlength):
+  # [FUNCTION DOC]
+  # HELPER: adapts an expected bincount list to the length constraints under test.
+  # Inputs: x (list of counts), minlength and maxlength (integers or nothing for no bound).
+  # If x is shorter than minlength it is padded with zeros; if longer than maxlength it is
+  # truncated. Returns the adjusted list; does not modify the argument in place.
   """Trim or pad an expected result based on minlength and maxlength."""
   n = len(x)
   if (minlength is not None) and (n < minlength):
@@ -41,10 +57,18 @@ def _adjust_expected_rank1(x, minlength, maxlength):
 
 
 def _adjust_expected_rank2(x, minlength, maxlength):
+  # [FUNCTION DOC]
+  # HELPER: rank-2 variant of the expected-result adjuster. Input: x, a list of rows of counts,
+  # plus minlength and maxlength (integers or nothing). Applies the rank-1 padding/truncation to
+  # each row and returns the new list of rows.
   return [_adjust_expected_rank1(i, minlength, maxlength) for i in x]
 
 
 class TestSparseCount(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized tests of the sparse bincount ops on valid inputs: dense and sparse input tensors
+  # with optional weights, length limits, binary output and axis choice, plus the bincount
+  # function over sparse inputs. Stateless; each test case supplies inputs and expected outputs.
 
   @parameterized.named_parameters(
       {
@@ -189,9 +213,14 @@ class TestSparseCount(test_util.TensorFlowTestCase, parameterized.TestCase):
                        binary_output=False,
                        weights=None,
                        axis=-1):
-    y = sparse_ops.sparse_bincount(
-        x,
-        weights=weights,
+    # [FUNCTION DOC]
+    # Parameterized test for sparse bincount on a dense integer input. Inputs per case: x (dense
+    # array), expected indices, values and dense shape of the sparse result, optional minlength,
+    # maxlength, binary_output (default false), weights (dense, default none) and axis (default
+    # last axis; nothing means count over all axes). Calls the op and asserts that the result's
+    # indices, values and dense shape equal the expectations. Cases cover trimming, padding,
+    # zero maxlength, binary output, weights, one-dimensional input and very large values.
+
         minlength=minlength,
         maxlength=maxlength,
         binary_output=binary_output,
@@ -396,6 +425,11 @@ class TestSparseCount(test_util.TensorFlowTestCase, parameterized.TestCase):
                         binary_output=False,
                         weights=None,
                         axis=-1):
+    # [FUNCTION DOC]
+    # Parameterized test for sparse bincount on a sparse input. Same parameters as the dense test,
+    # except the input x (and weights, if given) are dense arrays that are first converted to
+    # sparse tensors; implicit zeros are therefore not counted. Asserts the result's indices,
+    # values and dense shape equal the expectations.
     x_sparse = sparse_ops.from_dense(x)
     w_sparse = sparse_ops.from_dense(weights) if weights is not None else None
     y = sparse_ops.sparse_bincount(
@@ -461,6 +495,12 @@ class TestSparseCount(test_util.TensorFlowTestCase, parameterized.TestCase):
       expected,
       tid=None,
   ):
+    # [FUNCTION DOC]
+    # Parameterized test of bincount on sparse inputs of rank 1 to 3 (including all-zero input)
+    # crossed with several minlength and maxlength combinations. Inputs: x_factory (callback
+    # making the sparse input), minlength, maxlength, expected (counts list) and an unused case id.
+    # The expected list is padded or trimmed accordingly; asserts the dense result equals it both
+    # with the default axis and with axis zero.
     x = x_factory()
     expected = _adjust_expected_rank1(expected, minlength, maxlength)
     self.assertAllEqual(
@@ -503,6 +543,10 @@ class TestSparseCount(test_util.TensorFlowTestCase, parameterized.TestCase):
   def test_axis_neg_one(
       self, tid, x_factory, minlength, maxlength, expected
   ):
+    # [FUNCTION DOC]
+    # Parameterized test of bincount on a rank-2 sparse input counting along the last axis (axis
+    # minus one), crossed with minlength and maxlength combinations. Expected rows are padded or
+    # trimmed per row; asserts the dense per-row counts equal them. The case id is unused.
     x = x_factory()
     expected = _adjust_expected_rank2(expected, minlength, maxlength)
     self.assertAllEqual(
@@ -590,6 +634,12 @@ class TestSparseCount(test_util.TensorFlowTestCase, parameterized.TestCase):
       expected,
       axis,
   ):
+    # [FUNCTION DOC]
+    # Parameterized test of bincount with sparse weights of the same shape as the sparse input,
+    # for axis none (count over everything) or last axis, crossed with length limits. Skips the
+    # test when a GPU is present and XLA is not enabled, because the dense bincount GPU kernel does
+    # not support weights (tracked by a bug reference). Otherwise computes the expected counts
+    # (rank 2 when axis is minus one, else rank 1, padded or trimmed) and asserts equality.
     device_set = set([d.device_type for d in tf_config.list_physical_devices()])
     if "GPU" in device_set and not test_util.is_xla_enabled():
       self.skipTest(
@@ -675,6 +725,11 @@ class TestSparseCount(test_util.TensorFlowTestCase, parameterized.TestCase):
       expected,
       axis=None,
   ):
+    # [FUNCTION DOC]
+    # Parameterized test of bincount with binary output enabled (each present value counts as one)
+    # on sparse inputs, with axis none or last axis (default none), crossed with length limits.
+    # Expected results are padded or trimmed (rank 2 for last axis, otherwise rank 1); asserts the
+    # dense result equals them. The case id is unused.
     x = x_factory()
     if axis == -1:
       expected = _adjust_expected_rank2(expected, minlength, maxlength)
@@ -695,8 +750,14 @@ class TestSparseCount(test_util.TensorFlowTestCase, parameterized.TestCase):
 
 
 class TestSparseCountFailureModes(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests that sparse bincount rejects invalid combinations of inputs and weights (wrong tensor
+  # kind, mismatched shape or indices) with the expected error types and messages. Stateless.
 
   def test_dense_input_sparse_weights_fails(self):
+    # [FUNCTION DOC]
+    # Test: dense input with sparse weights. Expects a value error saying the weights must be an
+    # ordinary tensor.
     x = np.array([[3, 2, 1], [5, 4, 4]], dtype=np.int32)
     weights = sparse_ops.from_dense(
         np.array([[3, 0, 1, 0], [0, 0, 0, 0], [5, 0, 4, 4]], dtype=np.int32))
@@ -704,6 +765,10 @@ class TestSparseCountFailureModes(test_util.TensorFlowTestCase):
       self.evaluate(sparse_ops.sparse_bincount(x, weights=weights, axis=-1))
 
   def test_dense_input_wrong_shape_fails(self):
+    # [FUNCTION DOC]
+    # Test: dense input with dense weights of a different shape. In eager mode expects an
+    # invalid-argument error (same shape required, raised by the kernel); in graph mode expects a
+    # value error from static shape checking (shapes must be equal).
     x = np.array([[3, 2, 1], [5, 4, 4]], dtype=np.int32)
     weights = np.array([[3, 2], [5, 4], [4, 3]])
     # Note: Eager mode and graph mode throw different errors here. Graph mode
@@ -718,6 +783,9 @@ class TestSparseCountFailureModes(test_util.TensorFlowTestCase):
         self.evaluate(sparse_ops.sparse_bincount(x, weights=weights, axis=-1))
 
   def test_sparse_input_dense_weights_fails(self):
+    # [FUNCTION DOC]
+    # Test: sparse input with dense weights. Expects a value error saying the weights must be a
+    # sparse tensor.
     x = sparse_ops.from_dense(
         np.array([[3, 0, 1, 0], [0, 0, 0, 0], [5, 0, 4, 4]], dtype=np.int32))
     weights = np.array([[3, 2, 1], [5, 4, 4]], dtype=np.int32)
@@ -725,6 +793,9 @@ class TestSparseCountFailureModes(test_util.TensorFlowTestCase):
       self.evaluate(sparse_ops.sparse_bincount(x, weights=weights, axis=-1))
 
   def test_sparse_input_wrong_indices_fails(self):
+    # [FUNCTION DOC]
+    # Test: sparse input and sparse weights with the same number of entries but different
+    # positions. Expects an invalid-argument error saying they must have the same indices.
     x = sparse_ops.from_dense(
         np.array([[3, 0, 1, 0], [0, 0, 0, 0], [5, 0, 4, 4]], dtype=np.int32))
     weights = sparse_ops.from_dense(
@@ -734,6 +805,9 @@ class TestSparseCountFailureModes(test_util.TensorFlowTestCase):
       self.evaluate(sparse_ops.sparse_bincount(x, weights=weights, axis=-1))
 
   def test_sparse_input_too_many_indices_fails(self):
+    # [FUNCTION DOC]
+    # Test: sparse weights with more non-zero entries than the sparse input. Expects the framework's
+    # incompatible-shapes error (assertion helper accepting the eager or graph variant).
     x = sparse_ops.from_dense(
         np.array([[3, 0, 1, 0], [0, 0, 0, 0], [5, 0, 4, 4]], dtype=np.int32))
     weights = sparse_ops.from_dense(
@@ -742,6 +816,9 @@ class TestSparseCountFailureModes(test_util.TensorFlowTestCase):
       self.evaluate(sparse_ops.sparse_bincount(x, weights=weights, axis=-1))
 
   def test_sparse_input_wrong_shape_fails(self):
+    # [FUNCTION DOC]
+    # Test: sparse input and sparse weights with different dense shapes (weights have an extra
+    # row). Expects an invalid-argument error saying they must have the same dense shape.
     x = sparse_ops.from_dense(
         np.array([[3, 0, 1, 0], [0, 0, 0, 0], [5, 0, 4, 4]], dtype=np.int32))
     weights = sparse_ops.from_dense(
