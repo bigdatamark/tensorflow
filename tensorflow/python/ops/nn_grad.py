@@ -1,3 +1,16 @@
+# [MODULE DOC]
+# Registers gradient functions for neural-network ops defined in nn_ops / gen_nn_ops: convolutions
+# (2D, 3D, depthwise, dilation) and their backprop ops (for higher-order gradients), pooling
+# (average, max, fractional, 3D, with argmax and their grad-of-grad variants), softmax and
+# log-softmax, softmax cross entropy, bias add, activations (relu, relu6, leaky relu, elu, selu,
+# softplus, softsign), local response normalization, batch norms, L2 loss, top-k, approximate
+# top-k, nth element and isotonic regression.
+# Each function is attached to an op type name through the gradient registry at import time
+# (the only import-time side effect). A gradient function receives the forward op and the
+# gradients flowing into its outputs, and returns one gradient (or nothing) per op input.
+# Mostly implemented by calling the generated gen_nn_ops kernels directly (faster in eager mode).
+# Private helpers are used only inside this module. Not a helper module itself; it is loaded by
+# the autodiff machinery.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,6 +41,14 @@ from tensorflow.python.ops import math_ops
 
 @ops.RegisterGradient("Conv2DBackpropInput")
 def _Conv2DBackpropInputGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of the Conv2DBackpropInput (transposed convolution) op, used for second-order
+  # gradients. Inputs: op, the forward op (its attributes dilations, strides, padding, explicit
+  # paddings, cudnn flag and data format are read); grad, gradient with respect to the op output.
+  # Returns a list of three: nothing for the input-sizes input, the filter gradient (computed by
+  # conv2d backprop-filter from grad, the filter shape and the third input), and the gradient for
+  # the third input (a plain conv2d of grad with the filter). Uses the generated kernels directly
+  # for eager-mode performance. No side effects.
   """The derivatives for deconvolution.
 
   Args:
@@ -65,6 +86,13 @@ def _Conv2DBackpropInputGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Conv2DBackpropFilter")
 def _Conv2DBackpropFilterGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of the Conv2DBackpropFilter op (for second-order gradients). Inputs: op, the forward
+  # op whose attributes (dilations, strides, padding, explicit paddings, cudnn flag, data format)
+  # are reused; grad, gradient with respect to the filter-gradient output.
+  # Returns a list of three: gradient for the original input (conv2d backprop-input using the
+  # input shape, grad and the third input), nothing for the filter-sizes input, and the gradient
+  # for the third input (a conv2d of the original input with grad). No side effects.
   # We call the gen_nn_ops backprop functions instead of nn_ops backprop
   # functions for performance reasons in Eager mode. See _Conv2DGrad.
   return [
@@ -92,6 +120,13 @@ def _Conv2DBackpropFilterGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("DepthwiseConv2dNativeBackpropInput")
 def _DepthwiseConv2dNativeBackpropInputGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of the depthwise conv2d backprop-input op (second-order gradients). Inputs: op, the
+  # forward op (dilations, strides, padding, explicit paddings, data format attributes are read);
+  # grad, gradient with respect to the op output.
+  # Returns a list of three: nothing for the input-sizes input, the filter gradient (depthwise
+  # backprop-filter of grad against the third input) and the gradient for the third input (a
+  # depthwise conv2d of grad with the filter). No side effects.
   """The derivatives for deconvolution.
 
   Args:
@@ -125,6 +160,12 @@ def _DepthwiseConv2dNativeBackpropInputGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("DepthwiseConv2dNativeBackpropFilter")
 def _DepthwiseConv2dNativeBackpropFilterGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of the depthwise conv2d backprop-filter op (second-order gradients). Inputs: op, the
+  # forward op whose attributes are reused; grad, gradient with respect to its output (filter
+  # shaped). Returns a list of three: gradient for the original input (depthwise backprop-input),
+  # nothing for the filter-sizes input, and gradient for the third input (depthwise conv2d of the
+  # original input with grad). No side effects.
   return [
       gen_nn_ops.depthwise_conv2d_native_backprop_input(
           array_ops.shape(op.inputs[0]),
@@ -148,6 +189,12 @@ def _DepthwiseConv2dNativeBackpropFilterGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Conv3D")
 def _Conv3DGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of the 3D convolution op. Inputs: op, the forward Conv3D op (dilations, strides,
+  # padding and data format attributes are read; the data format is decoded from bytes); grad,
+  # gradient with respect to the output. Returns a list of two: the gradient for the input
+  # (conv3d backprop-input v2, using the input shape) and for the filter (conv3d backprop-filter
+  # v2, using the filter shape). Shapes are obtained together via a shape-of-many op.
   data_format = op.get_attr("data_format").decode()
   shape_0, shape_1 = array_ops.shape_n([op.inputs[0], op.inputs[1]])
   return [
@@ -173,6 +220,12 @@ def _Conv3DGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Conv3DBackpropInputV2")
 def _Conv3DBackpropInputGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of the Conv3DBackpropInputV2 op (second-order gradients). Inputs: op, the forward
+  # op (dilations, strides, padding, data format attributes read); grad, gradient with respect to
+  # its output. Returns a list of three: nothing for the input-sizes input, the filter gradient
+  # (conv3d backprop-filter v2) and the gradient for the third input (a conv3d of grad with the
+  # filter).
   data_format = op.get_attr("data_format").decode()
   return [
       None,
@@ -196,6 +249,12 @@ def _Conv3DBackpropInputGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Conv3DBackpropFilterV2")
 def _Conv3DBackpropFilterGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of the Conv3DBackpropFilterV2 op (second-order gradients). Inputs: op, the forward
+  # op whose attributes (dilations, strides, padding, data format) are reused; grad, gradient
+  # with respect to its output. Returns a list of three: the gradient for the original input
+  # (conv3d backprop-input v2), nothing for the filter-sizes input, and the gradient for the
+  # third input (conv3d of the original input with grad).
   data_format = op.get_attr("data_format").decode()
   return [
       gen_nn_ops.conv3d_backprop_input_v2(
@@ -218,6 +277,10 @@ def _Conv3DBackpropFilterGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("AvgPool3D")
 def _AvgPool3DGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of 3D average pooling. Inputs: op, the forward op (ksize, strides, padding, data
+  # format attributes read); grad, gradient with respect to the pooled output. Returns the single
+  # gradient tensor for the input, computed by the avg-pool3d-grad kernel using the input shape.
   return gen_nn_ops.avg_pool3d_grad(
       array_ops.shape(op.inputs[0]),
       grad,
@@ -229,6 +292,11 @@ def _AvgPool3DGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("AvgPool3DGrad")
 def _AvgPool3DGradGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of the AvgPool3DGrad op (second-order). Inputs: op, the forward grad op; grad,
+  # gradient with respect to its output. Returns a pair: a stopped-gradient copy of the first
+  # input (the original shape input, not differentiable) and the result of average pooling grad
+  # with the same ksize, strides, padding and data format.
   return (array_ops.stop_gradient(op.inputs[0]),
           gen_nn_ops.avg_pool3d(
               grad,
@@ -240,6 +308,10 @@ def _AvgPool3DGradGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("MaxPool3D")
 def _MaxPool3DGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of 3D max pooling. Inputs: op, the forward op (ksize, strides, padding, data format
+  # read); grad, gradient with respect to the pooled output. Returns the input gradient computed
+  # by the max-pool3d-grad kernel from the original input, the pooled output and grad.
   return gen_nn_ops.max_pool3d_grad(
       op.inputs[0],
       op.outputs[0],
@@ -252,6 +324,11 @@ def _MaxPool3DGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("MaxPool3DGrad")
 def _MaxPool3DGradGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of the MaxPool3DGrad op (second-order). Inputs: op, the forward grad op with three
+  # inputs (original input, pooled output, upstream gradient); grad, gradient with respect to its
+  # output. Returns a triple: zeros shaped like the first two inputs and the max-pool3d
+  # grad-of-grad result for the third input, using the op's ksize, strides, padding, data format.
   return (array_ops.zeros_like(op.inputs[0]),
           array_ops.zeros_like(op.inputs[1]),
           gen_nn_ops.max_pool3d_grad_grad(
@@ -266,6 +343,11 @@ def _MaxPool3DGradGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("MaxPool3DGradGrad")
 def _MaxPool3DGradGradGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of the MaxPool3DGradGrad op (third-order). Inputs: op, the forward op with inputs
+  # (original input, pooled output, upstream gradient); grad, gradient with respect to its output.
+  # Returns a triple: zeros shaped like the first two inputs and the max-pool3d-grad result for
+  # the third input, using the op's ksize, strides, padding and data format.
   return (array_ops.zeros_like(op.inputs[0]),
           array_ops.zeros_like(op.inputs[1]),
           gen_nn_ops.max_pool3d_grad(
@@ -280,6 +362,11 @@ def _MaxPool3DGradGradGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Softmax")
 def _SoftmaxGrad(op: ops.Operation, grad_softmax):
+  # [FUNCTION DOC]
+  # Gradient of softmax. Inputs: op, the Softmax op (its output is reused); grad_softmax,
+  # gradient with respect to the softmax output. Computes, along the last axis, the incoming
+  # gradient minus the sum of (gradient times softmax), multiplied by softmax, and returns that
+  # single tensor with the input's shape. Works for any rank, softmax taken over the last axis.
   """The derivative of the softmax nonlinearity.
 
   We assume that probs is of shape [batch_size * dim]
@@ -305,6 +392,10 @@ def _SoftmaxGrad(op: ops.Operation, grad_softmax):
 
 @ops.RegisterGradient("LogSoftmax")
 def _LogSoftmaxGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of log-softmax. Inputs: op, the LogSoftmax op (softmax is recovered by taking the
+  # exponential of its output); grad, gradient with respect to the output. Returns grad minus the
+  # last-axis sum of grad times the softmax, a single tensor shaped like the input.
   """The gradient for log_softmax.
 
       log_softmax = input - log(sum(exp(input))
@@ -323,6 +414,13 @@ def _LogSoftmaxGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("BiasAdd")
 def _BiasAddGrad(op: ops.Operation, received_grad):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the bias gradient is the sum over the batch (first)
+  # dimension; the code actually delegates to the bias-add-grad kernel, which sums over every
+  # dimension except the channel dimension chosen by the data format attribute.
+  # Gradient of bias addition. Inputs: op, the BiasAdd op; received_grad, gradient with respect to
+  # the output. Reads the data format attribute, falling back to nothing if the op lacks it.
+  # Returns a pair: the received gradient unchanged for the tensor input, and the bias gradient.
   """Return the gradients for the 2 inputs of bias_op.
 
   The first input of unused_bias_op is the tensor t, and its gradient is
@@ -351,6 +449,13 @@ def _BiasAddGrad(op: ops.Operation, received_grad):
 
 @ops.RegisterGradient("BiasAddGrad")
 def _BiasAddGradGrad(op: ops.Operation, received_grad):
+  # [FUNCTION DOC]
+  # Gradient of the BiasAddGrad op (second-order). Inputs: op, the BiasAddGrad op (its input
+  # supplies the full shape; the data format attribute is read, defaulting to nothing when
+  # absent); received_grad, a bias-sized gradient. Reshapes the bias-sized gradient so the bias
+  # axis is the channel axis (second axis for channels-first format, otherwise last axis) with
+  # ones elsewhere, then tiles it across the other dimensions to the input's full shape.
+  # Returns that single tensor.
   """Gradient for the BiasAddGrad op.
 
   Args:
@@ -387,6 +492,12 @@ def _BiasAddGradGrad(op: ops.Operation, received_grad):
 
 @ops.RegisterGradient("BiasAddV1")
 def _BiasAddGradV1(unused_bias_op: ops.Operation, received_grad):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the bias gradient sums over the batch (first) dimension, but
+  # the code sums over all dimensions except the last (channels-last assumed).
+  # Gradient of the legacy BiasAddV1 op. Inputs: the op (unused), and received_grad, the gradient
+  # with respect to the output. Returns a pair: received_grad for the tensor input, and the sum of
+  # received_grad over all axes but the last for the bias input.
   """Return the gradients for the 2 inputs of bias_op.
 
   The first input of unused_bias_op is the tensor t, and its gradient is
@@ -411,11 +522,19 @@ def _BiasAddGradV1(unused_bias_op: ops.Operation, received_grad):
 
 @ops.RegisterGradient("Relu")
 def _ReluGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of relu: applies the relu-grad kernel to the incoming gradient and the op's output.
+  # Returns one tensor shaped like the input.
   return gen_nn_ops.relu_grad(grad, op.outputs[0])
 
 
 @ops.RegisterGradient("EluGrad")
 def _EluGradGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of the EluGrad op (second-order). Inputs: op, with inputs (upstream gradient, elu
+  # activation value); grad, gradient with respect to the op output. Returns a pair: the elu-grad
+  # of grad at the activation (for the upstream gradient input), and for the activation input the
+  # product of grad and the upstream gradient where the activation is negative, zero elsewhere.
   elu_x = op.inputs[1]
   return (gen_nn_ops.elu_grad(grad, elu_x),
           array_ops.where(
@@ -424,6 +543,11 @@ def _EluGradGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("SeluGrad")
 def _SeluGradGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of the SeluGrad op (second-order). Inputs: op, with inputs (upstream gradient, selu
+  # activation value); grad, gradient with respect to the op output. Returns a pair: the selu-grad
+  # of grad at the activation, and for the activation input the product of grad and the upstream
+  # gradient where the activation is negative, zero elsewhere.
   selu_x = op.inputs[1]
   return (gen_nn_ops.selu_grad(grad, selu_x),
           array_ops.where(
@@ -432,17 +556,27 @@ def _SeluGradGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Relu6")
 def _Relu6Grad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of relu6: applies the relu6-grad kernel to the incoming gradient and the op's
+  # output. Returns one tensor shaped like the input.
   return gen_nn_ops.relu6_grad(grad, op.outputs[0])
 
 
 @ops.RegisterGradient("Relu6Grad")
 def _Relu6GradGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of the Relu6Grad op (second-order). Inputs: op, with inputs (upstream gradient,
+  # features); grad, gradient with respect to its output. Returns a pair: relu6-grad of grad at
+  # the features for the upstream-gradient input, and zeros shaped like the features.
   x = op.inputs[1]
   return (gen_nn_ops.relu6_grad(grad, x), array_ops.zeros_like(x))
 
 
 @ops.RegisterGradient("LeakyRelu")
 def _LeakyReluGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of leaky relu. Reads the alpha (negative slope) attribute from the op and applies the
+  # leaky-relu-grad kernel to the incoming gradient and the op's input. Returns one tensor.
   x = op.inputs[0]
   alpha = op.get_attr("alpha")
   return gen_nn_ops.leaky_relu_grad(grad, x, alpha=alpha)
@@ -450,6 +584,10 @@ def _LeakyReluGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("LeakyReluGrad")
 def _LeakyReluGradGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of the LeakyReluGrad op (second-order). Inputs: op, with inputs (upstream gradient,
+  # features) and an alpha attribute; grad, gradient with respect to its output. Returns a pair:
+  # leaky-relu-grad of grad at the features, and zeros shaped like the features.
   x = op.inputs[1]
   alpha = op.get_attr("alpha")
   return (gen_nn_ops.leaky_relu_grad(grad, x,
@@ -458,21 +596,35 @@ def _LeakyReluGradGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Elu")
 def _EluGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of elu: applies the elu-grad kernel to the incoming gradient and the op's output.
+  # Returns one tensor shaped like the input.
   return gen_nn_ops.elu_grad(grad, op.outputs[0])
 
 
 @ops.RegisterGradient("Selu")
 def _SeluGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of selu: applies the selu-grad kernel to the incoming gradient and the op's output.
+  # Returns one tensor shaped like the input.
   return gen_nn_ops.selu_grad(grad, op.outputs[0])
 
 
 @ops.RegisterGradient("Softplus")
 def _SoftplusGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of softplus: the incoming gradient multiplied elementwise by the sigmoid of the op's
+  # input. Returns one tensor shaped like the input.
   return grad * math_ops.sigmoid(op.inputs[0])
 
 
 @ops.RegisterGradient("SoftplusGrad")
 def _SoftplusGradGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of the SoftplusGrad op (second-order). Inputs: op, with inputs (upstream gradient
+  # dy, features x); grad, gradient with respect to its output. Returns a pair: the softplus-grad
+  # of grad at x (for dy), and grad times dy divided by (exp(-x) + 2 + exp(x)) (for x). The
+  # computation is wrapped in a control dependency on grad so grad is evaluated first.
   # Let:
   #   y = tf.nn.softplus(x)
   #   dx = gen_nn_ops.softplus_grad(dy, x) = dy / (1 + exp(-x))
@@ -486,16 +638,28 @@ def _SoftplusGradGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Softsign")
 def _SoftsignGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of softsign: applies the softsign-grad kernel to the incoming gradient and the op's
+  # input. Returns one tensor shaped like the input.
   return gen_nn_ops.softsign_grad(grad, op.inputs[0])
 
 
 @ops.RegisterGradient("ReluGrad")
 def _ReluGradGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of the ReluGrad op (second-order). Inputs: op, with inputs (upstream gradient,
+  # features); grad, gradient with respect to its output. Returns a pair: relu-grad of grad at the
+  # features, and zeros shaped like the features.
   x = op.inputs[1]
   return (gen_nn_ops.relu_grad(grad, x), array_ops.zeros_like(x))
 
 
 def _BroadcastMul(vec, mat):
+  # [FUNCTION DOC]
+  # HELPER: used by the softmax cross-entropy gradient functions in this module.
+  # Multiplies a one-dimensional tensor (one value per row) with a two-dimensional tensor by
+  # first adding a trailing axis to the vector so it broadcasts across columns. Returns the
+  # product with the matrix's shape. No side effects.
   """Multiply after broadcasting vec to match dimensions of mat.
 
   Args:
@@ -512,6 +676,13 @@ def _BroadcastMul(vec, mat):
 
 @ops.RegisterGradient("SoftmaxCrossEntropyWithLogits")
 def _SoftmaxCrossEntropyWithLogitsGrad(op: ops.Operation, grad_loss, grad_grad):
+  # [FUNCTION DOC]
+  # Gradient of softmax cross entropy with logits. Inputs: op (logits and labels as inputs; loss
+  # and precomputed backprop as outputs); grad_loss, gradient for the loss output; grad_grad,
+  # gradient for the backprop output (may be nothing or a marked all-zeros tensor, in which case
+  # the second-order term is skipped). The logits gradient is grad_loss scaled backprop, plus,
+  # when grad_grad is present, a correction using the softmax of the logits. The labels gradient
+  # is grad_loss times the negative log-softmax of the logits. Returns a pair (logits, labels).
   """Gradient function for SoftmaxCrossEntropyWithLogits."""
   # grad_loss is the backprop for cost, and we multiply it with the gradients
   # (which is output[1])
@@ -539,6 +710,12 @@ def _SoftmaxCrossEntropyWithLogitsGrad(op: ops.Operation, grad_loss, grad_grad):
 def _SparseSoftmaxCrossEntropyWithLogitsGrad(op: ops.Operation,
                                              grad_loss,
                                              grad_grad):
+  # [FUNCTION DOC]
+  # Gradient of sparse softmax cross entropy with logits. Inputs: op (logits and integer labels;
+  # loss and precomputed backprop as outputs); grad_loss, gradient for the loss; grad_grad,
+  # gradient for the backprop output (nothing or a marked all-zeros tensor skips the second-order
+  # term). Returns a pair: the logits gradient (grad_loss scaled backprop, plus a softmax-based
+  # correction when grad_grad is given) and nothing for the labels, which are not differentiable.
   """Gradient function for SparseSoftmaxCrossEntropyWithLogits."""
   # grad_loss is the backprop for cost, and we multiply it with the gradients
   # (which is output[1])
@@ -565,6 +742,12 @@ def _SparseSoftmaxCrossEntropyWithLogitsGrad(op: ops.Operation,
 
 @ops.RegisterGradient("Conv2D")
 def _Conv2DGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of 2D convolution. Inputs: op, the Conv2D op (dilations, strides, padding, explicit
+  # paddings, cudnn flag and data format attributes read); grad, gradient with respect to the
+  # output. Returns a list of two: the input gradient (conv2d backprop-input using the input
+  # shape) and the filter gradient (conv2d backprop-filter using the filter shape). Uses the
+  # generated kernels directly because they accept explicit paddings and avoid eager overhead.
   """Gradient function for Conv2D."""
   dilations = op.get_attr("dilations")
   strides = op.get_attr("strides")
@@ -606,6 +789,11 @@ def _Conv2DGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("DepthwiseConv2dNative")
 def _DepthwiseConv2dNativeGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of depthwise 2D convolution. Inputs: op (attributes dilations, strides, padding,
+  # explicit paddings, data format read); grad, gradient with respect to the output. Returns a
+  # list of two: the input gradient (depthwise backprop-input) and the filter gradient
+  # (depthwise backprop-filter).
   return [
       gen_nn_ops.depthwise_conv2d_native_backprop_input(
           array_ops.shape(op.inputs[0]),
@@ -630,6 +818,10 @@ def _DepthwiseConv2dNativeGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Dilation2D")
 def _Dilation2DGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of 2D morphological dilation. Inputs: op (strides, rates and padding read); grad,
+  # gradient with respect to the output. Returns a list of two: gradient for the input and for
+  # the filter, each from its dilation2d backprop kernel.
   return [
       gen_nn_ops.dilation2d_backprop_input(op.inputs[0], op.inputs[1], grad,
                                            op.get_attr("strides"),
@@ -644,6 +836,10 @@ def _Dilation2DGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("LRN")
 def _LRNGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of local response normalization. Reads depth radius, bias, alpha and beta from the
+  # op and calls the lrn-grad kernel with the incoming gradient, the op input and output.
+  # Returns a list with a single input gradient.
   depth_radius = op.get_attr("depth_radius")
   bias = op.get_attr("bias")
   alpha = op.get_attr("alpha")
@@ -656,6 +852,10 @@ def _LRNGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("AvgPool")
 def _AvgPoolGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of 2D average pooling. Uses the input's shape (as 32-bit integers), grad, and the
+  # op's ksize, strides, padding and data format with the avg-pool-grad kernel. Returns the input
+  # gradient tensor.
   return gen_nn_ops.avg_pool_grad(
       array_ops.shape(op.inputs[0], out_type=dtypes.int32),
       grad,
@@ -667,6 +867,10 @@ def _AvgPoolGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("AvgPoolGrad")
 def _AvgPoolGradGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of the AvgPoolGrad op (second-order). Returns a pair: a stopped-gradient copy of the
+  # first input (the shape input, not differentiable) and the average pooling of grad using the
+  # op's ksize, strides, padding and data format.
   return (array_ops.stop_gradient(op.inputs[0]),
           gen_nn_ops.avg_pool(
               grad,
@@ -678,6 +882,10 @@ def _AvgPoolGradGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("MaxPool")
 def _MaxPoolGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of 2D max pooling. Calls the max-pool-grad kernel with the op's input, output, grad,
+  # and its ksize, strides, padding, explicit paddings and data format attributes. Returns the
+  # input gradient tensor.
   return gen_nn_ops.max_pool_grad(
       op.inputs[0],
       op.outputs[0],
@@ -691,6 +899,10 @@ def _MaxPoolGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("MaxPoolV2")
 def _MaxPoolGradV2(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of MaxPoolV2, where ksize and strides are tensor inputs (second and third inputs).
+  # Returns a triple: the max-pool-grad-v2 result for the data input and nothing for ksize and
+  # strides. Padding and data format are read from op attributes.
   ksize = op.inputs[1]
   strides = op.inputs[2]
   return gen_nn_ops.max_pool_grad_v2(
@@ -705,6 +917,11 @@ def _MaxPoolGradV2(op: ops.Operation, grad):
 
 @ops.RegisterGradient("MaxPoolWithArgmax")
 def _MaxPoolGradWithArgmax(op: ops.Operation, grad, unused_argmax_grad):
+  # [FUNCTION DOC]
+  # Gradient of max pooling with argmax. Inputs: op; grad, gradient for the pooled values;
+  # unused_argmax_grad, gradient for the integer argmax output, discarded. Returns the input
+  # gradient from the argmax-based kernel using the op's argmax output, ksize, strides, padding
+  # and include-batch-in-index attributes.
   del unused_argmax_grad
   return gen_nn_ops.max_pool_grad_with_argmax(
       op.inputs[0],
@@ -719,6 +936,11 @@ def _MaxPoolGradWithArgmax(op: ops.Operation, grad, unused_argmax_grad):
 
 @ops.RegisterGradient("MaxPoolGrad")
 def _MaxPoolGradGrad(op, grad):
+  # [FUNCTION DOC]
+  # Gradient of the MaxPoolGrad op (second-order). The op argument has no type annotation here
+  # unlike its siblings. Returns a triple: zeros shaped like the first two inputs and the
+  # max-pool grad-of-grad result for the third input, using ksize, strides, padding and data
+  # format attributes of the op.
   return (
       array_ops.zeros_like(op.inputs[0]),
       array_ops.zeros_like(op.inputs[1]),
@@ -736,6 +958,10 @@ def _MaxPoolGradGrad(op, grad):
 
 @ops.RegisterGradient("MaxPoolGradV2")
 def _MaxPoolGradGradV2(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of the MaxPoolGradV2 op (second-order), where ksize and strides are the fourth and
+  # fifth inputs. Returns a five-element tuple: zeros for the first two inputs, the v2 max-pool
+  # grad-of-grad result for the third, and nothing for ksize and strides.
   ksize = op.inputs[3]
   strides = op.inputs[4]
   return (
@@ -757,6 +983,10 @@ def _MaxPoolGradGradV2(op: ops.Operation, grad):
 
 @ops.RegisterGradient("MaxPoolGradGrad")
 def _MaxPoolGradGradGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of the MaxPoolGradGrad op (third-order). Returns a triple: zeros for the first two
+  # inputs and the max-pool-grad result for the third input, using the op's ksize, strides,
+  # padding and data format.
   return (
       array_ops.zeros_like(op.inputs[0]),
       array_ops.zeros_like(op.inputs[1]),
@@ -776,6 +1006,11 @@ def _MaxPoolGradGradGrad(op: ops.Operation, grad):
 def _FractionalMaxPoolGrad(
     op: ops.Operation, grad_0, unused_grad_1, unused_grad_2
 ):
+  # [FUNCTION DOC]
+  # Gradient of fractional max pooling. Inputs: op (three outputs: pooled values, row and column
+  # pooling sequences); grad_0, gradient for the pooled values; two unused gradients for the
+  # sequences, ignored. Returns the input gradient from the fractional-max-pool-grad kernel using
+  # the op's input, output, sequences and overlapping attribute.
   """Returns gradient for FractionalMaxPool.
 
   Since FractionalMaxPool has three outputs, there are three gradients passed in
@@ -805,6 +1040,12 @@ def _FractionalMaxPoolGrad(
 def _FractionalAvgPoolGrad(
     op: ops.Operation, grad_0, unused_grad_1, unused_grad_2
 ):
+  # [FUNCTION DOC]
+  # Gradient of fractional average pooling. Inputs: op (three outputs: pooled values, row and
+  # column pooling sequences); grad_0, gradient for the pooled values; two unused gradients for
+  # the sequences, ignored. Returns the input gradient from the fractional-avg-pool-grad kernel,
+  # given the input's static shape, grad_0, the sequences and the overlapping attribute.
+  # Requires the input shape to be statically known.
   """Returns gradient for FractionalAvgPool.
 
   Since FractionalAvgPool has three outputs, there are three gradients passed in
@@ -827,6 +1068,12 @@ def _FractionalAvgPoolGrad(
 
 @ops.RegisterGradient("BatchNormWithGlobalNormalization")
 def _BatchNormWithGlobalNormalizationGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of the legacy batch normalization with global normalization op. Inputs: op (five
+  # inputs: input, mean, variance, beta, gamma; variance epsilon and scale-after-normalization
+  # attributes read); grad, gradient for the output. Calls the dedicated grad kernel and returns
+  # five gradients in input order: input, mean, variance, beta, gamma. Per the docstring mean and
+  # variance gradients are produced by the kernel, not stopped.
   """Return the gradients for the 5 inputs of BatchNormWithGlobalNormalization.
 
   We do not backprop anything for the mean and var intentionally as they are
@@ -853,6 +1100,17 @@ def _BatchNormWithGlobalNormalizationGrad(op: ops.Operation, grad):
 
 
 def _BaseFusedBatchNormGrad(op: ops.Operation, version, *grad):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation behind the FusedBatchNorm, V2 and V3 gradient functions.
+  # KNOWN ISSUE: the docstring says it returns gradients for 3 inputs, but it returns five values
+  # (x, scale, offset gradients, plus two nothing values for population mean and variance).
+  # Inputs: op (fused batch norm op; epsilon, data format and training-flag attributes read);
+  # version, integer 0, 1 or 2 selecting grad kernel v1, v2 or v3 (any value other than 1 or 2
+  # picks the original); grad, variable list of output gradients with the first being for y.
+  # In training mode calls the kernel with the op's saved reserve-space outputs (a third reserve
+  # space for version 2). In inference mode uses the population mean and variance inputs,
+  # transposing channels-first (4-D or 5-D) tensors to channels-last before the kernel and
+  # transposing dx back afterwards. Returns (dx, dscale, doffset, nothing, nothing).
   """Return the gradients for the 3 inputs of BatchNorm.
 
   Args:
@@ -936,21 +1194,33 @@ def _BaseFusedBatchNormGrad(op: ops.Operation, version, *grad):
 
 @ops.RegisterGradient("FusedBatchNorm")
 def _FusedBatchNormGrad(op: ops.Operation, *grad):
+  # [FUNCTION DOC]
+  # Gradient of FusedBatchNorm (version 0). Forwards the op and all output gradients to the shared
+  # fused batch norm gradient helper and returns its five values.
   return _BaseFusedBatchNormGrad(op, 0, *grad)
 
 
 @ops.RegisterGradient("FusedBatchNormV2")
 def _FusedBatchNormV2Grad(op: ops.Operation, *grad):
+  # [FUNCTION DOC]
+  # Gradient of FusedBatchNormV2. Forwards to the shared fused batch norm gradient helper with
+  # version 1 and returns its five values.
   return _BaseFusedBatchNormGrad(op, 1, *grad)
 
 
 @ops.RegisterGradient("FusedBatchNormV3")
 def _FusedBatchNormV3Grad(op: ops.Operation, *grad):
+  # [FUNCTION DOC]
+  # Gradient of FusedBatchNormV3. Forwards to the shared fused batch norm gradient helper with
+  # version 2 (which also uses a third reserve space) and returns its five values.
   return _BaseFusedBatchNormGrad(op, 2, *grad)
 
 
 @ops.RegisterGradient("L2Loss")
 def _L2LossGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of the L2 loss. Inputs: op; grad, scalar gradient for the loss. Returns the op's
+  # input multiplied by grad (broadcast), a tensor shaped like the input.
   """Return the gradients for L2Loss.
 
   Args:
@@ -966,6 +1236,15 @@ def _L2LossGrad(op: ops.Operation, grad):
 @ops.RegisterGradient("TopK")
 @ops.RegisterGradient("TopKV2")
 def _TopKGrad(op: ops.Operation, grad, _):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the second gradient is "all zero" with the shape of indices;
+  # the code returns a scalar 32-bit integer zero for the k input, not a tensor of zeros.
+  # Gradient of TopK and TopKV2 (registered for both). Inputs: op; grad, gradient for the values
+  # output; the gradient for the indices output is ignored. Flattens the output indices to 2-D,
+  # offsets each row by the row index times the last input dimension to get linear indices into
+  # the flattened input, scatters the gradient values there into a zero tensor and reshapes to
+  # the input shape. Returns a list: that tensor and a scalar zero. Indices are cast to 64-bit
+  # for the offset arithmetic because 32-bit is unsupported on GPU.
   """Return the gradients for TopK.
 
   Args:
@@ -1012,6 +1291,13 @@ def _TopKGrad(op: ops.Operation, grad, _):
 
 @ops.RegisterGradient("ApproxTopK")
 def _ApproxTopKGradient(op: ops.Operation, grad, _):
+  # [FUNCTION DOC]
+  # Gradient of approximate top-k. Inputs: op (output 1 holds indices; reduction-dimension
+  # attribute read, negative values counted from the end); grad, gradient for the values output;
+  # the indices gradient is ignored. Builds full coordinate tuples for each selected element
+  # (the indices along the reduction dimension, iota ranges along the others), flattens them and
+  # the gradient, and scatters into a tensor of the input's shape. Uses static shapes, so shapes
+  # must be fully known. Returns that single tensor.
   """Return the gradients for ApproxTopK.
 
   Args:
@@ -1036,6 +1322,11 @@ def _ApproxTopKGradient(op: ops.Operation, grad, _):
     reduction_dim = rank + reduction_dim
 
   def GetLiftedIdx(d):
+    # [FUNCTION DOC]
+    # HELPER: builds one coordinate component for the approximate top-k gradient scatter.
+    # Input: d, an axis number. For the reduction axis returns the op's index output with a
+    # trailing axis added; for other axes returns an iota range along that axis, reshaped and
+    # broadcast to the lifted index shape. Uses enclosing variables; no side effects.
     if d == reduction_dim:
       return array_ops.reshape(op.outputs[1], lifted_idx_shape)
     iota_len = idx_shape[d]
@@ -1053,6 +1344,11 @@ def _ApproxTopKGradient(op: ops.Operation, grad, _):
 
 @ops.RegisterGradient("NthElement")
 def _NthElementGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of NthElement. Inputs: op; grad, gradient for the selected element along the last
+  # axis. Marks input entries equal to the selected value, divides the gradient evenly among ties
+  # (the count of marked entries), and returns a list: the distributed gradient shaped like the
+  # input, and nothing for the n input.
   """Return the gradients for NthElement.
 
   Args:
@@ -1079,6 +1375,14 @@ def _NthElementGrad(op: ops.Operation, grad):
 
 
 def _MeanAggregator(inputs, segments):
+  # [FUNCTION DOC]
+  # HELPER: used by the isotonic regression gradient.
+  # KNOWN ISSUE: the docstring says segments has the same shape as "input" (a typo for inputs);
+  # the code also requires the first dimension to be statically known, since it splits per row.
+  # Inputs: inputs and segments, two 2-D tensors of equal shape (segments holds integer segment
+  # ids). For each row computes the unsorted segment mean (avoiding segment-mean, unsupported on
+  # TPU) and gathers it back so each element is replaced by its segment's mean. Returns the
+  # stacked rows with the same shape and type as inputs.
   """Replaces each segment with its mean along the last axis.
 
   Specifically, each value in the `inputs` tensor gets replaced by the mean
@@ -1107,6 +1411,10 @@ def _MeanAggregator(inputs, segments):
 # how to differentiate them.
 @ops.RegisterGradient("IsotonicRegression")
 def _IsotonicRegressionGrad(op: ops.Operation, grad_output, grad_segments):
+  # [FUNCTION DOC]
+  # Gradient of isotonic regression. Inputs: op (output 1 holds segment ids); grad_output,
+  # gradient for the fitted values; grad_segments, gradient for the discrete segments, discarded.
+  # Returns the segment-wise mean of grad_output (same shape as it) as the input gradient.
   """Gradient for the isotonic regression function.
 
   Args:
