@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: import-aggregator module for the structured package.
+# Exists only to import the structured modules that define exported symbols (the array ops
+# dispatch implementations and the StructuredTensor class) so they get registered, without
+# importing them from the package initializer, which would cause circular dependencies.
+# Exposes no definitions of its own; the imports are the import-time side effect.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
