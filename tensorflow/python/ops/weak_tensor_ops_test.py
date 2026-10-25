@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Test module verifying how TensorFlow ops treat WeakTensor inputs: which inputs yield a WeakTensor
+# output versus a normal Tensor, and that binary ops follow the dtype promotion tables
+# (including the safe mode that forbids lossy promotions). Defines parameter lists of unary APIs
+# grouped by input style, a generated list of all dtype promotion combinations and of those not
+# allowed in safe mode, an extension type used for dispatch testing, three test classes
+# (unary ops, binary ops, binary ops in safe mode) and a few module-level helper functions.
+# Import-time side effects: builds the promotion lists from the promotion table; when run as a
+# script it enables eager execution and NumPy behavior with all-mode dtype conversion.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -117,19 +126,34 @@ for key in _DTYPE_PROMO_RES:
 
 
 class MyTensor(extension_type.ExtensionType):
+  # [CLASS DOC]
+  # Minimal extension type wrapping a single Tensor in its value field. Used by the dispatch test
+  # as a custom type for which an override of the absolute-value op is registered and later
+  # unregistered.
   value: tensor.Tensor
 
 
 class WeakTensorUnaryOpsTest(
     test_util.TensorFlowTestCase, parameterized.TestCase
 ):
-
+  # [CLASS DOC]
+  # Tests unary and other single-input TensorFlow ops patched to be WeakTensor aware. Checks which
+  # kinds of inputs (WeakTensor, nested Python values, constants without a dtype, tensors with an
+  # explicit dtype, NumPy arrays) produce WeakTensor versus Tensor outputs, plus dispatch, dunder
+  # methods and NumPy-style attributes on WeakTensor. Parameterized per op or per input style; no
+  # shared fixtures.
   # Test unary ops with one input.
   @parameterized.named_parameters(
       (api.__module__ + "." + api.__name__, api)
       for api in set(_TF_UNARY_APIS) - set(_TF_UNARY_APIS_WITH_MULT_INPUT)
   )
   def test_unary_ops_return_weak_tensor(self, unary_api):
+    # [FUNCTION DOC]
+    # For each unary API (parameterized by api, covering the unary list minus the multi-input
+    # APIs), builds five inputs matching the API's input style and checks: a WeakTensor input gives
+    # a WeakTensor equal to the result on the underlying tensor; a constant without explicit dtype
+    # and a nested Python value give WeakTensors; a Tensor with explicit dtype and a NumPy array
+    # give plain Tensors.
     (
         weak_tensor_input,
         python_input,
@@ -174,6 +198,12 @@ class WeakTensorUnaryOpsTest(
   def test_multi_arg_unary_ops_return_weak_tensor(
       self, input_type, input_dtype, result_type
   ):
+    # [FUNCTION DOC]
+    # Parameterized by input kind, dtype and expected result type. Converts a three-element float
+    # list to that input kind and checks the result type of ops taking extra arguments:
+    # check_numerics, random and stateless random brightness, adjust_brightness, clip_by_value, and
+    # the NumPy-style expand_dims, moveaxis, reshape, swapaxes plus array reshape and expand_dims.
+    # Weak inputs give WeakTensor, explicit dtype or NumPy gives Tensor.
     test_input = _convert_to_input_type(
         [1.0, 2.0, 3.0], input_type, input_dtype
     )
@@ -220,6 +250,11 @@ class WeakTensorUnaryOpsTest(
   # Test unary ops with a specific return dtype.
   @parameterized.parameters(_TF_UNARY_APIS_SPECIFIC_DTYPE)
   def test_unary_ops_return_normal_tensor(self, unary_api_specific_dtype):
+    # [FUNCTION DOC]
+    # Parameterized over the conversion ops that fix their output dtype (to float, double, int32,
+    # int64, bfloat16, complex64, complex128). Feeds a WeakTensor, a Python list, an untyped
+    # constant, a typed constant and a NumPy array and asserts every result is a plain Tensor,
+    # never a WeakTensor.
     # All inputs should output a normal Tensor because return dtype is
     # specified.
     weak_tensor_input = _get_weak_tensor([1, 2, 3], dtypes.float32)
@@ -244,8 +279,16 @@ class WeakTensorUnaryOpsTest(
 
   @test_util.run_in_graph_and_eager_modes
   def test_weak_tensor_from_scalar_in_tf_func(self):
+    # [FUNCTION DOC]
+    # Runs in graph and eager modes. Calls a compiled function returning a Python integer and
+    # asserts the returned value is a WeakTensor. Checks that scalars returned from function
+    # tracing are turned into weak tensors.
     @def_function.function()
     def f():
+      # [FUNCTION DOC]
+      # HELPER: inner function used only by test_weak_tensor_from_scalar_in_tf_func
+      # Nested function compiled by the function decorator in the test above. Takes no inputs and
+      # returns the Python integer one, whose conversion to a weak tensor is under test.
       return 1
 
     res = f()
@@ -263,6 +306,11 @@ class WeakTensorUnaryOpsTest(
   def test_elementwise_unary_ops_optional_dtype(
       self, input_type, input_dtype, result_type
   ):
+    # [FUNCTION DOC]
+    # Parameterized by input kind, dtype and expected type. Checks zeros_like and ones_like:
+    # without a dtype argument (or with dtype set to nothing) the result type follows the input
+    # (WeakTensor for weak inputs); with an explicit dtype argument, given by keyword or position,
+    # the result is always a plain Tensor.
     test_input = _convert_to_input_type(
         [1.0, 2.0, 3.0], input_type, input_dtype
     )
@@ -303,6 +351,11 @@ class WeakTensorUnaryOpsTest(
   def test_elementwise_unary_ops_optional_dtype_with_multi_args(
       self, input_type, input_dtype, dtype_arg, result_type
   ):
+    # [FUNCTION DOC]
+    # Parameterized by input kind, input dtype, optional dtype argument and expected type. Builds a
+    # scalar five and checks arange (with end 10) and full_like (fill 1) from the NumPy-style API:
+    # a WeakTensor result when the input is weak and no dtype argument is passed, otherwise a plain
+    # Tensor.
     test_input = _convert_to_input_type(5, input_type, input_dtype)
     self.assertIsInstance(
         np_array_ops.arange(test_input, 10, dtype=dtype_arg), result_type
@@ -313,6 +366,9 @@ class WeakTensorUnaryOpsTest(
 
   # Test unary ops that require dtype arg.
   def test_unary_ops_explicit_dtype_return(self):
+    # [FUNCTION DOC]
+    # Checks that cast and saturate_cast to int32 return plain Tensors regardless of whether the
+    # input is a WeakTensor, a Python list or an untyped constant.
     wt_input = _get_weak_tensor([1, 2, 3], dtypes.float32)
     self.assertIsInstance(math_ops.cast(wt_input, dtypes.int32), tensor.Tensor)
     self.assertIsInstance(
@@ -338,6 +394,9 @@ class WeakTensorUnaryOpsTest(
     )
 
   def test_unsupported_input_type_in_weak_tensor_ops(self):
+    # [FUNCTION DOC]
+    # Builds a ragged tensor and checks that the patched absolute-value op still accepts it
+    # (unsupported types are ignored by the WeakTensor wrapper) and returns a ragged tensor.
     rt = ragged_tensor.RaggedTensor.from_row_splits(
         values=[3, 1, 4, 1, 5, 9, 2, 6], row_splits=[0, 4, 4, 7, 8, 8]
     )
@@ -345,6 +404,9 @@ class WeakTensorUnaryOpsTest(
     self.assertIsInstance(math_ops.abs(rt), ragged_tensor.RaggedTensor)
 
   def test_update_weak_tensor_patched_ops_in_dispatch_dict(self):
+    # [FUNCTION DOC]
+    # Checks that the patched absolute-value op still has its decorator marker and can be used as a
+    # key in the type-based dispatch signature registry, where it has a non-empty set of entries.
     dispatch_dict = dispatch._TYPE_BASED_DISPATCH_SIGNATURES
     # Test that we can use the updated op reference as a key to the dispatch
     # dictionary.
@@ -352,8 +414,17 @@ class WeakTensorUnaryOpsTest(
     self.assertNotEmpty(dispatch_dict[math_ops.abs])
 
   def test_weak_tensor_ops_dispatch(self):
+    # [FUNCTION DOC]
+    # Registers a dispatch override of the absolute-value op for the MyTensor extension type,
+    # checks it is used for a MyTensor input and returns MyTensor, then unregisters it and checks
+    # calling the op with a MyTensor input raises a value error. Side effect: temporarily modifies
+    # the global dispatch registry.
     @dispatch.dispatch_for_api(math_ops.abs)
     def my_abs(x: MyTensor):
+      # [FUNCTION DOC]
+      # HELPER: dispatch handler for test_weak_tensor_ops_dispatch
+      # Nested dispatch override registered for the absolute-value op when given MyTensor. Takes a
+      # MyTensor, returns a new MyTensor wrapping the absolute value of its tensor.
       return MyTensor(math_ops.abs(x.value))
 
     self.assertIsInstance(my_abs(MyTensor(constant_op.constant(1.0))), MyTensor)
@@ -364,6 +435,9 @@ class WeakTensorUnaryOpsTest(
       math_ops.abs(MyTensor(constant_op.constant(1.0)))
 
   def testWeakTensorDunderMethods(self):
+    # [FUNCTION DOC]
+    # Checks that absolute value, bitwise invert and negation applied through built-in operators to
+    # an integer WeakTensor each return a WeakTensor.
     x = _get_weak_tensor([1, 2, 3])
 
     self.assertIsInstance(abs(x), WeakTensor)
@@ -377,6 +451,11 @@ class WeakTensorUnaryOpsTest(
       ("data", WeakTensor),
   )
   def testNumpyAttributesOnWeakTensor(self, np_attribute, result_type):
+    # [FUNCTION DOC]
+    # Parameterized by attribute name (transpose-as-T, ndim, size, data) and expected type. Checks
+    # a WeakTensor has the NumPy-style attribute, that its type matches the expected type (for
+    # size, where the type varies by machine, it must equal the type from the same attribute on a
+    # normal Tensor), and that its value equals the Tensor's value.
     a = weak_tensor_test_util.get_weak_tensor(([1, 2, 3]))
     b = constant_op.constant([1, 2, 3])
 
@@ -406,6 +485,11 @@ class WeakTensorUnaryOpsTest(
       ("min", WeakTensor),
   )
   def testNumpyMethodsOnWeakTensor(self, np_method, result_type, *args):
+    # [FUNCTION DOC]
+    # Parameterized by method name, expected result type and optional extra arguments (round,
+    # reshape, clip, astype and others). Calls the method on a WeakTensor and on a normal Tensor
+    # with the same arguments; asserts the WeakTensor result has the expected type (clip and astype
+    # give plain Tensor) and values close to the Tensor result.
     a = weak_tensor_test_util.get_weak_tensor(([1, 2, 3]))
     b = constant_op.constant([1, 2, 3])
     self.assertTrue(hasattr(a, np_method))
@@ -424,8 +508,19 @@ class WeakTensorUnaryOpsTest(
 class WeakTensorBinaryOpsTest(
     test_util.TensorFlowTestCase, parameterized.TestCase
 ):
-
+  # [CLASS DOC]
+  # Tests binary ops (add, subtract, multiply, power, modulo, floor/real/truncate/true division,
+  # scalar multiply, matmul, div and multiply with no-nan) for every non-boolean dtype pair in the
+  # promotion table. The class decorator parameterizes each test with the first dtype, the second
+  # dtype and the expected result (dtype, is-weak) pair. Provides a helper that asserts type, dtype
+  # and value of a result.
   def match_expected(self, actual, expected_val, expected_dtype):
+    # [FUNCTION DOC]
+    # HELPER: shared assertion helper for the binary op tests in this class
+    # Asserts that actual has the expected kind and value. expected_dtype is a pair of a dtype and
+    # a flag telling whether the result must be weak: the result must be a WeakTensor if the flag
+    # is set, otherwise a plain Tensor; its dtype must equal the dtype and its contents equal
+    # expected_val. Fails the test with an assertion error otherwise; returns nothing.
     dtype, weak = expected_dtype
     expected_type = WeakTensor if weak else tensor.Tensor
     self.assertIsInstance(actual, expected_type)
@@ -433,7 +528,17 @@ class WeakTensorBinaryOpsTest(
     self.assertAllEqual(actual, expected_val)
 
   def test_weak_tensor_add(self, a_dtype, b_dtype, expected_dtype):
+    # [FUNCTION DOC]
+    # Parameterized by two input dtype descriptors and the expected result descriptor. Runs the
+    # nested add check for three pairs of positive integers (positive so unsigned types work). Also
+    # exercised in both argument orders.
     def run_test_add(a, b):
+      # [FUNCTION DOC]
+      # HELPER: inner worker for test_weak_tensor_add
+      # Builds input variants for each operand and the expected sum computed on tensors of the
+      # expected dtype. For each variant pair, checks add in both orders gives the expected value,
+      # dtype and weakness, and when at least one operand is a tensor kind also checks the plus
+      # operator in both orders.
       a_list = _get_test_input_for_binary_op(a, a_dtype)
       b_list = _get_test_input_for_binary_op(b, b_dtype)
       expected_val = constant_op.constant(
@@ -453,7 +558,15 @@ class WeakTensorBinaryOpsTest(
     run_test_add(a=10, b=41)
 
   def test_weak_tensor_sub(self, a_dtype, b_dtype, expected_dtype):
+    # [FUNCTION DOC]
+    # Parameterized by dtype descriptors and expected result. Runs the nested subtract check for
+    # pairs (4,2), (41,0) and (100,50).
     def run_test_sub(a, b):
+      # [FUNCTION DOC]
+      # HELPER: inner worker for test_weak_tensor_sub
+      # Builds input variants and expected values for a minus b and b minus a. Checks the subtract
+      # function in both orders and, if at least one operand is a tensor kind, the minus operator
+      # in both orders, for value, dtype and weakness.
       a_list = _get_test_input_for_binary_op(a, a_dtype)
       b_list = _get_test_input_for_binary_op(b, b_dtype)
       a_tensor = constant_op.constant(a, expected_dtype[0])
@@ -476,7 +589,16 @@ class WeakTensorBinaryOpsTest(
     run_test_sub(a=100, b=50)
 
   def test_weak_tensor_mul(self, a_dtype, b_dtype, expected_dtype):
+    # [FUNCTION DOC]
+    # Parameterized by dtype descriptors and expected result. Runs the nested multiply check for
+    # pairs (4,2), (41,10) and (10,5).
     def run_test_mul(a, b):
+      # [FUNCTION DOC]
+      # HELPER: inner worker for test_weak_tensor_mul
+      # KNOWN ISSUE: The operator check calls the tensor-kind test on the raw Python numbers a and
+      # b instead of the variants x and y, so that condition is always false and the operator form
+      # is never exercised.      # Builds input variants and the expected product. Checks the multiply function in both
+      # orders, and the times operator in both orders when the tensor-kind condition holds.
       a_list = _get_test_input_for_binary_op(a, a_dtype)
       b_list = _get_test_input_for_binary_op(b, b_dtype)
       expected_val = constant_op.constant(
@@ -498,7 +620,15 @@ class WeakTensorBinaryOpsTest(
     run_test_mul(a=10, b=5)
 
   def test_weak_tensor_pow(self, a_dtype, b_dtype, expected_dtype):
+    # [FUNCTION DOC]
+    # Parameterized by dtype descriptors and expected result. Runs the nested power check for pairs
+    # (4,2) and (10,5).
     def run_test_pow(a, b):
+      # [FUNCTION DOC]
+      # HELPER: inner worker for test_weak_tensor_pow
+      # Returns early (skipping the case) when the expected dtype is not supported by the power op
+      # in eager mode. Otherwise checks the power function and the power operator in both orders
+      # against values computed on tensors of the expected dtype.
       a_list = _get_test_input_for_binary_op(a, a_dtype)
       b_list = _get_test_input_for_binary_op(b, b_dtype)
 
@@ -523,7 +653,15 @@ class WeakTensorBinaryOpsTest(
     run_test_pow(a=10, b=5)
 
   def test_weak_tensor_mod(self, a_dtype, b_dtype, expected_dtype):
+    # [FUNCTION DOC]
+    # Parameterized by dtype descriptors and expected result. Runs the nested modulo check for
+    # pairs (4,2), (41,124) and (2,6).
     def run_test_mod(a, b):
+      # [FUNCTION DOC]
+      # HELPER: inner worker for test_weak_tensor_mod
+      # Skips unsupported expected dtypes. Checks the mod function, the equivalent generated
+      # floor_mod op, and the percent operator, in both orders, against values computed on tensors
+      # of the expected dtype.
       a_list = _get_test_input_for_binary_op(a, a_dtype)
       b_list = _get_test_input_for_binary_op(b, b_dtype)
 
@@ -556,7 +694,14 @@ class WeakTensorBinaryOpsTest(
     run_test_mod(a=2, b=6)
 
   def test_weak_tensor_floor_div(self, a_dtype, b_dtype, expected_dtype):
+    # [FUNCTION DOC]
+    # Parameterized by dtype descriptors and expected result. Runs the nested floor division check
+    # for pairs (124,123), (41,20) and (2,6).
     def run_test_floor_div(a, b):
+      # [FUNCTION DOC]
+      # HELPER: inner worker for test_weak_tensor_floor_div
+      # Skips unsupported expected dtypes. Checks floordiv, floor_div and the double-slash operator
+      # in both orders against expected values computed on tensors.
       a_list = _get_test_input_for_binary_op(a, a_dtype)
       b_list = _get_test_input_for_binary_op(b, b_dtype)
 
@@ -591,7 +736,15 @@ class WeakTensorBinaryOpsTest(
     run_test_floor_div(a=2, b=6)
 
   def test_weak_tensor_real_div(self, a_dtype, b_dtype, expected_dtype):
+    # [FUNCTION DOC]
+    # Parameterized by dtype descriptors and expected result. Runs the nested real division check
+    # for pairs (124,123), (41,20) and (2,6).
     def run_test_real_div(a, b):
+      # [FUNCTION DOC]
+      # HELPER: inner worker for test_weak_tensor_real_div
+      # Skips unsupported expected dtypes. Checks realdiv and the generated real_div op in both
+      # orders against the real_div of tensors of the expected dtype. Unlike the other operators,
+      # no division operator form is tested.
       a_list = _get_test_input_for_binary_op(a, a_dtype)
       b_list = _get_test_input_for_binary_op(b, b_dtype)
 
@@ -623,7 +776,15 @@ class WeakTensorBinaryOpsTest(
     run_test_real_div(a=2, b=6)
 
   def test_weak_tensor_truncate_div(self, a_dtype, b_dtype, expected_dtype):
+    # [FUNCTION DOC]
+    # Parameterized by dtype descriptors and expected result. Runs the nested truncating division
+    # check for positive and negative pairs, including (-7,5), (1,-2) and (-100,-50).
     def run_test_truncate_div(a, b):
+      # [FUNCTION DOC]
+      # HELPER: inner worker for test_weak_tensor_truncate_div
+      # Skips unsupported expected dtypes. Negative operands are flipped to positive when an
+      # unsigned dtype is involved. Checks truncatediv and generated truncate_div in both orders
+      # against expected values computed on tensors.
       # Skip if provided dtype is not a valid input dtype for the op.
       if not output_dtype_supported_in_op("truncate_div", expected_dtype[0]):
         return
@@ -662,7 +823,15 @@ class WeakTensorBinaryOpsTest(
     run_test_truncate_div(a=-100, b=-50)
 
   def test_weak_tensor_truncate_mod(self, a_dtype, b_dtype, expected_dtype):
+    # [FUNCTION DOC]
+    # Parameterized by dtype descriptors and expected result. Runs the nested truncating modulo
+    # check for positive and negative pairs including (-7,5), (1,-1) and (-100,-50).
     def run_test_truncate_mod(a, b):
+      # [FUNCTION DOC]
+      # HELPER: inner worker for test_weak_tensor_truncate_mod
+      # Skips unsupported expected dtypes. Flips negative operands for unsigned dtypes. Checks
+      # truncatemod and generated truncate_mod in both orders against expected values computed on
+      # tensors.
       # Skip if provided dtype is not a valid input dtype for the op.
       if not output_dtype_supported_in_op("truncate_mod", expected_dtype[0]):
         return
@@ -701,7 +870,17 @@ class WeakTensorBinaryOpsTest(
     run_test_truncate_mod(a=-100, b=-50)
 
   def test_weak_tensor_scalar_mul(self, a_dtype, b_dtype, expected_dtype):
+    # [FUNCTION DOC]
+    # Parameterized by dtype descriptors and expected result. Runs the nested scalar multiply check
+    # for pairs (4,1), (41,2) and (2,0).
     def run_test_scalar_mul(a, b):
+      # [FUNCTION DOC]
+      # HELPER: inner worker for test_weak_tensor_scalar_mul
+      # KNOWN ISSUE: The expected dtype parameter is deliberately discarded, and the comment calls
+      # the expected dtype the second argument's dtype.      # Builds input variants, returns early when the first dtype is not compatible with the second
+      # dtype, then checks scalar_mul in both orders: the result should match the NumPy product and
+      # carry the dtype descriptor of the second (respectively first) argument rather than the
+      # promoted dtype.
       a_list = _get_test_input_for_binary_op(a, a_dtype)
       b_list = _get_test_input_for_binary_op(b, b_dtype)
       # Expected dtype = second arg's dtype.
@@ -718,7 +897,14 @@ class WeakTensorBinaryOpsTest(
     run_test_scalar_mul(a=2, b=0)
 
   def test_weak_tensor_mat_mul(self, a_dtype, b_dtype, expected_dtype):
+    # [FUNCTION DOC]
+    # Parameterized by dtype descriptors and expected result. Runs the nested matrix multiplication
+    # check on a pair of two-by-two matrices and a pair of one-by-one-by-one batches.
     def run_test_mat_mul(a, b):
+      # [FUNCTION DOC]
+      # HELPER: inner worker for test_weak_tensor_mat_mul
+      # Skips unsupported expected dtypes. Checks matmul in both orders against matmul of tensors
+      # of the expected dtype, including result weakness and dtype.
       a_list = _get_test_input_for_binary_op(a, a_dtype)
       b_list = _get_test_input_for_binary_op(b, b_dtype)
 
@@ -740,7 +926,15 @@ class WeakTensorBinaryOpsTest(
     run_test_mat_mul(a=[[[3]]], b=[[[2]]])
 
   def test_weak_tensor_truediv(self, a_dtype, b_dtype, expected_dtype):
+    # [FUNCTION DOC]
+    # Parameterized by dtype descriptors and expected result. Runs the nested true division check
+    # for pairs (4,2), (41,3) and (2,6).
     def run_test_truediv(a, b):
+      # [FUNCTION DOC]
+      # HELPER: inner worker for test_weak_tensor_truediv
+      # Because true division converts integers to floats on its own, the expected dtype is taken
+      # from the tensor division result while weakness comes from the expected descriptor. Checks
+      # truediv, divide and the slash operator in both orders.
       a_list = _get_test_input_for_binary_op(a, a_dtype)
       b_list = _get_test_input_for_binary_op(b, b_dtype)
       a_tensor = constant_op.constant(a, expected_dtype[0])
@@ -788,7 +982,15 @@ class WeakTensorBinaryOpsTest(
     run_test_truediv(a=2, b=6)
 
   def test_weak_tensor_div_no_nan(self, a_dtype, b_dtype, expected_dtype):
+    # [FUNCTION DOC]
+    # Parameterized by dtype descriptors and expected result. Runs the nested div_no_nan check for
+    # three pairs, then checks dividing not-a-number and infinity by zero gives zero as a weak
+    # float32 result.
     def run_test_div_no_nan(a, b):
+      # [FUNCTION DOC]
+      # HELPER: inner worker for test_weak_tensor_div_no_nan
+      # Checks div_no_nan in both orders against the tensor result of the same op; the expected
+      # dtype follows the tensor result and weakness follows the descriptor.
       a_list = _get_test_input_for_binary_op(a, a_dtype)
       b_list = _get_test_input_for_binary_op(b, b_dtype)
       a_tensor = constant_op.constant(a, expected_dtype[0])
@@ -823,7 +1025,15 @@ class WeakTensorBinaryOpsTest(
     self.match_expected(math_ops.div_no_nan(x, y), 0, (dtypes.float32, True))
 
   def test_weak_tensor_multiply_no_nan(self, a_dtype, b_dtype, expected_dtype):
+    # [FUNCTION DOC]
+    # Parameterized by dtype descriptors and expected result. Runs the nested multiply_no_nan check
+    # for three pairs, then checks multiplying not-a-number and infinity by zero gives zero as a
+    # weak float32 result.
     def run_test_multiply_no_nan(a, b):
+      # [FUNCTION DOC]
+      # HELPER: inner worker for test_weak_tensor_multiply_no_nan
+      # Skips expected dtypes other than float32 and float64. Checks multiply_no_nan in both orders
+      # against the tensor result of the same op.
       a_list = _get_test_input_for_binary_op(a, a_dtype)
       b_list = _get_test_input_for_binary_op(b, b_dtype)
 
@@ -863,8 +1073,16 @@ class WeakTensorBinaryOpsTest(
 class WeakTensorBinaryOpsTestSafeMode(
     test_util.TensorFlowTestCase, parameterized.TestCase
 ):
-
+  # [CLASS DOC]
+  # Tests that binary ops raise a type error when run under the safe dtype conversion mode for
+  # every dtype pair whose promotion is only allowed in the all mode. Parameterized by the class
+  # decorator with the two dtype descriptors; each test enters a safe-mode environment context.
   def test_weak_tensor_add(self, a_dtype, b_dtype):
+    # [FUNCTION DOC]
+    # Inside a safe-mode dtype conversion environment, builds input variants of the value one for
+    # the two dtypes and asserts that the add function raises a type error in both argument orders,
+    # and the plus operator when at least one operand is a tensor kind. Parameterized by the two
+    # disallowed dtype descriptors.
     with DtypeConversionTestEnv("safe"):
       a_list = _get_test_input_for_binary_op(1, a_dtype)
       b_list = _get_test_input_for_binary_op(1, b_dtype)
@@ -880,6 +1098,11 @@ class WeakTensorBinaryOpsTestSafeMode(
             _ = y + x
 
   def test_weak_tensor_sub(self, a_dtype, b_dtype):
+    # [FUNCTION DOC]
+    # Inside a safe-mode dtype conversion environment, builds input variants of the value one for
+    # the two dtypes and asserts that the subtract function raises a type error in both argument
+    # orders, and the minus operator when at least one operand is a tensor kind. Parameterized by
+    # the two disallowed dtype descriptors.
     with DtypeConversionTestEnv("safe"):
       a_list = _get_test_input_for_binary_op(1, a_dtype)
       b_list = _get_test_input_for_binary_op(1, b_dtype)
@@ -895,6 +1118,11 @@ class WeakTensorBinaryOpsTestSafeMode(
             _ = y - x
 
   def test_weak_tensor_mul(self, a_dtype, b_dtype):
+    # [FUNCTION DOC]
+    # Inside a safe-mode dtype conversion environment, builds input variants of the value one for
+    # the two dtypes and asserts that the multiply function raises a type error in both argument
+    # orders, and the times operator when at least one operand is a tensor kind. Parameterized by
+    # the two disallowed dtype descriptors.
     with DtypeConversionTestEnv("safe"):
       a_list = _get_test_input_for_binary_op(1, a_dtype)
       b_list = _get_test_input_for_binary_op(1, b_dtype)
@@ -910,6 +1138,11 @@ class WeakTensorBinaryOpsTestSafeMode(
             _ = y * x
 
   def test_weak_tensor_pow(self, a_dtype, b_dtype):
+    # [FUNCTION DOC]
+    # Inside a safe-mode dtype conversion environment, builds input variants of the value one for
+    # the two dtypes and asserts that the power function raises a type error in both argument
+    # orders, and the power operator when at least one operand is a tensor kind. Parameterized by
+    # the two disallowed dtype descriptors.
     with DtypeConversionTestEnv("safe"):
       a_list = _get_test_input_for_binary_op(1, a_dtype)
       b_list = _get_test_input_for_binary_op(1, b_dtype)
@@ -925,6 +1158,11 @@ class WeakTensorBinaryOpsTestSafeMode(
             _ = y**x
 
   def test_weak_tensor_mod(self, a_dtype, b_dtype):
+    # [FUNCTION DOC]
+    # Inside a safe-mode dtype conversion environment, builds input variants of the value one for
+    # the two dtypes and asserts that the mod function and the generated floor_mod op raises a type
+    # error in both argument orders, and the percent operator when at least one operand is a tensor
+    # kind. Parameterized by the two disallowed dtype descriptors.
     with DtypeConversionTestEnv("safe"):
       a_list = _get_test_input_for_binary_op(1, a_dtype)
       b_list = _get_test_input_for_binary_op(1, b_dtype)
@@ -944,6 +1182,11 @@ class WeakTensorBinaryOpsTestSafeMode(
             _ = y % x
 
   def test_weak_tensor_floor_div(self, a_dtype, b_dtype):
+    # [FUNCTION DOC]
+    # Inside a safe-mode dtype conversion environment, builds input variants of the value one for
+    # the two dtypes and asserts that the floordiv function and the generated floor_div op raises a
+    # type error in both argument orders, and the double-slash operator when at least one operand
+    # is a tensor kind. Parameterized by the two disallowed dtype descriptors.
     with DtypeConversionTestEnv("safe"):
       a_list = _get_test_input_for_binary_op(1, a_dtype)
       b_list = _get_test_input_for_binary_op(1, b_dtype)
@@ -963,6 +1206,11 @@ class WeakTensorBinaryOpsTestSafeMode(
             _ = y // x
 
   def test_weak_tensor_real_div(self, a_dtype, b_dtype):
+    # [FUNCTION DOC]
+    # Inside a safe-mode dtype conversion environment, builds input variants of the value one for
+    # the two dtypes and asserts that the realdiv function and the generated real_div op raises a
+    # type error in both argument orders (no operator form is tested). Parameterized by the two
+    # disallowed dtype descriptors.
     with DtypeConversionTestEnv("safe"):
       a_list = _get_test_input_for_binary_op(1, a_dtype)
       b_list = _get_test_input_for_binary_op(1, b_dtype)
@@ -977,6 +1225,11 @@ class WeakTensorBinaryOpsTestSafeMode(
           _ = gen_math_ops.real_div(y, x)
 
   def test_weak_tensor_truncate_mod(self, a_dtype, b_dtype):
+    # [FUNCTION DOC]
+    # Inside a safe-mode dtype conversion environment, builds input variants of the value one for
+    # the two dtypes and asserts that the truncatemod function and the generated truncate_mod op
+    # raises a type error in both argument orders (no operator form is tested). Parameterized by
+    # the two disallowed dtype descriptors.
     with DtypeConversionTestEnv("safe"):
       a_list = _get_test_input_for_binary_op(1, a_dtype)
       b_list = _get_test_input_for_binary_op(1, b_dtype)
@@ -991,6 +1244,11 @@ class WeakTensorBinaryOpsTestSafeMode(
           _ = gen_math_ops.truncate_mod(y, x)
 
   def test_weak_tensor_truncate_div(self, a_dtype, b_dtype):
+    # [FUNCTION DOC]
+    # Inside a safe-mode dtype conversion environment, builds input variants of the value one for
+    # the two dtypes and asserts that the truncatediv function and the generated truncate_div op
+    # raises a type error in both argument orders (no operator form is tested). Parameterized by
+    # the two disallowed dtype descriptors.
     with DtypeConversionTestEnv("safe"):
       a_list = _get_test_input_for_binary_op(1, a_dtype)
       b_list = _get_test_input_for_binary_op(1, b_dtype)
@@ -1005,6 +1263,11 @@ class WeakTensorBinaryOpsTestSafeMode(
           _ = gen_math_ops.truncate_div(y, x)
 
   def test_weak_tensor_mat_mul(self, a_dtype, b_dtype):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: The assertions for matmul with the operands in each order are written twice, so
+    # the second pair of checks is redundant.    # Inside a safe-mode environment, builds one-by-one matrix variants for the two dtypes and
+    # asserts that matmul raises a type error in both orders. Parameterized by the disallowed dtype
+    # pair.
     with DtypeConversionTestEnv("safe"):
       a_list = _get_test_input_for_binary_op([[1]], a_dtype)
       b_list = _get_test_input_for_binary_op([[1]], b_dtype)
@@ -1020,6 +1283,11 @@ class WeakTensorBinaryOpsTestSafeMode(
 
 
 def at_least_one_tensor_type(a, b):
+  # [FUNCTION DOC]
+  # HELPER: shared predicate for binary op tests in this module
+  # Returns true when either argument is a Tensor or a WeakTensor (checked by type), false
+  # otherwise. Used to decide whether an operator form can be applied to a pair of variants, since
+  # two plain Python values cannot use tensor operators.
   """Returns True if at least one of the inputs is a Tensor/WeakTensor."""
   if isinstance(a, tensor.Tensor) or isinstance(a, WeakTensor):
     return True
@@ -1029,6 +1297,11 @@ def at_least_one_tensor_type(a, b):
 
 
 def maybe_to_positive_input(a, b, a_dtype, b_dtype, expected_dtype):
+  # [FUNCTION DOC]
+  # HELPER: input sanitizer for the truncating division and modulo tests
+  # Takes two numbers, the descriptors of their dtypes and the expected result dtype descriptor. If
+  # an operand is negative and either its own dtype or the expected dtype is an unsigned integer
+  # type, negates it. Returns the pair of possibly adjusted numbers.
   """Converts inputs to positive inputs if the provided dtypes are unsigned."""
   unsigned_types = [dtypes.uint8, dtypes.uint16, dtypes.uint32, dtypes.uint64]
   if a < 0 and (
@@ -1043,6 +1316,11 @@ def maybe_to_positive_input(a, b, a_dtype, b_dtype, expected_dtype):
 
 
 def output_dtype_supported_in_op(op_name, input_dtype):
+  # [FUNCTION DOC]
+  # HELPER: lets binary op tests skip dtypes unsupported by an op
+  # Takes an op name (power, mod, floor_div, real_div, truncate_div, truncate_mod, matmul,
+  # multiply_no_nan) and a dtype. Returns true if the dtype is in that op's list of dtypes valid in
+  # eager mode. Raises a key error for an unknown op name. No side effects.
   real_dtypes = [
       dtypes.int8,
       dtypes.int16,
@@ -1103,6 +1381,12 @@ def output_dtype_supported_in_op(op_name, input_dtype):
 # TODO(b/289333658): Add tf.constant(x) with no dtype arg as a "weak" input
 # after adding WeakTensor construction logic to tf.constant.
 def get_test_input_for_unary_op(op):
+  # [FUNCTION DOC]
+  # HELPER: builds the input set for test_unary_ops_return_weak_tensor
+  # Chooses five equivalent inputs for the given unary op and returns them as a tuple: weak tensor,
+  # plain Python value, constant without dtype, constant with explicit dtype, NumPy array. Integer
+  # scalars for ops in the integer list, 2x2 integer matrices for ops in the 2-D list, otherwise a
+  # float vector of three values.
   if op in _TF_UNARY_APIS_WITH_INT_INPUT:
     return (
         _get_weak_tensor(5, dtypes.int32),

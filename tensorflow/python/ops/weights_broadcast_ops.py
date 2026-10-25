@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Weight broadcasting operations used by the loss and metric libraries. Offers
+# assert_broadcastable (static or dynamic check that weights are a scalar or have the same rank
+# as the values with each dimension equal to 1 or to the values dimension) and
+# broadcast_weights (expands weights to the values shape, registered as an internal exported
+# API). Two private helpers implement the dynamic checks. Import-time side effect: registers
+# the public function with the export decorator.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,6 +37,14 @@ from tensorflow.python.util.tf_export import tf_export
 
 
 def _has_valid_dims(weights_shape, values_shape):
+  # [FUNCTION DOC]
+  # HELPER: dynamic check used by assert_broadcastable via the nonscalar shape check.
+  # KNOWN ISSUE: the name scope is called has_invalid_dims although the function returns whether
+  # dims are valid.
+  # Takes 1-D integer shape tensors. Builds, for each values dimension, the allowed set
+  # {values dim, 1}, computes the set difference of the weights dims against it, and returns a
+  # boolean scalar tensor that is true when no weights dim is outside the allowed set. Adds
+  # graph ops only.
   with ops.name_scope(
       None, "has_invalid_dims", (weights_shape, values_shape)) as scope:
     values_shape_2d = array_ops.expand_dims(values_shape, -1)
@@ -44,6 +59,11 @@ def _has_valid_dims(weights_shape, values_shape):
 
 def _has_valid_nonscalar_shape(
     weights_rank, weights_shape, values_rank, values_shape):
+  # [FUNCTION DOC]
+  # HELPER: dynamic check used by assert_broadcastable for non-scalar weights.
+  # Takes rank scalars and shape vectors of weights and values. Returns a boolean scalar tensor:
+  # false when the ranks differ, otherwise the result of the per-dimension validity check
+  # (evaluated lazily through a conditional). Adds graph ops only.
   with ops.name_scope(
       None, "has_valid_nonscalar_shape",
       (weights_rank, weights_shape, values_rank, values_shape)) as scope:
@@ -60,6 +80,14 @@ _ASSERT_BROADCASTABLE_ERROR_PREFIX = "weights can not be broadcast to values."
 
 
 def assert_broadcastable(weights, values):
+  # [FUNCTION DOC]
+  # Converts weights and values to tensors, then tries static checks: scalar weights (rank 0)
+  # succeed with a no-op; differing static ranks, or a static dimension of weights that is
+  # neither 1 nor the values dimension, raise a value error with a detailed message. If static
+  # shapes are fully known and valid it returns a no-op. Otherwise it builds a dynamic check
+  # and returns an assert operation that fails at run time with an invalid-argument error when
+  # the weights shape is invalid. Inputs: weights and values, tensor-like. Output: an operation
+  # to use as a control dependency. Adds named scopes and ops to the graph.
   """Asserts `weights` can be broadcast to `values`.
 
   In `tf.losses` and `tf.metrics`, we support limited weight broadcasting. We
@@ -135,6 +163,15 @@ def assert_broadcastable(weights, values):
 
 @tf_export("__internal__.ops.broadcast_weights", v1=[])
 def broadcast_weights(weights, values):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring mentions a function named with a leading underscore for
+  # broadcasting weights; the actual function is broadcast_weights.
+  # Converts values to a tensor and weights to a tensor of the values base dtype. If both static
+  # shapes are fully defined and compatible, returns weights unchanged. Inside an XLA context
+  # it skips the assertion and returns weights multiplied by ones shaped like values. Otherwise
+  # it multiplies weights by ones_like(values) under a control dependency on
+  # assert_broadcastable, so invalid shapes raise (value error statically, invalid-argument
+  # error at run time). Returns the broadcast weights tensor.
   """Broadcast `weights` to the same shape as `values`.
 
   This returns a version of `weights` following the same broadcast rules as
