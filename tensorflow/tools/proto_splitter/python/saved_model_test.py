@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test for the SavedModel splitter: builds a SavedModel wrapping a synthetic graph with large
+# and small nodes and library functions, splits it with a lowered maximum size, and verifies
+# that every message chunk is within the limit.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,14 +28,23 @@ from tensorflow.tools.proto_splitter.python import test_util
 
 
 class SavedModelSplitterTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the SavedModel splitter with a shared chunk-size assertion helper.
 
   def _assert_chunk_sizes(self, chunks, max_size):
+    # [FUNCTION DOC]
+    # HELPER: assertion for the test in this class. Asserts every chunk that is a protobuf
+    # message has a serialized size of at most max_size; raw byte chunks are ignored.
     """Asserts that all chunk proto sizes are <= max_size."""
     for chunk in chunks:
       if isinstance(chunk, message.Message):
         self.assertLessEqual(chunk.ByteSize(), max_size)
 
   def test_split_saved_model(self):
+    # [FUNCTION DOC]
+    # Scenario: max size set to 500; a graph with nine nodes (some 1000 bytes) and four library
+    # functions is placed in the first meta graph of a SavedModel. After splitting, asserts every
+    # message chunk is at most the max size. Side effect: changes the global debug max size.
     sizes = [100, 100, 1000, 100, 1000, 500, 100, 100, 100]
     fn1 = [100, 100, 100]
     fn2 = [100, 500]

@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Tests for the graph-building test utility: verifies that generated node sizes are close to the
+# requested sizes for the top-level graph and for library functions.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,11 +25,19 @@ from tensorflow.tools.proto_splitter.python import test_util
 
 
 class MakeGraphDefTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case for the synthetic graph builder.
 
   @parameterized.named_parameters(
       ("Float64", dtypes.float64), ("Float32", dtypes.float32)
   )
   def testMakeGraphDef(self, dtype):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the float64 case does not really test float64, because the builder ignores
+    # its dtype argument and always uses float32.
+    # Parameterized by element type. Builds a graph with five top-level nodes and two functions,
+    # then asserts the actual node byte sizes are within 5 bytes (top level) or 10 bytes
+    # (function nodes) of the requested sizes.
     expected_sizes = [75, 50, 100, 95, 120]
     fn1 = [121, 153, 250, 55]
     fn2 = [552, 45]

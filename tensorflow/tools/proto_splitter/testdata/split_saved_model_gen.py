@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: command-line generator script for test data (not library code). Builds a synthetic
+# SavedModel containing a large graph and exports it as text, binary and chunked files into the
+# directory given by the path flag, for use by the C++ merger tests. Defines the path, saved
+# model type and export command-line flags at import time; running as a script starts the
+# application main function.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -48,6 +54,14 @@ def _split_and_write(
     max_size: int,
     export_files: Sequence[str],
 ):
+  # [FUNCTION DOC]
+  # HELPER: shared writer for the generators in this script.
+  # Inputs: path, base file path without extension; saved_model, the model to export; max_size,
+  # the maximum chunk size to apply; export_files, list of formats among text, binary and chunked.
+  # Sets the global debug maximum chunk size (side effect). Writes the text and/or serialized
+  # binary forms with the matching extensions, and for the chunked format splits the model
+  # (mutating it) and writes the chunked file. Raises a runtime error if only one chunk resulted.
+  # Logs each file written.
   """Writes the .pb, .pbtxt and .cpb files for a SavedModel."""
   constants.debug_set_max_size(max_size)
 
@@ -73,6 +87,11 @@ def _split_and_write(
 
 
 def split_standard(path: str, export_files: Sequence[str]):
+  # [FUNCTION DOC]
+  # Generator for a standard test SavedModel: builds a graph with nine nodes and four library
+  # functions, puts it in the first meta graph, and exports with a 500 byte maximum chunk size
+  # (also setting the global debug maximum size). Inputs: path, base file path; export_files,
+  # formats to write. Returns nothing; writes files.
   """Splits a standard SavedModel."""
   fn1 = [100, 100, 100]
   fn2 = [100, 500]
@@ -115,6 +134,14 @@ EXPORT_FILES = flags.DEFINE_multi_string(
 
 
 def main(argv: Sequence[str]) -> None:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: never checks that the path flag was provided; a missing path causes a type
+  # error when joining paths rather than a usage error.
+  # Entry point. Input: argv, command-line arguments (extra arguments raise a usage error).
+  # Resolves export formats and saved model types from the flags (all expands to every option),
+  # raises a value error for an unknown type, then for each selected type logs and runs its
+  # generator with a base file path of the path directory joined with the type name.
+  # Returns nothing.
   if len(argv) > 1:
     raise app.UsageError("Too many command-line arguments.")
 

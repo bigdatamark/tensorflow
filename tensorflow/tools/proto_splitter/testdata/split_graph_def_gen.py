@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: command-line generator script for test data (not library code). Builds several
+# synthetic GraphDefs (many nodes, large nodes, a large constant, and graphs whose nodes live in
+# library functions) and exports each as text, binary and chunked files into the directory given
+# by the path flag, for use by the C++ merger tests. Defines the path, graph type and export
+# command-line flags at import time; running as a script starts the application main function.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -51,6 +57,14 @@ def _split_and_write(
     max_size: int,
     export_files: Sequence[str],
 ):
+  # [FUNCTION DOC]
+  # HELPER: shared writer for all graph generators in this script.
+  # Inputs: path, base file path without extension; graph_def, the graph to export; max_size,
+  # the maximum chunk size to apply; export_files, list of formats among text, binary and chunked.
+  # Sets the global debug maximum chunk size (side effect). Writes the text form and/or the
+  # serialized binary form with the matching extensions, and for the chunked format splits the
+  # graph (mutating it, so it must be exported in other formats first) and writes the chunked
+  # file. Raises a runtime error if the chunked export produced only one chunk. Logs each file.
   """Writes the .pb, .pbtxt and .cpb files for a GraphDef."""
   constants.debug_set_max_size(max_size)
 
@@ -76,6 +90,10 @@ def _split_and_write(
 
 
 def split_lots_nodes(path: str, export_files: Sequence[str]):
+  # [FUNCTION DOC]
+  # Generator for a graph of fifteen nodes of about 95 bytes each, exported with a 500 byte
+  # maximum chunk size (expected: three graph chunks plus metadata). Inputs: path, base file path;
+  # export_files, formats to write. Returns nothing; writes files.
   """GraphDef with lots of nodes."""
   # The actual sizes in the generated graph has a slight deviation, but are
   # between [90, 100] (tested in testMakeGraphDef with atol=5).
@@ -96,6 +114,10 @@ def split_lots_nodes(path: str, export_files: Sequence[str]):
 
 
 def split_large_nodes(path: str, export_files: Sequence[str]):
+  # [FUNCTION DOC]
+  # Generator for a six-node graph where four nodes exceed a third of the 200 byte maximum chunk
+  # size and so are split into their own chunks. Inputs: path, base file path; export_files,
+  # formats to write. Returns nothing; writes files.
   """GraphDef with large nodes."""
   # Large nodes are greedily split from the original proto if they are
   # larger than max_size / 3.
@@ -106,6 +128,10 @@ def split_large_nodes(path: str, export_files: Sequence[str]):
 
 
 def split_large_constant(path: str, export_files: Sequence[str]):
+  # [FUNCTION DOC]
+  # Generator for a graph with two 1000 byte constants among small nodes, exported with a 500
+  # byte maximum chunk size so the constants' tensor contents become separate chunks. Inputs:
+  # path, base file path; export_files, formats to write. Returns nothing; writes files.
   """GraphDef with large constant nodes."""
   #    Expected Chunks (Max Size = 500)
   #    -----------------------------
@@ -122,6 +148,10 @@ def split_large_constant(path: str, export_files: Sequence[str]):
 
 
 def function_lots_of_nodes(path: str, export_files: Sequence[str]):
+  # [FUNCTION DOC]
+  # Generator for a graph with no top-level nodes and one library function holding fifteen
+  # nodes of about 95 bytes, exported with a 500 byte maximum chunk size. Inputs: path, base
+  # file path; export_files, formats to write. Returns nothing; writes files.
   """Generates a proto of GraphDef with a FunctionDef that have many nodes."""
   graph_def = test_util.make_graph_def_with_constant_nodes(
       [], fn=LOTS_NODES_SIZES
@@ -130,6 +160,10 @@ def function_lots_of_nodes(path: str, export_files: Sequence[str]):
 
 
 def function_large_nodes(path: str, export_files: Sequence[str]):
+  # [FUNCTION DOC]
+  # Generator for a graph with one library function whose six nodes include several large ones,
+  # exported with a 200 byte maximum chunk size. Inputs: path, base file path; export_files,
+  # formats to write. Returns nothing; writes files.
   graph_def = test_util.make_graph_def_with_constant_nodes(
       [], fn=LARGE_NODES_SIZES
   )
@@ -137,6 +171,10 @@ def function_large_nodes(path: str, export_files: Sequence[str]):
 
 
 def graph_def_and_function(path: str, export_files: Sequence[str]):
+  # [FUNCTION DOC]
+  # Generator for a graph with six 50-byte top-level nodes plus four small library functions,
+  # exported with a 200 byte maximum chunk size so both nodes and the library are chunked.
+  # Inputs: path, base file path; export_files, formats to write. Returns nothing; writes files.
   graph_def = test_util.make_graph_def_with_constant_nodes(
       [50, 50, 50, 50, 50, 50], fn1=[50, 50, 50], fn2=[50], fn3=[50], fn4=[50]
   )
@@ -169,6 +207,14 @@ EXPORT_FILES = flags.DEFINE_multi_string(
 
 
 def main(argv: Sequence[str]) -> None:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: never checks that the path flag was provided; a missing path causes a type
+  # error when joining paths rather than a usage error.
+  # Entry point. Input: argv, command-line arguments (extra arguments raise a usage error).
+  # Resolves the export formats and graph types from the flags (the value all expands to every
+  # option), raises a value error for an unknown graph type, then for each selected type logs
+  # and runs its generator with a base file path of the path directory joined with the type name.
+  # Returns nothing.
   if len(argv) > 1:
     raise app.UsageError("Too many command-line arguments.")
 

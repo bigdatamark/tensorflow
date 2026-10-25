@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: utility module shared by the proto splitter modules (splitters, joiners and tests).
+# Provides byte-size formatting, navigation of protobuf messages by a path of field names, field
+# numbers, map keys and list indices (get_field), generation of the matching field-index protos
+# (get_field_tag), and a repeated-field check. Defines the FieldTypes type alias and private
+# lookup tables. No import-time side effects other than defining these names.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +31,12 @@ _BYTE_UNITS = [(1, "B"), (1 << 10, "KiB"), (1 << 20, "MiB"), (1 << 30, "GiB")]
 
 
 def format_bytes(b: int) -> str:
+  # [FUNCTION DOC]
+  # HELPER: formats sizes for messages (for example error text about oversized nodes).
+  # Input: b, a number of bytes (an integer; floats also work). Output: a string with the value
+  # scaled to the largest fitting unit among bytes, KiB, MiB and GiB (values of a GiB or more
+  # stay in GiB), shown with at most two decimals and with trailing zeros and a trailing decimal
+  # point removed, with no space before the unit. No exceptions; no side effects.
   """Formats bytes into a human-readable string."""
   for i in range(1, len(_BYTE_UNITS)):
     if b < _BYTE_UNITS[i][0]:
@@ -44,6 +56,16 @@ FieldTypes = Union[str, int, bool, Sequence[Union[str, int, bool]]]
 def get_field(
     proto: message.Message, fields: FieldTypes
 ) -> tuple[Any, Optional[descriptor.FieldDescriptor]]:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the field is None if none are found, but a missing map key or
+  # out-of-range list index yields None only for the value, while an empty path returns the
+  # proto itself together with a missing (None) descriptor.
+  # Follows a path through a proto and returns the field value and its descriptor. Inputs:
+  # proto, the starting message; fields, a single name/number or a list of field names or
+  # numbers, with map keys and list indices following the map or repeated field they apply to.
+  # Returns a pair of the value reached by the final step and the descriptor of the last field
+  # (descriptor is nothing for an empty path). Raises key errors for unknown names or numbers,
+  # value errors if the path goes below a non-message field, and a type error from the walker.
   """Returns the field and field descriptor from the proto.
 
   Args:
@@ -67,6 +89,13 @@ def get_field(
 def get_field_tag(
     proto: message.Message, fields: FieldTypes
 ) -> Sequence[chunk_pb2.FieldIndex]:
+  # [FUNCTION DOC]
+  # Builds the list of field-index protos describing a path into a proto. Inputs: proto, the
+  # starting message; fields, a path in the same form accepted by get_field. For every field
+  # step it emits an entry holding the field number, followed by an extra entry for a map key
+  # (typed by the map's key type) or a list index when one is present in the path.
+  # Returns the list of entries (longer than the path when map keys or indices are used).
+  # Raises the same key, value and type errors as the field walker. No side effects.
   """Generates FieldIndex proto for a nested field within a proto.
 
   Args:
@@ -91,6 +120,18 @@ def get_field_tag(
 
 
 def _walk_fields(proto: message.Message, fields: FieldTypes):
+  # [FUNCTION DOC]
+  # HELPER: shared path walker behind get_field and get_field_tag.
+  # KNOWN ISSUE: the type error for a boolean found in the field list can effectively never fire
+  # for a boolean in field position because booleans count as integers and are treated as field
+  # numbers (then fail with a key error). Also the docstring says None is yielded when not found,
+  # which only holds for map keys and list indices that are missing.
+  # Generator. Inputs: proto, starting message; fields, a single entry or list of names/numbers,
+  # with map keys and list indices placed after their map/repeated field. For each field step it
+  # yields a tuple of the value reached (nothing if a map key or index was missing), the field
+  # descriptor, the map key used (or nothing) and the list index used (or nothing).
+  # Raises a value error if the path continues below a field that is not a message, and key
+  # errors for names or numbers missing from the message type. Does not modify the proto.
   """Yields fields in a proto.
 
   Args:
@@ -176,10 +217,17 @@ def _walk_fields(proto: message.Message, fields: FieldTypes):
 
 
 def _is_map(desc: descriptor.Descriptor) -> bool:
+  # [FUNCTION DOC]
+  # HELPER: used by the path walker. Returns true if the message descriptor is a generated map
+  # entry type; false for non-map descriptors and for a missing descriptor.
   return desc.GetOptions().map_entry if desc is not None else False
 
 
 def is_repeated(field_desc: descriptor.FieldDescriptor) -> bool:
+  # [FUNCTION DOC]
+  # Returns true if the field descriptor describes a repeated field (including maps). The
+  # commented-out lines are source-transformation markers for an internal build; the active
+  # code compares the field label with the repeated label.
   # copybara:uncomment_begin(google-only)
   # return field_desc.is_repeated
   # copybara:uncomment_end_and_comment_begin
@@ -199,5 +247,9 @@ _MAP_KEY = {
 
 
 def _map_key_proto(key_type, key):
+  # [FUNCTION DOC]
+  # HELPER: used by get_field_tag. Inputs: key_type, the protobuf field type of the map key;
+  # key, the key value. Returns a map-key proto with the matching typed member set (string,
+  # bool, 32/64-bit signed or unsigned integer). Raises a key error for unsupported key types.
   """Returns MapKey proto for a key of key_type."""
   return _MAP_KEY[key_type](key)

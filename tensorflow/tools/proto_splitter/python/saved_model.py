@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Splitter for SavedModel protos. Exposes SavedModelSplitter, which delegates to the GraphDef
+# splitter for the graph of the first meta graph and, if the SavedModel is still too large,
+# moves that whole graph into its own chunk. No import-time side effects.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,9 +25,21 @@ from tensorflow.tools.proto_splitter import split_graph_def
 
 
 class SavedModelSplitter(split.ComposableSplitter):
+  # [CLASS DOC]
+  # Composable splitter for a SavedModel proto (held in place and mutated). Only the graph of
+  # the first meta graph is ever split; other meta graphs are left untouched.
   """Splits a SavedModel proto into chunks of size < 2GB."""
 
   def build_chunks(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the class docstring promises chunks below 2GB, but the actual limit is the
+    # configurable maximum size from the constants module, and only the first meta graph is
+    # considered; large content elsewhere in the SavedModel is not split.
+    # Takes no arguments, returns nothing. Raises a type error if the held proto is not a
+    # SavedModel. If the proto size reaches the maximum, runs the GraphDef splitter on the first
+    # meta graph's graph. If it is still too large, adds the entire graph as a chunk at index 1
+    # (index 0 is the SavedModel itself) and clears the graph from the SavedModel.
+    # Side effects: mutates the proto and registers chunks.
     if not isinstance(self._proto, saved_model_pb2.SavedModel):
       raise TypeError(
           "SavedModelSplitter can only split SavedModel protos. "

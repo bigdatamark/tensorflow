@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Unit tests for the GraphDef splitter. Builds synthetic GraphDefs with constant nodes of chosen
+# sizes (also inside library functions), lowers the global maximum chunk size for debugging, runs
+# the splitter, and checks the number, types, sizes and contents of the chunks and the resulting
+# chunked-message metadata. Runs under the TensorFlow test runner when executed as a script.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,32 +35,55 @@ from tensorflow.tools.proto_splitter.python import test_util
 
 
 class GraphDefSplitterTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the GraphDef splitter: no split, large constants, many small nodes, large
+  # nodes, and splitting of library functions. Shares helper methods for building and copying
+  # graphs and for checking chunk sizes and field tags.
 
   def _make_graph_def_with_constant_nodes(
       self, node_sizes, dtype=None, **function_node_sizes
   ):
+    # [FUNCTION DOC]
+    # HELPER: builds test graphs for the tests in this class.
+    # Thin wrapper over the shared test utility. Inputs: node_sizes, list of approximate byte
+    # sizes for top-level constant nodes; dtype, optional element type; keyword arguments mapping
+    # function names to lists of node sizes for library functions. Returns the new GraphDef.
     return test_util.make_graph_def_with_constant_nodes(
         node_sizes, dtype, **function_node_sizes
     )
 
   def _copy_graph(self, graph_def):
+    # [FUNCTION DOC]
+    # HELPER: gives tests an unmodified copy, since the splitter mutates its input.
+    # Returns a new GraphDef holding a copy of the given graph_def.
     """Create a copy of GraphDef."""
     graph_def_copy = graph_pb2.GraphDef()
     graph_def_copy.CopyFrom(graph_def)
     return graph_def_copy
 
   def _assert_chunk_sizes(self, chunks, max_size):
+    # [FUNCTION DOC]
+    # HELPER: assertion shared by the tests.
+    # For every chunk that is a protobuf message (raw byte chunks are skipped), asserts its
+    # serialized size is at most max_size. Returns nothing; fails the test otherwise.
     """Asserts that all chunk proto sizes are <= max_size."""
     for chunk in chunks:
       if isinstance(chunk, message.Message):
         self.assertLessEqual(chunk.ByteSize(), max_size)
 
   def _assert_field_tags(self, expected_fields, actual_fields):
+    # [FUNCTION DOC]
+    # HELPER: assertion shared by the tests.
+    # Asserts both lists of field tags have the same length and that each pair is equal as
+    # protos. Returns nothing; fails the test on mismatch.
     self.assertLen(actual_fields, len(expected_fields))
     for expected, actual in zip(expected_fields, actual_fields):
       self.assertProtoEquals(expected, actual)
 
   def testSplitNoChunks(self):
+    # [FUNCTION DOC]
+    # Scenario: five small nodes totalling below the debug max size of 500. Splitting the graph
+    # must produce exactly one chunk, equal to the original GraphDef.
     sizes = [50, 100, 50, 50, 100]
     max_size = 500
     constants.debug_set_max_size(max_size)
@@ -67,6 +95,11 @@ class GraphDefSplitterTest(test.TestCase):
     self.assertProtoEquals(graph_def, chunks[0])
 
   def testLargeConstant(self):
+    # [FUNCTION DOC]
+    # Scenario: max size 500 with two constant nodes (indices 2 and 4) of 1000 bytes. Expects
+    # three chunks, all message chunks within the limit; the tensor contents of nodes 4 and 2 are
+    # chunks 2 and 1; the chunked message has two fields pointing at chunks 1 and 2 with field
+    # tags for the tensor content of the respective nodes.
     sizes = [50, 50, 1000, 50, 1000]
     max_size = 500
     constants.debug_set_max_size(max_size)
@@ -113,6 +146,10 @@ class GraphDefSplitterTest(test.TestCase):
     )
 
   def testLotsOfNodes(self):
+    # [FUNCTION DOC]
+    # Scenario: fifteen nodes of about 95 bytes with max size 500. Expects three GraphDef
+    # chunks whose concatenated nodes equal the original nodes in order, all within the limit,
+    # and a chunked message with two fields referring to chunks 1 and 2 with empty field tags.
     # The actual sizes in the generated graph has a slight deviation, but are
     # between [90, 100] (tested in testMakeGraphDef with atol=5).
     sizes = [95] * 15
@@ -148,6 +185,13 @@ class GraphDefSplitterTest(test.TestCase):
     self.assertEmpty(chunked_message.chunked_fields[1].field_tag)
 
   def testLargeNodes(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the in-test comment says six chunks are created, but the assertion (and the
+    # listed contents) expects five.
+    # Scenario: max size 200, six nodes where those over a third of the limit (indices 1, 2, 3
+    # and 5) should be greedily moved into their own chunks. Expects five chunks within the
+    # limit, the large nodes equal to chunks 1 to 4, small nodes remaining in the parent, empty
+    # placeholders where large nodes were, and four chunked fields with matching field tags.
     # Large nodes are greedily split from the original proto if they are
     # larger than max_size / 3.
     sizes = [50, 95, 95, 95, 50, 95]
@@ -199,6 +243,11 @@ class GraphDefSplitterTest(test.TestCase):
     )
 
   def testFunctionLotsOfNodes(self):
+    # [FUNCTION DOC]
+    # Scenario: no top-level nodes, one library function with five 50-byte nodes, max size 200.
+    # Expects two chunks (a GraphDef then a FunctionDef) within the limit, the function nodes
+    # split across them in order, and a chunked message whose single field points at the
+    # library function entry and chunk index 1.
     sizes = []
     fn1 = [50, 50, 50, 50, 50]
     max_size = 200
@@ -244,6 +293,10 @@ class GraphDefSplitterTest(test.TestCase):
     self.assertProtoEquals(expected_message, chunked_message)
 
   def testFunctionLargeNodes(self):
+    # [FUNCTION DOC]
+    # Scenario: one library function with nodes of 500, 500, 50 and 500 bytes, max size 200.
+    # Expects four chunks within the limit: a GraphDef followed by the tensor contents of the
+    # three large constants, in node order.
     sizes = []
     fn1 = [500, 500, 50, 500]
     max_size = 200
@@ -258,6 +311,10 @@ class GraphDefSplitterTest(test.TestCase):
     self.assertIsInstance(chunks[0], graph_pb2.GraphDef)
 
     def get_const_value(index):
+      # [FUNCTION DOC]
+      # HELPER: reads expected data for the enclosing test. Given an index, returns the tensor
+      # content bytes of that node definition of the first library function in the original
+      # graph.
       node_def = graph_def.library.function[0].node_def[index]
       return node_def.attr["value"].tensor.tensor_content
 
@@ -270,6 +327,10 @@ class GraphDefSplitterTest(test.TestCase):
       self.assertEqual(expected, chunk)
 
   def testChunkGraphDefAndFunctions(self):
+    # [FUNCTION DOC]
+    # Scenario: six 50-byte top-level nodes plus four library functions (one with three nodes,
+    # three with one), max size 200. Expects four chunks, all within the limit (two GraphDef
+    # node slices, the large function, and the function library).
     sizes = [50, 50, 50, 50, 50, 50]
     fn1 = [50, 50, 50]
     fn2 = [50]

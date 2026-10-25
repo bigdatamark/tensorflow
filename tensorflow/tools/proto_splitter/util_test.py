@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Tests for the proto splitter utility functions: byte formatting, field-tag generation for
+# nested paths (names, numbers, map keys, list indices), error reporting for invalid paths, and
+# field/descriptor lookup, using the many-fields test message.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,8 +26,13 @@ from tensorflow.tools.proto_splitter.testdata import test_message_pb2
 
 
 class UtilTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the splitter utility module; no shared fixtures.
 
   def test_format_bytes(self):
+    # [FUNCTION DOC]
+    # Checks formatting of byte counts: exact KiB, fractional KiB with trimmed zeros, MiB and
+    # GiB values, including float inputs, rounded to two decimals.
     self.assertEqual(util.format_bytes(1024), "1KiB")
     self.assertEqual(util.format_bytes(5632), "5.5KiB")
     self.assertEqual(util.format_bytes(53432), "52.18KiB")
@@ -34,6 +43,11 @@ class UtilTest(test.TestCase):
     self.assertEqual(util.format_bytes(16493342281), "15.36GiB")
 
   def test_get_field_tag(self):
+    # [FUNCTION DOC]
+    # Builds field tags for three paths in the many-fields message: names with a list index and
+    # an unsigned-integer map key; a boolean map key followed by a field; and a path given purely
+    # by field numbers. Asserts the number of entries, field numbers, list indices and that the
+    # map key is stored in the typed member matching the key type.
     proto = test_message_pb2.ManyFields()
 
     # proto.field_one.repeated_field[15].map_field_uint32[10]
@@ -68,6 +82,9 @@ class UtilTest(test.TestCase):
     self.assertEqual(3, ret[4].field)
 
   def test_get_field_tag_invalid(self):
+    # [FUNCTION DOC]
+    # Checks error handling: an unknown field name and an unknown field number raise key errors
+    # with descriptive messages, and descending into a string field raises a value error.
     proto = test_message_pb2.ManyFields()
     with self.assertRaisesRegex(KeyError, "Unable to find field 'not_a_field'"):
       util.get_field_tag(proto, ["field_one", "not_a_field"])
@@ -77,6 +94,11 @@ class UtilTest(test.TestCase):
       util.get_field_tag(proto, ["string_field", 1])
 
   def test_get_field_and_desc(self):
+    # [FUNCTION DOC]
+    # Builds a nested many-fields message with repeated, map and nested-map content and checks
+    # field lookup: an empty path returns the message itself and no descriptor; paths by name or
+    # by number return the repeated list, an element, a string, and map values (unsigned key and
+    # boolean keys), with the expected descriptor names and numbers.
     proto = test_message_pb2.ManyFields(
         field_one=test_message_pb2.ManyFields(
             repeated_field=[

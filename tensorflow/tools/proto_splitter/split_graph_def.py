@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Splitter for GraphDef protos. Provides a set of composable splitters that break an oversized
+# GraphDef into several chunks, each below the maximum proto size from the constants module.
+# Nodes in the node list and functions in the function library are split into separate chunks;
+# individual large nodes are split further (constant tensor contents are moved to their own chunk
+# as raw bytes, other large messages become their own chunk). Exposes GraphDefSplitter (the
+# entry point), several size-based splitters, and a helper to extract constant values.
+# No import-time side effects beyond defining module constants and size-check callbacks.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,12 +38,25 @@ _CONST_OP = "Const"
 
 
 class GraphDefSplitter(split.ComposableSplitter):
+  # [CLASS DOC]
+  # Top-level splitter for a GraphDef proto. It holds the GraphDef (modified in place) and, when
+  # asked to build chunks, delegates to a repeated-message splitter for the node list and another
+  # for the function library, deciding which to run first based on which part is larger.
+  # Created with the proto and the usual composable-splitter keyword arguments.
   """Implements proto splitter for GraphDef.
 
   This Splitter will modify the passed in proto in place.
   """
 
   def build_chunks(self):
+    # [FUNCTION DOC]
+    # Splits the held GraphDef into chunks when its serialized size reaches the maximum size.
+    # Takes no arguments; returns nothing. Raises a type error if the proto is not a GraphDef.
+    # If the proto is already under the limit, does nothing. Otherwise creates splitters for the
+    # node list and for the library functions, runs the larger part first (and the other only if
+    # the total is still too big), then, if the proto remains oversized, moves the whole library
+    # into its own chunk at index 1 (index 0 is the base chunk) and clears it from the proto.
+    # Side effects: mutates the proto in place and registers chunks with the parent splitter.
     """Splits a GraphDef proto into smaller chunks."""
     proto = self._proto
     if not isinstance(proto, graph_pb2.GraphDef):
@@ -87,6 +108,14 @@ _KEEP_TENSOR_PROTO_FIELDS = ("dtype", "tensor_shape", "version_number")
 
 
 def chunk_constant_value(node: node_def_pb2.NodeDef, size: int):
+  # [FUNCTION DOC]
+  # Removes the tensor data from a Const node and returns it as bytes.
+  # Inputs: node, a NodeDef; size, its serialized size (used only in the error message).
+  # For a Const node, takes the raw tensor content (or, if absent, converts the typed value
+  # fields to a byte string), clears the tensor proto while preserving its dtype, shape and
+  # version number, and returns the bytes. Mutates the node in place.
+  # Raises a value error describing the node (name, op, inputs, device, attribute sizes) if the
+  # node is not a Const, since only constants can be split further.
   """Extracts and clears the constant value from a NodeDef.
 
   Args:
@@ -148,6 +177,12 @@ def _split_repeated_field(
     start_index: int,
     end_index: Optional[int] = None,
 ) -> None:
+  # [FUNCTION DOC]
+  # HELPER: used by the repeated-message splitter to fill the chunk protos.
+  # Copies a slice of a repeated field from proto into the same field of new_proto (merging).
+  # Inputs: proto, source message; new_proto, destination message; fields, the field path;
+  # start_index, first element to copy; end_index, exclusive end (nothing means to the end).
+  # Returns nothing; mutates new_proto only.
   """Generic function for copying a repeated field from one proto to another."""
   util.get_field(new_proto, fields)[0].MergeFrom(
       util.get_field(proto, fields)[0][start_index:end_index]
@@ -160,21 +195,36 @@ _ALWAYS_SPLIT = lambda x: True
 
 
 class SplitBasedOnSize(split.ComposableSplitter):
+  # [CLASS DOC]
+  # HELPER: base class for the per-message splitters used by the repeated-message splitter.
+  # KNOWN ISSUE: the slots list names "fn", which is never assigned anywhere; only proto_size is
+  # used.
+  # Stores the already-computed serialized size of the proto. Its own chunk building does
+  # nothing; subclasses override it.
   """A Splitter that's based on the size of the input proto."""
 
   __slots__ = ("fn", "proto_size")
 
   def __init__(self, proto, proto_size, **kwargs):
+    # [FUNCTION DOC]
+    # Stores proto_size (serialized size of the proto in bytes) and forwards the proto and any
+    # keyword arguments (parent splitter, fields in parent) to the base splitter constructor.
     """Initializer."""
     self.proto_size = proto_size
     super().__init__(proto, **kwargs)
 
   def build_chunks(self) -> int:
+    # [FUNCTION DOC]
+    # Default implementation: creates no chunks and returns zero (number of bytes removed).
     """Splits the proto, and returns the size of the chunks created."""
     return 0
 
 
 class RepeatedMessageSplitter(split.ComposableSplitter):
+  # [CLASS DOC]
+  # Splits a repeated message field of a proto (for example the nodes of a GraphDef) into several
+  # chunks. Holds the field path and the list of per-element splitter classes to apply to each
+  # element before deciding where to cut the list.
   """Splits a repeated message field on a proto."""
 
   __slots__ = ("repeated_field", "message_splitters")
@@ -186,6 +236,11 @@ class RepeatedMessageSplitter(split.ComposableSplitter):
       message_splitters: Sequence[Type[SplitBasedOnSize]],
       **kwargs,
   ):
+    # [FUNCTION DOC]
+    # Inputs: proto, the message containing the field; repeated_field, a field name or a list of
+    # field names/indices locating the repeated field (a single name is wrapped into a list);
+    # message_splitters, sequence of splitter classes tried in order on each element; extra
+    # keyword arguments go to the base constructor. Stores the field path and splitter classes.
     """Initializer."""
     super().__init__(proto, **kwargs)
     if not isinstance(repeated_field, list):
@@ -194,6 +249,17 @@ class RepeatedMessageSplitter(split.ComposableSplitter):
     self.message_splitters = message_splitters
 
   def build_chunks(self) -> int:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the validity check raises only when the field is not repeated AND is a
+    # message type; a non-repeated scalar field passes the check despite the error message.
+    # Walks every element of the repeated field. Each element is first offered to the configured
+    # element splitters, which may move parts of it into chunks; the returned sizes are
+    # subtracted from the element size. Elements are accumulated, and when the running size
+    # would reach the maximum size a new chunk (an empty message of the same type as the proto)
+    # is started at that index. Afterwards the elements from the first cut onward are copied into
+    # the new chunk messages and deleted from the original field.
+    # Returns the total number of bytes moved out of the original proto. Raises a value error for
+    # the invalid field kind noted above. Mutates the proto and registers chunks with the parent.
     """Splits the proto, and returns the size of the chunks created."""
     proto = self._proto
 
@@ -263,9 +329,16 @@ class RepeatedMessageSplitter(split.ComposableSplitter):
 
 
 class ConstantNodeDefSplitter(SplitBasedOnSize):
+  # [CLASS DOC]
+  # Element splitter that moves the tensor content of an oversized Const node into its own
+  # chunk of raw bytes.
   """Extracts constant value from a `Const` NodeDef."""
 
   def build_chunks(self) -> int:
+    # [FUNCTION DOC]
+    # If the node size exceeds the maximum, extracts the constant bytes (raising a value error for
+    # non-Const nodes), adds them as a chunk located at the tensor content field, and returns the
+    # byte count. Otherwise does nothing and returns zero.
     """Splits a NodeDef proto, and returns the size of the chunks created."""
     if _ABOVE_MAX_SIZE(self.proto_size):
       constant_bytes = chunk_constant_value(self._proto, self.proto_size)
@@ -278,17 +351,28 @@ class ConstantNodeDefSplitter(SplitBasedOnSize):
 
 
 class LargeMessageSplitter(SplitBasedOnSize):
+  # [CLASS DOC]
+  # Moves an entire message into a separate chunk when a size predicate says it is big enough.
+  # The predicate defaults to "larger than a third of the maximum size".
   """Splits a message into a separaet chunk if its over a certain size."""
 
   __slots__ = ("size_check",)
 
   def __init__(self, proto, proto_size, size_check=_GREEDY_SPLIT, **kwargs):
+    # [FUNCTION DOC]
+    # Inputs: proto and proto_size as in the base class; size_check, optional callback taking a
+    # size and returning true when the message should be split off (default: greater than a third
+    # of the maximum size); extra keyword arguments go to the base constructor.
     """Initializer."""
 
     self.size_check = size_check
     super().__init__(proto, proto_size, **kwargs)
 
   def build_chunks(self) -> int:
+    # [FUNCTION DOC]
+    # If the size check accepts the stored size, copies the whole proto into a new message of the
+    # same type, clears the original proto, adds the copy as a chunk, and returns the original
+    # size. Otherwise returns zero and changes nothing.
     """Creates a chunk for the entire proto and returns the original size."""
     if self.size_check(self.proto_size):
       new_proto = type(self._proto)()
@@ -300,9 +384,17 @@ class LargeMessageSplitter(SplitBasedOnSize):
 
 
 class FunctionDefSplitter(SplitBasedOnSize):
+  # [CLASS DOC]
+  # Element splitter for FunctionDef messages in the function library: moves a medium-sized
+  # function wholesale into a chunk, or splits the nodes of a too-large function.
   """Splits the FunctionDef message type."""
 
   def build_chunks(self) -> int:
+    # [FUNCTION DOC]
+    # If the function is over a third of the max size but not above the max, moves the whole
+    # function to a chunk. If it is above the max size, splits its node definitions with a
+    # repeated-message splitter (constant splitting, then whole-message splitting).
+    # Returns the total bytes moved out; mutates the proto and registers chunks.
     """Splits the proto, and returns the size of the chunks created."""
     size_diff = 0
 

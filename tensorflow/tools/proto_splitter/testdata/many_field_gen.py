@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: command-line generator script for test data (not library code). Builds a sample
+# message with nested, repeated and map fields, writes its text form and a chunked binary form
+# (produced by a custom splitter) into the directory given by the required path flag, for use by
+# the C++ merger tests. Defines the path command-line flag at import time; running as a script
+# starts the application main function.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -39,9 +45,17 @@ SPLITTER_TESTDATA_PATH = flags.DEFINE_string(
 
 
 class ManyFieldSplitter(split.ComposableSplitter):
+  # [CLASS DOC]
+  # HELPER: test-data splitter for the many-fields test message. Moves the nested message field
+  # and each entry of the boolean-keyed nested map into separate chunks.
   """Splitter for ManyField proto."""
 
   def build_chunks(self):
+    # [FUNCTION DOC]
+    # Adds the "field_one" sub-message as a chunk (located by its field number) and clears it from
+    # the proto; then adds each value of the nested boolean-keyed map as its own chunk (located by
+    # the map field number and the key) and clears the map. Takes no arguments, returns nothing;
+    # mutates the held proto.
     self.add_chunk(
         self._proto.field_one,
         [
@@ -65,6 +79,13 @@ class ManyFieldSplitter(split.ComposableSplitter):
 
 
 def main(argv: Sequence[str]) -> None:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: unlike the sibling generator, it never checks that the path flag was given; if
+  # it is missing, joining the path fails with a type error instead of a usage error.
+  # Entry point. Input: argv, the command-line arguments (only the program name allowed; extra
+  # arguments raise a usage error). Builds a many-fields message, writes its text form to a text
+  # file named many-field with the text-proto extension in the path directory, then splits and
+  # writes the chunked form to a file named many-field in the same directory. Returns nothing.
   if len(argv) > 1:
     raise app.UsageError("Too many command-line arguments.")
 

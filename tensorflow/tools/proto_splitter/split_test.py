@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Tests for the composable proto splitter base class. Defines a splitter that turns each repeated
+# string into its own byte chunk and a splitter that does nothing, then checks splitting, writing
+# to a chunked file (reading it back with a record reader), child splitters and the plain
+# single-file output when there are no chunks.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,9 +35,16 @@ from tensorflow.tools.proto_splitter.testdata import test_message_pb2
 
 
 class RepeatedStringSplitter(split.ComposableSplitter):
+  # [CLASS DOC]
+  # HELPER: test splitter used by the tests in this module.
+  # Splits a message holding a list of strings into one byte chunk per string.
   """Splits a RepeatedString proto with N repeated strings into N chunks."""
 
   def __init__(self, proto, **kwargs):
+    # [FUNCTION DOC]
+    # Raises a type error if proto is not the repeated-string test message. If the list of
+    # strings is empty, the proto itself is used as the initial chunk. Extra keyword arguments
+    # (parent splitter, fields in parent) are forwarded to the base constructor.
     if not isinstance(proto, test_message_pb2.RepeatedString):
       raise TypeError("Can only split RepeatedString type protos")
 
@@ -40,6 +52,9 @@ class RepeatedStringSplitter(split.ComposableSplitter):
     super().__init__(proto, proto_as_initial_chunk=empty_strings, **kwargs)
 
   def build_chunks(self):
+    # [FUNCTION DOC]
+    # Adds one chunk per string (the UTF-8 bytes, located at the string's index in the strings
+    # field), then clears the strings field of the proto. Takes no arguments, returns nothing.
     for n, s in enumerate(self._proto.strings):
       b = bytes(s, encoding="utf-8")
       self.add_chunk(b, ["strings", n])
@@ -47,6 +62,9 @@ class RepeatedStringSplitter(split.ComposableSplitter):
 
 
 def _random_string(length):
+  # [FUNCTION DOC]
+  # HELPER: generates test data. Returns a byte string of the given length made of random
+  # lowercase ASCII letters (uses the random module, so output differs between calls).
   return bytes(
       "".join(random.choices(string.ascii_lowercase, k=length)),
       encoding="utf-8",
@@ -54,11 +72,21 @@ def _random_string(length):
 
 
 class SplitRepeatedStringTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests the splitter base behavior using the repeated-string splitter: split output, writing a
+  # chunked file, and child splitters.
 
   def _to_proto(self, strings):
+    # [FUNCTION DOC]
+    # HELPER: builds a repeated-string test message from a list of strings. Not used by any test
+    # in this file.
     return test_message_pb2.RepeatedString(strings=strings)
 
   def testSplit(self):
+    # [FUNCTION DOC]
+    # Scenario: a message with no strings yields a single chunk that is the message itself; a
+    # message with strings a, b, c yields exactly those three byte chunks and a chunked message
+    # with three chunked fields.
     s = RepeatedStringSplitter(test_message_pb2.RepeatedString(strings=[]))
     chunks = s.split()[0]
     self.assertLen(chunks, 1)
@@ -72,6 +100,12 @@ class SplitRepeatedStringTest(test.TestCase):
     self.assertLen(chunked_message.chunked_fields, 3)
 
   def testWrite(self):
+    # [FUNCTION DOC]
+    # Scenario: write a message with three random strings to a temporary path. Expects the
+    # returned path to be the base path with the chunked-proto extension; reading the file as
+    # records gives four records (three chunks plus metadata); the metadata has three chunked
+    # fields with no top-level chunk index, indices 0 to 2, byte type, matching sizes and offsets
+    # from which each chunk's data can be read back. Side effect: creates a temp directory/file.
     path = os.path.join(self.create_tempdir(), "split-repeat")
     data = [_random_string(5), _random_string(10), _random_string(15)]
     returned_path = RepeatedStringSplitter(
@@ -104,6 +138,12 @@ class SplitRepeatedStringTest(test.TestCase):
         self.assertEqual(expected_data, reader.read_record())
 
   def test_child_splitter(self):
+    # [FUNCTION DOC]
+    # Scenario: a parent no-op splitter over a message with two nested repeated-string messages.
+    # Chunk count grows from 1 to 2 after adding a chunk by hand, to 5 after building the first
+    # child (three strings) and to 7 after the second child (two strings). Calling split or
+    # write directly on a child splitter must raise a value error saying the method should not
+    # be called directly.
     proto = test_message_pb2.RepeatedRepeatedString(
         rs=[
             test_message_pb2.RepeatedString(strings=["a", "b", "c"]),
@@ -141,15 +181,27 @@ class SplitRepeatedStringTest(test.TestCase):
 
 
 class NoOpSplitter(split.ComposableSplitter):
+  # [CLASS DOC]
+  # HELPER: test splitter that never creates chunks; used as a parent and for the no-chunk
+  # writing test.
 
   def build_chunks(self):
+    # [FUNCTION DOC]
+    # Does nothing; returns nothing.
     pass
 
 
 class NoOpSplitterTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized tests of writing output from a splitter that produces no chunks.
 
   @parameterized.parameters([None, "uncompressed"])
   def testWriteNoChunks(self, writer_options: Optional[str]):
+    # [FUNCTION DOC]
+    # Parameterized by writer options (nothing, or "uncompressed"). Scenario: write a
+    # three-string message with the no-op splitter. Expects a plain serialized proto file at the
+    # base path plus the plain extension, the returned path to equal it, and parsing the file to
+    # give a proto equal to the original. Side effect: creates a temporary file.
     path = os.path.join(self.create_tempdir(), "split-none")
     proto = test_message_pb2.RepeatedString(strings=["a", "bc", "de"])
     returned_path = NoOpSplitter(proto).write(path, writer_options)
