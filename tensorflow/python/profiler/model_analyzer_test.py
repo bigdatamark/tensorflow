@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Unit tests for the legacy profiler model analyzer API (profile, advise and the Profiler class)
+# together with the option builder and profile context. The tests build small and full models
+# using a shared test library, run them under a session with full tracing, and check the text
+# reports (written to files), returned profile protos, timeline and pprof outputs, minimum
+# thresholds, attribute selection, automatic periodic profiling and out-of-memory reports.
+# Several tests only run on GPU machines or only in graph mode. Contains a single test class
+# and a main entry that runs the test runner.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -45,14 +53,29 @@ builder = option_builder.ProfileOptionBuilder
 
 
 class PrintModelAnalysisTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the model analyzer profiling functions and the profiler option builder
+  # end to end. Shared fixture: a session configuration that disables host-pinning graph
+  # rewrites so that node placement and names are predictable. Tests write reports to
+  # temporary files and inspect their contents or the returned profile protos.
 
   def _no_rewrite_session_config(self):
+    # [FUNCTION DOC]
+    # HELPER: Shared fixture factory for the session configurations used by the tests.
+    # Builds and returns a session configuration whose graph rewriter has the pin-to-host
+    # optimization turned off. No inputs, no side effects.
     rewriter_config = rewriter_config_pb2.RewriterConfig(
         pin_to_host_optimization=rewriter_config_pb2.RewriterConfig.OFF)
     graph_options = config_pb2.GraphOptions(rewrite_options=rewriter_config)
     return config_pb2.ConfigProto(graph_options=graph_options)
 
   def testDumpToFile(self):
+    # [FUNCTION DOC]
+    # Scenario: profile a small model's trainable variable parameters with file output.
+    # Resets the default graph, builds options writing to a temporary dump file, builds the
+    # small model and runs the profile. Asserts the file content (after stripping the
+    # documentation header) lists the root node with 451 parameters and the three variables
+    # DW, DW2 and ScalarW with their shapes and parameter counts.
     ops.reset_default_graph()
     outfile = os.path.join(test.get_temp_dir(), 'dump')
     opts = builder(builder.trainable_variables_parameter()).with_file_output(
@@ -72,6 +95,15 @@ class PrintModelAnalysisTest(test.TestCase):
 
   @test_util.run_v1_only('b/120545219')
   def testSelectEverythingDetail(self):
+    # [FUNCTION DOC]
+    # Scenario (graph mode only): select every available metric using a profile context that
+    # traces and dumps the next step, on GPU if available otherwise CPU. Profiles by name scope
+    # into a file and asserts the header line lists all selected columns. For convolution rows
+    # it asserts that time is positive, the device is the expected kind, float operations are
+    # positive, the op count is one run over one defined and the input shapes are as expected;
+    # for the DW variable row it asserts positive parameter counts. Finally removes the file,
+    # reloads the saved profile with a profiler restored from file, re-runs the query and asserts
+    # the new output equals the earlier one.
     ops.reset_default_graph()
     dev = '/device:GPU:0' if test.is_gpu_available() else '/device:CPU:0'
     outfile = os.path.join(test.get_temp_dir(), 'dump')
@@ -146,6 +178,11 @@ class PrintModelAnalysisTest(test.TestCase):
         self.assertEqual(dump_str, lib.CheckAndRemoveDoc(f.read()))
 
   def testSelectEverything(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the test makes no assertions; it only checks that profiling with many selected
+    # attributes on CPU with full tracing does not raise.
+    # Scenario: run the small model with full tracing under a CPU device, then call profile with
+    # options selecting parameters, float ops, occurrence, device, op types and input shapes.
     ops.reset_default_graph()
     outfile = os.path.join(test.get_temp_dir(), 'dump')
     opts = (
@@ -170,6 +207,11 @@ class PrintModelAnalysisTest(test.TestCase):
       model_analyzer.profile(sess.graph, run_meta, options=opts)
 
   def testSimpleCodeView(self):
+    # [FUNCTION DOC]
+    # Scenario: profile the small model with the code view, showing only nodes from the test
+    # library file and selecting bytes, parameters, float ops, hidden ops, device and input
+    # shapes, writing to a file. Asserts that the first 80 characters of the report (after the
+    # documentation header is removed) equal the expected column header text.
     ops.reset_default_graph()
     outfile = os.path.join(test.get_temp_dir(), 'dump')
     # TODO(xpan): Test 'micros'. Since the execution time changes each run,
@@ -205,6 +247,15 @@ class PrintModelAnalysisTest(test.TestCase):
 
   @test_util.run_v1_only('b/120545219')
   def testComplexCodeView(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the expected child names embed hard-coded line numbers of another file, so any
+    # edit of that library file breaks this test.
+    # Scenario (graph mode only): profile the full model in Python code view through a profile
+    # context tracing the next step, selecting parameters and float ops. Asserts the report file
+    # has more than five lines and starts with the expected header, and the returned proto has
+    # positive execution time, 2844 total parameters, float operations above a threshold that
+    # depends on whether the MKL build is enabled, ten children, root name, and the exact child
+    # names giving source line numbers of the test library file (including gradient entries).
     ops.reset_default_graph()
     outfile = os.path.join(test.get_temp_dir(), 'dump')
     opts = (
@@ -265,6 +316,10 @@ class PrintModelAnalysisTest(test.TestCase):
         # pylint: enable=line-too-long
 
   def testCodeViewLeafGraphNode(self):
+    # [FUNCTION DOC]
+    # Scenario: profile the small model with the code view and empty output. Walks down the first
+    # child chain of the returned tree, asserting that inner nodes hold no graph nodes while the
+    # leaf holds exactly one graph node.
     ops.reset_default_graph()
     opts = (
         builder(builder.trainable_variables_parameter()).with_empty_output()
@@ -292,6 +347,10 @@ class PrintModelAnalysisTest(test.TestCase):
       self.assertEqual(1, len(leaf.graph_nodes))
 
   def testTimeline(self):
+    # [FUNCTION DOC]
+    # Scenario: profile the full model in graph view with timeline output for step zero and a
+    # very large depth. Asserts that a timeline file with the step suffix is created and has
+    # content (more than 1000 characters on non-Windows systems, at least 2 on Windows).
     ops.reset_default_graph()
     outfile = os.path.join(test.get_temp_dir(), 'timeline')
     opts = (
@@ -323,6 +382,12 @@ class PrintModelAnalysisTest(test.TestCase):
           self.assertLess(1, len(f.read()))
 
   def testOpView(self):
+    # [FUNCTION DOC]
+    # Scenario: profile the full model with the operation-type view, minimum occurrence 10,
+    # ordered by occurrence, selecting many metrics, written to a file. Asserts the whitespace
+    # stripped header text matches the expected columns, then walks the single-child chain of the
+    # returned tree asserting execution time accounting is consistent between parent and child,
+    # occurrence counts are non-increasing, and some input shapes were recorded.
     ops.reset_default_graph()
     outfile = os.path.join(test.get_temp_dir(), 'dump')
 
@@ -379,6 +444,11 @@ class PrintModelAnalysisTest(test.TestCase):
       self.assertGreater(input_shapes, 0)
 
   def testAdvisor(self):
+    # [FUNCTION DOC]
+    # Scenario: run the full model with full tracing and call advise. Asserts the returned
+    # advice contains the accelerator utilization, expensive operation and operation checkers;
+    # the accelerator checker has reports only when a GPU is available, and the expensive
+    # operation checker always has at least one report.
     ops.reset_default_graph()
 
     with session.Session(config=self._no_rewrite_session_config()) as sess:
@@ -406,6 +476,15 @@ class PrintModelAnalysisTest(test.TestCase):
       self.assertGreater(len(checker.reports), 0)
 
   def pprof_test_helper(self, attribute, should_fail=False):
+    # [FUNCTION DOC]
+    # HELPER: Shared body for the pprof output test.
+    # Inputs: attribute, the profile attribute to select (string); should_fail, boolean, true
+    # when the attribute is unsupported for pprof output (default false). Profiles the full
+    # model in code view with pprof output to a temporary gzip file, trimming nodes from the ops
+    # module. If failure is expected asserts the output file was not created and stops.
+    # Otherwise decompresses and parses the profile and asserts it has more than ten samples,
+    # locations and functions, more than thirty strings, includes an rnn string and no string
+    # starting with the trimmed module name.
     ops.reset_default_graph()
     outfile = os.path.join(test.get_temp_dir(), attribute + '_pprof.pb.gz')
     opts = (
@@ -449,6 +528,10 @@ class PrintModelAnalysisTest(test.TestCase):
       self.assertTrue(has_rnn)
 
   def testPprof(self):
+    # [FUNCTION DOC]
+    # Scenario: run the pprof helper for each supported attribute (micros, bytes, accelerator
+    # micros, cpu micros, params, float ops) expecting a valid pprof file, and for the
+    # unsupported attributes (op types, device, input shapes) expecting no output file.
     for attr in [
         'micros', 'bytes', 'accelerator_micros', 'cpu_micros', 'params',
         'float_ops'
@@ -458,9 +541,21 @@ class PrintModelAnalysisTest(test.TestCase):
       self.pprof_test_helper(attr, True)
 
   def testMinOption(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: uses an unseeded random threshold, so runs are not reproducible.
+    # Scenario: for each minimum threshold option (execution time, accelerator time, cpu time,
+    # requested bytes, peak bytes, residual bytes, output bytes) set to the same random value
+    # between 0 and 10000, profile the small model and assert that every returned node,
+    # recursively, has the corresponding metric at least the threshold.
     ops.reset_default_graph()
 
     def check_min(nodes, mm=0, mam=0, mcm=0, mb=0, mpb=0, mrb=0, mob=0):
+      # [FUNCTION DOC]
+      # HELPER: Recursive assertion helper for the minimum option test.
+      # Inputs: nodes, list of profile nodes; mm, mam, mcm, mb, mpb, mrb, mob are the minimum
+      # execution micros, accelerator micros, cpu micros, requested bytes, peak bytes, residual
+      # bytes and output bytes (default 0 meaning not checked). For every node and its
+      # descendants, asserts each metric with a positive threshold is at least that threshold.
       for n in nodes:
         if mm > 0:
           self.assertGreaterEqual(n.exec_micros, mm)
@@ -533,10 +628,21 @@ class PrintModelAnalysisTest(test.TestCase):
       check_min(tfprof_node.children, mob=min_val)
 
   def testSelectOption(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the last check lists the not-selected name with underscores (requested_bytes)
+    # while the report uses spaces, so that negative check can never fail.
+    # Scenario: profile the small model three times with different selected attribute groups
+    # (time, bytes, then peak/residual/output bytes) writing to a file, and after each assert
+    # the report contains the expected column titles and omits the ones not selected.
     ops.reset_default_graph()
     outfile = os.path.join(test.get_temp_dir(), 'dump')
 
     def check_selection(selected, not_selected):
+      # [FUNCTION DOC]
+      # HELPER: Assertion helper for the select option test.
+      # Inputs: selected, list of strings that must appear in the dumped report file;
+      # not_selected, list of strings that must not appear. Reads the output file and asserts
+      # each selected string is found (at a position after the start) and each other is absent.
       with gfile.Open(outfile, 'r') as f:
         s = f.read()
         for attr in selected:
@@ -577,6 +683,16 @@ class PrintModelAnalysisTest(test.TestCase):
 
   def _trainLoop(self, train_op, train_steps, time_dir, time_step, memory_dir,
                  memory_step, profile_dir, dump_step):
+    # [FUNCTION DOC]
+    # HELPER: Training loop driver for the automatic profiling test.
+    # Inputs: train_op, the operation to evaluate each step; train_steps, number of steps to run;
+    # time_dir and memory_dir, directories receiving automatic time and memory reports;
+    # time_step and memory_step, lists of steps at which those reports are expected; profile_dir,
+    # directory receiving dumped profiles; dump_step, list of steps at which a profile dump named
+    # after the step is expected. Initializes variables, then each step evaluates the op and
+    # asserts exactly one file exists in the time (memory) directory with the expected content
+    # on scheduled steps (and removes it) or none otherwise, and that the profile directory
+    # contains the expected dump on dump steps (removing it) or does not exist yet / is empty.
     with session.Session(config=self._no_rewrite_session_config()) as sess:
       self.evaluate(variables.global_variables_initializer())
       # start from 1 because variable_initializer took one step.
@@ -612,6 +728,12 @@ class PrintModelAnalysisTest(test.TestCase):
 
   @test_util.run_v1_only('b/120545219')
   def testAutoProfiling(self):
+    # [FUNCTION DOC]
+    # Scenario (graph mode only): within a profile context tracing steps one to three and dumping
+    # at steps three and four, register automatic scope profiling of time at steps two and three
+    # and memory at steps one and three, with reports written to separate directories. Runs ten
+    # training steps through the loop helper, which asserts the files appear only on the
+    # scheduled steps.
     ops.reset_default_graph()
     time_dir = os.path.join(test.get_temp_dir(), 'time')
     memory_dir = os.path.join(test.get_temp_dir(), 'memory')
@@ -642,6 +764,13 @@ class PrintModelAnalysisTest(test.TestCase):
 
   @test_util.run_v1_only('b/120545219')
   def testOOM(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: if running the oversized multiplication does not raise, the test passes
+    # without asserting anything; it also does nothing without a GPU.
+    # Scenario (graph mode, GPU only): multiply two huge random tensors on the GPU with tensor
+    # allocation reporting upon out-of-memory enabled. When the expected exception occurs,
+    # asserts its text mentions the failed allocation shape and reports the allocation sizes
+    # (gibibytes and mebibytes) from both random operations.
     if not test.is_gpu_available():
       return
     ops.reset_default_graph()
@@ -670,6 +799,13 @@ class PrintModelAnalysisTest(test.TestCase):
 
   @test_util.run_v1_only('b/120545219')
   def testDistributedOOM(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: passes silently when no exception is raised, and does nothing without a GPU.
+    # Scenario (graph mode, GPU only): create a local two-worker cluster, place one huge random
+    # tensor on each worker and multiply them on worker one with allocation reporting on
+    # out-of-memory. Asserts the error text reports usage for worker one's device and allocator,
+    # includes the second random tensor's size, and omits the first tensor, which lives on the
+    # other worker.
     if not test.is_gpu_available():
       return
     ops.reset_default_graph()
@@ -704,6 +840,11 @@ class PrintModelAnalysisTest(test.TestCase):
 
   @test_util.run_v1_only('b/120545219')
   def testTrackPersistentBytes(self):
+    # [FUNCTION DOC]
+    # Scenario (graph mode only): multiply two constants with graph-size rewrite threshold
+    # disabled, run twice with full tracing and profile each run by scope with bytes, peak,
+    # output and residual bytes selected. Asserts the multiplication node has positive peak,
+    # output and residual bytes and that those values are identical across the two runs.
     ops.reset_default_graph()
     a = array_ops.constant(np.ones((100, 100)))
     b = array_ops.constant(np.ones((100, 100)))
@@ -740,6 +881,11 @@ class PrintModelAnalysisTest(test.TestCase):
 
   @test_util.run_v1_only('b/120545219')
   def testTraceLoopBytes(self):
+    # [FUNCTION DOC]
+    # Scenario (graph mode, GPU only; returns immediately otherwise): build a while loop on the
+    # GPU that repeatedly squares a matrix for 100 iterations and compute its gradient. Run with
+    # full tracing and profile by scope with no output. Asserts the total requested bytes exceed
+    # one million, showing loop iterations' memory is accounted.
     if not test.is_gpu_available():
       return
     ops.reset_default_graph()
@@ -753,6 +899,9 @@ class PrintModelAnalysisTest(test.TestCase):
       x *= x1
 
       def loop_body(i, x):
+        # [FUNCTION DOC]
+        # HELPER: Loop body for the traced while loop. Inputs: i, iteration counter; x, matrix.
+        # Returns the incremented counter and the element-wise square of the matrix.
         x *= x
         return i + 1, x
 

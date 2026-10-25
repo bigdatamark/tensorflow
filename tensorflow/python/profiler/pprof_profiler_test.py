@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Unit tests for the pprof profiler module. Uses mock graphs and operations plus hand-built run
+# metadata to check that empty data produces no profiles, that run metadata without node
+# statistics produces no profiles, that valid data yields an exact expected profile text both as
+# a returned proto and as a compressed file, and that nodes executed repeatedly in a while loop
+# are aggregated into one sample with the iteration count. Contains one test class and a main
+# entry that runs the test runner.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the 'License');
@@ -28,8 +35,14 @@ from tensorflow.python.profiler import pprof_profiler
 
 
 class PprofProfilerTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the pprof profiler functions get_profiles and profile. Mostly builds mock
+  # graphs and run metadata in each test; no shared fixtures beyond the temporary directory.
 
   def testDataEmpty(self):
+    # [FUNCTION DOC]
+    # Scenario: a mock graph with no operations and empty run metadata. Asserts that both
+    # get_profiles returns no profiles and profile writes no files into the temporary directory.
     output_dir = test.get_temp_dir()
     run_metadata = config_pb2.RunMetadata()
     graph = test.mock.MagicMock()
@@ -42,6 +55,9 @@ class PprofProfilerTest(test.TestCase):
     self.assertEqual(0, len(profile_files))
 
   def testRunMetadataEmpty(self):
+    # [FUNCTION DOC]
+    # Scenario: a mock graph with one operation but empty run metadata (no device statistics).
+    # Asserts that get_profiles returns no profiles and profile creates no files.
     output_dir = test.get_temp_dir()
     run_metadata = config_pb2.RunMetadata()
     graph = test.mock.MagicMock()
@@ -58,6 +74,15 @@ class PprofProfilerTest(test.TestCase):
     self.assertEqual(0, len(profile_files))
 
   def testValidProfile(self):
+    # [FUNCTION DOC]
+    # Scenario: one device with one node statistic for a mock addition operation whose traceback
+    # has two frames, the first being the op-application function. Asserts that get_profiles
+    # returns exactly one profile keyed by the device name whose text form equals the expected
+    # profile (three sample types, one sample with count 1, total time 4 and op time 2, labels for
+    # node name and op type, the string table and the device comment). Then writes files with
+    # profile, asserts one file, decompresses and parses it, and asserts the same text.
+    # KNOWN ISSUE: run_metadata is assigned twice at the start; the first, unused assignment is
+    # dead code.
     output_dir = test.get_temp_dir()
     run_metadata = config_pb2.RunMetadata()
 
@@ -134,6 +159,11 @@ comment: 9
 
   @test_util.run_v1_only('b/120545219')
   def testProfileWithWhileLoop(self):
+    # [FUNCTION DOC]
+    # Scenario (graph mode only): run a five-iteration while loop in a cached session with full
+    # tracing and run metadata. Asserts that get_profiles returns one profile and that the
+    # samples labeled with the loop's addition node are aggregated into exactly one sample whose
+    # count value equals the number of iterations.
     options = config_pb2.RunOptions()
     options.trace_level = config_pb2.RunOptions.FULL_TRACE
     run_metadata = config_pb2.RunMetadata()

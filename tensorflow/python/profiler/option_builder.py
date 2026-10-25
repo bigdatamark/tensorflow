@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# HELPER: Helper module supplying profiler options to the model analyzer and profile context.
+# Provides the fluent builder for profiler option mappings used by the legacy profiling API.
+# Exposes one class, ProfileOptionBuilder, with pre-built option sets (trainable variable
+# parameters, float operations, time and memory) and chainable setters for depth, minimum
+# thresholds, type and name filters, ordering, selected attributes, step and output destination
+# (standard output, none, file, timeline, pprof). Results are plain mappings consumed by the
+# model analyzer. Registered in the version 1 public API at import time.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +29,12 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export(v1=['profiler.ProfileOptionBuilder'])
 class ProfileOptionBuilder(object):
+  # [CLASS DOC]
+  # Fluent builder of profiler option mappings. Holds a private mapping of option names to
+  # values, initialized from defaults or a copy of a given mapping. Static methods return
+  # ready-made option mappings; instance setter methods modify the held mapping and return the
+  # builder for chaining; build returns a deep copy of the result. Registered in the version 1
+  # public API.
   # pylint: disable=line-too-long
   """Option Builder for Profiling API.
 
@@ -56,6 +70,11 @@ class ProfileOptionBuilder(object):
   # pylint: enable=line-too-long
 
   def __init__(self, options=None):
+    # [FUNCTION DOC]
+    # Creates a builder. Input: options, optional mapping of options to start from; it is deeply
+    # copied so the caller's mapping is never changed. When omitted, starts from defaults: depth
+    # 100, zero minimums, order by name, account all types, start and show everything, hide
+    # nothing, account all ops, select time, step -1 (average) and output to standard output.
     """Constructor.
 
     Args:
@@ -83,6 +102,11 @@ class ProfileOptionBuilder(object):
 
   @staticmethod
   def trainable_variables_parameter():
+    # [FUNCTION DOC]
+    # Static factory. Takes no inputs; returns a new mapping of options for profiling trainable
+    # variable parameters (depth 10000, accounts only the trainable variables type, only
+    # displayed ops accounted, selects parameters, standard output). Normally used with the scope
+    # view. No side effects.
     """Options used to profile trainable variable parameters.
 
     Normally used together with 'scope' view.
@@ -109,6 +133,10 @@ class ProfileOptionBuilder(object):
 
   @staticmethod
   def float_operation():
+    # [FUNCTION DOC]
+    # Static factory. Takes no inputs; returns a new mapping of options for profiling float
+    # operations (depth 10000, minimum float ops 1, ordered by float ops, selects float ops,
+    # accounts all types, standard output). No side effects.
     # pylint: disable=line-too-long
     """Options used to profile float operations.
 
@@ -140,6 +168,12 @@ class ProfileOptionBuilder(object):
   def time_and_memory(min_micros=1, min_bytes=1, min_accelerator_micros=0,
                       min_cpu_micros=0, min_peak_bytes=0, min_residual_bytes=0,
                       min_output_bytes=0):
+    # [FUNCTION DOC]
+    # Static factory for time and memory profiling options. Inputs (all optional numbers): the
+    # minimum total execution micros (default 1), minimum requested bytes (default 1), minimum
+    # accelerator micros, cpu micros, peak bytes, residual bytes and output bytes (default 0).
+    # Returns a new mapping with depth 10000, ordered by micros, selecting micros and bytes,
+    # accounting all types and only displayed ops, output to standard output. No side effects.
     """Show operation time and memory consumptions.
 
     Args:
@@ -187,6 +221,9 @@ class ProfileOptionBuilder(object):
             'output': 'stdout'}
 
   def build(self):
+    # [FUNCTION DOC]
+    # Returns a deep copy of the option mapping built so far, so later builder changes do not
+    # affect the returned value. No inputs, no side effects.
     """Build a profiling option.
 
     Returns:
@@ -195,6 +232,9 @@ class ProfileOptionBuilder(object):
     return copy.deepcopy(self._options)
 
   def with_max_depth(self, max_depth):
+    # [FUNCTION DOC]
+    # Sets the maximum display depth option. Input: max_depth, integer. Returns the builder
+    # itself for chaining. Mutates the held options.
     """Set the maximum depth of display.
 
     The depth depends on profiling view. For 'scope' view, it's the
@@ -214,6 +254,10 @@ class ProfileOptionBuilder(object):
                       min_peak_bytes=0,
                       min_residual_bytes=0,
                       min_output_bytes=0):
+    # [FUNCTION DOC]
+    # Sets the four memory thresholds: requested bytes, peak bytes, residual bytes and output
+    # bytes (each a number, default 0). Always overwrites all four options, even when left at
+    # their defaults. Returns the builder itself for chaining. Mutates the held options.
     """Only show profiler nodes consuming no less than 'min_bytes'.
 
     Args:
@@ -242,6 +286,10 @@ class ProfileOptionBuilder(object):
                               min_micros=0,
                               min_accelerator_micros=0,
                               min_cpu_micros=0):
+    # [FUNCTION DOC]
+    # Sets the execution time thresholds: total micros, accelerator micros and cpu micros (each a
+    # number, default 0). Always overwrites all three options. Returns the builder itself for
+    # chaining. Mutates the held options.
     """Only show profiler nodes consuming no less than 'min_micros'.
 
     Args:
@@ -260,6 +308,9 @@ class ProfileOptionBuilder(object):
     return self
 
   def with_min_parameters(self, min_params):
+    # [FUNCTION DOC]
+    # Sets the minimum parameter count threshold. Input: min_params, number. Returns the builder
+    # itself for chaining. Mutates the held options.
     """Only show profiler nodes holding no less than 'min_params' parameters.
 
     'Parameters' normally refers the weights of in TensorFlow variables.
@@ -275,6 +326,9 @@ class ProfileOptionBuilder(object):
     return self
 
   def with_min_occurrence(self, min_occurrence):
+    # [FUNCTION DOC]
+    # Sets the minimum number of graph nodes a profiler node must include to be shown. Input:
+    # min_occurrence, integer. Returns the builder itself for chaining. Mutates held options.
     # pylint: disable=line-too-long
     """Only show profiler nodes including no less than 'min_occurrence' graph nodes.
 
@@ -293,6 +347,9 @@ class ProfileOptionBuilder(object):
     return self
 
   def with_min_float_operations(self, min_float_ops):
+    # [FUNCTION DOC]
+    # Sets the minimum float operation count threshold. Input: min_float_ops, number. Returns the
+    # builder itself for chaining. Mutates the held options.
     # pylint: disable=line-too-long
     """Only show profiler nodes consuming no less than 'min_float_ops'.
 
@@ -310,6 +367,10 @@ class ProfileOptionBuilder(object):
     return self
 
   def with_accounted_types(self, account_type_regexes):
+    # [FUNCTION DOC]
+    # Sets which node types are counted in the statistics. Input: account_type_regexes, list of
+    # regular expression strings matched against node properties such as device and operation
+    # type; the list is shallow-copied. Returns the builder itself. Mutates the held options.
     """Selectively counting statistics based on node types.
 
     Here, 'types' means the profiler nodes' properties. Profiler by default
@@ -336,6 +397,12 @@ class ProfileOptionBuilder(object):
                       show_name_regexes=None,
                       hide_name_regexes=None,
                       trim_name_regexes=None):
+    # [FUNCTION DOC]
+    # Sets the node-name filters. Inputs (each an optional list of regular expression strings,
+    # default null meaning leave unchanged): start_name_regexes where display begins,
+    # show_name_regexes nodes to display, hide_name_regexes nodes to hide, trim_name_regexes
+    # nodes where searching a branch stops. Provided lists are shallow-copied. Returns the builder
+    # itself. Mutates the held options.
     """Regular expressions used to select profiler nodes to display.
 
     After 'with_accounted_types' is evaluated, 'with_node_names' are
@@ -366,6 +433,9 @@ class ProfileOptionBuilder(object):
     return self
 
   def account_displayed_op_only(self, is_true):
+    # [FUNCTION DOC]
+    # Sets whether only statistics of displayed nodes are accounted. Input: is_true, boolean.
+    # Returns the builder itself. Mutates the held options.
     """Whether only account the statistics of displayed profiler nodes.
 
     Args:
@@ -381,26 +451,42 @@ class ProfileOptionBuilder(object):
     return self
 
   def with_empty_output(self):
+    # [FUNCTION DOC]
+    # Sets the output destination to none so profiling produces no side-effect output. Returns
+    # the builder itself. Mutates the held options.
     """Do not generate side-effect outputs."""
     self._options['output'] = 'none'
     return self
 
   def with_stdout_output(self):
+    # [FUNCTION DOC]
+    # Sets the output destination to standard output. Returns the builder itself. Mutates the
+    # held options.
     """Print the result to stdout."""
     self._options['output'] = 'stdout'
     return self
 
   def with_file_output(self, outfile):
+    # [FUNCTION DOC]
+    # Sets the output destination to a text file. Input: outfile, string path (not validated).
+    # Returns the builder itself. Mutates the held options; the file is written later when
+    # profiling runs.
     """Print the result to a file."""
     self._options['output'] = 'file:outfile=%s' % outfile
     return self
 
   def with_timeline_output(self, timeline_file):
+    # [FUNCTION DOC]
+    # Sets the output destination to a timeline JSON file. Input: timeline_file, string path
+    # prefix (the profiler appends the step number). Returns the builder itself. Mutates options.
     """Generate a timeline json file."""
     self._options['output'] = 'timeline:outfile=%s' % timeline_file
     return self
 
   def with_pprof_output(self, pprof_file):
+    # [FUNCTION DOC]
+    # Sets the output destination to a gzip-compressed pprof profile. Input: pprof_file, string
+    # path. Returns the builder itself. Mutates the held options; the file is written later.
     """Generate a pprof profile gzip file.
 
     To use the pprof file:
@@ -415,6 +501,9 @@ class ProfileOptionBuilder(object):
     return self
 
   def order_by(self, attribute):
+    # [FUNCTION DOC]
+    # Sets the attribute used to order displayed nodes. Input: attribute, string such as micros,
+    # bytes, occurrence or params. Returns the builder itself. Mutates the held options.
     # pylint: disable=line-too-long
     """Order the displayed profiler nodes based on a attribute.
 
@@ -431,6 +520,9 @@ class ProfileOptionBuilder(object):
     return self
 
   def select(self, attributes):
+    # [FUNCTION DOC]
+    # Sets which attributes are displayed. Input: attributes, list of attribute name strings
+    # (shallow-copied). Returns the builder itself. Mutates the held options.
     # pylint: disable=line-too-long
     """Select the attributes to display.
 
@@ -447,6 +539,10 @@ class ProfileOptionBuilder(object):
     return self
 
   def with_step(self, step):
+    # [FUNCTION DOC]
+    # Chooses which profile step to use. Input: step, integer step id as given when steps were
+    # added; negative one means the average of all steps. Returns the builder itself. Mutates
+    # the held options.
     """Which profile step to use for profiling.
 
     The 'step' here refers to the step defined by `Profiler.add_step()` API.

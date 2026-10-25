@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Public entry points of the legacy TensorFlow profiler (tfprof) for analyzing a model.
+# Exposes the Profiler class (multi-step profiling of a graph), the profile function (one-shot
+# profiling by operation type, name scope, graph or Python code view), the advise function
+# (automatic anomaly detection) and the ALL_ADVICE default checker configuration. Internally it
+# converts Python option mappings into option protocol buffers, serializes graphs and run
+# metadata, and calls the native tfprof extension, parsing the returned serialized protos.
+# The public names are exported to the version 1 API through registration decorators at import.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -43,6 +51,10 @@ ALL_ADVICE = {
 
 
 def _graph_string(graph):
+  # [FUNCTION DOC]
+  # HELPER: Serialization glue for the native profiler calls in this module.
+  # Input: graph, a graph object or nothing/null. Output: the serialized graph definition bytes
+  # (with tensor shapes added) when a graph is given, otherwise empty bytes. No side effects.
   """Helper to serialize a graph to string."""
   if graph:
     return graph.as_graph_def(add_shapes=True).SerializeToString()
@@ -51,6 +63,15 @@ def _graph_string(graph):
 
 
 def _build_options(options):
+  # [FUNCTION DOC]
+  # HELPER: Converts user option mappings into the protocol buffer the native profiler expects.
+  # Input: options, a mapping from option names to values (depth, minimum thresholds for bytes,
+  # time, parameters, float ops and occurrences, step id, ordering key, lists of regular
+  # expressions for accounting/start/trim/show/hide, a flag to account only displayed ops, the
+  # list of fields to select, output kind and dump file). Missing keys get defaults (maximum
+  # depth 10, thresholds 0, step -1, order by name, empty lists, output to standard output,
+  # empty dump file name). Output: a populated options protocol buffer. Unknown keys are ignored.
+  # No side effects; raises type errors if values do not match the proto field types.
   """Build tfprof.OptionsProto.
 
   Args:
@@ -99,6 +120,14 @@ def _build_options(options):
 
 
 def _build_advisor_options(options):
+  # [FUNCTION DOC]
+  # HELPER: Builds the advisor options protocol buffer for the advise calls.
+  # Input: options, a mapping from checker names to mappings of checker settings, or nothing/null.
+  # Output: an advisor options proto; empty when options is null, otherwise each checker's
+  # settings are copied into a checker option message and merged into the checkers map.
+  # KNOWN ISSUE: assigns settings by indexing the checker option message directly, while that
+  # message type is a nested protocol buffer message rather than a mapping; this only works if
+  # the generated type supports item assignment, which for non-empty checker settings may fail.
   """Build tfprof.AdvisorOptionsProto.
 
   Args:
@@ -120,6 +149,13 @@ def _build_advisor_options(options):
 
 @tf_export(v1=['profiler.Profiler'])
 class Profiler:
+  # [CLASS DOC]
+  # Multi-step profiler wrapping the process-wide native tfprof profiler.
+  # State: the graph being profiled and a coverage figure returned by the last added step. A
+  # single native profiler exists per process, created in the constructor and destroyed when
+  # the instance is garbage collected. Typical use: construct, add steps with run metadata,
+  # then query by Python code, operation type, name scope, graph view, or ask for advice, and
+  # optionally serialize the profile. Registered in the version 1 public API.
   """TensorFlow multi-step profiler.
 
 
@@ -159,6 +195,13 @@ class Profiler:
   """
 
   def __init__(self, graph=None, op_log=None):
+    # [FUNCTION DOC]
+    # Creates the native profiler for a graph. Inputs: graph, optional graph (if null and eager
+    # execution is off, the default graph is used; in eager mode it stays null); op_log, optional
+    # op log protocol buffer defining extra operation types. Merges the op log with defaults
+    # derived from the graph, then creates the process-wide native profiler with the serialized
+    # graph and op log. Side effects: replaces/creates global native profiler state; sets the
+    # coverage to zero.
     """Constructor.
 
     Args:
@@ -178,9 +221,19 @@ class Profiler:
         _graph_string(self._graph), op_log.SerializeToString())
 
   def __del__(self):
+    # [FUNCTION DOC]
+    # Finalizer: deletes the process-wide native profiler when the instance is destroyed.
+    # Takes no inputs, returns nothing. Side effect: frees global native state, so any other
+    # Profiler instance would lose its backing profiler as well.
     print_mdl.DeleteProfiler()
 
   def add_step(self, step, run_meta):
+    # [FUNCTION DOC]
+    # Records the statistics of one session run. Inputs: step, integer id used to group run
+    # metadata together for later queries; run_meta, run metadata protocol buffer with the
+    # collected statistics. Merges an op log built from the run metadata, passes the serialized
+    # graph, run metadata and op log to the native profiler, and stores the returned coverage
+    # value on the instance. Returns nothing. Side effect: updates native profiler state.
     """Add statistics of a step.
 
     Args:
@@ -199,6 +252,11 @@ class Profiler:
                                        op_log.SerializeToString())
 
   def profile_python(self, options):
+    # [FUNCTION DOC]
+    # Profiles by Python code view (call stacks). Input: options, mapping of profiler options.
+    # Builds the options proto, asks the native profiler for the code view and parses the result
+    # into a multi-graph node proto. Output: that proto; if the returned bytes cannot be parsed,
+    # an error message is written to standard error and a possibly empty/partial proto is returned.
     """Profile the statistics of the Python codes.
 
       By default, it shows the call stack from root. To avoid
@@ -221,6 +279,13 @@ class Profiler:
     return tfprof_node
 
   def profile_operations(self, options):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring's first sentence is broken across the summary line and body
+    # ("e.g." split), so the generated summary is truncated; behavior itself is unaffected.
+    # Profiles by operation type view. Input: options, mapping of profiler options. Builds the
+    # options proto, queries the native profiler for the op view and parses the result into a
+    # multi-graph node proto, which is returned. On a parse failure an error message is written
+    # to standard error and the possibly empty proto is returned.
     """Profile the statistics of the Operation types (e.g.
 
     MatMul, Conv2D).
@@ -241,6 +306,11 @@ class Profiler:
     return tfprof_node
 
   def profile_name_scope(self, options):
+    # [FUNCTION DOC]
+    # Profiles graph nodes organized by name scope. Input: options, mapping of profiler options.
+    # Queries the native profiler for the scope view and parses it into a graph node proto,
+    # which is returned. On a parse failure writes an error message to standard error and returns
+    # the possibly empty proto.
     """Profile the statistics of graph nodes, organized by name scope.
 
     Args:
@@ -259,6 +329,11 @@ class Profiler:
     return tfprof_node
 
   def profile_graph(self, options):
+    # [FUNCTION DOC]
+    # Profiles graph nodes organized by dataflow graph (inputs/outputs). Input: options, mapping
+    # of profiler options. Queries the native profiler for the graph view and parses it into a
+    # graph node proto, which is returned. On a parse failure writes an error message to
+    # standard error and returns the possibly empty proto.
     """Profile the statistics of graph nodes, organized by dataflow graph.
 
     Args:
@@ -277,6 +352,11 @@ class Profiler:
     return tfprof_node
 
   def advise(self, options):
+    # [FUNCTION DOC]
+    # Runs automatic problem detection on the accumulated profile. Input: options, mapping from
+    # checker names to checker settings (null gives empty options). Output: an advice proto with
+    # reports from all checkers. Unlike the profile methods, a parse failure is not caught and
+    # raises the protocol buffer decode error.
     """Automatically detect problems and generate reports.
 
     Args:
@@ -292,6 +372,9 @@ class Profiler:
     return advise_pb
 
   def serialize_to_string(self):
+    # [FUNCTION DOC]
+    # Serializes the native profiler's accumulated profile proto. Takes no inputs; returns the
+    # binary string, suitable for writing to a file for offline analysis. No side effects.
     """Serialize the ProfileProto to a binary string.
 
       Users can write it to file for offline analysis by tfprof commandline
@@ -303,6 +386,10 @@ class Profiler:
     return print_mdl.SerializeToString()
 
   def _write_profile(self, filename):
+    # [FUNCTION DOC]
+    # HELPER: Private utility for dumping the profile to disk (used by tooling and tests).
+    # Input: filename, string path. Asks the native profiler to write its profile there.
+    # Returns nothing; side effect is creating or overwriting that file.
     """Writes the profile to a file."""
     print_mdl.WriteProfile(filename)
 
@@ -313,6 +400,18 @@ def profile(graph=None,
             op_log=None,
             cmd='scope',
             options=_DEFAULT_PROFILE_OPTIONS):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring names the option "accounted_type_regexes" but the options builder
+  # reads the key "account_type_regexes", so following the docstring has no effect.
+  # One-shot model profiling. Inputs: graph, optional graph (default graph when null and not
+  # eager); run_meta, optional run metadata proto enabling time/memory data; op_log, optional op
+  # log proto assigning types to nodes; cmd, one of op, scope, graph or code selecting the view
+  # (default scope); options, mapping of options (default means trainable-variable parameter
+  # profile). Merges the op log (with traces for the code view), builds options, calls the native
+  # analysis and parses the result. Output: a multi-graph node proto for op and code, a graph
+  # node proto for graph and scope. Raises an invalid-argument error for an unknown cmd. A parse
+  # failure is reported on standard error. Side effect: output to standard output, a file or a
+  # timeline file depending on the output option.
   """Profile model.
 
     Tutorials and examples can be found in:
@@ -384,6 +483,12 @@ def profile(graph=None,
 
 @tf_export(v1=['profiler.advise'])
 def advise(graph=None, run_meta=None, options=_DEFAULT_ADVISE_OPTIONS):
+  # [FUNCTION DOC]
+  # Builds profiles and runs anomaly checkers. Inputs: graph, optional graph (default graph when
+  # null and not eager); run_meta, optional run metadata proto; options, mapping of checker names
+  # to settings (default means all checkers in the default advice configuration). Merges an op
+  # log with traces, calls the native analysis in advise mode and parses the result.
+  # Output: an advice proto. A parse failure is not caught and raises the decode error.
   """Auto profile and advise.
 
     Builds profiles and automatically check anomalies of various

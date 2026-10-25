@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# HELPER: Diagnostic helper for troubleshooting failures to load TensorFlow native libraries on Windows.
+# Standalone utility that walks the import tables of a Windows PE binary (by default the TensorFlow
+# internal pywrap extension) and tries to load each dependency, printing a human-readable
+# explanation for every failure (module not found, bad format, missing procedure, access denied,
+# initialization failure). It exposes the Windows error-code constants, a PE header parser, a
+# recursive loader-checker and a top-level entry point. It deliberately avoids importing
+# tensorflow so it can run when the package itself fails to import. It can be run as a script with
+# an optional path argument. No import-time side effects other than standard library imports.
 # Copyright 2024 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,6 +37,16 @@ ERROR_DLL_INIT_FAILED = 0x45A
 
 
 def get_dll_dependencies(path):
+  # [FUNCTION DOC]
+  # HELPER: Supplies the dependency list used by the recursive Windows DLL load diagnosis.
+  # Reads the binary at the given path and parses its PE header by hand: checks the MZ and PE
+  # signatures, reads the section count and optional header (supporting both 32-bit and 64-bit
+  # layouts), locates the import directory, maps relative virtual addresses to file offsets using
+  # the section table, and collects the ASCII names of every imported DLL.
+  # Input: path, a string path to an executable or library file.
+  # Output: a list of DLL file name strings; an empty list if the file is not a valid PE file, has
+  # no imports, or any file/parse/decoding error occurs (those errors are silently swallowed).
+  # Side effects: opens and reads the file only.
   """Parses PE header to find direct DLL dependencies."""
   deps = []
   try:
@@ -74,6 +93,12 @@ def get_dll_dependencies(path):
         sections.append((va, vs, rp))
 
       def rva_to_offset(rva):
+        # [FUNCTION DOC]
+        # HELPER: Address translation for the PE import-table parser.
+        # Converts a relative virtual address (integer) into a file offset using the section list
+        # captured from the enclosing function: finds the section whose virtual range contains the
+        # address and returns the raw data pointer plus the offset inside the section.
+        # Returns nothing (null value) if no section contains the address. No side effects.
         for va, vs, ptr in sections:
           if va <= rva < va + vs:
             return ptr + (rva - va)
@@ -109,6 +134,25 @@ def get_dll_dependencies(path):
 
 
 def diagnose_dll_load(path, depth=0, visited=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: relies on the PATH environment variable key existing; a missing PATH raises a
+  # lookup error that is not caught here. Also the Windows-only loader call raises an attribute
+  # error on non-Windows platforms.
+  # Core of the diagnostic: depth-first, leaf-first check of a binary's DLL dependencies.
+  # Inputs: path, string path of the binary to analyze; depth, integer recursion level used for
+  # output indentation (default 0; level 0 prints a header line); visited, optional set of
+  # lower-cased names/paths already handled (created fresh when omitted) used to avoid cycles
+  # and duplicate work.
+  # Behavior: returns immediately if already visited, the file does not exist (assumed system
+  # DLL) or it has no dependencies. Otherwise registers the file's directory as an extra DLL
+  # search directory (when the operating system supports it, ignoring failures), then for each
+  # dependency recurses into a matching file found in that directory or on the PATH environment
+  # variable (skipping well-known system DLL prefixes), and afterwards attempts to load the
+  # dependency through the Windows loader. Load failures are printed with a specific explanation
+  # for known error codes (and hints for initialization failures) or a generic unknown-error
+  # message, and the dependency is marked visited.
+  # Returns nothing. Side effects: printing to standard output, mutating the visited set, adding
+  # a DLL search directory, loading libraries into the process.
   """Recursively checks DLL dependencies and attempts loading them."""
   if visited is None:
     visited = set()
@@ -188,6 +232,14 @@ def diagnose_dll_load(path, depth=0, visited=None):
 
 
 def run_diagnosis(path=None):
+  # [FUNCTION DOC]
+  # Entry point of the diagnostic. Input: path, optional string path of the primary DLL or
+  # extension module; when omitted, it is derived from this file's location as the internal
+  # TensorFlow pywrap extension in the parent python directory. If running on Windows and the
+  # path exists, runs the recursive dependency diagnosis on it; otherwise prints an error
+  # message saying the path is missing or the platform is not Windows. Operating-system errors
+  # are caught and reported by printing. Returns nothing; side effect is output to standard
+  # output plus those of the diagnosis.
   """Runs the Windows DLL load diagnosis.
 
   Args:

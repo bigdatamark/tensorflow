@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Converts TensorFlow graph and run metadata (collected with full tracing) into profiles in the
+# pprof protocol buffer format. Defines small bookkeeping classes that deduplicate strings,
+# functions, locations and samples (StringTable, Functions, Locations, Samples), the PprofProfiler
+# class that builds one profile per device from per-node execution statistics and the creating
+# Python tracebacks of graph operations, and two public functions: get_profiles returns the
+# protos per device, and profile also writes them as compressed files in an output directory
+# or prints them. Used by the option builder's pprof output. Imports the pprof profile proto
+# from a top-level package named proto at import time.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the 'License');
@@ -57,14 +66,25 @@ ProfileDatum = namedtuple('ProfileDatum', [
 
 
 class StringTable(object):
+  # [CLASS DOC]
+  # HELPER: Bookkeeping helper for building the pprof profile.
+  # Interns strings: holds an ordered list of unique strings (the first entry is always the empty
+  # string, as pprof requires) and a mapping from each string to its position, so each distinct
+  # string gets a stable index in the profile's string table.
   """Keeps track of strings to add to string_table in pprof proto."""
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Creates the table containing only the empty string at index zero. No inputs, no outputs.
     # Pprof requires first entry in string_table to be ''.
     self._string_table = ['']
     self._string_to_index = {'': 0}
 
   def index_of(self, value_str):
+    # [FUNCTION DOC]
+    # Looks up or interns a string. Input: value_str, a string (a null value is treated as the
+    # empty string). Returns the integer index of the string, appending it at the end of the table
+    # first if it was not present. Side effect: may grow the table and the index mapping.
     """Get index of value_str in the string table.
 
     If value_str is not in the string table, we will add it at the end
@@ -85,6 +105,9 @@ class StringTable(object):
     return index
 
   def next_index(self):
+    # [FUNCTION DOC]
+    # Returns the integer index that the next newly added string would receive (the current table
+    # length). Does not modify the table.
     """Gets index that would be assigned to the next added string.
 
     Returns:
@@ -93,14 +116,25 @@ class StringTable(object):
     return len(self._string_table)
 
   def string_table(self):
+    # [FUNCTION DOC]
+    # Returns the underlying list of strings in index order (the live list, not a copy), ready to
+    # be stored as the profile's string table.
     """Returns a list of strings to store in pprof's string_table."""
     return self._string_table
 
 
 class Functions(object):
+  # [CLASS DOC]
+  # HELPER: Bookkeeping helper for building the pprof profile.
+  # Registry of function records for the profile. Holds a reference to the shared string table
+  # and a mapping from (file path, function name, start line) to the function proto, assigning
+  # identifiers starting at one in insertion order.
   """Keeps track of `Function` protos for pprof profile."""
 
   def __init__(self, string_table):
+    # [FUNCTION DOC]
+    # Creates an empty registry. Input: string_table, the shared string table object used to
+    # intern function names and file paths. No outputs.
     """Constructor.
 
     Args:
@@ -112,6 +146,11 @@ class Functions(object):
     self._function_key_to_function = {}
 
   def index_of(self, file_path, function_name, function_start_line):
+    # [FUNCTION DOC]
+    # Looks up or creates a function record. Inputs: file_path, string path where the function is
+    # defined; function_name, string; function_start_line, integer start line. Returns the
+    # function's integer identifier (starting at one). A new record stores the interned name and
+    # file name and the start line. Side effects: may add a record and strings to the string table.
     """Returns index of the function, adding the function if needed.
 
     Args:
@@ -137,17 +176,29 @@ class Functions(object):
       return function_index
 
   def function_protos(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring promises a list, but this returns a dictionary values view, which
+    # is not indexable (callers here only extend a repeated field with it).
+    # Returns all registered function protos in insertion order. Does not modify state.
     """Returns list of `profile_pb2.Function` protos."""
     return self._function_key_to_function.values()
 
 
 class Locations(object):
+  # [CLASS DOC]
+  # HELPER: Bookkeeping helper for building the pprof profile.
+  # Registry of call-location records. Holds the function registry and a mapping from (calling
+  # file path, called function name, line number) to the location proto; identifiers start at
+  # one in insertion order, and each location has one line entry pointing to a function record.
   """Keeps track of `Location` protos for pprof profile.
 
   `Locations` store information about function call locations.
   """
 
   def __init__(self, functions):
+    # [FUNCTION DOC]
+    # Creates an empty registry. Input: functions, the Functions registry used to register called
+    # functions. No outputs.
     """Constructor.
 
     Args:
@@ -161,6 +212,14 @@ class Locations(object):
   def index_of(
       self, file_path, line_number, called_function_name, called_file_path,
       called_function_start_line):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the lookup key omits the called file path and start line, so two calls from the
+    # same file and line to same-named functions in different files share one location.
+    # Looks up or creates a location. Inputs: file_path, string path of the calling file;
+    # line_number, integer call line; called_function_name, string; called_file_path, string path
+    # where the called function is defined; called_function_start_line, integer. Returns the
+    # location's integer identifier. A new location registers the called function and records
+    # the call line. Side effects: may add a location and function.
     """Returns index of the location, adding the location if needed.
 
     Args:
@@ -194,11 +253,19 @@ class Locations(object):
       return location_index
 
   def location_protos(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring promises a list, but this returns a dictionary values view.
+    # Returns all registered location protos in insertion order. Does not modify state.
     """Returns list of `profile_pb2.Location` protos."""
     return self._location_key_to_location.values()
 
 
 class Samples(object):
+  # [CLASS DOC]
+  # HELPER: Bookkeeping helper for building the pprof profile.
+  # Registry of sample records, one per graph node name. Each sample holds three values (count,
+  # total time and operation time) and labels for node name and operation type; repeated
+  # executions of the same node are aggregated into the same sample.
   """Keeps track of `Sample` protos for pprof profile.
 
   Samples store the following statistics in order:
@@ -206,6 +273,9 @@ class Samples(object):
   """
 
   def __init__(self, string_table):
+    # [FUNCTION DOC]
+    # Creates an empty sample registry. Input: string_table, the shared string table used for
+    # label keys and values. Keeps a mapping from graph node name to its sample proto.
     """Constructor.
 
     Args:
@@ -217,6 +287,13 @@ class Samples(object):
     self._node_name_to_sample = {}
 
   def add(self, datum, location_ids):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: when a sample for the node already exists, its location list is extended again
+    # with the new ids, so repeated executions duplicate the same locations in the sample.
+    # Records one execution of a node. Inputs: datum, a profile datum (execution statistics, op
+    # type, traceback); location_ids, list of integer location identifiers. Creates the sample
+    # with zero values and node name / op type labels if new, then increments the count by one,
+    # adds the total end time and adds the operation duration (end minus start) to the values.
     """Adds a sample data point.
 
     Args:
@@ -246,14 +323,26 @@ class Samples(object):
         datum.node_exec_stats.op_start_rel_micros)
 
   def get_sample_protos(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring promises a list, but this returns a dictionary values view.
+    # Returns all sample protos, one per node name, in insertion order. Does not modify state.
     """Returns list of `Sample` protos for pprof profile."""
     return self._node_name_to_sample.values()
 
 
 class PprofProfiler(object):
+  # [CLASS DOC]
+  # Builds pprof profiles from a graph and run metadata. Holds the graph, the run metadata and
+  # shared string table, function and location registries (shared across devices, so identifiers
+  # and strings accumulate over one instance). Use profile to get one proto per device.
   """Creates profiles in pprof format."""
 
   def __init__(self, graph, run_metadata):
+    # [FUNCTION DOC]
+    # Creates a profiler. Inputs: graph, the graph whose operations supply op types and creation
+    # tracebacks; run_metadata, run metadata whose step statistics hold per-device node timings
+    # (the docstring says a list, but the code reads the step statistics of a single metadata
+    # object). Initializes empty string, function and location registries.
     """Constructor.
 
     Args:
@@ -267,6 +356,15 @@ class PprofProfiler(object):
     self._locations = Locations(self._functions)
 
   def profile(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the constructor docstring says run_metadata is a list, but a single object is
+    # used. Also string table and registries are shared across devices, so each device's proto
+    # contains entries from earlier devices, and calling this twice accumulates state.
+    # Generates a pprof proto per device in the run metadata. For each device builds the proto from
+    # that device's node statistics; if it has no samples, prints a message suggesting that run
+    # metadata be passed to the session run and skips it; otherwise appends a comment string
+    # "Device i of n: name" to the proto. Returns a dictionary from device name to proto.
+    # Side effect: printing to standard output.
     """Generates pprof profiles.
 
     Returns:
@@ -296,6 +394,18 @@ class PprofProfiler(object):
     return profiles
 
   def _get_pprof_proto(self, profile_datum_generator):
+    # [FUNCTION DOC]
+    # HELPER: Core proto builder used by profile for a single device.
+    # Input: profile_datum_generator, iterable of profile data (node stats, op type, traceback).
+    # For each datum with a non-empty traceback, walks the traceback from the innermost frame
+    # outward, skipping frames until the op-application function is passed, and registers a
+    # location for each remaining frame (the frame's file and line calling the previous frame's
+    # function; the called function's start line is always recorded as minus one). Adds a sample
+    # for the datum. Then declares sample types count, all_time and op_time (units count and
+    # nanoseconds) and fills string table, samples, functions and locations. Returns the profile
+    # proto. Side effects: grows shared string table, function and location registries.
+    # KNOWN ISSUE: the timing units are declared as nanoseconds but the values come from
+    # microsecond fields of the statistics, so the unit label is likely wrong.
     """Returns profile data in pprof proto format.
 
     Args:
@@ -358,6 +468,12 @@ class PprofProfiler(object):
     return pprof_profile
 
   def _get_profile_data_generator(self):
+    # [FUNCTION DOC]
+    # HELPER: Prepares per-operation lookups for the profile generation.
+    # Scans the graph's operations to map each operation name to its creation traceback and type
+    # (missing names default to an empty list and empty string). Returns a function that takes a
+    # device's step statistics and yields profile data (execution stats, op type, traceback) for
+    # each node, skipping the synthetic source and sink nodes.
     """Get function that generates `ProfileDatum` objects.
 
     Returns:
@@ -370,6 +486,10 @@ class PprofProfiler(object):
       node_to_op_type[op.name] = op.type
 
     def profile_data_generator(device_step_stats):
+      # [FUNCTION DOC]
+      # HELPER: Generator returned by the enclosing method. Input: device_step_stats, a device's
+      # step statistics. Yields one profile datum per node statistic, pairing it with the
+      # operation type and traceback looked up by node name; skips the source and sink nodes.
       for node_stats in device_step_stats.node_stats:
         if node_stats.node_name == '_SOURCE' or node_stats.node_name == '_SINK':
           continue
@@ -382,6 +502,11 @@ class PprofProfiler(object):
 
 
 def get_profiles(graph, run_metadata):
+  # [FUNCTION DOC]
+  # Public entry point returning pprof protos. Inputs: graph, a graph object; run_metadata, run
+  # metadata with step statistics from a fully traced run. Creates a profiler and returns the
+  # dictionary from device name to profile proto (devices without samples are omitted, with a
+  # message printed to standard output).
   """Generate profiles in pprof format.
 
   See https://github.com/google/pprof/blob/master/proto/profile.proto
@@ -398,6 +523,15 @@ def get_profiles(graph, run_metadata):
 
 
 def profile(graph, run_metadata, output_dir=None):
+  # [FUNCTION DOC]
+  # Generates pprof profiles and writes or prints them. Inputs: graph and run_metadata as for
+  # get_profiles; output_dir, optional directory string. If given, creates it when missing and
+  # writes one gzip-compressed serialized proto per device, named with the sanitized device name
+  # (slashes and colons replaced by underscores) and a timestamp suffix, printing each path.
+  # Without a directory, prints a notice and each proto to standard output.
+  # Returns the list of files created (empty when no directory is given).
+  # KNOWN ISSUE: the timestamp has one-second resolution, so repeated calls in the same second
+  # overwrite earlier files.
   """Generate profiles in pprof format.
 
   See https://github.com/google/pprof/blob/master/proto/profile.proto
