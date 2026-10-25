@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Utilities for creating SavedModels from estimator-style export outputs. Provides the default
+# mappings from mode keys to export tags and signature keys, the default receiver/feature/label
+# names, construction of the full signature-definition mapping from receiver tensors and export
+# outputs (with reporting of what was included or excluded), timestamped and temporary export
+# directory naming, and helpers that choose or validate export outputs for a mode.
+# Import-time side effects: builds the module-level mode-keyed mappings and a friendly-name table
+# only; no registration. Part of the model_utils package.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -60,10 +68,21 @@ SINGLE_LABEL_DEFAULT_NAME = 'label'
 
 
 def _must_be_fed(op):
+  # [FUNCTION DOC]
+  # HELPER: predicate used by the servability check to find operations that need external input.
+  # Takes a graph operation and returns true when its type is a placeholder, false otherwise.
   return op.type == 'Placeholder'
 
 
 def _ensure_servable(input_tensors, names_to_output_tensor_infos):
+  # [FUNCTION DOC]
+  # HELPER: validation step used by the signature-definition builder.
+  # Takes an iterable of signature input tensors (composite tensors are expanded into their
+  # components) and a mapping from output names to tensor-info messages. Finds the single graph of
+  # the inputs, resolves the outputs in that graph, walks backward from the outputs stopping at
+  # the inputs, and checks every placeholder reached is among the fed inputs. Returns nothing.
+  # Raises a value error naming the inputs, output keys, offending operation and a dependency
+  # path if an output depends on a placeholder that is not provided as an input.
   """Check that the signature outputs don't depend on unreachable placeholders.
 
   Args:
@@ -111,6 +130,21 @@ def build_all_signature_defs(receiver_tensors,
                              export_outputs,
                              receiver_tensors_alternatives=None,
                              serving_only=True):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it returns "signature_def representing all passed args", but
+  # the function returns a mapping from signature name to signature definition.
+  # Builds the mapping of signature names to signature definitions for all export outputs.
+  # receiver_tensors: a tensor or mapping of names to tensors; a bare tensor is wrapped under the
+  # default receiver name. export_outputs: required mapping of keys to export output objects;
+  # a null value or non-mapping raises a value error. receiver_tensors_alternatives: optional
+  # mapping of alternative names to a tensor or mapping of tensors; each non-mapping value is
+  # wrapped under the default receiver name. serving_only: default true; when true, signatures
+  # failing the serving validity check are dropped from the result.
+  # For each output key (a falsy key is named None) the signature is created from the receivers,
+  # checked for servability, and stored; a value error from either step excludes that signature
+  # and records the message. Alternatives produce entries named alternative-name colon output-key.
+  # Side effect: logs a report of included and excluded signatures via the internal reporter.
+  # Returns the mapping of signature names to signature definitions.
   """Build `SignatureDef`s for all export outputs.
 
   Args:
@@ -202,6 +236,13 @@ _FRIENDLY_METHOD_NAMES = {
 
 
 def _log_signature_report(signature_def_map, excluded_signatures):
+  # [FUNCTION DOC]
+  # HELPER: logging step of the signature-definition builder.
+  # Takes the mapping of included signature names to definitions and the mapping of excluded
+  # signature names to their error messages. Groups included names by method name (always
+  # listing the five standard methods even if empty, using friendly names), logs one info line
+  # per method, logs the excluded signatures with reasons, and warns when no signatures exist or
+  # when the default serving key is missing. Returns nothing; only emits log messages.
   """Log a report of which signatures were produced."""
   sig_names_by_method_name = collections.defaultdict(list)
 
@@ -243,6 +284,14 @@ MAX_DIRECTORY_CREATION_ATTEMPTS = 10
 
 
 def get_timestamped_export_dir(export_dir_base):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it returns a path, but the result is a byte string, because
+  # the base and the timestamp are converted to bytes before joining.
+  # Builds (without creating) a new subdirectory path under the base directory named by the current
+  # time in whole seconds since the epoch. If that path already exists it sleeps one second and
+  # retries, logging a warning each time, up to the module maximum of attempts (ten).
+  # Input: export_dir_base, a string or bytes path. Returns the byte-string path. Raises a runtime
+  # error if no unique name was obtained within the allowed attempts.
   """Builds a path to a new subdirectory within the base directory.
 
   Each export is written into a new subdirectory named using the
@@ -280,6 +329,13 @@ def get_timestamped_export_dir(export_dir_base):
 
 
 def get_temp_export_dir(timestamped_export_dir):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring implies a plain path is returned, but the result is a byte string
+  # because the inputs are converted to bytes before joining.
+  # Splits the given timestamped export directory into parent and final component (decoding a
+  # byte-string component as UTF-8) and returns a sibling path whose final component is the
+  # original one prefixed with temp-. Pure path manipulation: no
+  # file system access and no exceptions of its own.
   """Builds a directory name based on the argument but starting with 'temp-'.
 
   This relies on the fact that TensorFlow Serving ignores subdirectories of
@@ -305,6 +361,15 @@ def get_temp_export_dir(timestamped_export_dir):
 def export_outputs_for_mode(
     mode, serving_export_outputs=None, predictions=None, loss=None,
     metrics=None):
+  # [FUNCTION DOC]
+  # Builds the mapping of signature key to export output appropriate for a mode.
+  # Inputs: mode, one of the mode keys (predict, train, test); serving_export_outputs, optional
+  # mapping used only in predict mode; predictions, loss and metrics, optional tensors or mappings
+  # (metrics as value/update-op pairs). In predict mode it delegates to the validating helper that
+  # supplies a default prediction output when none is given. In train mode it returns a single
+  # entry with a train output, otherwise a single entry with an eval output, keyed by the default
+  # signature key for the mode.
+  # Raises a value error when the mode is not one of the known keys. No side effects.
   """Util function for constructing a `ExportOutput` dict given a mode.
 
   The returned dict can be directly passed to `build_all_signature_defs` helper
@@ -345,6 +410,14 @@ def export_outputs_for_mode(
 
 
 def get_export_outputs(export_outputs, predictions):
+  # [FUNCTION DOC]
+  # Validates the given export outputs or creates the default ones.
+  # Inputs: export_outputs, a mapping of keys to export output objects or nothing; predictions,
+  # a tensor or mapping of tensors used to build a default prediction output when export_outputs
+  # is nothing. Raises a type error if export_outputs is not a mapping or any value is not an
+  # export output object. Then ensures a default serving key exists via the helper (which may
+  # add an alias entry to, or raise for, the given mapping). Returns the mapping, which is the
+  # same object as the argument when one was given (so the argument may be mutated).
   """Validate export_outputs or create default export_outputs.
 
   Args:
@@ -379,6 +452,14 @@ def get_export_outputs(export_outputs, predictions):
 
 
 def _maybe_add_default_serving_output(export_outputs):
+  # [FUNCTION DOC]
+  # HELPER: normalization step for the export-output validation function.
+  # KNOWN ISSUE: the error message for multiple outputs lacks a space before the quoted key name
+  # (the strings are concatenated without one).
+  # Takes a mapping of keys to export outputs and mutates it in place: if it has exactly one entry
+  # under a non-default key, the same output is also registered under the default serving key.
+  # If it has several entries and none uses the default serving key, raises a value error.
+  # Returns the same (possibly modified) mapping.
   """Add a default serving output to the export_outputs if not present.
 
   Args:
