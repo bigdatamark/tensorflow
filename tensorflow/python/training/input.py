@@ -1,3 +1,16 @@
+# [MODULE DOC]
+# Legacy queue-based input pipeline utilities for graph-mode TensorFlow 1.x style programs.
+# Exposes (through the v1 train and io export namespaces) producers that push filenames, integers
+# or row slices into FIFO queues (string_input_producer, range_input_producer,
+# slice_input_producer, input_producer, limit_epochs, match_filenames_once) and the batching
+# functions (batch, maybe_batch, batch_join, maybe_batch_join, shuffle_batch, maybe_shuffle_batch,
+# shuffle_batch_join, maybe_shuffle_batch_join). Each batching function builds a FIFO, padding or
+# random-shuffle queue, registers a queue runner that enqueues from background threads, adds a
+# fullness summary, and returns the dequeued batch. Sparse tensors are stored in a tensors map and
+# restored after dequeue by private helpers in this module.
+# Everything here is deprecated in favor of the tf.data API and raises an error under eager
+# execution. Import-time side effects: binds module-level aliases to private sparse ops and
+# registers public symbols with the export decorators; no flags are defined.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -58,6 +71,14 @@ _restore_sparse = sparse_ops._take_many_sparse_from_tensors_map
     v1=["io.match_filenames_once", "train.match_filenames_once"])
 @deprecation.deprecated_endpoints("train.match_filenames_once")
 def match_filenames_once(pattern, name=None):
+  # [FUNCTION DOC]
+  # Builds a non-trainable local variable whose initial value is the list of files matching the
+  # given pattern(s), so the file listing is evaluated only once, at variable initialization.
+  # Inputs: pattern is a glob string or a 1-D tensor of glob strings; name is an optional
+  # name scope for the created operations.
+  # Returns the variable (shape validation disabled so the size may vary). Side effect: the
+  # variable is added to the local variables collection, so the local variables initializer must
+  # be run before use. Raises nothing itself.
   """Save the list of files matching pattern, so it is only computed once.
 
   NOTE: The order of the files returned is deterministic.
@@ -81,6 +102,15 @@ def match_filenames_once(pattern, name=None):
     None, "Queue-based input pipelines have been replaced by `tf.data`. Use "
     "`tf.data.Dataset.from_tensors(tensor).repeat(num_epochs)`.")
 def limit_epochs(tensor, num_epochs=None, name=None):
+  # [FUNCTION DOC]
+  # Passes a tensor through, but fails with an out-of-range error once it has been evaluated the
+  # requested number of times.
+  # Inputs: tensor is any tensor; num_epochs is an optional positive integer (nothing means no
+  # limit and the input tensor is returned unchanged); name is an optional name scope.
+  # Returns an identity of the tensor that depends on a counting op incrementing a local int64
+  # counter variable named epochs, which raises out-of-range when the limit is exceeded.
+  # Raises a value error if num_epochs is zero or negative. Side effect: adds the counter variable
+  # to the local variables collection (must be initialized with the local initializer).
   """Returns tensor `num_epochs` times and then raises an `OutOfRange` error.
 
   Note: creates local counter `epochs`. Use `local_variables_initializer()` to
@@ -128,6 +158,19 @@ def input_producer(input_tensor,
                    summary_name=None,
                    name=None,
                    cancel_op=None):
+  # [FUNCTION DOC]
+  # Core producer: creates a FIFO queue holding the rows of a tensor and registers a queue runner
+  # that enqueues them from a background thread.
+  # Inputs: input_tensor is a tensor of rank at least one; element_shape is an optional shape of
+  # one row, merged with the static row shape and required to be fully defined; num_epochs
+  # optionally limits how many passes over the rows are made; shuffle (default true) randomly
+  # shuffles rows each epoch using seed; capacity is the queue size (default 32); shared_name
+  # optionally shares the queue across sessions; summary_name, if given, adds a scalar summary of
+  # the queue fill fraction; name is the scope name; cancel_op is an optional op run to cancel
+  # the queue runner.
+  # Returns the FIFO queue. Raises a runtime error under eager execution and a value error if the
+  # row shape is not fully defined. Side effects: adds a queue runner to the queue runner
+  # collection of the default graph, may create the epoch counter local variable and a summary.
   """Output the rows of `input_tensor` to a queue for an input pipeline.
 
   Note: if `num_epochs` is not `None`, this function creates local counter
@@ -214,6 +257,16 @@ def string_input_producer(string_tensor,
                           shared_name=None,
                           name=None,
                           cancel_op=None):
+  # [FUNCTION DOC]
+  # Produces strings (typically filenames) from a 1-D string tensor into a queue by delegating to
+  # the generic input producer with scalar element shape and a fill-fraction summary named after
+  # the capacity.
+  # Inputs: string_tensor (1-D strings, converted to a string tensor), num_epochs, shuffle
+  # (default true), seed, capacity (default 32), shared_name, name, cancel_op as for the generic
+  # producer.
+  # Returns the queue. Raises a value error if string_tensor is an empty Python list; an empty
+  # tensor instead fails at run time through an assertion op wired as a control dependency.
+  # Side effects: registers a queue runner, may add the epoch counter local variable and a summary.
   """Output strings (e.g. filenames) to a queue for an input pipeline.
 
   Note: if `num_epochs` is not `None`, this function creates local counter
@@ -282,6 +335,14 @@ def string_input_producer(string_tensor,
     "`shuffle=False`, omit the `.shuffle(...)`.")
 def range_input_producer(limit, num_epochs=None, shuffle=True, seed=None,
                          capacity=32, shared_name=None, name=None):
+  # [FUNCTION DOC]
+  # Produces the integers from zero up to limit minus one into a queue, using the generic input
+  # producer on a range tensor with scalar element shape.
+  # Inputs: limit is an int32 scalar tensor; num_epochs optionally limits passes; shuffle
+  # (default true) and seed control shuffling; capacity (default 32); shared_name; name.
+  # Returns the queue. Side effects: registers a queue runner, may create the epoch counter local
+  # variable and a fill-fraction summary. Raises a runtime error under eager execution (from the
+  # underlying producer).
   """Produces the integers from 0 to limit-1 in a queue.
 
   Note: if `num_epochs` is not `None`, this function creates local counter
@@ -325,6 +386,16 @@ def range_input_producer(limit, num_epochs=None, shuffle=True, seed=None,
     "`shuffle=False`, omit the `.shuffle(...)`.")
 def slice_input_producer(tensor_list, num_epochs=None, shuffle=True, seed=None,
                          capacity=32, shared_name=None, name=None):
+  # [FUNCTION DOC]
+  # Produces one slice (a single index along the first dimension) of every tensor in the list per
+  # dequeue, by creating a range producer over the first dimension size of the first tensor and
+  # gathering that index from each tensor.
+  # Inputs: tensor_list is a non-empty list of tensors sharing the first dimension size (this is
+  # not checked, see the TODO in the code); num_epochs, shuffle, seed, capacity, shared_name,
+  # name as for the range producer.
+  # Returns a list of tensors, one per input, each with the first dimension removed. Raises a
+  # value error if the list is empty. Side effects: registers a queue runner via the range
+  # producer; creates a dequeue op.
   """Produces a slice of each `Tensor` in `tensor_list`.
 
   Implemented using a Queue -- a `QueueRunner` for the Queue
@@ -379,13 +450,27 @@ def slice_input_producer(tensor_list, num_epochs=None, shuffle=True, seed=None,
 
 
 def _flatten(tensor_list_list):
+  # [FUNCTION DOC]
+  # HELPER: flattens inputs for the batch_join family when building name scope input lists.
+  # Takes a list of lists of tensors and returns a single list with all elements in order.
   return [tensor for tensor_list in tensor_list_list for tensor in tensor_list]
 
 
 class _SparseMetaData:
+  # [CLASS DOC]
+  # HELPER: bookkeeping record used by the batching functions to restore sparse tensors.
+  # Immutable-style holder of three facts about one tensor in a batch input: whether it is sparse,
+  # the operation that created the tensors map storing it (map_op), and its static rank. Exposed
+  # through read-only properties; supports equality, inequality, string conversion and merging
+  # of compatible records. Instances are created by the sparse storing helpers and consumed when
+  # restoring sparse tensors after dequeue.
   """Store information about the Tensor: Is it sparse?, map_op, and rank."""
 
   def __init__(self, sparse, map_op, rank):
+    # [FUNCTION DOC]
+    # Constructor. Stores the sparse flag (boolean), the map operation (operation or nothing for
+    # dense tensors) and the rank, which is converted to a dimension object (nothing is accepted
+    # and gives an unknown dimension). Returns nothing; no side effects beyond the instance.
     """Create the metadata.
 
     Args:
@@ -400,6 +485,13 @@ class _SparseMetaData:
     self._rank = tensor_shape.as_dimension(rank)
 
   def __eq__(self, other):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: defines equality without defining a hash, so instances are unhashable.
+    # Equality test against another metadata record. Different sparse flags are unequal; two dense
+    # records are equal. For sparse records they are equal only if both have or both lack a map
+    # operation, the map operations are identical, and the ranks are compatible. Returns a
+    # boolean; the other argument must be a metadata record (anything else raises an attribute
+    # error).
     if self.sparse != other.sparse:
       return False
     if not self.sparse:
@@ -414,13 +506,24 @@ class _SparseMetaData:
     return True
 
   def __ne__(self, other):
+    # [FUNCTION DOC]
+    # Inequality: returns the logical negation of the equality test with the other record.
     return not self.__eq__(other)
 
   def __str__(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: for a dense record the map operation is nothing, so reading its name raises an
+    # attribute error; the string form only works for sparse records.
+    # Returns a bracketed string with the sparse flag, the map operation name and the rank.
     return "[SparseMetaData(%s, %s, %s)]" % (self.sparse, self.map_op.name,
                                              self.rank)
 
   def merge_with(self, other):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the dimension merge returns a new merged dimension that is discarded, so the
+    # rank stored on this record is not actually refined; only compatibility is checked.
+    # Checks that this record is equal to the other one and returns this same record. Raises a
+    # value error if the two records are incompatible. For sparse records it also merges ranks.
     if self != other:
       raise ValueError("SparseMetaData objects are incompatible: %s vs. %s"
                        % (self, other))
@@ -430,18 +533,28 @@ class _SparseMetaData:
 
   @property
   def map_op(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the operation that created the tensors map (nothing if dense).
     return self._map_op
 
   @property
   def sparse(self):
+    # [FUNCTION DOC]
+    # Read-only property returning true if the described tensor is a sparse tensor.
     return self._sparse
 
   @property
   def rank(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the statically known rank as a dimension object.
     return self._rank
 
 
 def _as_tensor_list(tensors):
+  # [FUNCTION DOC]
+  # HELPER: normalizes batching inputs to a list of tensors.
+  # If the input is a mapping from names to tensors, returns its values ordered by the string
+  # form of the keys; otherwise returns the input unchanged. No exceptions or side effects.
   if isinstance(tensors, dict):
     return [tensors[k] for k in sorted(tensors, key=str)]
   else:
@@ -449,6 +562,12 @@ def _as_tensor_list(tensors):
 
 
 def _as_tensor_list_list(tensors_list):
+  # [FUNCTION DOC]
+  # HELPER: normalizes the input of the join batching functions to a list of tensor lists.
+  # Input is a non-empty list whose elements are lists of tensors or mappings from names to
+  # tensors. Mappings are converted with the single-input normalizer. Raises a value error if the
+  # list is empty or if mappings do not all share the same key set (the check only runs when the
+  # first element is a mapping). Returns the converted list, or the input unchanged for lists.
   if not tensors_list:
     raise ValueError("Expected at least one set of tensors")
   if isinstance(tensors_list[0], dict):
@@ -463,6 +582,11 @@ def _as_tensor_list_list(tensors_list):
 
 
 def _as_original_type(original_tensors, tensor_list):
+  # [FUNCTION DOC]
+  # HELPER: converts dequeued results back to the structure the caller passed in.
+  # If the original input was a mapping, rebuilds a mapping with the same keys (ordered by string
+  # form of the key) from the dequeued list, first wrapping a lone tensor into a list because a
+  # single enqueued tensor is returned bare. Otherwise returns the dequeued value unchanged.
   if isinstance(original_tensors, dict):
     if len(original_tensors) == 1:
       # tensor_list is bogusly returned as a single tensor if only one tensor
@@ -476,6 +600,17 @@ def _as_original_type(original_tensors, tensor_list):
 
 def _store_sparse_tensors(tensor_list, enqueue_many, keep_input,
                           shared_map_ops=None):
+  # [FUNCTION DOC]
+  # HELPER: converts sparse tensors in a batch input into dense handle tensors so they can pass
+  # through a queue.
+  # Inputs: tensor_list is a list of dense or sparse tensors; enqueue_many says whether the
+  # first dimension is a batch dimension; keep_input is a scalar or vector boolean tensor
+  # controlling which inputs are stored (a vector filters rows); shared_map_ops is an optional
+  # list of map operations from a previous call so several enqueue paths share one tensors map.
+  # Each sparse tensor is stored (conditionally, via the cond helper, or by retaining only kept
+  # rows when keep_input is a vector) and replaced by its handle, expanded by one dimension; dense
+  # tensors pass through. Returns a pair: the list of stored tensors and the list of metadata
+  # records. Side effects: creates ops that write to the sparse tensors map.
   """Store SparseTensors for feeding into batch, etc.
 
   If `shared_map_ops` is provided, the underlying `SparseTensorsMap` objects
@@ -508,6 +643,11 @@ def _store_sparse_tensors(tensor_list, enqueue_many, keep_input,
   maybe_shared_map_ops = shared_map_ops or [None] * len(tensor_list)
 
   def _sparse_meta_data(t, storing_op, map_op):
+    # [FUNCTION DOC]
+    # HELPER: builds the metadata record for one tensor. Dense tensors give a non-sparse record.
+    # For sparse tensors the rank is taken from the dense shape (minus one when enqueue_many is
+    # set, from the enclosing scope) and the map operation is the shared one if provided,
+    # otherwise the storing operation. Returns the record.
     if not isinstance(t, sparse_tensor.SparseTensor):
       return _SparseMetaData(False, None, None)
     rank = t.dense_shape.shape.with_rank(1).dims[0]
@@ -519,17 +659,30 @@ def _store_sparse_tensors(tensor_list, enqueue_many, keep_input,
         sparse=True, map_op=map_op or storing_op, rank=rank)
 
   def _maybe_store(t, shared_map_op):
+    # [FUNCTION DOC]
+    # HELPER: stores one tensor if it is sparse; dense tensors are returned unchanged.
+    # Chooses the storing strategy from keep_input (enclosing scope): a vector filters rows and
+    # stores many sparse tensors; otherwise many-store if enqueue_many, else single store. The
+    # optional shared map operation supplies the shared name. Returns the handle tensor.
     """Store Sparse tensor, if necessary."""
     if not isinstance(t, sparse_tensor.SparseTensor):
       return t
     map_op_name = shared_map_op.name if shared_map_op else None
     def _maybe_store_sparse(t, map_op_name, keep_input):
+      # [FUNCTION DOC]
+      # HELPER: stores a single sparse tensor in the tensors map when keep_input is true,
+      # otherwise yields a scalar int64 handle of minus one. map_op_name is an optional shared
+      # name. Returns the handle tensor.
       """Conditionally store a single sparse Tensor."""
       return utils.smart_cond(
           keep_input,
           lambda: _store_sparse(t, shared_name=map_op_name),
           lambda: constant_op.constant(-1, dtypes.int64))
     def _maybe_store_many_sparse(t, map_op_name, keep_input):
+      # [FUNCTION DOC]
+      # HELPER: stores a batch of sparse tensors in the tensors map when keep_input is true,
+      # otherwise yields a vector of minus-one int64 handles with one entry per batch row. The
+      # result's static shape is set to an unknown-length vector. Returns the handle vector.
       """Conditionally store multiple sparse Tensors."""
       out_tensor = utils.smart_cond(
           keep_input,
@@ -538,6 +691,10 @@ def _store_sparse_tensors(tensor_list, enqueue_many, keep_input,
       out_tensor.set_shape([None])  # necessary when t.ndims is unknown
       return out_tensor
     def _sparse_values_to_keep(t, keep_input):
+      # [FUNCTION DOC]
+      # HELPER: expands a per-row keep vector to a per-value keep vector for a sparse tensor by
+      # gathering, for each stored value, the keep flag of its row (first index column).
+      # Returns a boolean vector aligned with the sparse values.
       """Convert a per-row `keep_input` vector to a per-value one."""
       # Get the rows of every value in the sparse Tensor.
       row_values = t.indices[:, 0]
@@ -558,6 +715,10 @@ def _store_sparse_tensors(tensor_list, enqueue_many, keep_input,
   # Since the output of `_store{_many}_sparse is wrapped in a tf.cond `Merge`,
   # we can't just get the Op of the resulting tensor.
   def _sparse_op(stored):
+    # [FUNCTION DOC]
+    # HELPER: finds the sparse-store operation behind a stored tensor, which is wrapped in a
+    # conditional merge. Scans the inputs of the tensor's op for a single or many sparse store op
+    # and returns it; if none is found (tensor was dense) returns the tensor's own op.
     for input_tensor in stored.op.inputs:
       if input_tensor.op.type in ("AddSparseToTensorsMap",
                                   "AddManySparseToTensorsMap"):
@@ -577,6 +738,12 @@ def _store_sparse_tensors(tensor_list, enqueue_many, keep_input,
 
 
 def _store_sparse_tensors_join(tensor_list_list, enqueue_many, keep_input):
+  # [FUNCTION DOC]
+  # HELPER: sparse storing for the join batching functions.
+  # Stores the first tensor list normally, then stores each remaining list reusing the first
+  # list's map operations so all enqueue threads share the same tensors maps. Raises a value
+  # error if the metadata of a later list is inconsistent with the first; otherwise merges the
+  # metadata. Returns a pair: list of stored tensor lists and the merged metadata list.
   """Store SparseTensors for feeding into batch_join, etc."""
   (s0, sparse_info_list) = _store_sparse_tensors(
       tensor_list_list[0], enqueue_many, keep_input)
@@ -597,6 +764,13 @@ def _store_sparse_tensors_join(tensor_list_list, enqueue_many, keep_input):
 
 
 def _restore_sparse_tensors(stored_list, sparse_info_list):
+  # [FUNCTION DOC]
+  # HELPER: reverses sparse storing after dequeue.
+  # Inputs: stored_list is a single tensor or a sequence of dequeued tensors; sparse_info_list is
+  # the matching list of metadata records. Handles of sparse entries are squeezed and used to
+  # take sparse tensors back out of the tensors map; dense entries pass through. When any sparse
+  # tensor was restored, all components are made dependent on the restored values so ordering is
+  # preserved. Returns a list if the input was a sequence, otherwise the single restored tensor.
   """Restore SparseTensors after dequeue in batch, batch_join, etc."""
   received_sequence = isinstance(stored_list, collections_abc.Sequence)
   if not received_sequence:
@@ -627,6 +801,10 @@ def _restore_sparse_tensors(stored_list, sparse_info_list):
 
 
 def _validate(tensor_list):
+  # [FUNCTION DOC]
+  # HELPER: validates input of the single-list batching functions.
+  # Converts all entries to tensors or indexed slices and returns the list. Raises a value error
+  # if the list is empty.
   tensor_list = indexed_slices.convert_n_to_tensor_or_indexed_slices(
       tensor_list)
   if not tensor_list:
@@ -635,6 +813,10 @@ def _validate(tensor_list):
 
 
 def _validate_join(tensor_list_list):
+  # [FUNCTION DOC]
+  # HELPER: validates input of the join batching functions.
+  # Converts every inner list to tensors or indexed slices and returns the list of lists. Raises
+  # a value error if the outer list is empty.
   tensor_list_list = [
       indexed_slices.convert_n_to_tensor_or_indexed_slices(tl)
       for tl in tensor_list_list
@@ -645,6 +827,10 @@ def _validate_join(tensor_list_list):
 
 
 def _validate_keep_input(keep_input, enqueue_many):
+  # [FUNCTION DOC]
+  # HELPER: validates the keep_input argument of the conditional batching functions.
+  # Converts it to a tensor and returns it. Raises a value error if its rank is unknown, if it is
+  # a vector while enqueue_many is false, or if its rank is greater than one.
   """Validate `keep_input` argument to conditional batching functions."""
   keep_input = ops.convert_to_tensor(keep_input)
   if keep_input.shape.ndims is None:
@@ -659,6 +845,10 @@ def _validate_keep_input(keep_input, enqueue_many):
 
 
 def _dtypes(tensor_list_list):
+  # [FUNCTION DOC]
+  # HELPER: determines the queue component types from a list of tensor lists.
+  # Returns the list of data types of the first inner list. Raises a type error naming the
+  # mismatching types if any other inner list has different types.
   all_types = [[t.dtype for t in tl] for tl in tensor_list_list]
   types = all_types[0]
   for other_types in all_types[1:]:
@@ -670,6 +860,12 @@ def _dtypes(tensor_list_list):
 
 
 def _merge_shapes(shape_list, enqueue_many):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the merge result of each step is discarded, so the returned shape is just the
+  # first shape; incompatible shapes raise an error but compatible ones are not refined.
+  # HELPER: merges the static shapes of one component across enqueue threads.
+  # Converts entries to shapes, strips the leading batch dimension when enqueue_many is set, and
+  # returns the first shape as a list. Raises a value error if shapes are incompatible.
   shape_list = [tensor_shape.as_shape(s) for s in shape_list]
   if enqueue_many:
     # We want the shapes without the leading batch dimension.
@@ -681,6 +877,11 @@ def _merge_shapes(shape_list, enqueue_many):
 
 
 def _shapes(tensor_list_list, shapes, enqueue_many):
+  # [FUNCTION DOC]
+  # HELPER: computes the queue component shapes.
+  # If shapes is given it is returned unchanged. Otherwise every tensor must have a known rank
+  # (else a value error is raised) and the shapes of each component are merged across the lists
+  # with the shape merge helper. Returns a list of shapes, one per component.
   """Calculate and merge the shapes of incoming tensors.
 
   Args:
@@ -714,6 +915,10 @@ def _shapes(tensor_list_list, shapes, enqueue_many):
 
 
 def _select_which_to_enqueue(tensor_list, keep_input):
+  # [FUNCTION DOC]
+  # HELPER: row filtering for vector keep_input. Casts the keep flags to integer partition ids
+  # and, for each tensor, keeps only the rows in the partition marked true. Returns the list of
+  # filtered tensors.
   """Select which examples to enqueue based on vector `keep_input`."""
   select_i = math_ops.cast(keep_input, dtypes.int32)
   tensor_list = [
@@ -723,6 +928,11 @@ def _select_which_to_enqueue(tensor_list, keep_input):
 
 
 def _enqueue_join(queue, tensor_list_list, enqueue_many, keep_input):
+  # [FUNCTION DOC]
+  # HELPER: builds one enqueue op per tensor list (one per future thread) for the join batching
+  # functions. Uses the many-enqueue op if enqueue_many is set. With a vector keep_input rows are
+  # filtered; otherwise each enqueue runs only if the scalar keep_input is true (else a no-op).
+  # Returns nothing. Side effect: registers a queue runner for the queue in the default graph.
   """Enqueue `tensor_list_list` in `queue`."""
   if enqueue_many:
     enqueue_fn = queue.enqueue_many
@@ -740,6 +950,11 @@ def _enqueue_join(queue, tensor_list_list, enqueue_many, keep_input):
 
 
 def _enqueue(queue, tensor_list, threads, enqueue_many, keep_input):
+  # [FUNCTION DOC]
+  # HELPER: builds the enqueue op for a single tensor list and replicates it once per requested
+  # thread. Uses the many-enqueue op if enqueue_many is set; a vector keep_input filters rows,
+  # a scalar one makes the enqueue conditional (else a no-op). Returns nothing. Side effect:
+  # registers a queue runner for the queue in the default graph.
   """Enqueue `tensor_list` in `queue`."""
   if enqueue_many:
     enqueue_fn = queue.enqueue_many
@@ -757,6 +972,9 @@ def _enqueue(queue, tensor_list, threads, enqueue_many, keep_input):
 
 
 def _which_queue(dynamic_pad):
+  # [FUNCTION DOC]
+  # HELPER: selects the queue class for batching. Returns the padding FIFO queue class when
+  # dynamic_pad is true, otherwise the plain FIFO queue class (the class, not an instance).
   return (data_flow_ops.PaddingFIFOQueue if dynamic_pad
           else data_flow_ops.FIFOQueue)
 
@@ -765,6 +983,16 @@ def _batch(tensors, batch_size, keep_input, num_threads=1, capacity=32,
            enqueue_many=False, shapes=None, dynamic_pad=False,
            allow_smaller_final_batch=False, shared_name=None,
            name=None):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation of batch and maybe_batch.
+  # Inputs: tensors (list or mapping of tensors), batch_size, keep_input (boolean tensor or
+  # value; scalar or, with enqueue_many, a vector), num_threads, capacity, enqueue_many, shapes
+  # (optional), dynamic_pad (use a padding queue), allow_smaller_final_batch, shared_name, name.
+  # Validates inputs, stores sparse tensors, creates a FIFO or padding queue, enqueues from
+  # num_threads threads, adds a fill-fraction summary, and dequeues a batch (dequeue-up-to when a
+  # smaller final batch is allowed, else dequeue-many). Returns the batch in the original
+  # structure. Raises a value error under eager execution or on invalid inputs. Side effects:
+  # registers a queue runner and adds a summary to the default graph.
   """Helper function for `batch` and `maybe_batch`."""
   if context.executing_eagerly():
     raise ValueError(
@@ -804,6 +1032,13 @@ def _batch(tensors, batch_size, keep_input, num_threads=1, capacity=32,
 def _batch_join(tensors_list, batch_size, keep_input, capacity=32,
                 enqueue_many=False, shapes=None, dynamic_pad=False,
                 allow_smaller_final_batch=False, shared_name=None, name=None):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation of batch_join and maybe_batch_join.
+  # Like the single-list batch helper but takes tensors_list, a non-empty list of tensor lists or
+  # mappings, one per enqueue thread (the thread count equals the list length, so there is no
+  # num_threads parameter). Sparse tensors share tensors maps across threads. Returns the batch
+  # in the structure of the first element. Raises a value error under eager execution or on
+  # invalid or inconsistent inputs. Side effects: registers a queue runner, adds a summary.
   """Helper function for `batch_join` and `maybe_batch_join`."""
   if context.executing_eagerly():
     raise ValueError(
@@ -840,6 +1075,14 @@ def _shuffle_batch(tensors, batch_size, capacity, min_after_dequeue,
                    keep_input, num_threads=1, seed=None, enqueue_many=False,
                    shapes=None, allow_smaller_final_batch=False,
                    shared_name=None, name=None):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation of shuffle_batch and maybe_shuffle_batch.
+  # Inputs as for the plain batch helper plus min_after_dequeue (minimum elements kept for
+  # mixing) and seed; capacity must exceed min_after_dequeue. Uses a random shuffle queue, adds a
+  # summary of how full the queue is above the minimum, and dequeues a batch. Returns the batch
+  # in the original structure. Raises a value error under eager execution, when capacity is not
+  # larger than min_after_dequeue, or on invalid inputs. Side effects: registers a queue runner
+  # and adds a summary.
   """Helper function for `shuffle_batch` and `maybe_shuffle_batch`."""
   if context.executing_eagerly():
     raise ValueError(
@@ -885,6 +1128,15 @@ def _shuffle_batch_join(tensors_list, batch_size, capacity,
                         enqueue_many=False, shapes=None,
                         allow_smaller_final_batch=False, shared_name=None,
                         name=None):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation of shuffle_batch_join and maybe_shuffle_batch_join.
+  # KNOWN ISSUE: unlike the single-list shuffle helper, it does not check that capacity exceeds
+  # min_after_dequeue, so equal or smaller capacity gives a zero or negative divisor in the
+  # fullness summary.
+  # Takes a non-empty list of tensor lists or mappings (one enqueue thread each), min_after_dequeue
+  # and seed, and builds a random shuffle queue, enqueue ops, a fill summary and a dequeued batch.
+  # Returns the batch in the structure of the first element. Raises a value error under eager
+  # execution or on invalid inputs. Side effects: registers a queue runner and adds a summary.
   """Helper function for `shuffle_batch_join` and `maybe_shuffle_batch_join`."""
   if context.executing_eagerly():
     raise ValueError(
@@ -933,6 +1185,15 @@ def _shuffle_batch_join(tensors_list, batch_size, capacity,
 def batch(tensors, batch_size, num_threads=1, capacity=32,
           enqueue_many=False, shapes=None, dynamic_pad=False,
           allow_smaller_final_batch=False, shared_name=None, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the documented description of enqueue_many ("whether each tensor is a single
+  # example") is inverted; true means the tensors are already batches.
+  # Public deprecated queue-based batching. Delegates to the batch helper with keep_input fixed
+  # to true. Inputs: tensors (list or mapping), batch_size, num_threads (default 1), capacity
+  # (default 32), enqueue_many, shapes, dynamic_pad, allow_smaller_final_batch, shared_name, name.
+  # Returns a batch with the same structure as the input (a one-element list gives a bare
+  # tensor). Raises a value error when shapes cannot be inferred or under eager execution. Side
+  # effects: adds a queue runner and summary to the default graph.
   """Creates batches of tensors in `tensors`.
 
   The argument `tensors` can be a list or a dictionary of tensors.
@@ -1032,6 +1293,12 @@ def batch(tensors, batch_size, num_threads=1, capacity=32,
 def maybe_batch(tensors, keep_input, batch_size, num_threads=1, capacity=32,
                 enqueue_many=False, shapes=None, dynamic_pad=False,
                 allow_smaller_final_batch=False, shared_name=None, name=None):
+  # [FUNCTION DOC]
+  # Public deprecated conditional variant of batch. Same inputs as batch plus keep_input, a
+  # boolean tensor: a scalar gates the whole input, a vector (with enqueue_many) selects which
+  # examples are enqueued. Delegates to the batch helper. Returns the batch in the structure of
+  # the input. Raises a value error when keep_input has an invalid rank, shapes cannot be inferred
+  # or under eager execution. Side effects: adds a queue runner and summary to the default graph.
   """Conditionally creates batches of tensors based on `keep_input`.
 
   See docstring in `batch` for more details.
@@ -1089,6 +1356,13 @@ def maybe_batch(tensors, keep_input, batch_size, num_threads=1, capacity=32,
 def batch_join(tensors_list, batch_size, capacity=32, enqueue_many=False,
                shapes=None, dynamic_pad=False, allow_smaller_final_batch=False,
                shared_name=None, name=None):
+  # [FUNCTION DOC]
+  # Public deprecated multi-thread batching. tensors_list is a list of tensor tuples or mappings;
+  # one enqueue thread is started per element. Other inputs: batch_size, capacity (default 32),
+  # enqueue_many, shapes, dynamic_pad, allow_smaller_final_batch, shared_name, name. Delegates to
+  # the join batch helper with keep_input true. Returns a batch with the structure of the first
+  # element. Raises a value error when shapes cannot be inferred or under eager execution. Side
+  # effects: adds a queue runner and summary to the default graph. Nondeterministic ordering.
   """Runs a list of tensors to fill a queue to create batches of examples.
 
   The `tensors_list` argument is a list of tuples of tensors, or a list of
@@ -1200,6 +1474,12 @@ def maybe_batch_join(tensors_list, keep_input, batch_size, capacity=32,
                      enqueue_many=False, shapes=None, dynamic_pad=False,
                      allow_smaller_final_batch=False, shared_name=None,
                      name=None):
+  # [FUNCTION DOC]
+  # Public deprecated conditional variant of batch_join: adds keep_input, a boolean tensor that is
+  # a scalar gate or, with enqueue_many, a per-example vector filter. Other inputs as for
+  # batch_join. Delegates to the join batch helper. Returns the batch in the structure of the
+  # first element. Raises a value error on invalid keep_input rank, unknown shapes or eager
+  # execution. Side effects: adds a queue runner and summary to the default graph.
   """Runs a list of tensors to conditionally fill a queue to create batches.
 
   See docstring in `batch_join` for more details.
@@ -1255,6 +1535,16 @@ def maybe_batch_join(tensors_list, keep_input, batch_size, capacity=32,
 def shuffle_batch(tensors, batch_size, capacity, min_after_dequeue,
                   num_threads=1, seed=None, enqueue_many=False, shapes=None,
                   allow_smaller_final_batch=False, shared_name=None, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the documented descriptions of num_threads, enqueue_many and shapes refer to a
+  # nonexistent tensor_list argument, and enqueue_many is described inversely (true means the
+  # tensors are already batches).
+  # Public deprecated random-shuffling batching. Inputs: tensors (list or mapping), batch_size,
+  # capacity and min_after_dequeue (capacity must be larger), num_threads, seed, enqueue_many,
+  # shapes, allow_smaller_final_batch, shared_name, name. Delegates to the shuffle helper with
+  # keep_input true. Returns a batch in the structure of the input. Raises a value error if
+  # capacity is not larger than min_after_dequeue, shapes are unknown, or under eager execution.
+  # Side effects: adds a shuffle queue runner and summary to the default graph.
   """Creates batches by randomly shuffling tensors.
 
   This function adds the following to the current `Graph`:
@@ -1361,6 +1651,13 @@ def maybe_shuffle_batch(tensors, batch_size, capacity, min_after_dequeue,
                         enqueue_many=False, shapes=None,
                         allow_smaller_final_batch=False, shared_name=None,
                         name=None):
+  # [FUNCTION DOC]
+  # Public deprecated conditional variant of shuffle_batch: adds the required keep_input
+  # argument (placed after min_after_dequeue), a boolean scalar gate or per-example vector filter.
+  # Other inputs as for shuffle_batch. Delegates to the shuffle helper. Returns a batch in the
+  # structure of the input. Raises a value error for an invalid keep_input rank, capacity not
+  # larger than min_after_dequeue, unknown shapes, or eager execution. Side effects: adds a
+  # queue runner and summary to the default graph.
   """Creates batches by randomly shuffling conditionally-enqueued tensors.
 
   See docstring in `shuffle_batch` for more details.
@@ -1424,6 +1721,14 @@ def shuffle_batch_join(tensors_list, batch_size, capacity,
                        min_after_dequeue, seed=None, enqueue_many=False,
                        shapes=None, allow_smaller_final_batch=False,
                        shared_name=None, name=None):
+  # [FUNCTION DOC]
+  # Public deprecated random-shuffling multi-thread batching: one enqueue thread per element of
+  # tensors_list (tuples or mappings of tensors). Other inputs: batch_size, capacity,
+  # min_after_dequeue, seed, enqueue_many, shapes, allow_smaller_final_batch, shared_name, name.
+  # Delegates to the shuffle join helper with keep_input true. Returns a batch in the structure of
+  # the first element. Raises a value error for unknown shapes or under eager execution; note the
+  # join helper does not verify that capacity exceeds min_after_dequeue. Side effects: adds a
+  # queue runner and summary to the default graph.
   """Create batches by randomly shuffling tensors.
 
   The `tensors_list` argument is a list of tuples of tensors, or a list of
@@ -1523,6 +1828,12 @@ def maybe_shuffle_batch_join(tensors_list, batch_size, capacity,
                              enqueue_many=False, shapes=None,
                              allow_smaller_final_batch=False, shared_name=None,
                              name=None):
+  # [FUNCTION DOC]
+  # Public deprecated conditional variant of shuffle_batch_join: adds the required keep_input
+  # argument (boolean scalar gate or per-example vector filter). Other inputs as for
+  # shuffle_batch_join. Delegates to the shuffle join helper. Returns a batch in the structure of
+  # the first element. Raises a value error for invalid keep_input rank, unknown shapes or eager
+  # execution. Side effects: adds a queue runner and summary to the default graph.
   """Create batches by randomly shuffling conditionally-enqueued tensors.
 
   See docstring in `shuffle_batch_join` for more details.
