@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Defines Student's t distribution of the legacy tf.distributions API (v1 only), a heavy-tailed
+# location-scale distribution with degrees of freedom, location and scale, sampled via a normal
+# variate divided by the root of a scaled gamma (chi-squared) variate with reparameterized
+# gradients. Also defines StudentTWithAbsDfSoftplusScale, which floors the absolute value of df
+# and applies softplus to scale. Import-time effect: exports StudentT under the v1 distributions
+# namespace.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -41,6 +48,12 @@ __all__ = [
 
 @tf_export(v1=["distributions.StudentT"])
 class StudentT(distribution.Distribution):
+  # [CLASS DOC]
+  # Student's t distribution with degrees of freedom df, location loc and scale scale. Holds the
+  # three parameters as identity-wrapped floating tensors that broadcast together; batch shape is
+  # their broadcast shape, event shape is scalar, dtype comes from scale. Fully reparameterized
+  # sampling. Supports density, cdf, entropy, mean, variance and mode, with mean and variance
+  # undefined (NaN or an error) for df of at most one. Deprecated.
   """Student's t-distribution.
 
   This distribution has parameters: degree of freedom `df`, location `loc`,
@@ -155,6 +168,14 @@ class StudentT(distribution.Distribution):
                validate_args=False,
                allow_nan_stats=True,
                name="StudentT"):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says the type error is raised when loc and scale have different
+    # dtypes, but the code checks all three of df, loc and scale for a common floating dtype. Also
+    # validate_args only asserts that df is positive; scale positivity is never checked.
+    # Constructor. df, loc, scale: floating tensors broadcastable together; validate_args (bool,
+    # default false); allow_nan_stats (bool, default true); name (scope name). Stores identity
+    # copies of the three parameters and initializes the base class as fully reparameterized with
+    # the dtype of scale. Deprecated; warns once.
     """Construct Student's t distributions.
 
     The distributions have degree of freedom `df`, mean `loc`, and scale
@@ -204,6 +225,10 @@ class StudentT(distribution.Distribution):
 
   @staticmethod
   def _param_shapes(sample_shape):
+    # [FUNCTION DOC]
+    # HELPER: static helper for the base distribution's param_shapes machinery.
+    # Returns a mapping from parameter names df, loc and scale to the sample shape converted to a
+    # 32-bit integer tensor.
     return dict(
         zip(("df", "loc", "scale"), (
             [ops.convert_to_tensor(
@@ -211,38 +236,68 @@ class StudentT(distribution.Distribution):
 
   @property
   def df(self):
+    # [FUNCTION DOC]
+    # Property returning the degrees-of-freedom tensor.
     """Degrees of freedom in these Student's t distribution(s)."""
     return self._df
 
   @property
   def loc(self):
+    # [FUNCTION DOC]
+    # Property returning the location tensor.
     """Locations of these Student's t distribution(s)."""
     return self._loc
 
   @property
   def scale(self):
+    # [FUNCTION DOC]
+    # Property returning the scale tensor (not the standard deviation).
     """Scaling factors of these Student's t distribution(s)."""
     return self._scale
 
   def _batch_shape_tensor(self):
+    # [FUNCTION DOC]
+    # HELPER: hook for the base class batch_shape_tensor.
+    # Returns the dynamic broadcast of the shapes of df, loc and scale as an integer tensor.
     return array_ops.broadcast_dynamic_shape(
         array_ops.shape(self.df),
         array_ops.broadcast_dynamic_shape(
             array_ops.shape(self.loc), array_ops.shape(self.scale)))
 
   def _batch_shape(self):
+    # [FUNCTION DOC]
+    # HELPER: hook for the base class batch_shape.
+    # Returns the static broadcast of the shapes of df, loc and scale; raises a value error if
+    # they are not broadcast compatible.
     return array_ops.broadcast_static_shape(
         array_ops.broadcast_static_shape(self.df.get_shape(),
                                          self.loc.get_shape()),
         self.scale.get_shape())
 
   def _event_shape_tensor(self):
+    # [FUNCTION DOC]
+    # HELPER: hook for the base class event_shape_tensor.
+    # Returns an empty 32-bit integer vector since draws are scalars. (The dtype is looked up
+    # through the math ops module rather than the dtypes module, which only works because that
+    # module re-exposes it.)
     return constant_op.constant([], dtype=math_ops.int32)
 
   def _event_shape(self):
+    # [FUNCTION DOC]
+    # HELPER: hook for the base class event_shape.
+    # Returns the static scalar (empty) event shape.
     return tensor_shape.TensorShape([])
 
   def _sample_n(self, n, seed=None):
+    # [FUNCTION DOC]
+    # HELPER: hook for the base class sample.
+    # Draws n samples per batch member using the fact that a standard normal divided by the square
+    # root of a chi-squared variate over its degrees of freedom is Student t. n is an integer
+    # count; seed is an optional integer seed (default none). Draws normal noise, draws gamma
+    # noise with shape half of df and rate one half (using a derived seed salted for this
+    # distribution), forms the ratio, then scales by scale and shifts by loc (the absolute value
+    # of scale is intentionally not used). Returns a tensor shaped n followed by the batch shape.
+    # Consumes randomness.
     # The sampling method comes from the fact that if:
     #   X ~ Normal(0, 1)
     #   Z ~ Chi2(df)
@@ -262,13 +317,24 @@ class StudentT(distribution.Distribution):
     return samples * self.scale + self.loc  # Abs(scale) not wanted.
 
   def _log_prob(self, x):
+    # [FUNCTION DOC]
+    # HELPER: hook for the base class log_prob.
+    # Returns the unnormalized log density minus the log normalization for tensor x.
     return self._log_unnormalized_prob(x) - self._log_normalization()
 
   def _log_unnormalized_prob(self, x):
+    # [FUNCTION DOC]
+    # HELPER: part of the log density computation.
+    # Standardizes x by loc and scale, then returns minus half of (df + 1) times log1p of the
+    # squared standardized value divided by df.
     y = (x - self.loc) / self.scale  # Abs(scale) superfluous.
     return -0.5 * (self.df + 1.) * math_ops.log1p(y**2. / self.df)
 
   def _log_normalization(self):
+    # [FUNCTION DOC]
+    # HELPER: part of the log density computation.
+    # Returns log of the absolute scale plus half log df plus half log pi plus log-gamma of half
+    # df minus log-gamma of half of (df + 1): the log of the normalizing constant.
     return (math_ops.log(math_ops.abs(self.scale)) +
             0.5 * math_ops.log(self.df) +
             0.5 * np.log(np.pi) +
@@ -276,6 +342,12 @@ class StudentT(distribution.Distribution):
             math_ops.lgamma(0.5 * (self.df + 1.)))
 
   def _cdf(self, x):
+    # [FUNCTION DOC]
+    # HELPER: hook for the base class cdf.
+    # Standardizes x using loc and the absolute value of scale, computes half of the regularized
+    # incomplete beta function (parameters half df and one half) at df over (y squared plus df),
+    # which is the lower tail, and returns that for negative standardized values and one minus it
+    # otherwise. Returns a tensor of the batch shape.
     # Take Abs(scale) to make subsequent where work correctly.
     y = (x - self.loc) / math_ops.abs(self.scale)
     x_t = self.df / (y**2. + self.df)
@@ -283,6 +355,11 @@ class StudentT(distribution.Distribution):
     return array_ops.where_v2(math_ops.less(y, 0.), neg_cdf, 1. - neg_cdf)
 
   def _entropy(self):
+    # [FUNCTION DOC]
+    # HELPER: hook for the base class entropy.
+    # Returns the differential entropy per batch member: log of absolute scale plus half log df
+    # plus the log beta function of (df/2, 1/2) plus half of (df + 1) times the difference of
+    # digamma at (df + 1)/2 and at df/2. Parameters are broadcast to the batch shape.
     v = array_ops.ones(self.batch_shape_tensor(),
                        dtype=self.dtype)[..., array_ops.newaxis]
     u = v * self.df[..., array_ops.newaxis]
@@ -299,6 +376,14 @@ class StudentT(distribution.Distribution):
       `NaN`. If `self.allow_nan_stats=True`, then an exception will be raised
       rather than returning `NaN`.""")
   def _mean(self):
+    # [FUNCTION DOC]
+    # HELPER: hook for the base class mean.
+    # KNOWN ISSUE: the appended docstring has the condition reversed: it says an exception is
+    # raised when allow_nan_stats is true, but the code returns NaN in that case and only adds a
+    # runtime assertion (failing when any df is at most 1) when allow_nan_stats is false.
+    # Returns loc broadcast to the batch shape. With allow_nan_stats true, entries whose df is not
+    # greater than one are replaced by NaN; otherwise the result depends on an assertion that
+    # one is less than df.
     mean = self.loc * array_ops.ones(self.batch_shape_tensor(),
                                      dtype=self.dtype)
     if self.allow_nan_stats:
@@ -328,6 +413,13 @@ class StudentT(distribution.Distribution):
       ```
       """)
   def _variance(self):
+    # [FUNCTION DOC]
+    # HELPER: hook for the base class variance.
+    # Computes scale squared times df over (df - 2) where df exceeds two (using a safe
+    # denominator so gradients never hit NaN), infinity where df is at most two, and then, if
+    # allow_nan_stats is true, NaN where df is at most one. If allow_nan_stats is false, the
+    # result depends on a runtime assertion that every df is greater than one. Returns a tensor
+    # of the batch shape.
     # We need to put the tf.where inside the outer tf.where to ensure we never
     # hit a NaN in the gradient.
     denom = array_ops.where_v2(
@@ -361,10 +453,17 @@ class StudentT(distribution.Distribution):
           result_where_defined)
 
   def _mode(self):
+    # [FUNCTION DOC]
+    # HELPER: hook for the base class mode.
+    # Returns an identity copy of loc (not broadcast to the full batch shape).
     return array_ops.identity(self.loc)
 
 
 class StudentTWithAbsDfSoftplusScale(StudentT):
+  # [CLASS DOC]
+  # Student's t distribution whose constructor maps df to floor of its absolute value and scale
+  # through softplus so unconstrained reals can be supplied. Otherwise identical to StudentT.
+  # Deprecated.
   """StudentT with `df = floor(abs(df))` and `scale = softplus(scale)`."""
 
   @deprecation.deprecated(
@@ -379,6 +478,12 @@ class StudentTWithAbsDfSoftplusScale(StudentT):
                validate_args=False,
                allow_nan_stats=True,
                name="StudentTWithAbsDfSoftplusScale"):
+    # [FUNCTION DOC]
+    # Constructor with the same arguments as StudentT (df, loc, scale, validate_args,
+    # allow_nan_stats, name). Passes floor of absolute df, unchanged loc and softplus of scale to
+    # the StudentT constructor inside a name scope, then overwrites the stored parameters with the
+    # raw arguments originally passed. Note a df whose absolute value floors to zero would be
+    # invalid. Deprecated; warns once.
     parameters = dict(locals())
     with ops.name_scope(name, values=[df, scale]) as name:
       super(StudentTWithAbsDfSoftplusScale, self).__init__(

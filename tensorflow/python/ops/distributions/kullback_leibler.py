@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Registry and dispatch for KL divergences between distribution types (legacy tf.distributions
+# API). Holds a module-level mapping from (class A, class B) pairs to KL functions, the RegisterKL
+# decorator that fills it, the kl_divergence function that looks up the best match by walking the
+# classes' inheritance hierarchies, and cross_entropy built on entropy plus KL. Distribution
+# modules register their KL functions at import time. Global state: the registry mapping.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,6 +39,13 @@ __all__ = [
 
 
 def _registered_kl(type_a, type_b):
+  # [FUNCTION DOC]
+  # HELPER: lookup used by kl_divergence.
+  # Takes two classes, walks the method resolution order of each, and examines every pair of
+  # ancestors in the registry. Picks the registered function whose summed distances to the two
+  # classes is smallest; ties keep the first one found (favoring shorter distance on type_a's
+  # side because it is the outer loop). Returns the function, or nothing if none is registered.
+  # Reads global registry only; no side effects.
   """Get the KL function registered for classes a and b."""
   hierarchy_a = tf_inspect.getmro(type_a)
   hierarchy_b = tf_inspect.getmro(type_b)
@@ -59,6 +72,14 @@ def _registered_kl(type_a, type_b):
 @tf_export(v1=["distributions.kl_divergence"])
 def kl_divergence(distribution_a, distribution_b,
                   allow_nan_stats=True, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says name is prefixed to created ops, but the outer name scope is
+  # fixed to KullbackLeibler; name is only forwarded to the registered KL function.
+  # Computes the batchwise KL divergence between two distribution objects. Finds the registered
+  # KL function for their types (see the registry lookup); raises a not-implemented error if none
+  # exists. Calls it inside a name scope. If allow_nan_stats is true (default) returns the result
+  # directly; otherwise adds a runtime assertion that no entry is NaN and returns the checked
+  # tensor. Returns a tensor of KL values with the batch shape. Deprecated; warns once.
   """Get the KL-divergence KL(distribution_a || distribution_b).
 
   If there is no KL method registered specifically for `type(distribution_a)`
@@ -128,6 +149,12 @@ def kl_divergence(distribution_a, distribution_b,
     warn_once=True)
 def cross_entropy(ref, other,
                   allow_nan_stats=True, name=None):
+  # [FUNCTION DOC]
+  # Computes the cross entropy H[ref, other] as the entropy of ref plus the KL divergence from
+  # ref to other. ref and other are distribution objects; allow_nan_stats (bool, default true)
+  # is passed through to the KL computation; name is the scope name. Returns a tensor with the
+  # batch shape. Raises a not-implemented error if no KL is registered for the type pair.
+  # Not listed in the module exports. Deprecated; warns once.
   """Computes the (Shannon) cross entropy.
 
   Denote two distributions by `P` (`ref`) and `Q` (`other`). Assuming `P, Q`
@@ -160,6 +187,10 @@ def cross_entropy(ref, other,
 
 @tf_export(v1=["distributions.RegisterKL"])
 class RegisterKL:
+  # [CLASS DOC]
+  # Decorator factory used to register a KL divergence function for an ordered pair of
+  # distribution classes in the module-level registry. Instantiated with the two classes, then
+  # called on the function to register; registration is a side effect on global state.
   """Decorator to register a KL divergence implementation function.
 
   Usage:
@@ -178,6 +209,10 @@ class RegisterKL:
       "instead of `tf.distributions`.",
       warn_once=True)
   def __init__(self, dist_cls_a, dist_cls_b):
+    # [FUNCTION DOC]
+    # Constructor. Takes the class of the first and of the second distribution argument and
+    # stores them as a pair key for later registration. No registration happens yet. Deprecated;
+    # warns once.
     """Initialize the KL registrar.
 
     Args:
@@ -187,6 +222,11 @@ class RegisterKL:
     self._key = (dist_cls_a, dist_cls_b)
 
   def __call__(self, kl_fn):
+    # [FUNCTION DOC]
+    # Registers kl_fn (a callable taking two distributions and an optional name) under the stored
+    # class pair in the global registry and returns kl_fn unchanged so it works as a decorator.
+    # Raises a type error if kl_fn is not callable, and a value error if the pair is already
+    # registered. Side effect: mutates the global registry.
     """Perform the KL registration.
 
     Args:

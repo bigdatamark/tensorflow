@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Numerically careful special functions used by the legacy distributions: the standard normal
+# CDF (ndtr), its inverse (ndtri), the log of the normal CDF (log_ndtr, using an asymptotic series
+# in the far lower tail), the inverse error function (erfinv) and the log CDF of the Laplace
+# distribution (log_cdf_laplace). Also defines module constants with the dtype-dependent segment
+# boundaries used by log_ndtr, and private helpers for the core computations. Helper module for
+# the Normal and Laplace distributions; no import-time side effects beyond constants.
 
 # Functions "ndtr" and "ndtri" are derived from calculations made in:
 # https://root.cern.ch/doc/v608/SpecFuncCephesInv_8cxx_source.html
@@ -105,6 +112,11 @@ LOGNDTR_FLOAT32_UPPER = np.array(5, np.float32)
 
 
 def ndtr(x, name="ndtr"):
+  # [FUNCTION DOC]
+  # Standard normal cumulative distribution function. x: tensor (or value convertible to one) of
+  # 32- or 64-bit floating dtype; name: scope name (default ndtr). Converts x to a tensor and
+  # returns the CDF values with the same dtype and shape. Raises a type error if the dtype is not
+  # float32 or float64. Delegates the computation to the private core helper.
   """Normal distribution function.
 
   Returns the area under the Gaussian probability density function, integrated
@@ -140,6 +152,11 @@ def ndtr(x, name="ndtr"):
 
 
 def _ndtr(x):
+  # [FUNCTION DOC]
+  # HELPER: core computation behind ndtr and log_ndtr.
+  # Takes a floating tensor x and returns the standard normal CDF using the error function
+  # for small magnitudes and the complementary error function for large magnitudes (to avoid
+  # cancellation), selected elementwise. No dtype validation is done here.
   """Implements ndtr core logic."""
   half_sqrt_2 = constant_op.constant(
       0.5 * np.sqrt(2.), dtype=x.dtype, name="half_sqrt_2")
@@ -153,6 +170,11 @@ def _ndtr(x):
 
 
 def ndtri(p, name="ndtri"):
+  # [FUNCTION DOC]
+  # Inverse of the standard normal CDF (quantile function). p: tensor (or convertible value) of
+  # float32 or float64 probabilities; name: scope name (default ndtri). Returns a tensor of the
+  # same dtype and shape: minus infinity at p <= 0, plus infinity at p >= 1. Raises a type error
+  # for other dtypes. Delegates to the private piecewise rational approximation helper.
   """The inverse of the CDF of the Normal distribution function.
 
   Returns x such that the area under the pdf from minus infinity to x is equal
@@ -182,6 +204,13 @@ def ndtri(p, name="ndtri"):
 
 
 def _ndtri(p):
+  # [FUNCTION DOC]
+  # HELPER: core computation behind ndtri.
+  # Port of the Cephes piecewise rational approximation. Takes a floating tensor p of
+  # probabilities. Works with the smaller of p and its complement, sanitizes zeros to avoid NaNs
+  # in unused branches, computes the central-region form, or the tail forms (two coefficient
+  # sets, chosen by a threshold on the intermediate variable), then flips the sign for the lower
+  # half and maps p <= 0 and p >= 1 to minus and plus infinity. Returns a tensor of p's dtype.
   """Implements ndtri core logic."""
 
   # Constants used in piece-wise rational approximations. Taken from the cephes
@@ -227,6 +256,11 @@ def _ndtri(p):
   ]
 
   def _create_polynomial(var, coeffs):
+    # [FUNCTION DOC]
+    # HELPER: polynomial evaluator for the ndtri approximation.
+    # Evaluates a polynomial with coefficients given in increasing order of power (a list of
+    # numbers) at the tensor var, recursively using Horner's method. Coefficients are cast to the
+    # dtype of var; an empty coefficient list yields zeros shaped like var. Returns a tensor.
     """Compute n_th order polynomial via Horner's method."""
     coeffs = np.array(coeffs, var.dtype.as_numpy_dtype)
     if not coeffs.size:
@@ -276,6 +310,15 @@ def _ndtri(p):
 
 
 def log_ndtr(x, series_order=3, name="log_ndtr"):
+  # [FUNCTION DOC]
+  # Log of the standard normal CDF, stable across the whole range. x: float32 or float64 tensor;
+  # series_order: Python integer in zero to thirty (default 3), the depth of the asymptotic series
+  # used in the far lower tail; name: scope name. Raises a type error if series_order is not an
+  # integer or x has an unsupported dtype, and a value error if series_order is negative or above
+  # 30 (checked before anything else). Chooses elementwise between minus the CDF at minus x
+  # (upper tail), the log of the CDF (middle), and the asymptotic expansion (lower tail), with
+  # dtype-dependent segment boundaries; clamps inputs of each branch to keep gradients finite.
+  # Returns a tensor of x's dtype.
   """Log Normal distribution function.
 
   For details of the Normal distribution function see `ndtr`.
@@ -368,6 +411,11 @@ def log_ndtr(x, series_order=3, name="log_ndtr"):
 
 
 def _log_ndtr_lower(x, series_order):
+  # [FUNCTION DOC]
+  # HELPER: lower-tail branch of log_ndtr.
+  # For strongly negative tensor x, returns the log of the leading asymptotic term (minus half of
+  # x squared, minus log of minus x, minus half log of 2 pi) plus the log of the asymptotic
+  # series with the given integer order. Values for non-negative x are meaningless (NaN).
   """Asymptotic expansion version of `Log[cdf(x)]`, appropriate for `x<<-1`."""
   x_2 = math_ops.square(x)
   # Log of the term multiplying (1 + sum)
@@ -376,6 +424,12 @@ def _log_ndtr_lower(x, series_order):
 
 
 def _log_ndtr_asymptotic_series(x, series_order):
+  # [FUNCTION DOC]
+  # HELPER: series used by the lower-tail branch of log_ndtr.
+  # Computes one plus the alternating sum over n from 1 to series_order of double factorial of
+  # (2n - 1) divided by x to the power 2n, for tensor x. If series_order is not positive, returns
+  # the constant one (a numpy scalar of x's dtype) rather than a tensor. Otherwise returns a
+  # tensor of x's dtype. Odd terms are subtracted and even terms added.
   """Calculates the asymptotic series used in log_ndtr."""
   dtype = x.dtype.as_numpy_dtype
   if series_order <= 0:
@@ -395,6 +449,11 @@ def _log_ndtr_asymptotic_series(x, series_order):
 
 
 def erfinv(x, name="erfinv"):
+  # [FUNCTION DOC]
+  # Inverse error function. x: float32 or float64 tensor (values in the open interval minus one
+  # to one are meaningful); name: scope name. Computed from the normal quantile function of
+  # (x + 1) / 2 divided by the square root of two. Returns a tensor of x's dtype; yields
+  # infinities at the interval ends. Raises a type error for other dtypes.
   """The inverse function for erf, the error function.
 
   Args:
@@ -418,11 +477,23 @@ def erfinv(x, name="erfinv"):
 
 
 def _double_factorial(n):
+  # [FUNCTION DOC]
+  # HELPER: used by the asymptotic series of log_ndtr.
+  # Returns the double factorial of a small Python integer n (product of n, n-2, ... down to
+  # values above one) as a numpy integer. For n of one or less the product is empty, giving one.
   """The double factorial function for small Python integer `n`."""
   return np.prod(np.arange(n, 1, -2))
 
 
 def log_cdf_laplace(x, name="log_cdf_laplace"):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring gives the default name as log_ndtr (copy-paste), but the actual
+  # default is log_cdf_laplace. It also documents a type error for unhandled dtypes, yet the
+  # code performs no dtype check at all, so no type error is raised here explicitly.
+  # Log of the CDF of the standard Laplace distribution. x: floating tensor; name: scope name.
+  # For negative x returns minus log 2 plus x (exact); otherwise returns log of one minus half of
+  # exp of minus x, using the log1p op with the exponent of minus absolute x so it never
+  # overflows. Returns a tensor of x's dtype.
   """Log Laplace distribution function.
 
   This function calculates `Log[L(x)]`, where `L(x)` is the cumulative

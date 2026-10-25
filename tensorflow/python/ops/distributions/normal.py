@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Defines the Normal (Gaussian) distribution of the legacy tf.distributions API (v1 only),
+# parameterized by mean (loc) and standard deviation (scale), with reparameterized sampling.
+# Also defines NormalWithSoftplusScale (softplus applied to scale) and registers the closed-form
+# Normal-Normal KL divergence. Uses the special_math module for the standard normal CDF, log CDF
+# and inverse CDF. Import-time effects: exports Normal under the v1 distributions namespace and
+# registers the KL function with the kullback_leibler registry.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -40,6 +47,12 @@ __all__ = [
 
 @tf_export(v1=["distributions.Normal"])
 class Normal(distribution.Distribution):
+  # [CLASS DOC]
+  # Normal distribution over the reals with mean loc and positive standard deviation scale.
+  # Holds both as identity-wrapped tensors that broadcast together; batch shape is their
+  # broadcast shape, event shape is scalar, dtype comes from scale. Fully reparameterized
+  # sampling. Supports density, cdf, log cdf, survival functions, quantile, entropy, mean,
+  # mode and standard deviation. Deprecated in favor of TensorFlow Probability.
   """The Normal distribution with location `loc` and `scale` parameters.
 
   #### Mathematical details
@@ -117,6 +130,13 @@ class Normal(distribution.Distribution):
                validate_args=False,
                allow_nan_stats=True,
                name="Normal"):
+    # [FUNCTION DOC]
+    # Constructor. loc: floating tensor of means; scale: positive floating tensor of standard
+    # deviations (must broadcast with loc); validate_args (bool, default false) adds an assertion
+    # that scale is positive; allow_nan_stats (bool, default true); name (scope name). Stores
+    # identity copies of loc and scale, checks they share a floating dtype (raises a type error
+    # otherwise), and initializes the base class as fully reparameterized with dtype of scale.
+    # Deprecated; warns once.
     """Construct Normal distributions with mean and stddev `loc` and `scale`.
 
     The parameters `loc` and `scale` must be shaped in a way that supports
@@ -157,92 +177,164 @@ class Normal(distribution.Distribution):
 
   @staticmethod
   def _param_shapes(sample_shape):
+    # [FUNCTION DOC]
+    # HELPER: static helper for the base distribution's param_shapes machinery.
+    # Returns a mapping from parameter names loc and scale to the sample shape converted to a
+    # 32-bit integer tensor (both are scalar per batch member).
     return dict(
         zip(("loc", "scale"), ([ops.convert_to_tensor(
             sample_shape, dtype=dtypes.int32)] * 2)))
 
   @property
   def loc(self):
+    # [FUNCTION DOC]
+    # Property returning the mean (location) parameter tensor.
     """Distribution parameter for the mean."""
     return self._loc
 
   @property
   def scale(self):
+    # [FUNCTION DOC]
+    # Property returning the standard deviation parameter tensor.
     """Distribution parameter for standard deviation."""
     return self._scale
 
   def _batch_shape_tensor(self):
+    # [FUNCTION DOC]
+    # HELPER: hook for the base class batch_shape_tensor.
+    # Returns the dynamic broadcast of the shapes of loc and scale as an integer tensor.
     return array_ops.broadcast_dynamic_shape(
         array_ops.shape(self.loc),
         array_ops.shape(self.scale))
 
   def _batch_shape(self):
+    # [FUNCTION DOC]
+    # HELPER: hook for the base class batch_shape.
+    # Returns the static broadcast of loc and scale shapes; raises a value error if they are not
+    # broadcast compatible.
     return array_ops.broadcast_static_shape(
         self.loc.get_shape(),
         self.scale.get_shape())
 
   def _event_shape_tensor(self):
+    # [FUNCTION DOC]
+    # HELPER: hook for the base class event_shape_tensor.
+    # Returns an empty 32-bit integer vector since draws are scalars.
     return constant_op.constant([], dtype=dtypes.int32)
 
   def _event_shape(self):
+    # [FUNCTION DOC]
+    # HELPER: hook for the base class event_shape.
+    # Returns the static scalar (empty) event shape.
     return tensor_shape.TensorShape([])
 
   def _sample_n(self, n, seed=None):
+    # [FUNCTION DOC]
+    # HELPER: hook for the base class sample.
+    # Draws n samples per batch member: standard normal noise of shape n followed by the batch
+    # shape, scaled by scale and shifted by loc. n is an integer count; seed is an optional
+    # integer seed (default none). Returns a tensor of the loc dtype. Consumes randomness.
     shape = array_ops.concat([[n], self.batch_shape_tensor()], 0)
     sampled = random_ops.random_normal(
         shape=shape, mean=0., stddev=1., dtype=self.loc.dtype, seed=seed)
     return sampled * self.scale + self.loc
 
   def _log_prob(self, x):
+    # [FUNCTION DOC]
+    # HELPER: hook for the base class log_prob.
+    # Returns the unnormalized log density minus the log normalization for tensor x.
     return self._log_unnormalized_prob(x) - self._log_normalization()
 
   def _log_cdf(self, x):
+    # [FUNCTION DOC]
+    # HELPER: hook for the base class log_cdf.
+    # Returns the log of the standard normal CDF (stable helper) at the standardized x.
     return special_math.log_ndtr(self._z(x))
 
   def _cdf(self, x):
+    # [FUNCTION DOC]
+    # HELPER: hook for the base class cdf.
+    # Returns the standard normal CDF at the standardized x.
     return special_math.ndtr(self._z(x))
 
   def _log_survival_function(self, x):
+    # [FUNCTION DOC]
+    # HELPER: hook for the base class log_survival_function.
+    # Returns the log standard normal CDF at the negated standardized x (symmetry).
     return special_math.log_ndtr(-self._z(x))
 
   def _survival_function(self, x):
+    # [FUNCTION DOC]
+    # HELPER: hook for the base class survival_function.
+    # Returns the standard normal CDF at the negated standardized x, i.e. one minus the CDF.
     return special_math.ndtr(-self._z(x))
 
   def _log_unnormalized_prob(self, x):
+    # [FUNCTION DOC]
+    # HELPER: part of the log density computation.
+    # Returns minus one half times the square of the standardized x.
     return -0.5 * math_ops.square(self._z(x))
 
   def _log_normalization(self):
+    # [FUNCTION DOC]
+    # HELPER: part of the log density computation.
+    # Returns one half of log(2 pi) plus log scale.
     return 0.5 * math.log(2. * math.pi) + math_ops.log(self.scale)
 
   def _entropy(self):
+    # [FUNCTION DOC]
+    # HELPER: hook for the base class entropy.
+    # Returns one half of log(2 pi e) plus log scale, with scale broadcast against loc so the
+    # result has the full batch shape.
     # Use broadcasting rules to calculate the full broadcast scale.
     scale = self.scale * array_ops.ones_like(self.loc)
     return 0.5 * math.log(2. * math.pi * math.e) + math_ops.log(scale)
 
   def _mean(self):
+    # [FUNCTION DOC]
+    # HELPER: hook for the base class mean.
+    # Returns loc broadcast to the full batch shape (multiplied by ones shaped like scale).
     return self.loc * array_ops.ones_like(self.scale)
 
   def _quantile(self, p):
+    # [FUNCTION DOC]
+    # HELPER: hook for the base class quantile.
+    # p is a tensor of probabilities in the unit interval. Returns the corresponding values:
+    # the standard normal inverse CDF of p, scaled by scale and shifted by loc.
     return self._inv_z(special_math.ndtri(p))
 
   def _stddev(self):
+    # [FUNCTION DOC]
+    # HELPER: hook for the base class stddev.
+    # Returns scale broadcast to the full batch shape (multiplied by ones shaped like loc).
     return self.scale * array_ops.ones_like(self.loc)
 
   def _mode(self):
+    # [FUNCTION DOC]
+    # HELPER: hook for the base class mode. Equal to the mean (loc, broadcast).
     return self._mean()
 
   def _z(self, x):
+    # [FUNCTION DOC]
+    # HELPER: standardization used by density and CDF methods.
+    # Returns (x minus loc) divided by scale for tensor x, inside a name scope.
     """Standardize input `x` to a unit normal."""
     with ops.name_scope("standardize", values=[x]):
       return (x - self.loc) / self.scale
 
   def _inv_z(self, z):
+    # [FUNCTION DOC]
+    # HELPER: inverse of the standardization, used by the quantile method.
+    # Returns z times scale plus loc for tensor z, inside a name scope.
     """Reconstruct input `x` from a its normalized version."""
     with ops.name_scope("reconstruct", values=[z]):
       return z * self.scale + self.loc
 
 
 class NormalWithSoftplusScale(Normal):
+  # [CLASS DOC]
+  # Normal distribution whose constructor applies softplus to scale so an unconstrained real
+  # value can be supplied. Otherwise identical to Normal. Deprecated.
   """Normal with softplus applied to `scale`."""
 
   @deprecation.deprecated(
@@ -256,6 +348,11 @@ class NormalWithSoftplusScale(Normal):
                validate_args=False,
                allow_nan_stats=True,
                name="NormalWithSoftplusScale"):
+    # [FUNCTION DOC]
+    # Constructor with the same arguments as Normal (loc, scale, validate_args, allow_nan_stats,
+    # name). Passes loc unchanged and softplus of scale to the Normal constructor inside a name
+    # scope (the scope lists only scale as its input), then overwrites the stored parameters with
+    # the raw arguments originally passed. Deprecated; warns once.
     parameters = dict(locals())
     with ops.name_scope(name, values=[scale]) as name:
       super(NormalWithSoftplusScale, self).__init__(
@@ -269,6 +366,12 @@ class NormalWithSoftplusScale(Normal):
 
 @kullback_leibler.RegisterKL(Normal, Normal)
 def _kl_normal_normal(n_a, n_b, name=None):
+  # [FUNCTION DOC]
+  # HELPER: registered KL implementation for the Normal-Normal pair.
+  # Computes the batched closed-form KL divergence from n_a to n_b: squared mean difference over
+  # twice the variance of n_b plus half of (variance ratio minus one minus log of ratio).
+  # name is an optional scope name (default kl_normal_normal). Returns a tensor with the
+  # broadcast batch shape.
   """Calculate the batched KL divergence KL(n_a || n_b) with n_a and n_b Normal.
 
   Args:
