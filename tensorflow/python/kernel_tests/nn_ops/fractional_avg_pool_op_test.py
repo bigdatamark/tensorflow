@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# Unit tests for the fractional average pooling operation and its gradient.
+# The module defines two test cases. The first checks the forward op (the public fractional
+# average pool function) against a pure numpy reference implementation that averages over the
+# pooling regions described by the row and column pooling sequences returned by the op. The
+# second checks the gradient op, both by comparing it with the regular average pool gradient
+# for window layouts that are equivalent, and by numeric gradient checking.
+# Importing the module has no side effects beyond importing the gradient registrations of the
+# neural-network ops. Running it as a script starts the standard test runner.
+# Not a helper module; it is a test module only.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,12 +41,25 @@ from tensorflow.python.platform import test
 
 
 class FractionalAvgTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the forward fractional average pooling op. Holds a class-level seeded numpy
+  # random generator and a fixed op seed so results are reproducible. Helper methods build the
+  # expected output with numpy from the row and column pooling sequences the op reports, and the
+  # test methods cover input options, integer input, shapes, large and divisible pooling ratios,
+  # dynamic shapes and several invalid-argument cases.
 
   # Random number generate with seed.
   _PRNG = np.random.RandomState(341261000)
   _SEED = 341261001
 
   def _AvgPoolAlongRows(self, input_matrix, row_seq, overlapping):
+    # [FUNCTION DOC]
+    # HELPER: numpy reference implementation used to compute expected fractional pooling output.
+    # Averages groups of consecutive rows of a 2-D matrix. Inputs: input_matrix (2-D numpy array),
+    # row_seq (numpy array of cumulative row boundaries), overlapping (boolean). Each output row
+    # is the column-wise mean of rows from one boundary up to the next one, or one row past it
+    # when overlapping, clipped to the last boundary. Returns a 2-D array with one fewer row than
+    # the number of boundaries and the same number of columns. No side effects, raises nothing.
     """Perform average pool along row of a 2-D matrix based on row_seq.
 
     Args:
@@ -61,6 +84,12 @@ class FractionalAvgTest(test.TestCase):
     return output_image[1:, :]
 
   def _AvgPoolAlongCols(self, input_matrix, col_seq, overlapping):
+    # [FUNCTION DOC]
+    # HELPER: numpy reference for the column direction of expected fractional pooling output.
+    # Transposes the 2-D input matrix, reuses the row pooling helper with the column boundary
+    # sequence and the overlapping flag, and transposes the result back. Returns a 2-D array with
+    # the same rows as the input and one fewer column than the number of boundaries.
+    # No side effects.
     """Perform average pool along column of a 2-D matrix based on col_seq.
 
     Args:
@@ -79,6 +108,13 @@ class FractionalAvgTest(test.TestCase):
 
   def _GetExpectedFractionalAvgPoolResult(self, input_tensor, row_seq, col_seq,
                                           overlapping):
+    # [FUNCTION DOC]
+    # HELPER: builds the expected output of fractional average pooling for the tests.
+    # Inputs: input_tensor (4-D numpy array laid out as batch, rows, columns, channels), row_seq
+    # and col_seq (cumulative pooling boundaries, normally taken from the op's own outputs), and
+    # overlapping (boolean). For every batch and channel it pools the 2-D slice along rows and
+    # then along columns with the numpy helpers. Returns a new 4-D array of the input's dtype with
+    # rows and columns reduced to the number of boundaries minus one. No side effects.
     """Get expected fractional average pooling result.
 
     row_seq and col_seq together defines the fractional pooling region.
@@ -110,6 +146,13 @@ class FractionalAvgTest(test.TestCase):
 
   def _ValidateFractionalAvgPoolResult(self, input_tensor, pooling_ratio,
                                        pseudo_random, overlapping):
+    # [FUNCTION DOC]
+    # HELPER: shared assertion routine used by the forward pooling tests.
+    # Inputs: input_tensor (tensor or numpy array), pooling_ratio (length-4 list with first and
+    # last entry 1), pseudo_random and overlapping (booleans). Runs the public fractional average
+    # pool op with the class seed inside a cached session, evaluates output and both pooling
+    # sequences, computes the numpy expected result from those sequences, and asserts that shapes
+    # match and values are close. Returns nothing; fails the test on mismatch.
     """Validate FractionalAvgPool's result against expected.
 
     Expected result is computed given input_tensor, and pooling region defined
@@ -138,6 +181,16 @@ class FractionalAvgTest(test.TestCase):
       self.assertAllClose(expected, actual)
 
   def _testVisually(self):
+    # [FUNCTION DOC]
+    # HELPER: manual debugging aid, not collected as a test because its name starts with an
+    # underscore.
+    # KNOWN ISSUE: never run automatically; it only prints and asserts nothing. Also the session
+    # variable it binds is unused.
+    # Builds a small random 6 by 6 integer matrix for both overlapping settings, runs the fractional
+    # average pool op without pseudo-random mode, computes the numpy expected result, and prints the
+    # pooling sequences, the input with pooling boundaries marked, the op output and the expected
+    # output. Takes no arguments, returns nothing; side effects are printing to standard output and
+    # advancing the class random generator.
     """Manual test by printing out intermediate result of a small random tensor.
 
     Since _GetExpectedFractionalAvgPoolResult is 'automated', it feels safer to
@@ -190,6 +243,11 @@ class FractionalAvgTest(test.TestCase):
         print(expected_result[0, :, :, 0])
 
   def testAllInputOptions(self):
+    # [FUNCTION DOC]
+    # Scenario: random float batch of shape 5 by 20 by 30 by 3 with values in a signed range, pooling
+    # ratio of root three by root two. Runs every combination of pseudo-random and overlapping
+    # flags through the shared validation helper, which compares the op to the numpy reference.
+    # Expected: results match for all four combinations. Uses and advances the class random generator.
     """Try all possible input options for fractional_avg_pool.
     """
     num_batches = 5
@@ -206,6 +264,11 @@ class FractionalAvgTest(test.TestCase):
             overlapping)
 
   def testIntegerTensorInput(self):
+    # [FUNCTION DOC]
+    # Scenario: a fixed 6 by 6 integer matrix reshaped to a single-image, single-channel batch,
+    # pooled with pseudo-random and overlapping modes on and a ratio of root three by root two.
+    # The shared helper compares the op with the numpy reference. Expected: results match, showing
+    # integer input is accepted.
     """Test FractionalAvgPool works fine when input tensor is integer type.
     """
     pseudo_random = True
@@ -226,6 +289,10 @@ class FractionalAvgTest(test.TestCase):
                                           pseudo_random, overlapping)
 
   def testDifferentTensorShapes(self):
+    # [FUNCTION DOC]
+    # Scenario: random float inputs over combinations of batch size (1, 3), channels (1, 3), and
+    # row and column counts (10, 20, 50), pseudo-random and overlapping on, ratio of root three by
+    # root two. Each is validated against the numpy reference. Expected: all combinations match.
     """Test different shapes of input tensor.
 
     Mainly test different combinations of num_rows and num_cols.
@@ -244,6 +311,10 @@ class FractionalAvgTest(test.TestCase):
                 overlapping)
 
   def testLargePoolingRatio(self):
+    # [FUNCTION DOC]
+    # Scenario: random 3 by 30 by 50 by 3 input with row ratios and column ratios well above two
+    # (square roots of 11, 37 and 27), pseudo-random and overlapping on. Each ratio pair is
+    # validated against the numpy reference. Expected: results match.
     """Test when pooling ratio is not within [1, 2).
     """
     pseudo_random = True
@@ -262,6 +333,10 @@ class FractionalAvgTest(test.TestCase):
                                               pseudo_random, overlapping)
 
   def testDivisiblePoolingRatio(self):
+    # [FUNCTION DOC]
+    # Scenario: random 3 by 30 by 50 by 3 input with a pooling ratio of exactly two in both spatial
+    # dimensions, so sizes divide evenly, as regular average pooling could handle. Validated against
+    # the numpy reference with pseudo-random and overlapping on. Expected: results match.
     """Test when num of rows/cols can evenly divide pooling ratio.
 
     This is a case regular average pooling can handle. Should be handled by
@@ -281,6 +356,12 @@ class FractionalAvgTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testDifferentInputTensorShape(self):
+    # [FUNCTION DOC]
+    # Scenario (graph mode only, via the deprecated-v1 decorator): a placeholder with unknown
+    # batch, height and width and three channels feeds the pooling op with ratio 1.5 and both
+    # pseudo-random and overlapping off. The same graph is run twice with all-zero inputs of shape
+    # 3 by 32 by 32 by 3 and 4 by 60 by 60 by 3. After each run the expected shape is computed from
+    # the returned sequences and compared with the actual output shape. Expected: shapes match.
     """Runs the operation in one session with different input tensor shapes."""
     with self.cached_session() as sess:
       input_holder = array_ops.placeholder(dtypes.float32,
@@ -308,6 +389,14 @@ class FractionalAvgTest(test.TestCase):
       self.assertSequenceEqual(expected.shape, actual.shape)
 
   def testNegativeSeqValuesForGradOp(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the second assertion block (negative column sequence) is nested inside the first
+    # assertion block after the call that is expected to raise, so it is unreachable; only the
+    # negative row sequence case is actually exercised. The nested block also uses a positive first
+    # row entry.
+    # Scenario: calls the raw gradient op with a small output-gradient tensor, an original shape of
+    # 2 by 2 by 2 by 2, a row sequence containing a negative value and a valid column sequence.
+    # Expected: an invalid-argument error saying row sequence values must not be negative.
     with self.assertRaisesRegex(
         errors.InvalidArgumentError,
         r"Row sequence tensor values must not be negative.*"):
@@ -334,6 +423,10 @@ class FractionalAvgTest(test.TestCase):
         self.evaluate(z)
 
   def testPoolingRatioHasMoreDimThanInput(self):
+    # [FUNCTION DOC]
+    # Scenario: raw forward op on a 1 by 1 by 1 by 4 integer input with a pooling ratio that exceeds
+    # the size of dimension 1. Expected: an invalid-argument error stating that the pooling ratio is
+    # higher than the input dimension size for dimension 1.
     with self.cached_session() as _:
       with self.assertRaisesRegex(
           errors.InvalidArgumentError,
@@ -352,6 +445,11 @@ class FractionalAvgTest(test.TestCase):
         self.evaluate(result)
 
   def testPoolingRatioIllegalSmallValue(self):
+    # [FUNCTION DOC]
+    # Scenario: raw forward op on a zero tensor of shape 3 by 30 by 30 by 3 with a negative pooling
+    # ratio for the row dimension. Expected: either an invalid-argument error or a value error
+    # (depending on whether TF2 behavior is on) whose message says the ratio cannot be smaller than
+    # one or that a value is negative.
     with self.cached_session() as _:
       # Whether turn on `TF2_BEHAVIOR` generates different error messages
       with self.assertRaisesRegex(
@@ -369,6 +467,10 @@ class FractionalAvgTest(test.TestCase):
         self.evaluate(result)
 
   def testPoolingIllegalRatioForBatch(self):
+    # [FUNCTION DOC]
+    # Scenario: raw forward op on a zero tensor of shape 3 by 30 by 50 by 3 with a pooling ratio of
+    # two on the batch dimension (only one is supported there), pseudo-random and overlapping on.
+    # Expected: an unimplemented error is raised when the result is evaluated.
     with self.cached_session() as _:
       with self.assertRaises(errors.UnimplementedError):
         result = nn_ops.gen_nn_ops.fractional_avg_pool(
@@ -380,6 +482,12 @@ class FractionalAvgTest(test.TestCase):
 
 
 class FractionalAvgPoolGradTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the gradient of fractional average pooling. It compares the gradient op with the
+  # regular average pool gradient on layouts where both pooling schemes coincide (non-overlapping
+  # and overlapping), runs numeric gradient-error checks through the public forward op, and checks
+  # that invalid pooling sequences are rejected. Holds a seeded numpy random generator and a fixed
+  # op seed as class attributes.
   """Tests for FractionalAvgPoolGrad.
 
   Two types of tests for FractionalAvgPoolGrad.
@@ -411,6 +519,11 @@ class FractionalAvgPoolGradTest(test.TestCase):
   _SEED = 341261005
 
   def _GenerateRandomInputTensor(self, shape):
+    # [FUNCTION DOC]
+    # HELPER: creates random test data for the gradient tests.
+    # Input: shape, a sequence of dimension sizes. Draws as many uniform random numbers as the
+    # product of the sizes from the class random generator, scales them by one thousand, and
+    # returns them as a numpy array of that shape (double precision). Advances the generator state.
     num_elements = 1
     for dim_size in shape:
       num_elements *= dim_size
@@ -418,6 +531,13 @@ class FractionalAvgPoolGradTest(test.TestCase):
     return x.reshape(shape)
 
   def testDirectNotUseOverlapping(self):
+    # [FUNCTION DOC]
+    # Scenario: for several batch sizes, window sizes and channel counts, the input size is a
+    # multiple of the window, so regular average pooling with stride equal to window and valid
+    # padding matches non-overlapping fractional pooling with evenly spaced boundaries. A random
+    # output gradient is pushed through both the regular average pool gradient and the fractional
+    # gradient op (overlapping off) using those evenly spaced row and column boundaries.
+    # Expected: identical shapes and close values.
     for num_batches in [1, 3]:
       for row_window_size in [2, 5]:
         for col_window_size in [2, 4]:
@@ -457,6 +577,12 @@ class FractionalAvgPoolGradTest(test.TestCase):
               self.assertAllClose(input_backprop, fap_input_backprop)
 
   def testDirectUseOverlapping(self):
+    # [FUNCTION DOC]
+    # Scenario: input sizes are chosen so regular average pooling with stride one less than the
+    # window and valid padding corresponds to overlapping fractional pooling. Boundaries are
+    # spaced by the stride with the last one extended by one. A random output gradient goes through
+    # the regular average pool gradient and the fractional gradient op (overlapping on).
+    # Expected: identical shapes and close values for all parameter combinations.
     for num_batches in [1, 3]:
       for row_window_size in [2, 5]:
         for col_window_size in [2, 4]:
@@ -499,6 +625,10 @@ class FractionalAvgPoolGradTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testAllInputOptionsThroughGradientError(self):
+    # [FUNCTION DOC]
+    # Scenario (graph mode only): random 1 by 7 by 13 by 1 input, pooling ratio of root two by root
+    # three, for every combination of pseudo-random and overlapping. The numeric-versus-analytic
+    # gradient error of the forward op is computed with a small step. Expected: error below 1e-4.
     input_shape = (1, 7, 13, 1)
     input_data = self._GenerateRandomInputTensor(input_shape)
     pooling_ratio = [1, math.sqrt(2), math.sqrt(3), 1]
@@ -528,6 +658,11 @@ class FractionalAvgPoolGradTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testDifferentTensorShapesThroughGradientError(self):
+    # [FUNCTION DOC]
+    # Scenario (graph mode only): pseudo-random and overlapping on, ratio of root three by root two,
+    # over combinations of batch (1, 2), rows (5, 13), columns (5, 11) and channels (1, 3) with
+    # random inputs. Computes the gradient error of the forward op numerically versus analytically.
+    # Expected: error below 1e-4 in every case.
     pseudo_random = True
     overlapping = True
     pooling_ratio = [1, math.sqrt(3), math.sqrt(2), 1]
@@ -560,6 +695,11 @@ class FractionalAvgPoolGradTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testLargePoolingRatioThroughGradientError(self):
+    # [FUNCTION DOC]
+    # Scenario (graph mode only): random 1 by 17 by 23 by 1 input, large ratios (roots of 13 and
+    # 7), overlapping on, pseudo-random off. The output shape used for gradient checking is
+    # estimated by dividing each input dimension by its ratio and truncating, rather than read from
+    # the op. Expected: gradient error below 1e-4.
     input_shape = (1, 17, 23, 1)
     input_data = self._GenerateRandomInputTensor(input_shape)
     pooling_ratio = (1, math.sqrt(13), math.sqrt(7), 1)
@@ -587,6 +727,11 @@ class FractionalAvgPoolGradTest(test.TestCase):
       self.assertLess(gradient_error, error_margin)
 
   def testInvalidSeqRaiseErrorForFractionalAvgPoolGrad(self):
+    # [FUNCTION DOC]
+    # Scenario: calls the raw gradient op with a huge negative original input shape, an empty
+    # four-dimensional output gradient, and degenerate row and column sequences of ones. Expected:
+    # an invalid-argument error or a value error is raised (and not a crash) when building or
+    # evaluating the result.
     with self.assertRaises((errors.InvalidArgumentError, ValueError)):
       with self.cached_session() as _:
         overlapping = True
