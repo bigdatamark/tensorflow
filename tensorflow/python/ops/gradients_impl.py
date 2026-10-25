@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Public entry point for building gradient graphs: defines the gradients and hessians functions
+# (separate version 1 and version 2 exports) and a private Hessian-vector product helper. The real
+# work is done by the gradients_util module. This module also imports, only for side effects, many
+# gradient-registering modules (array, math, nn, control flow, linalg, image, sparse and others) so
+# that every op's gradient function is registered once this module is imported.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -62,6 +68,18 @@ def gradients(ys,
               aggregation_method=None,
               stop_gradients=None,
               unconnected_gradients=UnconnectedGradients.NONE):
+  # [FUNCTION DOC]
+  # Version 1 public gradients API: builds symbolic derivatives of the sum of ys with respect to
+  # each x in xs by adding backprop ops to the current graph. Inputs: ys and xs (tensor or list of
+  # tensors), grad_ys (optional initial gradients matching ys; ones are used when omitted), name
+  # (name scope for the gradient ops), colocate_gradients_with_ops (try to place gradient ops on
+  # the same device as forward ops), gate_gradients (wrap per-op gradients in a tuple to avoid
+  # races), aggregation_method (how multiple gradient terms are summed), stop_gradients (tensors
+  # treated as constants) and unconnected_gradients (null or zero for unconnected xs). Holds the
+  # default graph's mutation lock while calling the shared gradient helper, since control flow
+  # gradients mutate existing ops. Returns a list of length len(xs) of gradient tensors (or null).
+  # Raises lookup error for ops lacking a gradient, value error for bad arguments, and runtime
+  # error when executing eagerly.
   """Constructs symbolic derivatives of sum of `ys` w.r.t. x in `xs`.
 
   `ys` and `xs` are each a `Tensor` or a list of tensors.  `grad_ys`
@@ -194,6 +212,16 @@ def gradients_v2(ys,  # pylint: disable=invalid-name
                  aggregation_method=None,
                  stop_gradients=None,
                  unconnected_gradients=UnconnectedGradients.NONE):
+  # [FUNCTION DOC]
+  # Version 2 public gradients API. Same as the version 1 function except there is no
+  # colocate_gradients_with_ops parameter: colocation is always enabled. Inputs: ys and xs (tensor
+  # or list of tensors), grad_ys (optional initial gradients, same length as ys), name (name scope
+  # for gradient ops), gate_gradients (boolean), aggregation_method (how multiple gradient terms
+  # are summed), stop_gradients (tensors treated as constants), unconnected_gradients (whether
+  # unconnected xs give null or zeros). Takes the default graph's mutation lock while delegating
+  # to the shared gradient helper, so a session run cannot interleave with op mutation. Returns a
+  # list of length len(xs) of gradient tensors (or null values). Raises lookup error for ops
+  # without gradients, value error for bad arguments, and a runtime error in eager execution.
   """Constructs symbolic derivatives of sum of `ys` w.r.t. x in `xs`.
 
   `tf.gradients` is only valid in a graph context. In particular,
@@ -333,6 +361,16 @@ def gradients_v2(ys,  # pylint: disable=invalid-name
 
 # TODO(vrv): Make this available when we want to make it public.
 def _hessian_vector_product(ys, xs, v):
+  # [FUNCTION DOC]
+  # HELPER: private, currently unexported utility for second-order optimization code.
+  # KNOWN ISSUE: the docstring says a single tensor is returned when the result would have length
+  # one, but the code always returns the list produced by the second gradients call. Also,
+  # gradients that are null are dropped from the products, so results may not line up with v.
+  # Computes the product of the Hessian of ys with respect to xs and the list v using two
+  # backpropagation passes: first gradients of ys, multiplied elementwise by v (with gradient
+  # stopped on v), then gradients of those products. Inputs: ys (scalar or tensors to sum), xs
+  # (list of tensors), v (list of tensors shaped like xs). Raises a value error if xs and v differ
+  # in length; asserts the first gradient list has the same length as xs. Adds ops to the graph.
   """Multiply the Hessian of `ys` wrt `xs` by `v`.
 
   This is an efficient construction that uses a backprop-like approach
@@ -392,6 +430,17 @@ def hessians(ys,
              colocate_gradients_with_ops=False,
              gate_gradients=False,
              aggregation_method=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the name parameter is documented as the name for grouping the gradient ops but
+  # is never used anywhere in the body; no name scope is created from it.
+  # Version 1 Hessian construction. Inputs: ys (tensor or list of tensors, summed), xs (tensor or
+  # list of tensors), name (unused), and colocate_gradients_with_ops, gate_gradients and
+  # aggregation_method which are forwarded to the first-order gradient computation. Computes the
+  # first-order gradients once, then for each x flattens its gradient, and inside a graph while
+  # loop over every element differentiates that element with respect to x, collecting the rows in
+  # a tensor array. The stacked rows are reshaped to the shape of x concatenated with the shape of
+  # x. Returns a list with one Hessian tensor per x. Adds ops (including loop ops) to the current
+  # graph; raises a lookup error if some op has no registered gradient.
   """Constructs the Hessian of sum of `ys` with respect to `x` in `xs`.
 
   `hessians()` adds ops to the graph to output the Hessian matrix of `ys`
@@ -458,6 +507,16 @@ def HessiansV2(ys,
                gate_gradients=False,
                aggregation_method=None,
                name="hessians"):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the name argument is forwarded to the version 1 hessians function, which
+  # accepts it but never uses it, so the requested name scope is silently ignored.
+  # Public version 2 entry point for Hessian construction. Takes ys (tensor or list of tensors
+  # to be summed and differentiated), xs (tensor or list of tensors to differentiate with
+  # respect to), gate_gradients (boolean passed through to gradient construction),
+  # aggregation_method (how gradient terms are combined) and name. Delegates to the version 1
+  # hessians function, always forcing gradient colocation with ops to be enabled. Returns a list
+  # with one Hessian tensor per x, shaped as the shape of x followed by the shape of x. Adds ops
+  # to the current graph; raises a lookup error if an op lacks a registered gradient.
   """Constructs the Hessian of sum of `ys` with respect to `x` in `xs`.
 
   `hessians()` adds ops to the graph to output the Hessian matrix of `ys`
