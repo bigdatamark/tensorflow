@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# Unit tests for the DynamicRaggedShape class and its related functions in the ragged
+# dynamic_ragged_shape module (construction from tensors, lengths and row partitions, slicing and
+# indexing, num_row_partitions and inner-rank changes, broadcasting of shapes and tensors via
+# internal broadcaster objects, elementwise ragged arithmetic with broadcasting, static shape
+# inference, the Spec type, string representations and tf.data dataset batching/unbatching).
+# The file first defines small module-level helper functions that build row partitions, ragged
+# tensors and prime-number-filled tensors from nested "lengths" descriptions, then three test
+# classes: the main shape tests, error-path tests, and tests for DynamicRaggedShape.Spec.
+# Importing the module has no side effects other than imports; running it as a script starts the
+# TensorFlow googletest main runner. Most tests run in both graph and eager mode.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -51,6 +62,13 @@ from tensorflow.python.platform import googletest
 
 def _to_row_partitions_from_lengths(
     lengths: Sequence[Union[int, Sequence[int]]]) -> Sequence[RowPartition]:
+  # [FUNCTION DOC]
+  # HELPER: test utility that builds row partitions for shapes used throughout this test file.
+  # Converts a "lengths" description into a sequence of RowPartition objects. The input is a list
+  # whose items are either an integer (uniform dimension size) or a list of integers (ragged row
+  # lengths for that dimension). Delegates to the module's internal function that returns both
+  # the partitions and the value count, and returns only the partitions. Raises whatever that
+  # internal function raises for inconsistent lengths. No side effects.
   """Allow ragged and uniform shapes to be specified.
 
   For example, [2, [2,1], 2] represents a shape like:
@@ -69,6 +87,12 @@ def _to_row_partitions_from_lengths(
 
 def _to_ragged_tensor_from_lengths(
     values, lengths: Sequence[Union[int, Sequence[int]]]) -> RaggedTensor:
+  # [FUNCTION DOC]
+  # HELPER: test utility for building input data of a given ragged shape.
+  # Takes flat values (anything convertible to a constant tensor) and a lengths description (list
+  # of integers or lists of integers). Builds the row partitions from the lengths; if there are
+  # none, returns just the dense constant tensor, otherwise returns a RaggedTensor built from the
+  # constant values and the nested row partitions. No side effects.
   """Specify a ragged tensor (or tensor) from lengths and values."""
   row_partitions = _to_row_partitions_from_lengths(lengths)
   values = constant_op.constant(values)
@@ -78,10 +102,19 @@ def _to_ragged_tensor_from_lengths(
 
 
 def _divides(a, b):
+  # [FUNCTION DOC]
+  # HELPER: tiny arithmetic helper for the prime generator below.
+  # Returns true when the first argument evenly divides the second (the remainder is zero).
+  # Inputs are integers; pure function.
   return b % a == 0
 
 
 def _next_prime(primes_so_far):
+  # [FUNCTION DOC]
+  # HELPER: prime-number generator used to make tensors whose elements are all distinct.
+  # Takes the list of primes found so far (possibly empty) and returns the next prime, by
+  # trying consecutive candidates starting at two (or one past the last known prime) until one is
+  # not divisible by any known prime. Does not modify the input list. Pure function.
   first_candidate = 2
   if primes_so_far:
     first_candidate = primes_so_far[-1] + 1
@@ -92,6 +125,10 @@ def _next_prime(primes_so_far):
 
 
 def _lowest_primes(n):
+  # [FUNCTION DOC]
+  # HELPER: generator of distinct element values for test tensors.
+  # Returns a list holding the lowest n prime numbers (n is a non-negative integer), built by
+  # repeatedly asking for the next prime. Pure function.
   """Give the lowest n primes."""
   result = []
   for _ in range(n):
@@ -102,6 +139,12 @@ def _lowest_primes(n):
 def _num_elements_of_lengths_with_rows(rows,
                                        lengths: Sequence[Union[int,
                                                                Sequence[int]]]):
+  # [FUNCTION DOC]
+  # HELPER: recursive worker for computing the number of elements in a shape.
+  # Takes the number of rows seen so far and the remaining lengths list. If no lengths remain it
+  # returns the row count. For an integer entry it multiplies the row count by it; for a list
+  # entry (ragged lengths) it replaces the row count by the sum of the list. Recurses on the rest.
+  # Returns an integer; pure function.
   """Helper function for _num_elements_of_lengths."""
   if not lengths:
     return rows
@@ -113,12 +156,23 @@ def _num_elements_of_lengths_with_rows(rows,
 
 
 def _num_elements_of_lengths(lengths: Sequence[Union[int, Sequence[int]]]):
+  # [FUNCTION DOC]
+  # HELPER: static computation of how many scalar elements a shape described by lengths has.
+  # Starts the recursive helper with a single row. Input is a list of integers and/or lists of
+  # integers; returns an integer. The docstring promises equivalence with the number of elements
+  # reported by the shape built from the same lengths, which the tests rely on.
   """Static version of DynamicRaggedShape.from_lengths(lengths)._num_elements()."""
   return _num_elements_of_lengths_with_rows(1, lengths)
 
 
 def _to_prime_tensor_from_lengths(
     lengths: Sequence[Union[int, Sequence[int]]]) -> RaggedTensor:
+  # [FUNCTION DOC]
+  # HELPER: builds a tensor of distinct prime numbers with a requested shape.
+  # Creates a DynamicRaggedShape from the lengths description, computes the number of elements
+  # statically, and reshapes the first that-many primes into that shape with the ragged reshape
+  # op. Returns a dense tensor or RaggedTensor. Used so broadcast results can be checked by
+  # value, since every element is unique.
   """Create a tensor of primes with the shape specified."""
   shape = DynamicRaggedShape.from_lengths(lengths)
   num_elements = _num_elements_of_lengths(lengths)
@@ -128,17 +182,35 @@ def _to_prime_tensor_from_lengths(
 @test_util.run_all_in_graph_and_eager_modes
 class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
                              parameterized.TestCase):
+  # [CLASS DOC]
+  # Main test case for DynamicRaggedShape (and the broadcaster/dynamic-shape functions in the
+  # dynamic_ragged_shape module). Decorated to run every test in both graph and eager modes, and
+  # combines the TensorFlow test case with absl parameterized tests, so many methods are run once
+  # per parameter dictionary. Defines assertion helpers (partition, shape, layer broadcaster and
+  # broadcaster equality) and then tests for construction, indexing, broadcasting, arithmetic,
+  # static shapes, merging, and datasets.
 
   def assertRowPartitionEq(self,
                            x: RowPartition,
                            y: RowPartition,
                            msg=None) -> None:
+    # [FUNCTION DOC]
+    # HELPER: custom assertion used by the shape tests.
+    # Asserts that two RowPartition objects have equal row splits. Inputs: x and y, the partitions
+    # to compare, and an optional failure message. Fails the test if the splits differ; returns
+    # nothing.
     self.assertAllEqual(x.row_splits(), y.row_splits(), msg=msg)
 
   def assertShapeEq(self,
                     x: DynamicRaggedShape,
                     y: DynamicRaggedShape,
                     msg=None) -> None:
+    # [FUNCTION DOC]
+    # HELPER: custom assertion used by the shape tests.
+    # Asserts that two DynamicRaggedShape objects are equal: both must be shape instances (plain
+    # assertion failure otherwise), have the same number of row partitions, equal row splits in
+    # each partition, and equal inner shapes. Optional message is prefixed to the failure text.
+    # Returns nothing.
     assert isinstance(x, DynamicRaggedShape)
     assert isinstance(y, DynamicRaggedShape)
     if msg is None:
@@ -155,12 +227,22 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
 
   def assertLayerBroadcasterEq(self, x: _LayerBroadcaster,
                                y: _LayerBroadcaster) -> None:
+    # [FUNCTION DOC]
+    # HELPER: custom assertion used by the broadcaster tests.
+    # Checks that both arguments are layer broadcaster objects and that their gather indices are
+    # equal. Fails the test otherwise; returns nothing.
     assert isinstance(x, _LayerBroadcaster)
     assert isinstance(y, _LayerBroadcaster)
     self.assertAllEqual(x.gather_index, y.gather_index)
 
   def assertBroadcasterEq(self, x: dynamic_ragged_shape._Broadcaster,
                           y: dynamic_ragged_shape._Broadcaster) -> None:
+    # [FUNCTION DOC]
+    # HELPER: custom assertion used by the broadcaster tests.
+    # Checks that both arguments are internal broadcaster objects, that their source shapes and
+    # target shapes are equal, that they have the same number of layer broadcasters, and that each
+    # corresponding pair of layer broadcasters is equal. Returns nothing; fails the test on any
+    # mismatch.
     assert isinstance(x, dynamic_ragged_shape._Broadcaster)
     assert isinstance(y, dynamic_ragged_shape._Broadcaster)
     self.assertShapeEq(x.source_shape, y.source_shape)
@@ -216,6 +298,11 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
           inner_shape=[5]),
   ])
   def testFromTensor(self, value, row_partitions, inner_shape):
+    # [FUNCTION DOC]
+    # Scenario: building a shape from an existing tensor. Parameterized over dense and ragged
+    # values (including documentation examples) with the expected row-split lists and inner shape.
+    # Builds the shape with the from-tensor constructor, builds the expected shape from row
+    # partitions made from row splits plus the inner shape, and asserts the two shapes are equal.
     shape = DynamicRaggedShape.from_tensor(value)
     row_partitions = [RowPartition.from_row_splits(x) for x in row_partitions]
     expected = DynamicRaggedShape(row_partitions, inner_shape)
@@ -291,6 +378,11 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
                       row_partitions,
                       inner_shape,
                       num_row_partitions=None):
+    # [FUNCTION DOC]
+    # Scenario: building a shape from a lengths description, with an optional number of row
+    # partitions. If the expected row partitions are given as a callable, it is invoked first (so
+    # partitions are created inside the test). Builds the shape from lengths and asserts it equals
+    # a shape built directly from the expected row partitions and inner shape.
     if callable(row_partitions):
       row_partitions = row_partitions()
     shape = DynamicRaggedShape.from_lengths(
@@ -326,11 +418,20 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
       dict(lengths=7, num_row_partitions=0, msg='lengths should be a list')
   ])
   def testFromLengthsError(self, lengths, msg, num_row_partitions=None):
+    # [FUNCTION DOC]
+    # Scenario: invalid arguments to the from-lengths constructor (inconsistent lengths, too many
+    # row partitions, wrong types, scalar with partitions, non-list lengths). Asserts that a
+    # value error whose message matches the expected text is raised in each case. The
+    # num_row_partitions argument is optional and defaults to none.
     with self.assertRaisesRegex(ValueError, msg):
       DynamicRaggedShape.from_lengths(
           lengths, num_row_partitions=num_row_partitions)
 
   def testGetItemSliceRankUnknownA(self):
+    # [FUNCTION DOC]
+    # Scenario: slicing a shape of unknown rank. Only runs in graph mode (does nothing in eager
+    # mode). Creates a shape from a placeholder with unknown shape, slices off the first element
+    # and asserts the resulting rank is unknown (none).
     if not context.executing_eagerly():
       original_t = array_ops.placeholder_with_default(np.array([4, 5, 3]), None)
       sh = DynamicRaggedShape.from_tensor(original_t)
@@ -338,6 +439,10 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
       self.assertIsNone(known.rank)
 
   def testGetItemSliceRankUnknownLong(self):
+    # [FUNCTION DOC]
+    # Scenario: slicing a shape of unknown rank past its end. Graph mode only (does nothing in
+    # eager mode). Slices the first twenty entries of a shape built from a placeholder of unknown
+    # shape and asserts that the resulting rank is unknown.
     if not context.executing_eagerly():
       original_t = array_ops.placeholder_with_default(np.array([4, 5, 3]), None)
       sh = DynamicRaggedShape.from_tensor(original_t)
@@ -345,6 +450,10 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
       self.assertIsNone(unknown.rank)
 
   def testGetItemSliceRankKnownLong(self):
+    # [FUNCTION DOC]
+    # Scenario: slicing a known-rank shape past its end. Graph mode only. Builds a shape from a
+    # constant vector of length three, slices the first twenty entries, and asserts the result
+    # still has rank one.
     if not context.executing_eagerly():
       original_t = constant_op.constant([4, 5, 3], dtypes.float32)
       sh = DynamicRaggedShape.from_tensor(original_t)
@@ -352,6 +461,11 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
       self.assertEqual(unknown.rank, 1)
 
   def testGetBroadcaster(self):
+    # [FUNCTION DOC]
+    # Scenario: the internal function that computes a broadcaster between two shapes, going from a
+    # uniform shape to a larger uniform shape. Builds the origin and destination shapes, computes
+    # the broadcaster, and asserts it equals an explicitly constructed broadcaster with the
+    # expected gather indices for the two layers.
     origin_shape = DynamicRaggedShape(
         [RowPartition.from_uniform_row_length(1, 3)], inner_shape=[3])
     dest_shape = DynamicRaggedShape(
@@ -364,6 +478,10 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
     self.assertBroadcasterEq(actual, expected)
 
   def testGetBroadcaster2(self):
+    # [FUNCTION DOC]
+    # Scenario: computing a broadcaster from a scalar (empty) shape to a ragged shape. Asserts the
+    # result equals a broadcaster with the same source and target shapes and no layer
+    # broadcasters.
     origin_shape = DynamicRaggedShape([], inner_shape=[])
     dest_shape = DynamicRaggedShape([RowPartition.from_row_splits([0, 2, 3])],
                                     inner_shape=[3])
@@ -390,6 +508,10 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
       dict(lengths=[2, (2, 3), 7], axis=-3, expected=2),
   ])
   def testNumSlicesInDimension(self, lengths, axis, expected):
+    # [FUNCTION DOC]
+    # Scenario: the number of slices in a given dimension. Parameterized over uniform and ragged
+    # lengths with positive and negative axis values. Builds the shape, calls the internal
+    # number-of-slices method with the axis, and asserts it equals the expected count.
     original = DynamicRaggedShape.from_lengths(lengths)
     actual = original._num_slices_in_dimension(axis)
     self.assertAllEqual(expected, actual)
@@ -403,6 +525,10 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
   ])
   def testNumSlicesInDimensionRaises(self, lengths, axis, error_type,
                                      error_regex):
+    # [FUNCTION DOC]
+    # Scenario: invalid axis for the number-of-slices method. Parameters give lengths, a
+    # non-integer axis, and the expected error type and message pattern. Asserts the method raises
+    # that error.
     original = DynamicRaggedShape.from_lengths(lengths)
     with self.assertRaisesRegex(error_type, error_regex):
       original._num_slices_in_dimension(axis)
@@ -426,6 +552,11 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
   ])
   def testAltInnerShapeRaises(self, lengths, new_dense_rank, error_type,
                               error_regex):
+    # [FUNCTION DOC]
+    # Scenario: error cases of the internal alternative-inner-shape method (inner shape that cannot
+    # be computed for a ragged shape, zero old inner rank, zero new inner rank). Parameters give
+    # lengths, new dense rank, and expected error type and message. Asserts that the error is
+    # raised.
     original = DynamicRaggedShape.from_lengths(lengths)
     with self.assertRaisesRegex(error_type, error_regex):
       original._alt_inner_shape(new_dense_rank)
@@ -436,14 +567,27 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
                                                                           4]),
   ])
   def testAltInnerShape(self, lengths, new_dense_rank, expected_inner_shape):
+    # [FUNCTION DOC]
+    # Scenario: the alternative-inner-shape method with a valid new dense rank. Builds a shape from
+    # lengths, requests the inner shape for the new rank and asserts it equals the expected inner
+    # shape.
     original = DynamicRaggedShape.from_lengths(lengths)
     actual = original._alt_inner_shape(new_dense_rank)
     self.assertAllEqual(actual, expected_inner_shape)
 
   def testWithNumRowPartitionsDynamic(self):
+    # [FUNCTION DOC]
+    # Scenario: changing the number of row partitions of a shape whose inner shape is only known
+    # at run time. Defines a compiled function with an int64 vector input signature and calls it
+    # with a constant. Inside, the number of row partitions is raised to three and the result is
+    # compared with an explicitly built shape that includes an extra uniform row partition.
     @def_function.function(
         input_signature=[tensor.TensorSpec([3], dtypes.int64)])
     def fun(x):
+      # [FUNCTION DOC]
+      # Nested function compiled with a fixed int64 vector signature. Takes the dynamic inner shape
+      # tensor x, builds a shape from two row-length partitions and x, changes it to have three row
+      # partitions, and asserts equality with the expected shape. Returns nothing.
       shape = DynamicRaggedShape([
           RowPartition.from_row_lengths([1, 3], dtype=dtypes.int64),
           RowPartition.from_row_lengths([2, 3, 4, 5], dtype=dtypes.int64)
@@ -467,6 +611,11 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
   ])
   def testWithDenseRankRaises(self, lengths, new_dense_rank, error_type,
                               error_regex):
+    # [FUNCTION DOC]
+    # Scenario: changing the inner rank when it is not possible. Parameters give lengths, a new
+    # dense rank, and the expected error. Builds the shape and asserts that the internal
+    # with-inner-rank method raises the error. (The name says dense rank; the method called is the
+    # inner-rank one.)
     original = DynamicRaggedShape.from_lengths(lengths)
     with self.assertRaisesRegex(error_type, error_regex):
       original._with_inner_rank(new_dense_rank)
@@ -490,11 +639,18 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
   ])
   def testWithNumRowPartitionsRaises(self, lengths, num_row_partitions,
                                      error_type, error_regex):
+    # [FUNCTION DOC]
+    # Scenario: invalid arguments to the internal with-number-of-row-partitions method (too many,
+    # negative, non-integer). Parameters give lengths, the bad count, and the expected error type
+    # and message. Asserts the error is raised.
     original = DynamicRaggedShape.from_lengths(lengths)
     with self.assertRaisesRegex(error_type, error_regex):
       original._with_num_row_partitions(num_row_partitions)
 
   def testDimensionRaises(self):
+    # [FUNCTION DOC]
+    # Scenario: asking the internal dimension accessor for a non-integer index. Builds a ragged
+    # shape and asserts a type error saying the index should be an integer is raised.
     original = DynamicRaggedShape.from_lengths([2, (1, 2)])
     with self.assertRaisesRegex(TypeError, 'index should be an int'):
       # This error is not exposed directly to the end user.
@@ -554,6 +710,12 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
                        s,
                        expected_lengths,
                        num_row_partitions=None):
+    # [FUNCTION DOC]
+    # Scenario: slicing a shape with slice objects, covering whole-shape slices, out-of-range
+    # bounds, reversed bounds (gives scalar shape), and slices within and beyond the row
+    # partitions. Builds the shape (optionally converting it to the given number of row
+    # partitions), slices it, and asserts the result equals a shape built from the expected
+    # lengths.
     original = DynamicRaggedShape.from_lengths(lengths)
     if num_row_partitions is not None:
       original = original._with_num_row_partitions(num_row_partitions)
@@ -596,6 +758,11 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
                               error_type,
                               error_regex,
                               num_row_partitions=None):
+    # [FUNCTION DOC]
+    # Scenario: invalid indexing of a shape (non-integer index, strided slice, non-uniform index,
+    # negative index too small, index too large). Optionally converts the shape to a given number
+    # of row partitions, then asserts that indexing raises the expected error type with a message
+    # matching the expected pattern.
     original = DynamicRaggedShape.from_lengths(lengths)
     if num_row_partitions is not None:
       original = original._with_num_row_partitions(num_row_partitions)
@@ -603,6 +770,10 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
       original[index]  # pylint: disable=pointless-statement
 
   def testBroadcastToAlt(self):
+    # [FUNCTION DOC]
+    # Scenario: broadcasting a uniform-row-length ragged tensor to a larger uniform shape using
+    # the broadcast-to function. Builds an origin with row length one and an expected tensor with
+    # row length two, and asserts the broadcast result equals the expected tensor.
     origin = RaggedTensor.from_uniform_row_length([3, 4, 5],
                                                   uniform_row_length=1)
     expected = RaggedTensor.from_uniform_row_length([3, 3, 4, 4, 5, 5],
@@ -640,6 +811,11 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
                       expected_gather_indices,
                       source_num_row_partitions=None,
                       target_num_row_partitions=None):
+    # [FUNCTION DOC]
+    # Scenario: broadcaster construction between a source shape and a target shape given by
+    # lengths, each optionally with an explicit number of row partitions. Computes the broadcaster
+    # with the internal function and asserts it equals one constructed from the expected gather
+    # indices for each layer.
     source = DynamicRaggedShape.from_lengths(source_lengths)
     if source_num_row_partitions is not None:
       source = source._with_num_row_partitions(source_num_row_partitions)
@@ -656,9 +832,17 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
     self.assertBroadcasterEq(actual, expected)
 
   def testRaggedGradientSimple1(self):
+    # [FUNCTION DOC]
+    # Scenario: gradient through ragged multiplication with broadcasting, using row splits
+    # constructors. Graph mode only (returns immediately in eager mode). Asserts that the gradient
+    # of the flat values of a ragged-times-column product with respect to the input values equals
+    # the broadcast multipliers (ten, one hundred, one thousand repeated per row).
     if context.executing_eagerly():
       return
     def func(x):
+      # [FUNCTION DOC]
+      # Nested function: builds a ragged tensor from values x and fixed row splits, multiplies by a
+      # column of scalars and returns the flat values of the product.
       rt1 = RaggedTensor.from_row_splits(
           values=x, row_splits=[0, 4, 7, 8], validate=False)
       rt2 = rt1 * [[10], [100], [1000]]
@@ -672,9 +856,16 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
                         [10., 10., 10., 10., 100., 100., 100, 1000.])
 
   def testRaggedGradientSimple2(self):
+    # [FUNCTION DOC]
+    # Scenario: same gradient check as the first simple gradient test, but builds the ragged
+    # tensor from a row partition. Graph mode only. Asserts the gradient with respect to the input
+    # values equals the per-row multipliers.
     if context.executing_eagerly():
       return
     def func(x):
+      # [FUNCTION DOC]
+      # Nested function: builds a ragged tensor from values x and a row partition, multiplies by a
+      # column of scalars and returns the flat values.
       rt1 = RaggedTensor._from_row_partition(
           x,
           RowPartition.from_row_splits(row_splits=[0, 4, 7, 8], validate=False))
@@ -689,9 +880,15 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
                         [10., 10., 10., 10., 100., 100., 100, 1000.])
 
   def testRaggedGradientSimple3(self):
+    # [FUNCTION DOC]
+    # Scenario: same gradient check, with a row partition whose row splits use a 32-bit integer
+    # type. Graph mode only. Asserts the gradient equals the per-row multipliers.
     if context.executing_eagerly():
       return
     def func(x):
+      # [FUNCTION DOC]
+      # Nested function: builds a ragged tensor from values x and a 32-bit-split row partition,
+      # multiplies by a column of scalars and returns the flat values.
       rt1 = RaggedTensor._from_row_partition(
           x,
           RowPartition.from_row_splits(row_splits=[0, 4, 7, 8],
@@ -707,6 +904,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
                         [10., 10., 10., 10., 100., 100., 100, 1000.])
 
   def testRaggedMul(self):
+    # [FUNCTION DOC]
+    # Scenario: multiplication of a ragged tensor with 64-bit row splits by a column of scalars.
+    # Graph mode only. Asserts the flat values of the product equal the elementwise products.
     if context.executing_eagerly():
       return
     x = constant_op.constant([3.0, 1.0, 4.0, 1.0, 1.0, 0.0, 2.0, 1.0])
@@ -719,9 +919,17 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
                         [30.0, 10.0, 40.0, 10.0, 100.0, 0.0, 200.0, 1000.0])
 
   def testBroadcastToGradient(self):
+    # [FUNCTION DOC]
+    # Scenario: gradient of the broadcast-to function. Graph mode only. Broadcasts a dense column
+    # of three values to a ragged shape with row lengths four, three, and one, and asserts the
+    # gradient of the flat values with respect to the input equals the number of copies of each
+    # row (four, three, one).
     if context.executing_eagerly():
       return
     def func(x):
+      # [FUNCTION DOC]
+      # Nested function: builds a target shape from one row partition, broadcasts input x to it
+      # and returns the flat values of the result.
       target_shape = DynamicRaggedShape.from_row_partitions(
           [RowPartition.from_row_splits(row_splits=[0, 4, 7, 8])])
 
@@ -735,6 +943,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
     self.assertAllClose(g, [[4.], [3.], [1.]])
 
   def testBroadcastScalarToScalar(self):
+    # [FUNCTION DOC]
+    # Scenario: broadcasting a scalar string to the shape of a scalar. Asserts the result equals
+    # the original.
     origin = constant_op.constant(b'x')
     expected = origin
     expected_shape = DynamicRaggedShape.from_tensor(expected)
@@ -749,6 +960,10 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
       dict(lengths=[2, (2, 3), 7, 4], num_row_partitions=2, axis=3),
   ])
   def testIsUniformTrue(self, lengths, axis, num_row_partitions=None):
+    # [FUNCTION DOC]
+    # Scenario: the is-uniform query returning true. Parameterized by lengths, axis and optional
+    # number of row partitions. Builds the shape, optionally changes its row partition count, and
+    # asserts that the axis is reported as uniform.
     shape = DynamicRaggedShape.from_lengths(lengths)
     if num_row_partitions is not None:
       shape = shape._with_num_row_partitions(num_row_partitions)
@@ -763,6 +978,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
           axis=3),
   ])
   def testIsUniformFalse(self, lengths, num_row_partitions, axis):
+    # [FUNCTION DOC]
+    # Scenario: the is-uniform query returning false for ragged axes. Builds the shape with the
+    # given number of row partitions and asserts the answer for the axis is false.
     shape = DynamicRaggedShape.from_lengths(lengths)._with_num_row_partitions(
         num_row_partitions)
     actual = shape.is_uniform(axis)
@@ -790,6 +1008,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
   ])
   def testIsUniformRaises(self, lengths, num_row_partitions, axis, error_type,
                           error_regex):
+    # [FUNCTION DOC]
+    # Scenario: invalid axis for the is-uniform query (too large, negative, non-integer).
+    # Asserts the expected index or type error with a matching message is raised.
     shape = DynamicRaggedShape.from_lengths(lengths)._with_num_row_partitions(
         num_row_partitions)
     with self.assertRaisesRegex(error_type, error_regex):
@@ -808,6 +1029,10 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
   ])
   def testWithNumRowPartitions(self, lengths, num_row_partitions_a,
                                num_row_partitions_b):
+    # [FUNCTION DOC]
+    # Scenario: round trip of the row-partition count. Changes a shape to count a, then to count
+    # b, asserting each time that the count was applied, then returns to the original count and
+    # asserts equality with the original shape.
     shape = DynamicRaggedShape.from_lengths(lengths)
     original_row_partitions = shape.num_row_partitions
     shape_a = shape._with_num_row_partitions(num_row_partitions_a)
@@ -834,6 +1059,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
       dict(lengths=[3, 4, 5], axis=2, expected=5),
   ])
   def testGetItem(self, lengths, axis, expected, num_row_partitions=None):
+    # [FUNCTION DOC]
+    # Scenario: indexing a shape with an integer axis. Parameterized by lengths, axis, expected
+    # size and optional row partition count. Asserts the indexed size equals the expected value.
     shape = DynamicRaggedShape.from_lengths(lengths)
     if num_row_partitions is not None:
       shape = shape._with_num_row_partitions(num_row_partitions)
@@ -841,11 +1069,18 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
     self.assertAllEqual(actual, expected)
 
   def testNumElements(self):
+    # [FUNCTION DOC]
+    # Scenario: total number of elements of a shape with lengths two, three, four, five and two
+    # row partitions. Asserts the internal element count equals one hundred twenty.
     shape = DynamicRaggedShape.from_lengths([2, 3, 4,
                                              5])._with_num_row_partitions(2)
     self.assertAllEqual(shape._num_elements(), 120)
 
   def test_to_row_partitions_from_lengths(self):
+    # [FUNCTION DOC]
+    # HELPER: this tests the module-level test utility rather than library code ("testing the
+    # test"). Builds partitions from lengths one, two, three and asserts they equal partitions
+    # made from the expected row splits.
     # Testing the test.
     actual = _to_row_partitions_from_lengths([1, 2, 3])
     expected = [
@@ -885,6 +1120,10 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
                             expected_lengths,
                             expected,
                             expected_num_row_partitions=None):
+    # [FUNCTION DOC]
+    # Scenario: broadcasting a dense tensor (scalar or small) to a shape created from lengths with
+    # an optional number of row partitions. Asserts the broadcast result equals the expected
+    # ragged value.
     origin = constant_op.constant(origin)
     expected_shape = DynamicRaggedShape.from_lengths(expected_lengths)
     if expected_num_row_partitions is not None:
@@ -895,6 +1134,10 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
     self.assertAllEqual(actual, expected)
 
   def testBroadcastFlatValues(self):
+    # [FUNCTION DOC]
+    # Scenario: broadcasting flat values between a source and a destination shape with extra
+    # leading dimensions of size one. Gets the broadcaster and asserts that broadcasting the flat
+    # values returns values equal to the original flat values.
     origin_lengths = [3, (1, 2, 1), 2, 2]
     dest_lengths = [1, 1, 3, (1, 2, 1), 2, 2]
     origin_values = constant_op.constant([
@@ -989,6 +1232,10 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
   ])
   def testBroadcastRaggedTo(self, origin_lengths, origin_values,
                             expected_lengths, expected_values):
+    # [FUNCTION DOC]
+    # Scenario: broadcasting ragged tensors to ragged target shapes. Builds an origin and an
+    # expected tensor from lengths and values, takes the expected tensor's shape, broadcasts the
+    # origin to it, and asserts equality with the expected.
     origin = _to_ragged_tensor_from_lengths(origin_values, origin_lengths)
     expected = _to_ragged_tensor_from_lengths(expected_values, expected_lengths)
     expected_shape = DynamicRaggedShape.from_tensor(expected)
@@ -996,6 +1243,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
     self.assertAllEqual(actual, expected)
 
   def testDynamicRaggedShapeFromTensor2(self):
+    # [FUNCTION DOC]
+    # Scenario: shape of a nested ragged tensor made from a constant value. Asserts the shape
+    # computed from the tensor equals a shape from lengths with three row partitions.
     raw_rt = [[[[7, 4], [5, 6]], [[1, 2], [3, 7]]], [[[7, 4], [5, 6]]],
               [[[1, 2], [3, 7]]]]
     raw_rt = ragged_factory_ops.constant_value(raw_rt)
@@ -1045,6 +1295,10 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
                                   error_regex,
                                   validate=False,
                                   dtype=None):
+    # [FUNCTION DOC]
+    # Scenario: the constructor rejects invalid or inconsistent row partitions and inner shapes
+    # statically (wrong container types, mismatched row counts and value counts). Parameters are
+    # callables creating the inputs. Asserts the expected error type and message.
     row_partitions = row_partitions()
     inner_shape = inner_shape()
     with self.assertRaisesRegex(error_type, error_regex):
@@ -1052,6 +1306,10 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
           row_partitions, inner_shape, dtype=dtype, validate=validate)
 
   def testConstructorStaticOK(self):
+    # [FUNCTION DOC]
+    # Scenario: the constructor with valid statically known partitions and validation on.
+    # Verifies the static values of the inner shape and the value row ids of both partitions can
+    # still be recovered as constants.
     row_partitions = [
         RowPartition.from_value_rowids([0, 2, 4], nrows=5),
         RowPartition.from_value_rowids([0, 1, 2], nrows=3)
@@ -1068,6 +1326,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
     self.assertAllEqual(static_valid_rowids1, [0, 1, 2])
 
   def testConstructorWithStaticInnerShape(self):
+    # [FUNCTION DOC]
+    # Scenario: the constructor given an explicit static inner shape with validation on. Verifies
+    # constants for the inner shape and row ids can still be extracted.
     row_partitions = [
         RowPartition.from_value_rowids([0, 2, 4], nrows=5),
         RowPartition.from_value_rowids([0, 1, 2], nrows=3)
@@ -1085,18 +1346,27 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
     self.assertAllEqual(static_valid_rowids1, [0, 1, 2])
 
   def testZeros(self):
+    # [FUNCTION DOC]
+    # Scenario: the zeros function given a ragged shape. Asserts the shape of the result matches
+    # and the flat values are zeros of the expected size.
     shape_x = DynamicRaggedShape.from_lengths([3, (1, 3, 2), 4])
     foo = ragged_array_ops.zeros(shape_x)
     self.assertShapeEq(shape_x, DynamicRaggedShape.from_tensor(foo))
     self.assertAllEqual(array_ops.zeros([6, 4]), foo.flat_values)
 
   def testOnes(self):
+    # [FUNCTION DOC]
+    # Scenario: the ones function given a ragged shape. Asserts the result has that shape and flat
+    # values are ones of the expected size.
     shape_x = DynamicRaggedShape.from_lengths([3, (1, 3, 2), 4])
     foo = ragged_array_ops.ones(shape_x)
     self.assertShapeEq(shape_x, DynamicRaggedShape.from_tensor(foo))
     self.assertAllEqual(array_ops.ones([6, 4]), foo.flat_values)
 
   def testReshapeTensor(self):
+    # [FUNCTION DOC]
+    # Scenario: ragged reshape of a dense tensor to a ragged shape. Asserts the result shape
+    # matches and the flat values are zeros of the expected size.
     foo = array_ops.zeros([3, 2, 4])
     shape_b = DynamicRaggedShape.from_lengths([3, (3, 2, 1), 4])
     result = ragged_array_ops.ragged_reshape(foo, shape_b)
@@ -1104,6 +1374,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
     self.assertAllEqual(array_ops.zeros([6, 4]), result.flat_values)
 
   def test_reshape_ragged_tensor(self):
+    # [FUNCTION DOC]
+    # Scenario: ragged reshape of a ragged tensor to a different ragged shape. Asserts the result
+    # shape matches and flat values are the expected zeros.
     shape_x = DynamicRaggedShape.from_lengths([3, (1, 3, 2), 4])
     foo = ragged_array_ops.zeros(shape_x)
     shape_b = DynamicRaggedShape.from_lengths([3, (3, 2, 1), 4])
@@ -1217,6 +1490,11 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
                                         num_row_partitions_a=None,
                                         num_row_partitions_b=None,
                                         num_row_partitions_e=None):
+    # [FUNCTION DOC]
+    # Scenario: extended broadcast of two shapes in both argument orders. Builds the shapes from
+    # lengths (with optional row-partition counts), asserts the broadcast shape equals the
+    # expected shape, and then checks each returned broadcaster by broadcasting prime-filled
+    # tensors and comparing with the broadcast-to function result.
     # This test is predicated on the fact that broadcast_to is correct.
     # Thus, it tests:
     # Whether the shape generated is correct.
@@ -1273,6 +1551,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
       ),
   ])
   def testWithDenseRank(self, lengths, dense_rank, lengths_e):
+    # [FUNCTION DOC]
+    # Scenario: setting the inner rank (called a dense rank in the name). Asserts the inner rank
+    # equals the requested one and the static lengths equal the expected lengths.
     # Makes little sense with from_lengths/_with_num_row_partitions.
     original = DynamicRaggedShape.from_lengths(lengths)
     actual = original._with_inner_rank(dense_rank)
@@ -1292,6 +1573,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
       ),
   ])
   def testFromRowPartitions(self, rps, lengths_e, num_row_partitions_e):
+    # [FUNCTION DOC]
+    # Scenario: building a shape from row partitions made from lengths. Asserts it equals a shape
+    # from expected lengths with the expected number of row partitions.
     rps = _to_row_partitions_from_lengths(rps)
     actual = DynamicRaggedShape.from_row_partitions(rps)
     expected = DynamicRaggedShape.from_lengths(
@@ -1299,6 +1583,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
     self.assertShapeEq(expected, actual)
 
   def testFromRowPartitionsError(self):
+    # [FUNCTION DOC]
+    # Scenario: building a shape from an empty list of row partitions. Asserts a value error
+    # saying the partitions cannot be empty.
     with self.assertRaisesRegex(ValueError, 'row_partitions cannot be empty'):
       DynamicRaggedShape.from_row_partitions([])
 
@@ -1425,6 +1712,10 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
            broadcast_lengths=[2, (2, 1), 2, (2, 1, 2, 1, 2, 1)]),
   ])  # pyformat: disable
   def testBroadcastDimension(self, original_lengths, broadcast_lengths):
+    # [FUNCTION DOC]
+    # Scenario: broadcasting along a single dimension. Builds a prime-filled tensor of the
+    # original lengths, broadcasts it to the shape of the broadcast lengths and asserts the
+    # result's shape equals the intended shape.
     """Tests broadcast_to on a single dimension."""
     original_rt = _to_prime_tensor_from_lengths(original_lengths)
     bcast_shape = DynamicRaggedShape.from_lengths(broadcast_lengths)
@@ -1434,17 +1725,26 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
     self.assertShapeEq(bcast_shape, result_shape)
 
   def testAsRowPartitions(self):
+    # [FUNCTION DOC]
+    # Scenario: internal conversion of a shape to row partitions. For a shape with two ragged
+    # levels asserts that two partitions are returned.
     my_shape = DynamicRaggedShape.from_lengths([3, (2, 0, 1), 5])
     rps = my_shape._as_row_partitions()
     self.assertLen(rps, 2)
 
   def testAsRowPartitionsRaises(self):
+    # [FUNCTION DOC]
+    # Scenario: converting a scalar shape to row partitions. Asserts a value error saying rank
+    # must be at least one.
     my_shape = DynamicRaggedShape.from_lengths([])
     with self.assertRaisesRegex(ValueError,
                                 'rank must be >= 1 for _as_row_partitions'):
       my_shape._as_row_partitions()
 
   def testToPrimeTensorFromDimSizes(self):
+    # [FUNCTION DOC]
+    # Scenario: the prime tensor test utility. Builds a prime tensor from lengths and asserts it
+    # equals the expected ragged tensor of the first thirteen primes.
     """Tests the test utility."""
     original_lengths = [3, (3, 2, 8), 1]
     original_rt = _to_prime_tensor_from_lengths(original_lengths)
@@ -1507,6 +1807,10 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
           expected_dims=[2, (2, 1), 2, (2, 1, 2, 1, 2, 1)]),
   ])
   def testBroadcastDynamicShape(self, x_dims, y_dims, expected_dims):
+    # [FUNCTION DOC]
+    # Scenario: broadcasting two shapes from lengths. For both argument orders asserts the shape
+    # equals the expected one and that the two broadcasters, applied to prime tensors, equal the
+    # broadcast-to result. Also asserts the two wrapper functions return the expected shape.
     shape_a = DynamicRaggedShape.from_lengths(x_dims)
     shape_b = DynamicRaggedShape.from_lengths(y_dims)
     shape_e = DynamicRaggedShape.from_lengths(expected_dims)
@@ -1541,6 +1845,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
     self.assertShapeEq(shape_e, result2)
 
   def testBroadcastDynamicShapeFirstLayer(self):
+    # [FUNCTION DOC]
+    # Scenario: broadcasting the first layer of two shapes (sizes one and three). Asserts the
+    # layer broadcasters have the expected gather indices.
     a_0 = constant_op.constant(1, dtypes.int64)
     b_0 = constant_op.constant(3, dtypes.int64)
     [a_layer, b_layer
@@ -1551,6 +1858,11 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
     self.assertLayerBroadcasterEq(expected_b_layer, b_layer)
 
   def testBroadcastDynamicShapeNextLayer(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the name says next layer but the test calls the half-ragged variant and
+    # makes no assertion; it only checks that the call does not raise.
+    # Scenario: builds a uniform partition and a row-length partition with layer broadcasters and
+    # calls the internal half-ragged next-layer function.
     a_1 = RowPartition.from_uniform_row_length(
         1, nvals=1, nrows=1, dtype_hint=dtypes.int64)
     b_1 = RowPartition.from_row_lengths([2, 1, 3], dtype_hint=dtypes.int64)
@@ -1562,16 +1874,24 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
         ac_0, bc_0, a_1, b_1)
 
   def testBroadcastDynamicShapeRaisesLeft(self):
+    # [FUNCTION DOC]
+    # Scenario: the first argument to broadcast-dynamic-shape is not a shape. Asserts a type
+    # error mentioning shape_x.
     shape = DynamicRaggedShape.from_tensor(constant_op.constant([1, 2, 3]))
     with self.assertRaisesRegex(TypeError, 'shape_x must be'):
       dynamic_ragged_shape.broadcast_dynamic_shape(1, shape)
 
   def testBroadcastDynamicShapeRaisesRight(self):
+    # [FUNCTION DOC]
+    # Scenario: the second argument to broadcast-dynamic-shape is not a shape. Asserts a type
+    # error mentioning shape_y.
     shape = DynamicRaggedShape.from_tensor(constant_op.constant([1, 2, 3]))
     with self.assertRaisesRegex(TypeError, 'shape_y must be'):
       dynamic_ragged_shape.broadcast_dynamic_shape(shape, 1)
 
   def testBroadcastToRaises(self):
+    # [FUNCTION DOC]
+    # Scenario: broadcast-to with a target that is not a shape. Asserts a type error.
     rt = constant_op.constant([1, 2, 3])
     with self.assertRaisesRegex(TypeError, 'shape must be'):
       dynamic_ragged_shape.broadcast_to(rt, 1)
@@ -1612,6 +1932,10 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
               [[[1, 1], [2, 2]], [[3, 3]]], ragged_rank=1)),
   ])
   def testRaggedBroadcastTo(self, x, lengths, expected):
+    # [FUNCTION DOC]
+    # Scenario: broadcasting dense or ragged values to a shape from lengths. Asserts the number
+    # of row partitions and values equal expected, and the wrapper in the array ops module gives
+    # the same result.
     shape = DynamicRaggedShape.from_lengths(lengths)
     result = dynamic_ragged_shape.broadcast_to(x, shape)
     self.assertEqual(
@@ -1675,6 +1999,10 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
                                                       [[[15, 25], [36]]]])),
   ])
   def testRaggedAddWithBroadcasting(self, x, y, expected, doc):
+    # [FUNCTION DOC]
+    # Scenario: adding ragged and dense tensors with broadcasting. The doc parameter is only a
+    # description and is deleted. Converts inputs to 32-bit tensors, adds with the operator, and
+    # asserts the same number of row partitions and the same values as expected.
     del doc
     expected_rrank = getattr(expected, 'num_row_partitions', 0)
     x = ragged_tensor.convert_to_tensor_or_ragged_tensor(x, dtype=dtypes.int32)
@@ -1691,6 +2019,10 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
       dict(lengths_a=[3, (1, 4, 2)], new_impl=False, op_max=300),
   ])
   def testAddSelf(self, lengths_a, new_impl, op_max, num_row_partitions_a=None):
+    # [FUNCTION DOC]
+    # Scenario: graph-size check for adding a ragged tensor to itself. Graph mode only. Counts
+    # graph nodes before and after using the new implementation or the old operator and asserts
+    # the added nodes do not exceed op_max.
     if context.executing_eagerly():
       return
     shape_a0 = DynamicRaggedShape.from_lengths(
@@ -1717,6 +2049,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
       self.assertLessEqual(node_delta, op_max)
 
   def testAndSelfBool(self):
+    # [FUNCTION DOC]
+    # Scenario: logical-and of a boolean ragged tensor with itself via the elementwise op
+    # implementation. Graph mode only. Asserts the result equals the input.
     if context.executing_eagerly():
       return
     values = constant_op.constant([True, False, True, True, True])
@@ -1730,6 +2065,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
     self.assertAllEqual(result, expected)
 
   def testEquals(self):
+    # [FUNCTION DOC]
+    # Scenario: elementwise equality of a ragged tensor with a scalar. Graph mode only. Asserts
+    # the boolean ragged result.
     if context.executing_eagerly():
       return
 
@@ -1742,12 +2080,18 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
     self.assertAllEqual(result, rt_expected)
 
   def testEquals2(self):
+    # [FUNCTION DOC]
+    # Scenario: the equality operator on two ragged tensors with different values. Asserts the
+    # comparison gives the boolean false.
     splits = constant_op.constant([0, 1])
     a = RaggedTensor.from_row_splits([[1, 2]], splits)
     b = RaggedTensor.from_row_splits([[3, 4, 5]], splits)
     self.assertIs(a == b, False)
 
   def testEquals3(self):
+    # [FUNCTION DOC]
+    # Scenario: same as the previous equality test, without a splits tensor. Asserts boolean
+    # false.
     a = RaggedTensor.from_row_splits([[1, 2]], [0, 1])
     b = RaggedTensor.from_row_splits([[3, 4, 5]], [0, 1])
     self.assertIs(a == b, False)
@@ -1777,6 +2121,11 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
               max_num_ops,
               num_row_partitions_a=None,
               num_row_partitions_b=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: in the old implementation branch the number of added nodes is computed but
+    # never asserted, so only the new implementation is checked.
+    # Scenario: graph-size check when adding ragged tensors with broadcasting. Graph mode only.
+    # Asserts the number of added nodes is within max_num_ops for the new implementation.
     if context.executing_eagerly():
       return
 
@@ -1848,6 +2197,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
                    new_impl=False,
                    num_row_partitions_a=None,
                    num_row_partitions_b=None):
+    # [FUNCTION DOC]
+    # Scenario: static shape of the sum of two ragged tensors. Graph mode only. Adds with the new
+    # implementation or the operator and asserts the static shape equals the expected one.
     if context.executing_eagerly():
       return
     shape_a = DynamicRaggedShape.from_lengths(
@@ -1899,6 +2251,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
                                       shape_e,
                                       num_row_partitions_a=None,
                                       num_row_partitions_b=None):
+    # [FUNCTION DOC]
+    # Scenario: static lengths and tensor shape when broadcasting two shapes. Graph mode only.
+    # Asserts static lengths and converted tensor shape equal the expected values.
     if context.executing_eagerly():
       return
     shape_a = DynamicRaggedShape.from_lengths(
@@ -1914,11 +2269,18 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
     self.assertEqual(tensor_shape_e, result_shape.as_list())
 
   def testBroadcastDynamicShapePartiallyKnown(self):
+    # [FUNCTION DOC]
+    # Scenario: broadcasting with a partly unknown inner shape. Graph mode only. Inside a compiled
+    # function, a shape with a dynamic middle dimension is broadcast with a shape and the static
+    # lengths are asserted as five, unknown, three.
     if context.executing_eagerly():
       return
     @def_function.function(
         input_signature=[tensor.TensorSpec(None, dtypes.int64)])
     def fun(x):
+      # [FUNCTION DOC]
+      # Nested function with an int64 unknown-shape signature. Builds the shapes, broadcasts
+      # them and asserts static lengths. Returns nothing.
       shape_a = DynamicRaggedShape([], array_ops_stack.stack([5, x, 3]))
       shape_b = DynamicRaggedShape.from_lengths([1, 3], dtype=dtypes.int64)
       result = dynamic_ragged_shape.broadcast_dynamic_shape(shape_a, shape_b)
@@ -1926,11 +2288,19 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
     fun(constant_op.constant(2, dtype=dtypes.int64))
 
   def testBroadcastDynamicShapePartiallyKnownNiceToHave(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: given the name, this documents desired behavior; it expects the dynamic
+    # dimension to be resolved to two, which may not hold.
+    # Scenario: like the previous test but expects a known size from broadcasting. Graph mode
+    # only.
     if context.executing_eagerly():
       return
     @def_function.function(
         input_signature=[tensor.TensorSpec(None, dtypes.int64)])
     def fun(x):
+      # [FUNCTION DOC]
+      # Nested function: broadcasts a shape with an unknown dimension against a known one and
+      # asserts static lengths of five, two, three.
       shape_a = DynamicRaggedShape([], array_ops_stack.stack([5, x, 3]))
       shape_b = DynamicRaggedShape.from_lengths([2, 3], dtype=dtypes.int64)
       result = dynamic_ragged_shape.broadcast_dynamic_shape(shape_a, shape_b)
@@ -1938,6 +2308,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
     fun(constant_op.constant(2, dtype=dtypes.int64))
 
   def testFromRowPartitionsStatic(self):
+    # [FUNCTION DOC]
+    # Scenario: static lengths of a shape from one row partition. Graph mode only. Asserts three
+    # rows and lengths four, two, three.
     if context.executing_eagerly():
       return
     rp = RowPartition.from_row_lengths([4, 2, 3])
@@ -1966,6 +2339,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
       dict(lengths_a=[5, 1, 3], dim=0, expected=5),
   ])
   def testDimStatic(self, lengths_a, dim, expected):
+    # [FUNCTION DOC]
+    # Scenario: static value of a single dimension. Graph mode only. Asserts the constant value
+    # of the indexed dimension equals the expected value.
     if context.executing_eagerly():
       return
     shape_a = DynamicRaggedShape.from_lengths(lengths_a)
@@ -1987,6 +2363,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
                                      shape_e,
                                      new_num_row_partitions,
                                      num_row_partitions_a=None):
+    # [FUNCTION DOC]
+    # Scenario: static lengths after setting the number of row partitions. Graph mode only.
+    # Asserts they equal the expected lengths.
     if context.executing_eagerly():
       return
     shape_a = DynamicRaggedShape.from_lengths(
@@ -1999,6 +2378,8 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
       dict(lengths_a=[3, 2, (1, 4, 2, 1, 3, 1), 3]),
   ])
   def testFromLengthsNRowsStatic(self, lengths_a):
+    # [FUNCTION DOC]
+    # Scenario: number of rows of each partition is statically known. Graph mode only.
     if context.executing_eagerly():
       return
     shape_a = DynamicRaggedShape.from_lengths(lengths_a)
@@ -2024,6 +2405,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
                               inner_shape,
                               new_inner_rank,
                               num_row_partitions_a=None):
+    # [FUNCTION DOC]
+    # Scenario: static value of the alternative inner shape. Graph mode only. Asserts the static
+    # shape equals the expected inner shape.
     if context.executing_eagerly():
       return
     shape_a = DynamicRaggedShape.from_lengths(
@@ -2056,6 +2440,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
                       lengths,
                       shape_e,
                       num_row_partitions=None):
+    # [FUNCTION DOC]
+    # Scenario: static shape of a ragged reshape result. Graph mode only. Asserts the static shape
+    # list equals the expected.
     # Testing the shape has enough information.
     # In particular, any uniform_row_length should be reproduced.
     if context.executing_eagerly():
@@ -2079,6 +2466,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
                                      lengths,
                                      shape_e,
                                      num_row_partitions=None):
+    # [FUNCTION DOC]
+    # Scenario: static lengths after changing to one fewer row partition than rank. Graph mode
+    # only. Asserts they equal the expected.
     # Note that this test loses the later static values.
     if context.executing_eagerly():
       return
@@ -2088,6 +2478,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
     self.assertEqual(shape_e, shape_b.static_lengths())
 
   def testWithNumRowPartitionsStaticAlt(self):
+    # [FUNCTION DOC]
+    # Scenario: static lengths after changing to zero row partitions. Graph mode only. Asserts
+    # the dense static lengths.
     # Note that this test loses the later static values.
     if context.executing_eagerly():
       return
@@ -2097,6 +2490,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
     self.assertEqual([5, 2, 3], shape_b.static_lengths())
 
   def testWithNumRowPartitionsDType(self):
+    # [FUNCTION DOC]
+    # Scenario: dtype is preserved. Builds a shape with 32-bit inner shape, changes the number of
+    # row partitions and asserts the dtype stays 32-bit.
     # Note that this test loses the later static values.
     shape = DynamicRaggedShape([], constant_op.constant([5, 2, 3],
                                                         dtype=dtypes.int32))
@@ -2106,11 +2502,15 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
     self.assertEqual(result.dtype, dtypes.int32)
 
   def test_merge_with(self):
+    # [FUNCTION DOC]
+    # Scenario: merging a shape with itself. Asserts the result equals the original.
     original = DynamicRaggedShape.from_lengths([2, (3, 5), 6])
     result = original._merge_with(original)
     self.assertShapeEq(result, original)
 
   def test_merge_with_spec(self):
+    # [FUNCTION DOC]
+    # Scenario: merging a shape with a compatible spec. Asserts the result equals the original.
     original = DynamicRaggedShape.from_lengths([2, (3, 5), 6],
                                                dtype=dtypes.int64)
     spec = DynamicRaggedShape.Spec(
@@ -2125,6 +2525,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
     self.assertShapeEq(result, original)
 
   def test_merge_with_spec_raises(self):
+    # [FUNCTION DOC]
+    # Scenario: merging a 64-bit shape with a 32-bit spec. Asserts a value error that the
+    # partition and spec are not compatible.
     original = DynamicRaggedShape.from_lengths([2, (3, 5), 6],
                                                dtype=dtypes.int64)
     spec = DynamicRaggedShape.Spec(
@@ -2141,6 +2544,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
       original._merge_with_spec(spec)
 
   def test_merge_with_spec_uniform(self):
+    # [FUNCTION DOC]
+    # Scenario: merging a ragged shape that has uniform rows with a uniform spec. Asserts the
+    # result equals a shape with one uniform row partition.
     original = DynamicRaggedShape.from_lengths(
         [2, (4, 4), 6], dtype=dtypes.int64)
     spec = DynamicRaggedShape.Spec._from_tensor_shape(
@@ -2204,6 +2610,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
                                                       [[[15, 25], [36]]]])),
   ])
   def testRaggedDispatchImplWithBroadcasting(self, x, y, expected, doc):
+    # [FUNCTION DOC]
+    # Scenario: same as the add-with-broadcasting test, but calls the elementwise op
+    # implementation directly with the add operation. The doc parameter is deleted.
     del doc
     expected_rrank = getattr(expected, 'num_row_partitions', 0)
     x = ragged_tensor.convert_to_tensor_or_ragged_tensor(x, dtype=dtypes.int32)
@@ -2217,10 +2626,14 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
     self.assertAllEqual(result, expected)
 
   def testDimensions(self):
+    # [FUNCTION DOC]
+    # Scenario: dimension accessor on a shape from an inner shape. Asserts dimension zero is one.
     a = DynamicRaggedShape._from_inner_shape([1, 2, 3])
     self.assertAllEqual(1, a._dimension(0))
 
   def testGetItemIsInstanceTensor(self):
+    # [FUNCTION DOC]
+    # Scenario: indexing a dense shape returns a tensor instance.
     a = dynamic_ragged_shape.DynamicRaggedShape._from_inner_shape([1, 2, 3])
     self.assertIsInstance(a[0], tensor.Tensor)
 
@@ -2238,6 +2651,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
                         num_row_partitions,
                         expected,
                         expected_eager=None):
+    # [FUNCTION DOC]
+    # Scenario: static lengths for shapes with various row partition counts. Asserts they equal
+    # expected (or the eager-mode expectation when given and in eager mode).
     a = DynamicRaggedShape.from_lengths(lengths)._with_num_row_partitions(
         num_row_partitions)
     actual = a.static_lengths()
@@ -2247,10 +2663,16 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
       self.assertAllEqual(expected, actual)
 
   def testStaticLengthsUnknown(self):
+    # [FUNCTION DOC]
+    # Scenario: static lengths when the row lengths are unknown inside a compiled function.
+    # Asserts the result is two unknowns.
 
     @def_function.function(
         input_signature=[tensor.TensorSpec(None, dtypes.int32)])
     def foo(row_lengths):
+      # [FUNCTION DOC]
+      # Nested function: builds a shape from a row-length partition of unknown length and an inner
+      # shape of six, asserts static lengths are unknown, unknown.
       a = DynamicRaggedShape([RowPartition.from_row_lengths(row_lengths)], [6])
       actual = a.static_lengths()
       self.assertAllEqual([None, None], actual)
@@ -2258,11 +2680,16 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
     foo([3, 3])
 
   def testStaticLengthsRankUnknown(self):
+    # [FUNCTION DOC]
+    # Scenario: static lengths when the rank is unknown. Only a prefix is known.
     # Note that the rank of the shape is unknown, so we can only provide a
     # prefix of the lengths.
     @def_function.function(
         input_signature=[tensor.TensorSpec(None, dtypes.int32)])
     def foo(inner_shape):
+      # [FUNCTION DOC]
+      # Nested function: builds a shape whose inner shape tensor has unknown rank and asserts the
+      # static lengths are two, (three, three), ellipsis.
       a = DynamicRaggedShape([RowPartition.from_row_lengths([3, 3])],
                              inner_shape)
       actual = a.static_lengths()
@@ -2271,6 +2698,8 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
     foo([6, 3])
 
   def testReprRankKnown(self):
+    # [FUNCTION DOC]
+    # Scenario: string form of a shape with known rank. Asserts the exact text.
     a = DynamicRaggedShape.from_lengths([2, (1, 2), 3])
     actual = str(a)
     self.assertEqual(
@@ -2279,6 +2708,10 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
 
   def assertDimsEqual(self, x: tensor_shape.TensorShape,
                       y: tensor_shape.TensorShape):
+    # [FUNCTION DOC]
+    # HELPER: assertion for comparing tensor shapes.
+    # If the first has unknown rank, asserts the second does too and returns. Otherwise asserts
+    # second has known rank and equal dimension lists.
     if x.rank is None:
       self.assertIsNone(
           y.rank,
@@ -2290,15 +2723,23 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
     self.assertAllEqual(x.as_list(), y.as_list())
 
   def testToTensorShapeRankKnown(self):
+    # [FUNCTION DOC]
+    # Scenario: conversion to tensor shape with known rank. Asserts two, unknown, three.
     a = DynamicRaggedShape.from_lengths([2, (1, 2), 3])
     actual = a._to_tensor_shape()
     self.assertDimsEqual(tensor_shape.TensorShape([2, None, 3]), actual)
 
   def testReprRankUnknown(self):
+    # [FUNCTION DOC]
+    # Scenario: string form for unknown rank inside a compiled function. Asserts text with
+    # ellipsis.
 
     @def_function.function(
         input_signature=[tensor.TensorSpec(None, dtypes.int32)])
     def foo(inner_shape):
+      # [FUNCTION DOC]
+      # Nested function: builds a shape with unknown-rank inner shape, converts to a string and
+      # asserts it.
       a = DynamicRaggedShape([RowPartition.from_row_lengths([3, 3])],
                              inner_shape)
       actual = str(a)
@@ -2309,9 +2750,14 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
     foo([6, 3])
 
   def testToTensorShapeRankUnknown(self):
+    # [FUNCTION DOC]
+    # Scenario: conversion to tensor shape with unknown rank inside a compiled function. Asserts
+    # unknown-rank shape.
     @def_function.function(
         input_signature=[tensor.TensorSpec(None, dtypes.int32)])
     def foo(inner_shape):
+      # [FUNCTION DOC]
+      # Nested function: builds the shape, converts to a tensor shape and asserts unknown rank.
       a = DynamicRaggedShape([RowPartition.from_row_lengths([3, 3])],
                              inner_shape)
       actual = a._to_tensor_shape()
@@ -2321,6 +2767,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
     foo([6, 3])
 
   def testBroadcastDynamicShapeExtendedRankOne(self):
+    # [FUNCTION DOC]
+    # Scenario: extended broadcast of rank-one shapes, one and three. Asserts the shape is three
+    # and the broadcasters yield expected values.
     a = DynamicRaggedShape._from_inner_shape([1])
     b = DynamicRaggedShape._from_inner_shape([3])
     (c, ac, bc) = dynamic_ragged_shape.broadcast_dynamic_shape_extended(a, b)
@@ -2332,6 +2781,8 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
     self.assertAllEqual(bc_result, [4, 7, 1])
 
   def testBroadcastDynamicShapeExtendedRankOneRev(self):
+    # [FUNCTION DOC]
+    # Scenario: same as above with arguments reversed (three, one).
     a = DynamicRaggedShape._from_inner_shape([3])
     b = DynamicRaggedShape._from_inner_shape([1])
     (c, ac, bc) = dynamic_ragged_shape.broadcast_dynamic_shape_extended(a, b)
@@ -2343,6 +2794,8 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
     self.assertAllEqual(ac_result, [4, 7, 1])
 
   def testBroadcastDynamicShapeExtendedRankOneIdentity(self):
+    # [FUNCTION DOC]
+    # Scenario: extended broadcast of identical shapes. Both broadcasters leave values unchanged.
     a = DynamicRaggedShape._from_inner_shape([3])
     b = DynamicRaggedShape._from_inner_shape([3])
     (c, ac, bc) = dynamic_ragged_shape.broadcast_dynamic_shape_extended(a, b)
@@ -2354,6 +2807,8 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
     self.assertAllEqual(ac_result, [4, 7, 1])
 
   def testFromGatherLayerIndexRaises(self):
+    # [FUNCTION DOC]
+    # Scenario: building a layer broadcaster from a float gather index. Asserts a value error.
     bad_gather_index = constant_op.constant([0.0, 0.5, 1.0])
     with self.assertRaisesRegex(ValueError, 'gather_index must be'):
       _LayerBroadcaster.from_gather_index(bad_gather_index)
@@ -2361,6 +2816,8 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
   ### Tests mostly for code coverage ###########################################
 
   def testFindPreferredDtypeIntNone(self):
+    # [FUNCTION DOC]
+    # Scenario: coverage test for finding a dtype from an integer and none. Asserts none.
     actual = dynamic_ragged_shape._find_dtype(3, None)
     self.assertIsNone(actual)
 
@@ -2400,6 +2857,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
   def testBroadcasterInitRaises(self, source_shape, target_shape,
                                 layer_broadcasters, dtype, error_type,
                                 error_regex):
+    # [FUNCTION DOC]
+    # Scenario: invalid broadcaster constructor arguments. Parameters are callables producing
+    # source shape, target shape and layer broadcasters. Asserts the expected type error.
     source_shape = source_shape()
     target_shape = target_shape()
     layer_broadcasters = layer_broadcasters()
@@ -2408,6 +2868,8 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
           source_shape, target_shape, layer_broadcasters, dtype=dtype)
 
   def testBroadcasterRepr(self):
+    # [FUNCTION DOC]
+    # Scenario: string form of a broadcaster. Asserts it contains the source shape text.
     source_shape = DynamicRaggedShape(
         [RowPartition.from_row_splits(constant_op.constant([0, 1, 2]))],
         constant_op.constant([3]))
@@ -2424,6 +2886,8 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
     self.assertRegex(actual, '.src_shape..DynamicRaggedShape')
 
   def testBroadcasterWithDtype(self):
+    # [FUNCTION DOC]
+    # Scenario: changing the dtype of a broadcaster. Asserts the new broadcaster has the new dtype.
     source_shape = DynamicRaggedShape(
         [RowPartition.from_row_splits(constant_op.constant([0, 1, 2]))],
         constant_op.constant([3]))
@@ -2447,6 +2911,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
       dict(dtype=dtypes.int64)
   ])
   def testBroadcasterWithDenseDType(self, dtype):
+    # [FUNCTION DOC]
+    # Scenario: broadcasting a dense tensor with a ragged tensor of given row-splits dtype, both
+    # orders. Asserts the result row splits keep that dtype. Only the 64-bit case is run.
     a = constant_op.constant([[4]])
     b = RaggedTensor.from_row_splits([[2], [3], [4], [5]], [0, 3, 4])
     b = b.with_row_splits_dtype(dtype)
@@ -2462,6 +2929,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
            dtype_right=dtypes.int64)])
   def testBroadcastWithDifferentDenseShapeDTypes(self, dtype_left,
                                                  dtype_right):
+    # [FUNCTION DOC]
+    # Scenario: broadcasting dense shapes with different integer types. Asserts the result dtype
+    # is 64-bit.
     s_left = DynamicRaggedShape._from_inner_shape(
         constant_op.constant([4, 1], dtype_left))
     s_right = DynamicRaggedShape._from_inner_shape(
@@ -2470,6 +2940,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
     self.assertEqual(s_result.dtype, dtypes.int64)
 
   def testBroadcastFlatValuesToDenseExpand(self):
+    # [FUNCTION DOC]
+    # Scenario: broadcasting flat values of a uniform ragged tensor to a larger dense shape.
+    # Asserts the expected nested values.
     source = RaggedTensor.from_uniform_row_length([0, 1, 2, 3], 2)
     target_shape = DynamicRaggedShape._from_inner_shape([1, 2, 2])
     broadcaster = dynamic_ragged_shape._get_broadcaster(
@@ -2479,6 +2952,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
 
   # TODO(edloper): Confirm that this is the expected behavior.
   def testBroadcastFlatValuesToDenseExpandInnerDimensionsFalse(self):
+    # [FUNCTION DOC]
+    # Scenario: same as above with inner dimensions turned off. Asserts the flat result. A todo
+    # in the code asks to confirm this behavior.
     source = RaggedTensor.from_uniform_row_length([0, 1, 2, 3], 2)
     target_shape = DynamicRaggedShape._from_inner_shape([1, 2, 2])
     broadcaster = dynamic_ragged_shape._get_broadcaster(
@@ -2488,10 +2964,16 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
     self.assertAllEqual(flat_values, [[0, 1], [2, 3]])
 
   def testGetLayerBroadcastersFromRPSRaisesTypeError(self):
+    # [FUNCTION DOC]
+    # Scenario: layer broadcasters from row partitions with a bad class argument. Asserts type
+    # error.
     with self.assertRaisesRegex(TypeError, 'Not a _LayerBroadcaster'):
       dynamic_ragged_shape._get_layer_broadcasters_from_rps(int, [], [])
 
   def testGetBroadcasterRankDrop(self):
+    # [FUNCTION DOC]
+    # Scenario: broadcaster to a lower-rank target shape. Asserts a value error about being
+    # unable to broadcast.
     with self.assertRaisesRegex(ValueError, 'Cannot broadcast'):
       a = DynamicRaggedShape._from_inner_shape([3, 4, 5])
       b = DynamicRaggedShape._from_inner_shape([4, 5])
@@ -2529,6 +3011,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
   ])
   def testBroadcastDynamicShapeNextLayerHalfRaggedRaises(
       self, ac_0, bc_0, a_1, b_1, error_type, error_regex):
+    # [FUNCTION DOC]
+    # Scenario: type validation of the half-ragged next-layer function. Each case passes none
+    # for one argument, and the test asserts the matching type error.
     ac_0 = ac_0()
     bc_0 = bc_0()
     a_1 = a_1()
@@ -2569,6 +3054,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
   ])
   def testBroadcastDynamicShapeNextLayerBothUniformRaises(
       self, ac_0, bc_0, a_1, b_1, error_type, error_regex):
+    # [FUNCTION DOC]
+    # Scenario: type validation of the both-uniform next-layer function. Each case passes none for
+    # one argument. Asserts the matching type error.
     ac_0 = ac_0()
     bc_0 = bc_0()
     a_1 = a_1()
@@ -2609,6 +3097,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
   ])
   def testBroadcastDynamicShapeNextLayerRaises(self, ac_0, bc_0, a_1, b_1,
                                                error_type, error_regex):
+    # [FUNCTION DOC]
+    # Scenario: type validation of the general next-layer function. Each case passes none for one
+    # argument. Asserts the matching type error.
     ac_0 = ac_0()
     bc_0 = bc_0()
     a_1 = a_1()
@@ -2628,6 +3119,8 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
           expected_dtype=dtypes.int32)
   ])
   def testAddingRowSplits(self, left_dtype, right_dtype, expected_dtype):
+    # [FUNCTION DOC]
+    # Scenario: adding ragged tensors with the same row-splits dtype. Asserts the result keeps it.
     x = ragged_factory_ops.constant([[1, 2]]).with_row_splits_dtype(left_dtype)
     y = ragged_factory_ops.constant([[1, 2]]).with_row_splits_dtype(right_dtype)
     z = math_ops.add(x, y)
@@ -2638,6 +3131,8 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
       dict(left_dtype=dtypes.int64, right_dtype=dtypes.int32),
   ])
   def testAddingRowSplitsError(self, left_dtype, right_dtype):
+    # [FUNCTION DOC]
+    # Scenario: adding ragged tensors with different row-splits dtypes. Asserts a value error.
     x = ragged_factory_ops.constant([[1, 2]]).with_row_splits_dtype(left_dtype)
     y = ragged_factory_ops.constant([[1, 2]]).with_row_splits_dtype(right_dtype)
     with self.assertRaisesRegex(
@@ -2645,6 +3140,10 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
       math_ops.add(x, y)
 
   def testAddRowPartitionsInvalidV1(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the name says V1 but the test runs only in eager mode and returns otherwise.
+    # Scenario: adding row partitions to a shape with flat values whose length does not match.
+    # Asserts an invalid-argument or value error with message about the last partition.
     if not context.executing_eagerly():
       return
 
@@ -2730,6 +3229,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
   ])
   def test_merge_dims(self, lengths, num_row_partitions, outer_axis, inner_axis,
                       expected_lengths, expected_num_row_partitions):
+    # [FUNCTION DOC]
+    # Scenario: merging dimensions of shapes. Builds a shape, merges the outer to inner axis
+    # and asserts the result equals the expected shape from lengths and partition count.
     original = DynamicRaggedShape.from_lengths(
         lengths, num_row_partitions=num_row_partitions)
     actual = original._merge_dims(outer_axis, inner_axis)
@@ -2738,15 +3240,23 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
     self.assertShapeEq(actual, expected)
 
   def test_merge_dims_special(self):
+    # [FUNCTION DOC]
+    # Scenario: merging the first two dimensions of a ragged shape. Asserts the new first size
+    # is three.
     rt = ragged_factory_ops.constant([[[1, 2], [3]], [[4]]])
     original = DynamicRaggedShape.from_tensor(rt)
     actual = original._merge_dims(0, 1)
     self.assertAllEqual(actual[0], 3)
 
   def testGetItemRankNoneTruncate(self):
+    # [FUNCTION DOC]
+    # Scenario: truncating slice on a shape of unknown rank inside a compiled function. Asserts
+    # the result equals the original.
     @def_function.function(
         input_signature=[tensor.TensorSpec(None, dtypes.int32)])
     def foo(x):
+      # [FUNCTION DOC]
+      # Nested function: builds a shape from x, slices it and asserts equality with the original.
       rts = DynamicRaggedShape.from_tensor(x)
       actual = rts[:1]
       self.assertShapeEq(rts, actual)
@@ -2754,29 +3264,42 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
     foo([1, 2, 3])
 
   def test_dataset_only_dense(self):
+    # [FUNCTION DOC]
+    # Scenario: creating a dataset from a dense shape. Only checks no error.
     ragged = DynamicRaggedShape.from_lengths([4, 5, 2, 3])
     dataset_ops.DatasetV2.from_tensors(ragged)
 
   def test_dataset_only_ragged(self):
+    # [FUNCTION DOC]
+    # Scenario: creating a dataset from a shape with a ragged part. Only checks no error.
     ragged = DynamicRaggedShape.from_lengths([4, (3, 0, 4, 5), 2, 3])
     dataset_ops.DatasetV2.from_tensors(ragged)
 
   def test_ragged_dataset(self):
+    # [FUNCTION DOC]
+    # Scenario: creating a dataset from a ragged tensor. Only checks no error.
     rt = RaggedTensor.from_row_splits(array_ops.zeros([5, 2, 3]), [0, 3, 5])
     dataset_ops.DatasetV2.from_tensors(rt)
 
   def test_ones_shape(self):
+    # [FUNCTION DOC]
+    # Scenario: the ones function with boolean dtype. Asserts static lengths of the result shape.
     ragged = DynamicRaggedShape.from_lengths([4, (3, 0, 4, 5)])
     ones = dynamic_ragged_shape.ones(ragged, dtype=bool)
     sh2 = DynamicRaggedShape.from_tensor(ones)
     self.assertAllEqual(sh2.static_lengths(), [4, (3, 0, 4, 5)])
 
   def test_dataset_only_simple_ragged(self):
+    # [FUNCTION DOC]
+    # Scenario: creating a dataset from a simple ragged shape. Only checks no error.
     ragged = DynamicRaggedShape.from_lengths([4, (3, 0, 4, 5)])
     dataset_ops.DatasetV2.from_tensors(ragged)
 
   # ValueError: _to_batched_tensor_list doesn't support ragged_rank=0 yet
   def test_unbatch_batch_dense(self):
+    # [FUNCTION DOC]
+    # Scenario: unbatching then batching a dense shape dataset. In eager mode asserts static
+    # lengths of unbatched and rebatched elements.
     ragged = DynamicRaggedShape.from_lengths([4, 5, 2, 3])
     ds = dataset_ops.DatasetV2.from_tensors(ragged)
     dsu = ds.unbatch()
@@ -2792,6 +3315,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
       self.assertAllEqual(valuesb[1].static_lengths(), [2, 5, 2, 3])
 
   def test_unbatch_batch_values_shape_0(self):
+    # [FUNCTION DOC]
+    # Scenario: unbatch then batch a one-dimensional shape. In eager mode asserts the batch
+    # equals the original.
     batched = DynamicRaggedShape.from_lengths([2])
     batch_size = 2
     ds = dataset_ops.Dataset.from_tensors(batched)
@@ -2801,6 +3327,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
       self.assertAllEqual(v[0], batched)
 
   def test_unbatch_batch_values_shape_1(self):
+    # [FUNCTION DOC]
+    # Scenario: unbatch then batch a two-dimensional shape. In eager mode asserts the batch equals
+    # the shape with one row partition.
     batched = DynamicRaggedShape.from_lengths([2, 3])
     rebatched = DynamicRaggedShape.from_lengths([2, 3], num_row_partitions=1)
 
@@ -2812,6 +3341,8 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
       self.assertAllEqual(v[0], rebatched)
 
   def test_unbatch_dense_matrix(self):
+    # [FUNCTION DOC]
+    # Scenario: unbatching a matrix shape dataset. In eager mode asserts static lengths of rows.
     ragged = DynamicRaggedShape.from_lengths([2, 3])
     ds = dataset_ops.DatasetV2.from_tensors(ragged)
     dsu = ds.unbatch()
@@ -2821,6 +3352,8 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
       self.assertAllEqual(values[1].static_lengths(), [3])
 
   def test_unbatch_dense_vector(self):
+    # [FUNCTION DOC]
+    # Scenario: unbatching a vector shape dataset. In eager mode asserts empty static lengths.
     ragged = DynamicRaggedShape.from_lengths([3])
     ds = dataset_ops.DatasetV2.from_tensors(ragged)
     dsu = ds.unbatch()
@@ -2830,6 +3363,8 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
       self.assertAllEqual(values[1].static_lengths(), [])
 
   def test_unbatch_ragged(self):
+    # [FUNCTION DOC]
+    # Scenario: unbatching a ragged shape dataset. In eager mode only creates an iterator.
     ragged = DynamicRaggedShape.from_lengths([4, (3, 0, 4, 5), 2, 3])
     ds = dataset_ops.DatasetV2.from_tensors(ragged)
     dsu = ds.unbatch()
@@ -2837,6 +3372,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
       dsu.__iter__()
 
   def test_unbatch_batch_ragged(self):
+    # [FUNCTION DOC]
+    # Scenario: unbatch then batch a ragged shape dataset. In eager mode asserts static lengths
+    # of elements and batches.
     ragged = DynamicRaggedShape.from_lengths([4, (3, 0, 4, 5), 2, 3])
     ds = dataset_ops.DatasetV2.from_tensors(ragged)
     dsu = ds.unbatch()
@@ -2853,6 +3391,9 @@ class DynamicRaggedShapeTest(test_util.TensorFlowTestCase,
 
 
 class DynamicRaggedShapeErrorTest(parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests for error paths of DynamicRaggedShape, mostly with unknown ranks or invalid inputs.
+  # A plain parameterized test case, run in whatever mode the default is.
 
   @parameterized.parameters([
       # Broadcast [1, 2, (1, 2)] to [1, 2, (2, 1)] (FAIL)
@@ -2878,6 +3419,11 @@ class DynamicRaggedShapeErrorTest(parameterized.TestCase):
   ])
   def testBroadcastRaggedError(self, origin_lengths, origin_values,
                                expected_lengths):
+    # [FUNCTION DOC]
+    # Scenario: unsupported or failing ragged broadcasts. Parameters give origin lengths, values and
+    # target lengths. Opens a graph session, builds the origin tensor and target shape, broadcasts
+    # and runs the result in the session; asserts that an invalid-argument error saying the
+    # broadcast cannot be done is raised. Side effect: creates a session.
     # I pulled this out of the tensorflow test case, so that I could have
     # more control.
     # However this error is being generated, it confuses assertRaises,
@@ -2917,6 +3463,11 @@ class DynamicRaggedShapeErrorTest(parameterized.TestCase):
                                    error_regex,
                                    validate=False,
                                    dtype=None):
+    # [FUNCTION DOC]
+    # Scenario: dynamic validation in the shape constructor. Parameters are callables creating
+    # inconsistent row partitions and inner shapes, a validate flag and expected message. Inside a
+    # session, constructs the shape with the validate flag and runs the inner shape tensor;
+    # asserts that an invalid-argument or value error with the matching message is raised.
     with self.assertRaisesRegex((errors_impl.InvalidArgumentError, ValueError),
                                 error_regex):
       sess = session.Session()
@@ -2928,78 +3479,115 @@ class DynamicRaggedShapeErrorTest(parameterized.TestCase):
         sess.run([rts.inner_shape])
 
   def testRankNone(self):
+    # [FUNCTION DOC]
+    # Scenario: shape built from an inner shape of unknown rank. Calls a compiled function and
+    # asserts the shape's rank is none.
 
     @def_function.function(
         input_signature=[tensor.TensorSpec(None, dtypes.int32)])
     def foo(x):
+      # [FUNCTION DOC]
+      # Nested function with an int32 unknown-shape signature. Builds a shape from the inner
+      # shape x and asserts its rank is unknown (none).
       rts = DynamicRaggedShape._from_inner_shape(x)
       self.assertIsNone(rts.rank)
 
     foo([3, 7, 5])
 
   def testNumSlicesInDimensionRankNone(self):
+    # [FUNCTION DOC]
+    # Scenario: number of slices in a dimension with unknown rank and negative axis. Asserts a
+    # value error that the rank is undefined.
     with self.assertRaisesRegex(ValueError, 'rank is undefined'):
 
       @def_function.function(
           input_signature=[tensor.TensorSpec(None, dtypes.int32)])
       def foo(x):
+        # [FUNCTION DOC]
+        # Nested function: builds a unknown-rank shape from x and asks for slices in dimension
+        # minus one, which raises when traced.
         rts = DynamicRaggedShape._from_inner_shape(x)
         rts._num_slices_in_dimension(-1)
 
       foo([3, 7, 5])
 
   def testGetItemRankNone(self):
+    # [FUNCTION DOC]
+    # Scenario: indexing with negative index on an unknown-rank shape. Asserts a value error that
+    # rank must be known.
     with self.assertRaisesRegex(ValueError, 'Rank must be known to'):
 
       @def_function.function(
           input_signature=[tensor.TensorSpec(None, dtypes.int32)])
       def foo(x):
+        # [FUNCTION DOC]
+        # Nested function: builds an unknown-rank shape from x and indexes it with minus one.
         rts = DynamicRaggedShape._from_inner_shape(x)
         rts[-1]  # pylint: disable=pointless-statement
 
       foo([3, 7, 5])
 
   def testWithDenseRankRankNone(self):
+    # [FUNCTION DOC]
+    # Scenario: setting the inner rank of an unknown-rank shape. Asserts a value error that rank
+    # must be known. (The name says dense rank.)
     with self.assertRaisesRegex(ValueError, 'Rank must be known to'):
 
       @def_function.function(
           input_signature=[tensor.TensorSpec(None, dtypes.int32)])
       def foo(x):
+        # [FUNCTION DOC]
+        # Nested function: builds an unknown-rank shape and sets the inner rank to one.
         rts = DynamicRaggedShape._from_inner_shape(x)
         rts._with_inner_rank(1)
 
       foo([3, 7, 5])
 
   def testWithRaggedRankRankNone(self):
+    # [FUNCTION DOC]
+    # Scenario: setting the number of row partitions on an unknown-rank shape. Asserts a value
+    # error that rank must be known. (The name says ragged rank.)
     with self.assertRaisesRegex(ValueError, 'Rank must be known to'):
 
       @def_function.function(
           input_signature=[tensor.TensorSpec(None, dtypes.int32)])
       def foo(x):
+        # [FUNCTION DOC]
+        # Nested function: builds an unknown-rank shape and sets the row partition count to one.
         rts = DynamicRaggedShape._from_inner_shape(x)
         rts._with_num_row_partitions(1)
 
       foo([3, 7, 5])
 
   def testAsRowPartitionsRankNone(self):
+    # [FUNCTION DOC]
+    # Scenario: converting an unknown-rank shape to row partitions. Asserts a value error; the
+    # message pattern is empty because the real text does not match.
     # Error is readable, but does not match strings correctly.
     with self.assertRaisesRegex(ValueError, ''):
 
       @def_function.function(
           input_signature=[tensor.TensorSpec(None, dtypes.int32)])
       def foo(x):
+        # [FUNCTION DOC]
+        # Nested function: builds an unknown-rank shape and converts it to row partitions.
         rts = DynamicRaggedShape._from_inner_shape(x)
         rts._as_row_partitions()
 
       foo([3, 7, 5])
 
   def testBroadcastDynamicShapeExtendedRankNone(self):
+    # [FUNCTION DOC]
+    # Scenario: extended broadcast with an unknown-rank shape. Asserts a value error about
+    # unknown rank.
     with self.assertRaisesRegex(ValueError,
                                 'Unable to broadcast: unknown rank'):
 
       @def_function.function(
           input_signature=[tensor.TensorSpec(None, dtypes.int32)])
       def foo(x):
+        # [FUNCTION DOC]
+        # Nested function: broadcasts an unknown-rank shape with a rank-three shape.
         a = DynamicRaggedShape._from_inner_shape(x)
         b = DynamicRaggedShape._from_inner_shape([1, 1, 1])
         dynamic_ragged_shape.broadcast_dynamic_shape_extended(a, b)
@@ -3007,6 +3595,9 @@ class DynamicRaggedShapeErrorTest(parameterized.TestCase):
       foo([3, 7, 5])
 
   def testBroadcastDynamicShapeUnmatchedTypes6432(self):
+    # [FUNCTION DOC]
+    # Scenario: broadcasting a 64-bit shape with a 32-bit shape. Asserts a value error that
+    # dtypes do not match.
     shape_int64 = DynamicRaggedShape.from_lengths([3, (0, 2, 3)],
                                                   dtype=dtypes.int64)
     shape_int32 = DynamicRaggedShape.from_lengths([3, (0, 2, 3)],
@@ -3015,6 +3606,8 @@ class DynamicRaggedShapeErrorTest(parameterized.TestCase):
       dynamic_ragged_shape.broadcast_dynamic_shape(shape_int64, shape_int32)
 
   def testBroadcastDynamicShapeUnmatchedTypes3264(self):
+    # [FUNCTION DOC]
+    # Scenario: same as above with the arguments reversed (32-bit first). Asserts the same error.
     shape_int64 = DynamicRaggedShape.from_lengths([3, (0, 2, 3)],
                                                   dtype=dtypes.int64)
     shape_int32 = DynamicRaggedShape.from_lengths([3, (0, 2, 3)],
@@ -3023,28 +3616,41 @@ class DynamicRaggedShapeErrorTest(parameterized.TestCase):
       dynamic_ragged_shape.broadcast_dynamic_shape(shape_int32, shape_int64)
 
   def testGetIdentityBroadcasterRankNone(self):
+    # [FUNCTION DOC]
+    # Scenario: identity broadcaster of an unknown-rank shape. Asserts a value error that the
+    # shape must have a rank.
     with self.assertRaisesRegex(ValueError, 'Shape must have a'):
 
       @def_function.function(
           input_signature=[tensor.TensorSpec(None, dtypes.int32)])
       def foo(x):
+        # [FUNCTION DOC]
+        # Nested function: builds an unknown-rank shape and asks for its identity broadcaster.
         rts = DynamicRaggedShape._from_inner_shape(x)
         dynamic_ragged_shape._get_identity_broadcaster(rts)
 
       foo([3, 7, 5])
 
   def testLayerBroadcasterRepr(self):
+    # [FUNCTION DOC]
+    # Scenario: string form of a layer broadcaster. Asserts text mentioning a tensor of shape
+    # three with 32-bit integer type.
     index = constant_op.constant([0, 1, 2], name='testLayerBroadcasterRepr')
     lb = _LayerBroadcaster.from_gather_index(index)
     actual = str(lb)
     self.assertRegex(actual, '.*Tensor.*, shape=.3... dtype=int32.')
 
   def testGetBroadcasterRankNoneLeft(self):
+    # [FUNCTION DOC]
+    # Scenario: getting a broadcaster between unknown-rank shapes. Asserts a value error that
+    # the rank of source and target must be known.
     with self.assertRaisesRegex(ValueError, 'Rank of source and target must'):
 
       @def_function.function(
           input_signature=[tensor.TensorSpec(None, dtypes.int32)])
       def foo(x):
+        # [FUNCTION DOC]
+        # Nested function: builds two unknown-rank shapes and requests a broadcaster.
         rts_a = DynamicRaggedShape._from_inner_shape(x)
         rts_b = DynamicRaggedShape._from_inner_shape(x)
         dynamic_ragged_shape._get_broadcaster(rts_a, rts_b)
@@ -3052,12 +3658,17 @@ class DynamicRaggedShapeErrorTest(parameterized.TestCase):
       foo([3, 7, 5])
 
   def testFromTensorDType(self):
+    # [FUNCTION DOC]
+    # Scenario: dtype of a shape from a ragged tensor. Asserts row splits and shape dtypes are
+    # 64-bit.
     x = ragged_factory_ops.constant([[1, 2]])
     self.assertEqual(x.row_splits.dtype, dtypes.int64)
     shape_x = DynamicRaggedShape.from_tensor(x)
     self.assertEqual(shape_x.dtype, dtypes.int64)
 
   def testAddingRowSplits(self):
+    # [FUNCTION DOC]
+    # Scenario: adding a ragged tensor to itself. Asserts the row splits remain 64-bit.
     x = ragged_factory_ops.constant([[1, 2]])
     self.assertEqual(x.row_splits.dtype, dtypes.int64)
 
@@ -3065,6 +3676,11 @@ class DynamicRaggedShapeErrorTest(parameterized.TestCase):
     self.assertEqual(y.row_splits.dtype, dtypes.int64)
 
   def testHashingWithMask(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the test makes no assertion; it only runs the operations, so it only fails if
+    # one raises. The computed mask is only used to select zeros.
+    # Scenario: hashing string values of a ragged tensor with a mask. Builds the tensor, computes
+    # a mask, hashes the strings, adds one and selects zeros where the mask is true.
     inp_data = ragged_factory_ops.constant(
         [['omar', 'stringer', 'marlo', 'wire'], ['marlo', 'skywalker', 'wire']],
         dtype=dtypes.string)
@@ -3076,6 +3692,9 @@ class DynamicRaggedShapeErrorTest(parameterized.TestCase):
     values = array_ops.where(mask, local_zeros, values)
 
   def testAddRowPartitionsInvalid(self):
+    # [FUNCTION DOC]
+    # Scenario: adding row partitions with flat values of the wrong size, with validation, in a
+    # session. Asserts an invalid-argument or value error about the last partition.
     with self.assertRaisesRegex(
         (errors_impl.InvalidArgumentError, ValueError),
         'Last row partition does not match flat_values.'):
@@ -3089,11 +3708,19 @@ class DynamicRaggedShapeErrorTest(parameterized.TestCase):
 
 
 class DynamicRaggedShapeSpecTest(parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests for DynamicRaggedShape.Spec (the type specification of a shape): construction from
+  # tensor shapes, dimension queries, dtype and row-partition changes, merging, batching, string
+  # form and creation from a value. Defines assertion helpers for row partition specs, tensor
+  # shapes, tensor specs and shape specs. A plain parameterized test case.
 
   def assertRowPartitionSpecEqual(self,
                                   a: RowPartitionSpec,
                                   b: RowPartitionSpec,
                                   msg='') -> None:
+    # [FUNCTION DOC]
+    # HELPER: custom assertion for row partition specs. Compares number of rows, number of
+    # values, uniform row length and dtype of two specs, with an optional message.
     self.assertEqual(a.nrows, b.nrows, msg)
     self.assertEqual(a.nvals, b.nvals, msg)
     self.assertEqual(a.uniform_row_length, b.uniform_row_length, msg)
@@ -3101,17 +3728,26 @@ class DynamicRaggedShapeSpecTest(parameterized.TestCase):
 
   def assertTensorShapeEqual(self, a: tensor_shape.TensorShape,
                              b: tensor_shape.TensorShape) -> None:
+    # [FUNCTION DOC]
+    # HELPER: custom assertion that two tensor shapes are equal.
     self.assertEqual(a, b)
 
   def assertTensorSpecEqual(self,
                             a: tensor.TensorSpec,
                             b: tensor.TensorSpec) -> None:
+    # [FUNCTION DOC]
+    # HELPER: custom assertion that two tensor specs have equal shapes and dtypes.
     self.assertTensorShapeEqual(a.shape, b.shape)
     self.assertEqual(a.dtype, b.dtype)
 
   def assertDynamicRaggedShapeSpecEqual(self,
                                         a: DynamicRaggedShape.Spec,
                                         b: DynamicRaggedShape.Spec) -> None:
+    # [FUNCTION DOC]
+    # HELPER: custom assertion that two shape specs are equal. Compares static inner shapes,
+    # inner shape tensor specs and each row partition spec in order.
+    # KNOWN ISSUE: the loop variables shadow the arguments and the zip does not check that the
+    # two have the same number of partitions, so a spec with extra partitions can go unnoticed.
     self.assertTensorShapeEqual(a._static_inner_shape, b._static_inner_shape)
     self.assertTensorSpecEqual(a._inner_shape, b._inner_shape)
     for i, (a, b) in enumerate(zip(a._row_partitions, b._row_partitions)):
@@ -3202,6 +3838,9 @@ class DynamicRaggedShapeSpecTest(parameterized.TestCase):
               dtype=dtypes.int32)),
   ])
   def test_from_tensor_shape(self, shape, num_row_partitions, dtype, expected):
+    # [FUNCTION DOC]
+    # Scenario: creating a spec from a tensor shape, row partition count and dtype. Asserts the
+    # result equals the expected spec.
     spec = DynamicRaggedShape.Spec._from_tensor_shape(shape, num_row_partitions,
                                                       dtype)
     self.assertDynamicRaggedShapeSpecEqual(spec, expected)
@@ -3231,17 +3870,30 @@ class DynamicRaggedShapeSpecTest(parameterized.TestCase):
   ])
   def test_from_tensor_shape_raises(self, shape, num_row_partitions, dtype,
                                     error_type, error_regex):
+    # [FUNCTION DOC]
+    # Scenario: invalid arguments when creating a spec from a tensor shape (bad dtype, partitions
+    # for a scalar, too many partitions). Asserts a value error with matching message.
     with self.assertRaisesRegex(error_type, error_regex):
       DynamicRaggedShape.Spec._from_tensor_shape(shape, num_row_partitions,
                                                  dtype)
 
   def test_from_tensor_shape_raises_dtype(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the arguments look misplaced: a tensor shape is passed where the number of row
+    # partitions is expected, and the empty list as the shape; the expected dtype error only
+    # happens to be raised.
+    # Scenario: float dtype for a spec. Asserts a value error that dtype must be int32 or int64.
     with self.assertRaisesRegex(ValueError,
                                 'dtype must be tf.int32 or tf.int64'):
       DynamicRaggedShape.Spec._from_tensor_shape(
           [], tensor_shape.TensorShape([1, 2, 3]), dtypes.float32)
 
   def test_from_row_partition_inner_shape_and_dtype_raises_dtype(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the name suggests an inner shape check, but the test only builds a spec with
+    # partitions of mixed dtypes.
+    # Scenario: spec whose row partitions have 32-bit and 64-bit dtypes. Asserts a value error
+    # that the dtype does not match the expected one.
     with self.assertRaisesRegex(
         ValueError, r'dtype of .* is .*int64.*: expected .*int32.*'):
       DynamicRaggedShape.Spec(
@@ -3261,6 +3913,8 @@ class DynamicRaggedShapeSpecTest(parameterized.TestCase):
           dtype=dtypes.int32)
 
   def test_ranks(self):
+    # [FUNCTION DOC]
+    # Scenario: rank properties of a spec. Asserts inner rank four, two row partitions, rank six.
     spec = dynamic_ragged_shape.DynamicRaggedShape.Spec._from_tensor_shape(
         shape=tensor_shape.TensorShape([5, None, 7, 4, 2, 5]),
         num_row_partitions=2,
@@ -3271,6 +3925,9 @@ class DynamicRaggedShapeSpecTest(parameterized.TestCase):
     self.assertEqual(spec.rank, 6)
 
   def test_dimension_simple(self):
+    # [FUNCTION DOC]
+    # Scenario: dimension sizes of a spec. Asserts known sizes and unknown (none) for the
+    # unknown one.
     spec = dynamic_ragged_shape.DynamicRaggedShape.Spec._from_tensor_shape(
         shape=tensor_shape.TensorShape([5, None, 7, 4, 2, 5]),
         num_row_partitions=2,
@@ -3294,6 +3951,8 @@ class DynamicRaggedShapeSpecTest(parameterized.TestCase):
           dimension=1),
   ])
   def test_dimension_none(self, spec, dimension):
+    # [FUNCTION DOC]
+    # Scenario: dimension of a spec of unknown rank. Asserts none.
     actual = spec._dimension(dimension)
     self.assertIsNone(actual)
 
@@ -3314,10 +3973,15 @@ class DynamicRaggedShapeSpecTest(parameterized.TestCase):
           error_regex='Index out of range: 1.'),
   ])
   def test_dimension_raises(self, spec, dimension, error_type, error_regex):
+    # [FUNCTION DOC]
+    # Scenario: out-of-range dimension for a scalar spec. Asserts a value error.
     with self.assertRaisesRegex(error_type, error_regex):
       spec._dimension(dimension)
 
   def test_num_slices_in_dimension_ragged(self):
+    # [FUNCTION DOC]
+    # Scenario: number of slices per dimension for a ragged spec. Asserts products of known
+    # sizes, none once an unknown size is hit, and none for negative axis -2.
     spec = dynamic_ragged_shape.DynamicRaggedShape.Spec._from_tensor_shape(
         shape=tensor_shape.TensorShape([5, 3, 7, 4, None, 5]),
         num_row_partitions=2,
@@ -3332,6 +3996,8 @@ class DynamicRaggedShapeSpecTest(parameterized.TestCase):
     self.assertIsNone(spec._num_slices_in_dimension(-2))
 
   def test_num_slices_in_dimension_ragged_alt(self):
+    # [FUNCTION DOC]
+    # Scenario: number of slices for an alternative ragged spec. Asserts known values and none.
     spec = dynamic_ragged_shape.DynamicRaggedShape.Spec._from_tensor_shape(
         shape=tensor_shape.TensorShape([5, 3, None, 2]),
         num_row_partitions=3,
@@ -3343,6 +4009,8 @@ class DynamicRaggedShapeSpecTest(parameterized.TestCase):
     self.assertIsNone(spec._num_slices_in_dimension(3))
 
   def test_num_slices_in_dimension_dense_known(self):
+    # [FUNCTION DOC]
+    # Scenario: number of slices for a fully known dense spec: five, fifteen, sixty.
     spec = dynamic_ragged_shape.DynamicRaggedShape.Spec._from_tensor_shape(
         [5, 3, 4], 0, dtypes.int32)
 
@@ -3367,10 +4035,15 @@ class DynamicRaggedShapeSpecTest(parameterized.TestCase):
   ])
   def test_num_slices_in_dimension_raises(self, spec, dimension, error_type,
                                           error_regex):
+    # [FUNCTION DOC]
+    # Scenario: invalid axis for slice counts (non-integer, negative with unknown rank). Asserts
+    # the matching error.
     with self.assertRaisesRegex(error_type, error_regex):
       spec._num_slices_in_dimension(dimension)
 
   def test_with_dtype(self):
+    # [FUNCTION DOC]
+    # Scenario: changing the spec dtype. Asserts the spec and its row partitions use 64-bit.
     spec = DynamicRaggedShape.Spec._from_tensor_shape(
         shape=tensor_shape.TensorShape([5, 3, 7, 4, None, 5]),
         num_row_partitions=2,
@@ -3404,6 +4077,8 @@ class DynamicRaggedShapeSpecTest(parameterized.TestCase):
   ])
   def test_with_num_row_partitions(self, original, num_row_partitions,
                                    expected):
+    # [FUNCTION DOC]
+    # Scenario: changing the row partition count of a spec. Asserts equality with the expected.
     actual = original._with_num_row_partitions(num_row_partitions)
     self.assertDynamicRaggedShapeSpecEqual(actual, expected)
 
@@ -3429,10 +4104,16 @@ class DynamicRaggedShapeSpecTest(parameterized.TestCase):
   ])
   def test_with_num_row_partitions_raises(self, spec, num_row_partitions,
                                           error_type, error_regex):
+    # [FUNCTION DOC]
+    # Scenario: invalid row partition counts (unknown rank, too large, negative). Asserts value
+    # errors with matching messages.
     with self.assertRaisesRegex(error_type, error_regex):
       spec._with_num_row_partitions(num_row_partitions)
 
   def test_truncate(self):
+    # [FUNCTION DOC]
+    # Scenario: truncating a spec to each rank from zero to six. Asserts the rank and the
+    # dimensions match the original.
     spec = dynamic_ragged_shape.DynamicRaggedShape.Spec._from_tensor_shape(
         shape=tensor_shape.TensorShape([5, 3, 7, 4, None, 5]),
         num_row_partitions=2,
@@ -3447,6 +4128,9 @@ class DynamicRaggedShapeSpecTest(parameterized.TestCase):
             'Mismatch on new_rank ' + str(new_rank) + ' on dimension ' + str(i))
 
   def test_truncate_unknown(self):
+    # [FUNCTION DOC]
+    # Scenario: truncating a spec whose inner shape has unknown rank to rank four. Asserts the
+    # inner shape becomes two unknown dimensions.
     spec = DynamicRaggedShape.Spec(
         row_partitions=[
             RowPartitionSpec(
@@ -3509,6 +4193,8 @@ class DynamicRaggedShapeSpecTest(parameterized.TestCase):
           expected=None),
   ])
   def test_inner_rank(self, spec, expected):
+    # [FUNCTION DOC]
+    # Scenario: inner rank of specs (scalar gives zero, vector gives one, unknown gives none).
     actual = spec.inner_rank
     self.assertEqual(expected, actual)
 
@@ -3552,6 +4238,9 @@ class DynamicRaggedShapeSpecTest(parameterized.TestCase):
               dtype=dtypes.int64)),
   ])
   def test_from_spec(self, other_spec, expected):
+    # [FUNCTION DOC]
+    # Scenario: creating a shape spec from another spec (tensor spec, ragged spec or shape spec).
+    # Asserts the expected result.
     actual = DynamicRaggedShape.Spec._from_spec(other_spec)
     self.assertDynamicRaggedShapeSpecEqual(expected, actual)
 
@@ -3615,6 +4304,9 @@ class DynamicRaggedShapeSpecTest(parameterized.TestCase):
   ])
   def test_constructor_idempotent(self, row_partitions, static_inner_shape,
                                   inner_shape):
+    # [FUNCTION DOC]
+    # Scenario: the constructor keeps already consistent information unchanged. Builds the spec
+    # and asserts the inner shape and partitions equal the inputs.
     # The constructor detects if there is any additional information that
     # can be inferred from what is given.
     original = dynamic_ragged_shape.DynamicRaggedShape.Spec(
@@ -3711,6 +4403,11 @@ class DynamicRaggedShapeSpecTest(parameterized.TestCase):
   def test_constructor_improvements(self, original, expected_row_partitions,
                                     expected_static_inner_shape,
                                     expected_inner_shape):
+    # [FUNCTION DOC]
+    # Scenario: the constructor infers missing information (value counts, row counts, inner
+    # shape). Asserts the inferred values on the given spec.
+    # KNOWN ISSUE: the original argument is already built by the parameter list so the
+    # constructor is not invoked inside the test.
     # Note that self_merge is only idempotent if no data is partially present.
     self.assertTensorShapeEqual(original._static_inner_shape,
                                 expected_static_inner_shape)
@@ -3791,6 +4488,8 @@ class DynamicRaggedShapeSpecTest(parameterized.TestCase):
   ])
   def test_constructor_raises(self, row_partitions, static_inner_shape,
                               dtype, error_type, msg):
+    # [FUNCTION DOC]
+    # Scenario: invalid spec constructor inputs. Asserts the matching error type and message.
     # Note that self_merge is only idempotent if no data is partially present.
     with self.assertRaisesRegex(error_type, msg):
       dynamic_ragged_shape.DynamicRaggedShape.Spec(
@@ -3846,6 +4545,8 @@ class DynamicRaggedShapeSpecTest(parameterized.TestCase):
 
   ])
   def test_to_tensor_shape(self, original, expected):
+    # [FUNCTION DOC]
+    # Scenario: converting specs to tensor shapes. Asserts equality with expected.
     # Note that self_merge is only idempotent if no data is partially present.
     actual = original._to_tensor_shape()
     self.assertEqual(actual, expected)
@@ -3938,6 +4639,8 @@ class DynamicRaggedShapeSpecTest(parameterized.TestCase):
                       a: DynamicRaggedShape.Spec,
                       b: DynamicRaggedShape.Spec,
                       expected: DynamicRaggedShape.Spec):
+    # [FUNCTION DOC]
+    # Scenario: merging two specs in both orders. Asserts both equal the expected merged spec.
     actual = a._merge_with(b)
     actual_rev = b._merge_with(a)
 
@@ -4105,6 +4808,9 @@ class DynamicRaggedShapeSpecTest(parameterized.TestCase):
                  spec: DynamicRaggedShape.Spec,
                  batch_size: int,
                  expected: DynamicRaggedShape.Spec):
+    # [FUNCTION DOC]
+    # Scenario: the batch encoder adds a leading batch dimension to a spec. Asserts equality
+    # with the expected spec.
     encoder = dynamic_ragged_shape._DynamicRaggedShapeBatchEncoder()
     actual = encoder.batch(spec, batch_size)
     self.assertDynamicRaggedShapeSpecEqual(actual, expected)
@@ -4127,11 +4833,15 @@ class DynamicRaggedShapeSpecTest(parameterized.TestCase):
   ])
   def test_unbatch(self, spec: DynamicRaggedShape.Spec,
                    expected: DynamicRaggedShape.Spec):
+    # [FUNCTION DOC]
+    # Scenario: the batch encoder removes the leading dimension from a spec. Asserts equality.
     encoder = dynamic_ragged_shape._DynamicRaggedShapeBatchEncoder()
     actual = encoder.unbatch(spec)
     self.assertDynamicRaggedShapeSpecEqual(actual, expected)
 
   def test_repr(self):
+    # [FUNCTION DOC]
+    # Scenario: official string form of a spec. Asserts the exact text.
     original = dynamic_ragged_shape.DynamicRaggedShape.Spec(
         row_partitions=[
             RowPartitionSpec(
@@ -4175,6 +4885,10 @@ class DynamicRaggedShapeSpecTest(parameterized.TestCase):
               dtype=dtypes.int32)),
   ])
   def test_from_value(self, lengths, expected, dtype=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: asserts equality with a tensor-shape comparison helper even though both are
+    # specs; works since it only tests equality.
+    # Scenario: creating a spec from a value shape built from lengths and optional dtype.
     original = DynamicRaggedShape.from_lengths(lengths)
     if dtype is not None:
       original = original.with_dtype(dtype)
