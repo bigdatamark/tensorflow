@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# Defines LinearOperatorBlockLowerTriangular, a square linear operator whose matrix is a
+# blockwise lower-triangular arrangement of component operators given as a nested list (row i
+# has i+1 blocks, the last one on the diagonal and square; zeros above the diagonal). Exposes
+# only that class, publicly exported. Solves use forward or backward block substitution,
+# inverse is computed recursively with a block formula, and determinant, trace, eigenvalues and
+# assertions depend only on the diagonal blocks. Builds on the base linear operator module and
+# uses the operator addition, full-matrix and scaled-identity operators, and shared blockwise
+# utilities. Import-time side effects: registers the class with the public API export decorator
+# and wraps it as a composite-tensor type. Not a helper module; sibling of the block diagonal
+# operator module.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -39,6 +50,17 @@ __all__ = ["LinearOperatorBlockLowerTriangular"]
 @tf_export("linalg.LinearOperatorBlockLowerTriangular")
 @linear_operator.make_composite_tensor
 class LinearOperatorBlockLowerTriangular(linear_operator.LinearOperator):
+  # [CLASS DOC]
+  # Linear operator for a square blockwise lower-triangular matrix built from a nested list of
+  # operators: row i holds i+1 operators, the last of which sits on the block diagonal and must
+  # be square; blocks above the diagonal are implicit zeros. State: the nested operators list
+  # and the list of diagonal operators (last element of each row). Combined shape is the
+  # broadcast batch shape followed by the summed diagonal block sizes. Hints: non-singular is
+  # inferred from the diagonal blocks and the operator is always treated as square. Overrides
+  # matmul, matvec, solve (forward or backward block substitution), solvevec, inverse
+  # (recursive block formula), determinant (product over diagonal blocks), trace, diagonal part,
+  # eigenvalues (those of the diagonal blocks), dense form and non-singular assertion.
+  # Created from the nested list plus optional hint flags and a name.
   """Combines `LinearOperators` into a blockwise lower-triangular matrix.
 
   This operator is initialized with a nested list of linear operators, which
@@ -196,6 +218,18 @@ class LinearOperatorBlockLowerTriangular(linear_operator.LinearOperator):
                is_positive_definite=None,
                is_square=None,
                name="LinearOperatorBlockLowerTriangular"):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the non-singular hint passed in is replaced by the result of the validator,
+    # which returns nothing (null) when the diagonal blocks give no conclusion, so an explicit
+    # caller-supplied hint is silently discarded in that case.
+    # Builds the operator from a nested iterable of operators (each row converted to a list;
+    # must be non-empty, all of one dtype, row i having exactly i+1 operators, with compatible
+    # neighbouring dimensions and square diagonal blocks). Optional hints: non-singular,
+    # self-adjoint, positive-definite (passed through), is_square (must not be false). name
+    # defaults to the class name. Stores operators and the diagonal operators, runs the
+    # validators, then calls the base constructor in a name scope, recording the parameters.
+    # Raises a ValueError for empty input, wrong row lengths, incompatible dimensions or
+    # contradicting hints, and a TypeError for mixed dtypes.
     r"""Initialize a `LinearOperatorBlockLowerTriangular`.
 
     `LinearOperatorBlockLowerTriangular` is initialized with a list of lists of
@@ -271,6 +305,10 @@ class LinearOperatorBlockLowerTriangular(linear_operator.LinearOperator):
           name=name)
 
   def _validate_num_operators(self):
+    # [FUNCTION DOC]
+    # HELPER: constructor validation.
+    # Checks that row i of the operators structure contains exactly i+1 blocks. Raises a
+    # ValueError naming the offending row otherwise. Returns nothing.
     for i, row in enumerate(self.operators):
       if len(row) != i + 1:
         raise ValueError(
@@ -278,6 +316,12 @@ class LinearOperatorBlockLowerTriangular(linear_operator.LinearOperator):
             f"Received: {len(row)} blocks.")
 
   def _validate_operator_dimensions(self):
+    # [FUNCTION DOC]
+    # HELPER: constructor validation.
+    # For every off-diagonal block, checks (when static sizes are known) that its domain
+    # dimension equals that of the block directly above it and its range dimension equals that of
+    # the block to its right. Raises a ValueError describing the mismatching pair. Returns
+    # nothing.
     """Check that `operators` have compatible dimensions."""
     for i in range(1, len(self.operators)):
       for j in range(i):
@@ -310,6 +354,16 @@ class LinearOperatorBlockLowerTriangular(linear_operator.LinearOperator):
 
   # pylint: disable=g-bool-id-comparison
   def _validate_non_singular(self, is_non_singular):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: when every diagonal block is non-singular and the caller said false, the error
+    # text says the argument is expected to be true (correct), but in the singular-diagonal case
+    # it also says "expected to be True" although the contradicting hint there is true and it
+    # should expect false. Also, if neither case applies the function falls through and returns
+    # null, discarding the caller's hint.
+    # HELPER: constructor validation of the non-singular hint.
+    # Takes the caller's hint. If all diagonal blocks are non-singular, returns true (raising a
+    # ValueError if the hint was false). If any diagonal block is known singular, returns false
+    # (raising a ValueError if the hint was true). Otherwise returns null.
     if all(op.is_non_singular for op in self._diagonal_operators):
       if is_non_singular is False:
         raise ValueError(
@@ -327,6 +381,10 @@ class LinearOperatorBlockLowerTriangular(linear_operator.LinearOperator):
       return False
 
   def _validate_square(self, is_square):
+    # [FUNCTION DOC]
+    # HELPER: constructor validation of the square hint.
+    # Raises a ValueError if is_square is explicitly false, or if any diagonal block is known not
+    # to be square. Otherwise returns true (always true, regardless of a null input hint).
     if is_square is False:
       raise ValueError(f"`LinearOperatorBlockLowerTriangular` must be square. "
                        f"Expected argument `is_square` to be True. "
@@ -342,6 +400,13 @@ class LinearOperatorBlockLowerTriangular(linear_operator.LinearOperator):
   # pylint: enable=g-bool-id-comparison
 
   def _validate_dtype(self, dtype):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the error message formats a generator object rather than the joined names and
+    # dtypes, so the list of offending operators is not actually shown; it also lists only the
+    # row containing the mismatch.
+    # HELPER: constructor validation.
+    # Checks every block's dtype against the given dtype (that of the first block). Raises a
+    # TypeError at the first mismatch. Returns nothing.
     for i, row in enumerate(self.operators):
       for operator in row:
         if operator.dtype != dtype:
@@ -352,21 +417,42 @@ class LinearOperatorBlockLowerTriangular(linear_operator.LinearOperator):
 
   @property
   def operators(self):
+    # [FUNCTION DOC]
+    # Property returning the nested list of operators (list of row lists, row i having i+1
+    # blocks).
     return self._operators
 
   def _block_range_dimensions(self):
+    # [FUNCTION DOC]
+    # HELPER: per-block sizes for the blockwise logic.
+    # Returns a list of the static range dimensions of the diagonal blocks.
     return [op.range_dimension for op in self._diagonal_operators]
 
   def _block_domain_dimensions(self):
+    # [FUNCTION DOC]
+    # HELPER: per-block sizes for the blockwise logic.
+    # Returns a list of the static domain dimensions of the diagonal blocks.
     return [op.domain_dimension for op in self._diagonal_operators]
 
   def _block_range_dimension_tensors(self):
+    # [FUNCTION DOC]
+    # HELPER: dynamic per-block sizes for splitting arguments.
+    # Returns a list of scalar tensors with the range dimensions of the diagonal blocks.
     return [op.range_dimension_tensor() for op in self._diagonal_operators]
 
   def _block_domain_dimension_tensors(self):
+    # [FUNCTION DOC]
+    # HELPER: dynamic per-block sizes for splitting arguments.
+    # Returns a list of scalar tensors with the domain dimensions of the diagonal blocks.
     return [op.domain_dimension_tensor() for op in self._diagonal_operators]
 
   def _shape(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the matrix part is built as domain by range instead of range by domain; this is
+    # harmless only because the operator is always square.
+    # Computes the static shape: batch shapes of every block are broadcast together and followed
+    # by the summed diagonal block sizes. Returns a tensor shape; raises a ValueError (from the
+    # broadcast helper) for incompatible batch shapes. No side effects.
     # Get final matrix shape.
     domain_dimension = sum(self._block_domain_dimensions())
     range_dimension = sum(self._block_range_dimensions())
@@ -383,6 +469,11 @@ class LinearOperatorBlockLowerTriangular(linear_operator.LinearOperator):
     return batch_shape.concatenate(matrix_shape)
 
   def _shape_tensor(self):
+    # [FUNCTION DOC]
+    # Returns the shape as a 1-D int32 tensor. A constant is used when the static shape is fully
+    # known; otherwise the dynamic batch shapes of all blocks are combined with dynamic
+    # broadcasting and concatenated with the summed dynamic diagonal block sizes (domain then
+    # range, equal since square). Adds graph ops only.
     # Avoid messy broadcasting if possible.
     if self.shape.is_fully_defined():
       return tensor_conversion.convert_to_tensor_v2_with_dispatch(
@@ -402,6 +493,16 @@ class LinearOperatorBlockLowerTriangular(linear_operator.LinearOperator):
     return array_ops.concat((batch_shape, matrix_shape), 0)
 
   def _linop_inverse(self) -> "LinearOperatorBlockLowerTriangular":
+    # [FUNCTION DOC]
+    # Computes the inverse as another block lower-triangular operator. A single-row operator
+    # inverts its only block (keeping hints). Otherwise it recursively inverts the operator made
+    # of all but the last row, inverts the bottom-right block, and builds the new bottom row:
+    # each off-diagonal entry is the negated product of the inverted bottom-right block, the
+    # bottom-row blocks and the matching column of the recursive inverse (partial products are
+    # converted to full-matrix operators when their type cannot be added, then summed with the
+    # operator addition helper; a scaled-identity of minus one does the negation). The bottom
+    # right entry is the inverted corner block. The recursive call receives no hints. Takes no
+    # arguments; no external side effects.
     """Inverse of LinearOperatorBlockLowerTriangular.
 
      We recursively apply the identity:
@@ -490,6 +591,15 @@ class LinearOperatorBlockLowerTriangular(linear_operator.LinearOperator):
         is_square=True))
 
   def matmul(self, x, adjoint=False, adjoint_arg=False, name="matmul"):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: for a blockwise list input, converted tensors are written back into the
+    # caller's list (argument mutated in place), which the docstring does not mention.
+    # Multiplies this operator (or its adjoint) by x. If x is a linear operator, checks static
+    # dimension compatibility (ValueError if mismatched) and returns the operator product. Else
+    # x is a tensor or blockwise list; entries are converted, dtype-checked and shape-checked
+    # against the block sizes, then the internal product is used. adjoint_arg uses the hermitian
+    # transpose of x; name is the name scope. Returns an operator, a tensor, or a list of
+    # tensors for blockwise input.
     """Transform [batch] matrix `x` with left multiplication:  `x --> Ax`.
 
     ```python
@@ -554,6 +664,16 @@ class LinearOperatorBlockLowerTriangular(linear_operator.LinearOperator):
       return self._matmul(x, adjoint=adjoint, adjoint_arg=adjoint_arg)
 
   def _matmul(self, x, adjoint=False, adjoint_arg=False):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: a non-blockwise x is always split using the block domain dimensions even when
+    # adjoint is true (where range sizes would be expected); correct only because diagonal
+    # blocks are square.
+    # Core product on validated input. Splits x into per-block pieces (rows, or columns with
+    # adjoint_arg) unless it is already blockwise. For the plain operator, each row result is the
+    # sum over that row's blocks applied to the matching pieces; for the adjoint, each result is
+    # the diagonal block plus the blocks below it in the same column, applied to the matching
+    # pieces. Returns the list of per-row results for blockwise input, or the results broadcast
+    # to a common batch shape and concatenated along rows.
     arg_dim = -1 if adjoint_arg else -2
     block_dimensions = (self._block_range_dimensions() if adjoint
                         else self._block_domain_dimensions())
@@ -618,6 +738,12 @@ class LinearOperatorBlockLowerTriangular(linear_operator.LinearOperator):
     return array_ops.concat(result_list, axis=-2)
 
   def matvec(self, x, adjoint=False, name="matvec"):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: for a blockwise list input, converted tensors are written back into the
+    # caller's list (argument mutated in place), which the docstring does not mention.
+    # Multiplies the operator (or its adjoint) by a vector or a list of per-block vectors:
+    # vectors get a trailing axis, go through matmul, and the axis is squeezed. Returns a tensor
+    # (or list of tensors for blockwise input). Errors arise from dtype or size mismatches.
     """Transform [batch] vector `x` with left multiplication:  `x --> Ax`.
 
     ```python
@@ -669,6 +795,10 @@ class LinearOperatorBlockLowerTriangular(linear_operator.LinearOperator):
       return array_ops.squeeze(y_mat, axis=-1)
 
   def _determinant(self):
+    # [FUNCTION DOC]
+    # Returns the determinant, the product of the determinants of the diagonal blocks. When all
+    # diagonal blocks are known positive definite it is computed as the exponential of the log
+    # absolute determinant instead.
     if all(op.is_positive_definite for op in self._diagonal_operators):
       return math_ops.exp(self._log_abs_determinant())
     result = self._diagonal_operators[0].determinant()
@@ -677,12 +807,25 @@ class LinearOperatorBlockLowerTriangular(linear_operator.LinearOperator):
     return result
 
   def _log_abs_determinant(self):
+    # [FUNCTION DOC]
+    # Returns the sum of the log absolute determinants of the diagonal blocks.
     result = self._diagonal_operators[0].log_abs_determinant()
     for op in self._diagonal_operators[1:]:
       result += op.log_abs_determinant()
     return result
 
   def solve(self, rhs, adjoint=False, adjoint_arg=False, name="solve"):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: a non-blockwise rhs is split using the block domain dimensions regardless of
+    # adjoint (range sizes expected), valid only because diagonal blocks are square; blockwise
+    # rhs lists are also mutated in place by writing converted tensors back into them.
+    # Solves the system by block substitution. If rhs is an operator, checks dimension
+    # compatibility (ValueError) and returns an operator solve. Otherwise rhs (tensor or list of
+    # block tensors, optionally hermitian-transposed via adjoint_arg) is split into blocks.
+    # Forward case: top to bottom, subtract the products of off-diagonal blocks with earlier
+    # solutions, then solve with the diagonal block. Adjoint case: bottom to top similarly.
+    # Returns a tensor (concatenated, batch-broadcast) or a list for blockwise input. Raises
+    # NotImplementedError if the operator is known singular or known non-square.
     """Solve (exact or approx) `R` (batch) systems of equations: `A X = rhs`.
 
     The returned `Tensor` will be close to an exact solution if `A` is well
@@ -860,6 +1003,12 @@ class LinearOperatorBlockLowerTriangular(linear_operator.LinearOperator):
       return array_ops.concat(solution_list, axis=-2)
 
   def solvevec(self, rhs, adjoint=False, name="solve"):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the default name scope is "solve" rather than "solvevec", and the docstring's
+    # NotImplementedError is raised only indirectly by solve. Blockwise lists passed in are
+    # mutated in place.
+    # Solves for a vector (or list of per-block vectors): adds a trailing axis, calls solve, and
+    # squeezes the axis. adjoint solves with the adjoint operator. Returns a tensor or list.
     """Solve single equation with best effort: `A X = rhs`.
 
     The returned `Tensor` will be close to an exact solution if `A` is well
@@ -924,6 +1073,9 @@ class LinearOperatorBlockLowerTriangular(linear_operator.LinearOperator):
       return array_ops.squeeze(solution_mat, axis=-1)
 
   def _diag_part(self):
+    # [FUNCTION DOC]
+    # Returns the main diagonal of the combined operator by concatenating the diagonals of the
+    # diagonal blocks (after batch broadcasting); off-diagonal blocks do not contribute.
     diag_list = []
     for op in self._diagonal_operators:
       # Extend the axis, since `broadcast_matrix_batch_dims` treats all but the
@@ -934,12 +1086,19 @@ class LinearOperatorBlockLowerTriangular(linear_operator.LinearOperator):
     return array_ops.squeeze(diagonal, axis=-1)
 
   def _trace(self):
+    # [FUNCTION DOC]
+    # Returns the trace, the sum of the traces of the diagonal blocks.
     result = self._diagonal_operators[0].trace()
     for op in self._diagonal_operators[1:]:
       result += op.trace()
     return result
 
   def _to_dense(self):
+    # [FUNCTION DOC]
+    # Builds the dense matrix: densifies every block, broadcasts batch dimensions across all of
+    # them, regroups the flat list into rows (row i has i+1 blocks), pads each row on the right
+    # with zeros up to the full width, concatenates each row along columns, then all rows along
+    # rows, and sets the static shape. Returns a dense tensor; graph ops only.
     num_cols = 0
     dense_rows = []
     flat_broadcast_operators = linear_operator_util.broadcast_matrix_batch_dims(
@@ -964,10 +1123,16 @@ class LinearOperatorBlockLowerTriangular(linear_operator.LinearOperator):
     return mat
 
   def _assert_non_singular(self):
+    # [FUNCTION DOC]
+    # Returns a grouped op asserting every diagonal block is non-singular (sufficient and
+    # necessary for the triangular operator to be non-singular).
     return control_flow_ops.group([
         op.assert_non_singular() for op in self._diagonal_operators])
 
   def _eigvals(self):
+    # [FUNCTION DOC]
+    # Returns the eigenvalues, which for a block triangular matrix are those of the diagonal
+    # blocks: concatenates each diagonal block's eigenvalues after batch broadcasting.
     eig_list = []
     for op in self._diagonal_operators:
       # Extend the axis for broadcasting.
@@ -978,9 +1143,15 @@ class LinearOperatorBlockLowerTriangular(linear_operator.LinearOperator):
 
   @property
   def _composite_tensor_fields(self):
+    # [FUNCTION DOC]
+    # HELPER: composite-tensor support. Returns the tuple of constructor argument names holding
+    # tensor-like parts: just the operators structure.
     return ("operators",)
 
   @property
   def _experimental_parameter_ndims_to_matrix_ndims(self):
+    # [FUNCTION DOC]
+    # HELPER: composite-tensor/batching support. Returns a mapping from the operators parameter
+    # to a nested structure mirroring the operators with zero at each leaf (no extra dimensions).
     # None of the operators contribute to the matrix shape.
     return {"operators": nest.map_structure(lambda _: 0, self.operators)}
