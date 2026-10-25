@@ -1,3 +1,15 @@
+# [MODULE DOC]
+# Implementation module for the public linear algebra API (the linalg namespace). It defines
+# aliases to existing kernels and wrappers (band_part, cholesky, det, diag, eigh, eye, inv, lu,
+# lstsq, norm, qr, solve, svd, tensordot, trace, transpose, triangular_solve and others), and
+# registers slogdet and logm for export with dispatch support at import time. It also implements
+# pure-Python graph-building functions on top of the generated ops: log-determinant, adjoint,
+# matrix exponential (scaling and squaring with Pade approximants), banded and tridiagonal solves
+# and multiplication, matrix rank, pseudo-inverse, LU solve / inverse / reconstruct, and the
+# eigenvalues and eigenvectors of Hermitian tridiagonal matrices (Sturm bisection plus inverse
+# iteration). Import-time side effects are limited to the export and dispatch registrations.
+# Not a helper module: it is the main implementation behind the public linalg symbols.
+#
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -68,6 +80,13 @@ triangular_solve = linalg_ops.matrix_triangular_solve
 @tf_export('linalg.logdet')
 @dispatch.add_dispatch_support
 def logdet(matrix, name=None):
+  # [FUNCTION DOC]
+  # Computes the natural log of the determinant of one or more Hermitian positive definite
+  # matrices via the Cholesky factorization: twice the sum of the logs of the real parts of the
+  # Cholesky factor's diagonal, reduced over the last axis. Inputs: matrix, a tensor of shape
+  # batch by M by M with a float or complex dtype; name, optional op-scope name (default logdet).
+  # Returns a tensor of the batch shape. The underlying Cholesky op fails at run time for matrices
+  # that are not positive definite; there is no explicit validation here. No side effects.
   """Computes log of the determinant of a hermitian positive definite matrix.
 
   ```python
@@ -102,6 +121,13 @@ def logdet(matrix, name=None):
 @tf_export('linalg.adjoint')
 @dispatch.add_dispatch_support
 def adjoint(matrix, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the input must have shape batch by M by M, but the code only
+  # transposes the last two axes, so non-square matrices (M by N) work as well.
+  # Returns the conjugate transpose of the last two dimensions of the input. Inputs: matrix, any
+  # tensor-like value with at least two dimensions (converted to a tensor); name, optional
+  # op-scope name. Output: tensor with the last two dimensions swapped and values conjugated
+  # (conjugation is a no-op for real dtypes). No side effects.
   """Transposes the last two dimensions of and conjugates tensor `matrix`.
 
   For example:
@@ -131,6 +157,11 @@ def adjoint(matrix, name=None):
 # This section is ported nearly verbatim from Eigen's implementation:
 # https://eigen.tuxfamily.org/dox/unsupported/MatrixExponential_8h_source.html
 def _matrix_exp_pade3(matrix):
+  # [FUNCTION DOC]
+  # HELPER: building block of matrix_exponential (Pade approximation, order 3).
+  # Takes a batch of square matrices and returns a pair of tensors (numerator odd part u and
+  # denominator even part v) such that the exponential is approximately the solve of (v - u)
+  # against (v + u). Uses fixed Eigen-derived coefficients cast to the input dtype. No side effects.
   """3rd-order Pade approximant for matrix exponential."""
   b = [120.0, 60.0, 12.0]
   b = [constant_op.constant(x, matrix.dtype) for x in b]
@@ -146,6 +177,11 @@ def _matrix_exp_pade3(matrix):
 
 
 def _matrix_exp_pade5(matrix):
+  # [FUNCTION DOC]
+  # HELPER: building block of matrix_exponential (Pade approximation, order 5).
+  # Same contract as the order 3 variant: takes a batch of square matrices and returns the pair
+  # (u, v) of odd and even polynomial parts, computed from powers 2 and 4 of the input and the
+  # order 5 coefficients. No side effects.
   """5th-order Pade approximant for matrix exponential."""
   b = [30240.0, 15120.0, 3360.0, 420.0, 30.0]
   b = [constant_op.constant(x, matrix.dtype) for x in b]
@@ -162,6 +198,11 @@ def _matrix_exp_pade5(matrix):
 
 
 def _matrix_exp_pade7(matrix):
+  # [FUNCTION DOC]
+  # HELPER: building block of matrix_exponential (Pade approximation, order 7).
+  # Takes a batch of square matrices and returns the pair (u, v) of odd and even polynomial parts
+  # built from powers 2, 4 and 6 of the input with the order 7 coefficients. For single precision
+  # types the caller passes an input already scaled down by a power of two. No side effects.
   """7th-order Pade approximant for matrix exponential."""
   b = [17297280.0, 8648640.0, 1995840.0, 277200.0, 25200.0, 1512.0, 56.0]
   b = [constant_op.constant(x, matrix.dtype) for x in b]
@@ -179,6 +220,11 @@ def _matrix_exp_pade7(matrix):
 
 
 def _matrix_exp_pade9(matrix):
+  # [FUNCTION DOC]
+  # HELPER: building block of matrix_exponential (Pade approximation, order 9).
+  # Takes a batch of square matrices and returns the pair (u, v) of odd and even polynomial parts
+  # built from powers 2, 4, 6 and 8 of the input with the order 9 coefficients. Used only for
+  # double precision types. No side effects.
   """9th-order Pade approximant for matrix exponential."""
   b = [
       17643225600.0, 8821612800.0, 2075673600.0, 302702400.0, 30270240.0,
@@ -204,6 +250,11 @@ def _matrix_exp_pade9(matrix):
 
 
 def _matrix_exp_pade13(matrix):
+  # [FUNCTION DOC]
+  # HELPER: building block of matrix_exponential (Pade approximation, order 13).
+  # Takes a batch of square matrices and returns the pair (u, v) of odd and even polynomial parts
+  # built from powers 2, 4 and 6 of the input with the order 13 coefficients. Used only for double
+  # precision types, applied to the input scaled down by a power of two. No side effects.
   """13th-order Pade approximant for matrix exponential."""
   b = [
       64764752532480000.0, 32382376266240000.0, 7771770303897600.0,
@@ -232,6 +283,19 @@ def _matrix_exp_pade13(matrix):
 @tf_export('linalg.expm')
 @dispatch.add_dispatch_support
 def matrix_exponential(input, name=None):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # Computes the exponential of a batch of square matrices using scaling and squaring with Pade
+  # approximants (Higham 2005). Inputs: input, tensor-like of shape batch by M by M with dtype
+  # float16, float32, float64, complex64 or complex128; name, optional op-scope name. Behavior: an
+  # empty (0 by 0) matrix is returned unchanged. The batch is flattened, the maximum column-sum
+  # one-norm per matrix is computed, and for each matrix the Pade order is chosen by norm
+  # thresholds (3, 5, 7 for single precision types; 3, 5, 7, 9, 13 for double precision) using
+  # nested selection. The scaled approximant is solved as a linear system, then squared repeatedly
+  # in a loop up to the largest needed number of squarings, with each matrix squared only while
+  # its own count is not exhausted. If the largest norm is not finite the result is filled with
+  # not-a-number values. The result is reshaped back to the original batch shape (dynamic shape
+  # used when not fully known). Raises a value error for unsupported dtypes. Creates graph ops
+  # (including a while loop and conditionals); no other side effects.
   r"""Computes the matrix exponential of one or more square matrices.
 
   $$exp(A) = \sum_{n=0}^\infty A^n/n!$$
@@ -280,6 +344,12 @@ def matrix_exponential(input, name=None):  # pylint: disable=redefined-builtin
     const = lambda x: constant_op.constant(x, l1_norm.dtype)
 
     def _nest_where(vals, cases):
+      # [FUNCTION DOC]
+      # HELPER: per-matrix selection of the Pade result inside matrix_exponential.
+      # Given ascending norm thresholds (vals) and one more candidate tensors (cases), builds a
+      # recursive chain that picks the first candidate whose threshold exceeds the matrix's
+      # one-norm and the last candidate otherwise. Asserts the length relation between the two
+      # lists. Reads the enclosing one-norm and constant helper. Returns the selected tensor.
       assert len(vals) == len(cases) - 1
       if len(vals) == 1:
         return array_ops.where_v2(
@@ -331,11 +401,21 @@ def matrix_exponential(input, name=None):  # pylint: disable=redefined-builtin
     i = const(0.0)
 
     def c(i, _):
+      # [FUNCTION DOC]
+      # HELPER: loop condition of the repeated-squaring while loop in matrix_exponential.
+      # Arguments: the iteration counter i and the (ignored) current result. Returns a boolean
+      # scalar: true only if all norms were finite and i is below the maximum squaring count;
+      # otherwise false (so a non-finite input skips squaring entirely).
       return tf_cond.cond(is_finite,
                           lambda: math_ops.less(i, max_squarings),
                           lambda: constant_op.constant(False))
 
     def b(i, r):
+      # [FUNCTION DOC]
+      # HELPER: loop body of the repeated-squaring while loop in matrix_exponential.
+      # Arguments: iteration counter i and the current batch of results r. Returns the incremented
+      # counter and r, where each matrix is replaced by its square only if i is below that
+      # matrix's own required squaring count, otherwise left unchanged.
       return i + 1, array_ops.where_v2(
           math_ops.less(i, squarings), math_ops.matmul(r, r), r)
 
@@ -354,6 +434,16 @@ def banded_triangular_solve(
     lower=True,
     adjoint=False,  # pylint: disable=redefined-outer-name
     name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring describes rhs as having the same dtype as `diagonals`, but there is
+  # no such parameter; the banded matrix argument is named bands.
+  # Solves triangular systems whose matrix is given in banded storage (cuSPARSE style left-right
+  # aligned bands). Inputs: bands, tensor of shape batch by K by M holding the K stored diagonals;
+  # rhs, tensor of shape batch by M or batch by M by N with the same dtype; lower, boolean
+  # (default true) saying whether bands is a lower or upper triangular matrix; adjoint, boolean
+  # (default false) to solve with the adjoint; name, optional op-scope name. Batch dimensions
+  # broadcast. Returns the solution tensor with the shape of rhs. Delegates to the generated
+  # banded triangular solve op; invalid shapes surface as errors from that op. No side effects.
   r"""Solve triangular systems of equations with a banded solver.
 
   `bands` is a tensor of shape `[..., K, M]`, where `K` represents the number
@@ -453,6 +543,21 @@ def tridiagonal_solve(diagonals,
                       name=None,
                       partial_pivoting=True,
                       perturb_singular=False):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: in the matrix format branch the local variable m is computed but never used
+  # (dead code); also the docstring says a value error is raised for unsupported dtypes, but no
+  # dtype check happens here (it is left to the op).
+  # Solves tridiagonal linear systems given in one of three layouts. Inputs: diagonals, either a
+  # tensor (matrix format: batch by M by M; compact format: batch by 3 by M) or a list/tuple of
+  # three tensors (sequence format: super, main, sub diagonals); rhs, tensor of shape batch by M
+  # or batch by M by K; diagonals_format, one of matrix, sequence or compact (default compact);
+  # transpose_rhs and conjugate_rhs, booleans (default false); name, optional; partial_pivoting,
+  # boolean (default true); perturb_singular, boolean (default false). The sequence format pads
+  # super/sub diagonals of length M-1 with a zero and stacks them; the matrix format extracts the
+  # three diagonals with left-right alignment; then all paths delegate to the compact-format
+  # helper. Returns the solution with the shape of rhs. Raises a value error if perturb_singular
+  # is set without partial pivoting, if a sequence is not of length three, if shapes are
+  # inconsistent, or if the format name is unrecognized. No side effects.
   r"""Solves tridiagonal systems of equations.
 
   The input can be supplied in various formats: `matrix`, `sequence` and
@@ -582,6 +687,12 @@ def tridiagonal_solve(diagonals,
     m = tensor_shape.dimension_value(maindiag.shape[-1])
 
     def pad_if_necessary(t, name, last_dim_padding):
+      # [FUNCTION DOC]
+      # HELPER: normalizes the length of a diagonal in tridiagonal_solve's sequence format.
+      # Arguments: t, a diagonal tensor; name, a label used in error text (shadows the outer op
+      # name locally); last_dim_padding, a pair of before/after pad amounts for the last axis.
+      # Returns t unchanged if its last length is unknown, zero or equals the main diagonal
+      # length m; pads it by one element if its length is m-1; otherwise raises a value error.
       n = tensor_shape.dimension_value(t.shape[-1])
       if not n or n == m:
         return t
@@ -620,6 +731,13 @@ def tridiagonal_solve(diagonals,
 def _tridiagonal_solve_compact_format(diagonals, rhs, transpose_rhs,
                                       conjugate_rhs, partial_pivoting,
                                       perturb_singular, name):
+  # [FUNCTION DOC]
+  # HELPER: shared back end of tridiagonal_solve once the diagonals are in compact form.
+  # Performs static rank and shape validation when ranks are known (raising value errors for rank
+  # below 2, rank mismatch between rhs and diagonals, incompatible batch shapes, a diagonal count
+  # other than 3, or unequal left/right counts), then handles rhs given as a vector (rank one less
+  # than diagonals: optional conjugation, expand, solve, squeeze; transpose_rhs ignored) or as a
+  # matrix (optional transpose with conjugation, or conjugation only). Returns the solution tensor.
   """Helper function used after the input has been cast to compact form."""
   diags_rank, rhs_rank = diagonals.shape.rank, rhs.shape.rank
 
@@ -641,6 +759,10 @@ def _tridiagonal_solve_compact_format(diagonals, rhs, transpose_rhs,
     raise ValueError('Expected 3 diagonals got {}'.format(diagonals.shape[-2]))
 
   def check_num_lhs_matches_num_rhs():
+    # [FUNCTION DOC]
+    # HELPER: static consistency check inside the compact-format tridiagonal solve helper.
+    # Raises a value error when the known last dimension of diagonals differs from the known
+    # second-to-last dimension of rhs; does nothing if either is unknown. Returns nothing.
     if (diagonals.shape[-1] and rhs.shape[-2] and
         diagonals.shape[-1] != rhs.shape[-2]):
       raise ValueError('Expected number of left-hand sided and right-hand '
@@ -670,6 +792,15 @@ def _tridiagonal_solve_compact_format(diagonals, rhs, transpose_rhs,
 @tf_export('linalg.tridiagonal_matmul')
 @dispatch.add_dispatch_support
 def tridiagonal_matmul(diagonals, rhs, diagonals_format='compact', name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says unsupported types raise a value error and lists only the
+  # sequence and compact formats in Args, but the code also supports the matrix format and does
+  # no dtype check; the only value errors raised are for unequal last two dims and bad format.
+  # Multiplies a tridiagonal matrix by a dense matrix. Inputs: diagonals in compact (batch by 3
+  # by M), sequence (list of three tensors) or matrix (batch by M by M) format; rhs of shape batch
+  # by M by N; diagonals_format (default compact); name, optional. The three diagonals are
+  # extracted, each given an extra row dimension (the backend needs matrices) and passed to the
+  # tridiagonal multiply op. Returns a tensor of shape batch by M by N.
   r"""Multiplies tridiagonal matrix by matrix.
 
   `diagonals` is representation of 3-diagonal NxN matrix, which depends on
@@ -749,6 +880,12 @@ def tridiagonal_matmul(diagonals, rhs, diagonals_format='compact', name=None):
 
 
 def _maybe_validate_matrix(a, validate_args):
+  # [FUNCTION DOC]
+  # HELPER: input validation for matrix_rank and pinv.
+  # Raises a type error if the tensor dtype is not floating point (complex counts as not
+  # floating here, so complex inputs are rejected). If the rank is statically known it raises a
+  # value error for rank below 2; otherwise, when validate_args is true, it returns a list with
+  # a graph assertion on rank. Returns a (possibly empty) list of assertion ops.
   """Checks that input is a `float` matrix."""
   assertions = []
   if not a.dtype.is_floating:
@@ -768,6 +905,15 @@ def _maybe_validate_matrix(a, validate_args):
 @tf_export('linalg.matrix_rank')
 @dispatch.add_dispatch_support
 def matrix_rank(a, tol=None, validate_args=False, name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring for a says the matrices are "to be pseudo-inverted", a copy-paste
+  # from pinv; this function counts singular values above a tolerance and inverts nothing.
+  # Computes the numerical rank of one or more matrices. Inputs: a, float matrix or batch of
+  # matrices (converted with a float32 hint); tol, optional threshold (default: machine epsilon
+  # times the larger matrix dimension times the largest singular value, per matrix); validate_args,
+  # boolean adding rank assertions as control dependencies; name, optional scope name. Computes
+  # singular values only, then counts those above the tolerance. Returns an int32 tensor of the
+  # batch shape. Raises type or value errors for non-float or rank-below-2 input.
   """Compute the matrix rank of one or more matrices.
 
   Args:
@@ -807,6 +953,16 @@ def matrix_rank(a, tol=None, validate_args=False, name=None):
 @tf_export('linalg.pinv')
 @dispatch.add_dispatch_support
 def pinv(a, rcond=None, validate_args=False, name=None):
+  # [FUNCTION DOC]
+  # Computes the Moore-Penrose pseudo-inverse of one or more matrices using the thin singular
+  # value decomposition. Inputs: a, float matrix or batch; rcond, optional cutoff tensor (default
+  # ten times the larger dimension times machine epsilon) that must broadcast against the batch
+  # shape; validate_args, boolean to add rank assertions; name, optional scope name. Singular
+  # values at or below rcond times the largest one are replaced by infinity so their reciprocal
+  # is zero without producing not-a-number gradients. The result is right vectors divided by the
+  # singular values, times the adjoint of the left vectors. Returns a tensor with the last two
+  # dimensions swapped (static shape set when the rank is known). Raises a type error for
+  # non-float input and a value error for rank below 2.
   """Compute the Moore-Penrose pseudo-inverse of one or more matrices.
 
   Calculate the [generalized inverse of a matrix](
@@ -888,6 +1044,10 @@ def pinv(a, rcond=None, validate_args=False, name=None):
     if rcond is None:
 
       def get_dim_size(dim):
+        # [FUNCTION DOC]
+        # HELPER: dimension lookup for the default rcond computation in pinv.
+        # Argument: dim, an axis index into the shape of a. Returns the static size as a number
+        # when known, otherwise a dynamic scalar tensor read from the runtime shape.
         dim_val = tensor_shape.dimension_value(a.shape[dim])
         if dim_val is not None:
           return dim_val
@@ -937,6 +1097,14 @@ def pinv(a, rcond=None, validate_args=False, name=None):
 @tf_export('linalg.lu_solve')
 @dispatch.add_dispatch_support
 def lu_solve(lower_upper, perm, rhs, validate_args=False, name=None):
+  # [FUNCTION DOC]
+  # Solves A X = RHS given the packed LU factorization from the lu op. Inputs: lower_upper, the
+  # packed factors (lower plus upper minus identity); perm, the permutation vector(s); rhs, matrix
+  # shaped targets; validate_args, boolean enabling extra assertions (invertibility is never
+  # checked); name, optional scope name. The rhs rows are permuted (a simple gather when both
+  # have no batch dimensions, otherwise broadcast batch shapes, flatten and gather with batch
+  # indices), then two triangular solves are applied: unit lower, then upper. Returns X. Raises
+  # value errors for static shape problems from the assertion helper.
   """Solves systems of linear eqns `A X = RHS`, given LU factorizations.
 
   Note: this function does not verify the implied matrix is actually invertible
@@ -1035,6 +1203,12 @@ def lu_solve(lower_upper, perm, rhs, validate_args=False, name=None):
 @tf_export('linalg.lu_matrix_inverse')
 @dispatch.add_dispatch_support
 def lu_matrix_inverse(lower_upper, perm, validate_args=False, name=None):
+  # [FUNCTION DOC]
+  # Computes matrix inverses from packed LU factorizations. Inputs: lower_upper and perm as
+  # produced by the lu op; validate_args, boolean enabling extra assertions (invertibility is not
+  # checked); name, optional scope name. Validates via the reconstruct assertion helper, then
+  # solves against an identity matrix of matching batch shape and dtype using the LU solve
+  # (without repeating validation). Returns the inverse tensor with the shape of lower_upper.
   """Computes the inverse given the LU decomposition(s) of one or more matrices.
 
   This op is conceptually identical to,
@@ -1100,6 +1274,13 @@ def lu_matrix_inverse(lower_upper, perm, validate_args=False, name=None):
 @tf_export('linalg.lu_reconstruct')
 @dispatch.add_dispatch_support
 def lu_reconstruct(lower_upper, perm, validate_args=False, name=None):
+  # [FUNCTION DOC]
+  # Rebuilds the original matrices from packed LU factors. Inputs: lower_upper (lower plus upper
+  # minus identity), perm (permutation vectors), validate_args (boolean for extra assertions),
+  # name (optional scope name). Splits the packed matrix into a unit lower and an upper triangle,
+  # multiplies them, then undoes the row permutation: via inverted permutation and gather for
+  # an unbatched matrix, or flattening the batch, mapping the permutation inversion over it and
+  # gathering with batch indices otherwise. Returns a tensor with the static shape of lower_upper.
   """The reconstruct one or more matrices from their LU decomposition(s).
 
   Args:
@@ -1172,6 +1353,12 @@ def lu_reconstruct(lower_upper, perm, validate_args=False, name=None):
 
 
 def lu_reconstruct_assertions(lower_upper, perm, validate_args):
+  # [FUNCTION DOC]
+  # HELPER: argument validation shared by lu_reconstruct, lu_matrix_inverse and lu_solve.
+  # Checks that lower_upper has rank at least 2, that its rank is one more than the rank of perm,
+  # and that its last two dimensions are equal. Statically known violations raise a value error;
+  # when unknown and validate_args is true, graph assertions are collected instead. Returns a
+  # list of assertion ops (possibly empty).
   """Returns list of assertions related to `lu_reconstruct` assumptions."""
   assertions = []
 
@@ -1204,6 +1391,13 @@ def lu_reconstruct_assertions(lower_upper, perm, validate_args):
 
 
 def _lu_solve_assertions(lower_upper, perm, rhs, validate_args):
+  # [FUNCTION DOC]
+  # HELPER: argument validation for lu_solve.
+  # KNOWN ISSUE: the error and assertion message says lower_upper.shape[-1] must equal
+  # rhs.shape[-1], but the code actually compares it with rhs.shape[-2].
+  # Starts from the reconstruct assertions, then checks that rhs has rank at least 2 and that
+  # the matrix size matches rhs's row count. Static violations raise value errors; unknown
+  # shapes with validate_args true produce graph assertions. Returns a list of assertion ops.
   """Returns list of assertions related to `lu_solve` assumptions."""
   assertions = lu_reconstruct_assertions(lower_upper, perm, validate_args)
 
@@ -1238,6 +1432,19 @@ def eigh_tridiagonal(alpha,
                      select_range=None,
                      tol=None,
                      name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring claims computing eigenvectors (eigvals_only false) is not
+  # implemented, but it is implemented via inverse iteration. Also, when the matrix has one or
+  # zero diagonal entries the function returns only the real part of alpha even if eigenvectors
+  # were requested, and the select option value check error message has unbalanced quotes.
+  # Computes eigenvalues (and optionally eigenvectors) of a real symmetric or complex Hermitian
+  # tridiagonal matrix. Inputs: alpha, diagonal of length n (imaginary part ignored); beta, first
+  # super-diagonal of length n-1 (same dtype as alpha, otherwise a value error); eigvals_only,
+  # default true; select, one of a (all), i (index range) or v (value interval), default a;
+  # select_range, two-element range for i or v; tol, optional absolute tolerance; name, optional.
+  # Eigenvalues come from parallel bisection using Sturm sequence counts, and eigenvectors from
+  # inverse iteration with tridiagonal solves, using a fixed random seed. Returns eigenvalues
+  # in non-decreasing order, or a pair of eigenvalues and eigenvectors. No batch support.
   """Computes the eigenvalues of a Hermitian tridiagonal matrix.
 
   Args:
@@ -1300,9 +1507,24 @@ def eigh_tridiagonal(alpha,
   with ops.name_scope(name or 'eigh_tridiagonal'):
 
     def _compute_eigenvalues(alpha, beta):
+      # [FUNCTION DOC]
+      # HELPER: eigenvalue stage of eigh_tridiagonal.
+      # Takes the diagonal and super-diagonal. Bounds the spectrum with the Gershgorin circle
+      # theorem, derives a safe minimum pivot and absolute tolerance, selects the target
+      # eigenvalue indices from select and select_range (with assertions for empty ranges and a
+      # value error for an invalid select), then runs parallel bisection in a while loop up to
+      # mantissa-bits-plus-one steps, counting eigenvalues below midpoints with a Sturm sequence.
+      # Returns the midpoint estimates of the selected eigenvalues. Reads enclosing select, tol.
       """Computes all eigenvalues of a Hermitian tridiagonal matrix."""
 
       def _sturm(alpha, beta_sq, pivmin, alpha0_perturbation, x):
+        # [FUNCTION DOC]
+        # HELPER: Sturm sequence counter for the bisection in _compute_eigenvalues.
+        # For each trial point in x, counts how many eigenvalues are below it using the Sturm
+        # recurrence over the diagonal and squared off-diagonal, with pivots floored by pivmin
+        # and an initial perturbation when x equals the first diagonal entry. The first
+        # steps are peeled off so the rest run in a partially unrolled loop (block of 16).
+        # Returns an int32 count tensor shaped like x. Gradients are disabled for the loop.
         """Implements the Sturm sequence recurrence."""
         with ops.name_scope('sturm'):
           n = alpha.shape[0]
@@ -1312,6 +1534,11 @@ def eigh_tridiagonal(alpha,
           # The first step in the Sturm sequence recurrence
           # requires special care if x is equal to alpha[0].
           def sturm_step0():
+            # [FUNCTION DOC]
+            # HELPER: first step of the Sturm recurrence in _sturm.
+            # Computes q as the first diagonal entry minus x, counts one where q is negative,
+            # and replaces q by the small perturbation where x equals the first entry exactly.
+            # Returns the pair (q, count), both shaped like x.
             q = alpha[0] - x
             count = array_ops.where(q < 0, ones, zeros)
             q = array_ops.where(
@@ -1320,6 +1547,11 @@ def eigh_tridiagonal(alpha,
 
           # Subsequent steps all take this form:
           def sturm_step(i, q, count):
+            # [FUNCTION DOC]
+            # HELPER: one later step of the Sturm recurrence in _sturm.
+            # Arguments: index i, previous q and running count. Updates q using the diagonal and
+            # squared off-diagonal entries, increments the count where q is at or below the
+            # minimum pivot, and clamps such q to a negative pivot floor. Returns (q, count).
             q = alpha[i] - beta_sq[i - 1] / q - x
             count = array_ops.where(q <= pivmin, count + 1, count)
             q = array_ops.where(q <= pivmin, math_ops.minimum(q, -pivmin), q)
@@ -1336,6 +1568,12 @@ def eigh_tridiagonal(alpha,
           unroll_cnt = peel
 
           def unrolled_steps(start, q, count):
+            # [FUNCTION DOC]
+            # HELPER: runs a fixed block of Sturm steps for _sturm, both for the peeled
+            # remainder and as the while-loop body.
+            # Arguments: start index, q, count. Applies the Sturm step the number of times given
+            # by the enclosing unroll count (read when called, so it changes after peeling).
+            # Returns the advanced index plus updated q and count.
             for j in range(unroll_cnt):
               q, count = sturm_step(start + j, q, count)
             return start + unroll_cnt, q, count
@@ -1440,14 +1678,27 @@ def eigh_tridiagonal(alpha,
         # (lower + upper) or (upper - lower) when the matrix has eigenvalues
         # with magnitude greater than finfo.max / 2.
         def midpoint(lower, upper):
+          # [FUNCTION DOC]
+          # HELPER: bisection midpoint for _compute_eigenvalues.
+          # Returns half of lower plus half of upper, avoiding overflow of the plain sum or
+          # difference for very large eigenvalue magnitudes.
           return (0.5 * lower) + (0.5 * upper)
 
         def continue_binary_search(i, lower, upper):
+          # [FUNCTION DOC]
+          # HELPER: while-loop condition for the bisection in _compute_eigenvalues.
+          # Returns a boolean scalar that is true while the step count is below the maximum
+          # iterations and the widest remaining interval exceeds the absolute tolerance.
           return math_ops.logical_and(
               math_ops.less(i, max_it),
               math_ops.less(abs_tol, math_ops.reduce_max(upper - lower)))
 
         def binary_search_step(i, lower, upper):
+          # [FUNCTION DOC]
+          # HELPER: while-loop body for the bisection in _compute_eigenvalues.
+          # Evaluates the Sturm count at each midpoint; where the count is at most the target
+          # count the lower bound moves up to the midpoint, otherwise the upper bound moves down.
+          # Returns the incremented step counter and the new lower and upper bounds.
           mid = midpoint(lower, upper)
           counts = _sturm(alpha, beta_sq, pivmin, alpha0_perturbation, mid)
           lower = array_ops.where(counts <= target_counts, mid, lower)
@@ -1461,6 +1712,14 @@ def eigh_tridiagonal(alpha,
         return midpoint(lower, upper)
 
     def _compute_eigenvectors(alpha, beta, eigvals):
+      # [FUNCTION DOC]
+      # HELPER: eigenvector stage of eigh_tridiagonal.
+      # Inputs: diagonal alpha, super-diagonal beta, and the sorted eigenvalues. Finds clusters
+      # of nearly equal eigenvalues (gap below the square root of machine epsilon times the
+      # spectral norm), starts from normalized random vectors (fixed seed), and runs inverse
+      # iteration for all eigenvalues in parallel using batched tridiagonal solves of the shifted
+      # matrix, renormalizing and orthogonalizing clusters each step, for at most five steps or
+      # until norm growth drops below ten percent. Returns the eigenvectors as columns.
       """Implements inverse iteration to compute eigenvectors."""
       with ops.name_scope('compute_eigenvectors'):
         k = array_ops.size(eigvals)
@@ -1513,6 +1772,11 @@ def eigh_tridiagonal(alpha,
         diags = [beta, alpha_shifted, math_ops.conj(beta)]
 
         def orthogonalize_close_eigenvectors(eigenvectors):
+          # [FUNCTION DOC]
+          # HELPER: cluster orthogonalization for _compute_eigenvectors.
+          # Takes the current eigenvector rows and loops over each cluster of close eigenvalues,
+          # replacing its vectors by an orthonormal basis of their span from a QR factorization.
+          # Returns the updated eigenvector matrix.
           # Eigenvectors corresponding to a cluster of close eigenvalues are not
           # uniquely defined, but the subspace they span is. To avoid numerical
           # instability, we explicitly mutually orthogonalize such eigenvectors
@@ -1521,6 +1785,10 @@ def eigh_tridiagonal(alpha,
           # on some platforms, so here we defer to the QR decomposition in
           # TensorFlow.
           def orthogonalize_cluster(cluster_idx, eigenvectors):
+            # [FUNCTION DOC]
+            # HELPER: loop body orthogonalizing one cluster of close eigenvectors.
+            # Slices the rows of the cluster, orthonormalizes them with QR on the transpose, and
+            # scatters them back. Returns the next cluster index and the updated eigenvectors.
             start = ortho_interval_start[cluster_idx]
             end = ortho_interval_end[cluster_idx]
             update_indices = array_ops.expand_dims(
@@ -1540,6 +1808,10 @@ def eigh_tridiagonal(alpha,
           return eigenvectors
 
         def continue_iteration(i, _, nrm_v, nrm_v_old):
+          # [FUNCTION DOC]
+          # HELPER: while-loop condition of the inverse iteration in _compute_eigenvectors.
+          # The vector argument is ignored. Returns true while fewer than five iterations (the
+          # LAPACK limit) have run and at least one vector's norm grew by ten percent or more.
           max_it = 5  # Taken from LAPACK xSTEIN.
           min_norm_growth = 0.1
           norm_growth_factor = constant_op.constant(
@@ -1554,6 +1826,11 @@ def eigh_tridiagonal(alpha,
                       math_ops.real(norm_growth_factor * nrm_v_old))))
 
         def inverse_iteration_step(i, v, nrm_v, nrm_v_old):
+          # [FUNCTION DOC]
+          # HELPER: while-loop body of the inverse iteration in _compute_eigenvectors.
+          # Solves the shifted tridiagonal systems (sequence format, with pivoting and singular
+          # perturbation), records the old norms, normalizes, and orthogonalizes close clusters.
+          # Returns the incremented counter, new vectors, new norms and previous norms.
           v = tridiagonal_solve(
               diags,
               v,
