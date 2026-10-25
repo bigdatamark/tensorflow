@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Gradient functions for the array manipulation operations defined in array_ops.py (and the
+# generated array/resource ops): packing, concatenation, slicing, splitting, diagonal ops,
+# gather/scatter, reshape/transpose, padding, space/depth/batch rearrangements, patch extraction,
+# quantize-and-dequantize and broadcast. Each gradient takes the forward operation plus the
+# incoming gradient(s) and returns one gradient (or nothing/null value) per op input.
+# Importing the module has the side effect of registering these functions in the global gradient
+# registry (by op type name) and marking several ops (shape queries, constants, one-hot, etc.) as
+# not differentiable. It exposes no public API of its own; it is used by the autodiff machinery.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -38,6 +47,10 @@ from tensorflow.python.ops import sparse_ops
 
 @ops.RegisterGradient("Pack")
 def _PackGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of the Pack (stack) op. Takes the forward op (its attributes give the number of
+  # packed inputs and the stacking axis) and the gradient of the packed output. Returns the
+  # gradient unstacked along that axis, one tensor per original input.
   """Gradient for pack op."""
   return array_ops_stack.unstack(
       grad, num=op.get_attr("N"), axis=op.get_attr("axis")
@@ -46,6 +59,9 @@ def _PackGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Unpack")
 def _UnpackGrad(op: ops.Operation, *grads):
+  # [FUNCTION DOC]
+  # Gradient of the Unpack (unstack) op. Takes the forward op and one gradient per output, and
+  # returns a single tensor made by stacking those gradients along the op's axis attribute.
   """Gradient for unpack op."""
   return array_ops_stack.stack(grads, axis=op.get_attr("axis"))
 
@@ -53,6 +69,24 @@ def _UnpackGrad(op: ops.Operation, *grads):
 def _ConcatGradHelper(
     op: ops.Operation, grad, start_value_index, end_value_index, dim_index
 ):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation behind the Concat and ConcatV2 gradient functions.
+  # KNOWN ISSUE: in the degenerate case of exactly two op inputs (one value plus the axis) the
+  # code does list concatenation with the gradient, which only works if grad is already a list;
+  # a plain tensor or sparse-slices gradient would fail or misbehave there, despite the docstring
+  # saying it accepts those types. Also the docstring's description of start/end indices is
+  # loose: the end index may be -1 (meaning exclude the last input) for ConcatV2.
+  # Splits the gradient of a concatenation back into per-input gradients. Inputs: the forward
+  # op; grad, a dense tensor or sparse indexed-slices gradient of the output; the slice of op
+  # inputs holding the concatenated values (start and end index) and the position of the axis
+  # input (dim_index). Returns a list with one gradient per value input plus a null entry for the
+  # axis input (placed first or last depending on dim_index). For dense gradients in eager mode
+  # it uses a native shape-slice helper and splits; in graph mode it uses either a split by sizes
+  # (when more than 16 inputs) or concat-offset plus slices. For sparse gradients it requires a
+  # statically known axis (and static rank if the axis is negative) and builds sparse slices per
+  # input, slicing values for axis > 0 or selecting index ranges for axis 0. Raises a value error
+  # when the axis is not static for sparse gradients, and a type error for other gradient types.
+  # Side effects: may duplicate a constant axis into the current control-flow context for XLA.
   """Gradient for concat op.
 
   Args:
@@ -72,6 +106,11 @@ def _ConcatGradHelper(
   """
 
   def _CreateDenseMaskAndBegin(sizes, concat_dim):
+    # [FUNCTION DOC]
+    # HELPER: used by the sparse-gradient branch of the concat gradient helper.
+    # Builds two integer vectors whose length is the rank of the first input: a mask that is one
+    # at the concat dimension and zero elsewhere, and an all-zero begin vector. Inputs: list of
+    # shape tensors and the non-negative concat dimension. Returns the (mask, begin) pair.
     """Create variables for iteratively slicing a dense gradients tensor."""
     # Since shape is 1-D, shape_of_shape = [rank-of-inputs]
     shape_of_shape = array_ops.shape(sizes[0])
@@ -94,6 +133,11 @@ def _ConcatGradHelper(
     return mask, begin
 
   def _ExtractInputShapes(inputs):
+    # [FUNCTION DOC]
+    # HELPER: used by the dense-gradient branch of the concat gradient helper.
+    # Returns the shapes of the given input tensors. In eager mode, or when any shape is not a
+    # compile-time constant, it returns the result of a single multi-input shape op; otherwise it
+    # returns the list of constant per-input shape tensors. No side effects beyond creating ops.
     """Extract the shapes of a set of input tensors."""
     if context.executing_eagerly():
       return array_ops.shape_n(inputs)
@@ -245,6 +289,10 @@ def _ConcatGradHelper(
 
 @ops.RegisterGradient("Concat")
 def _ConcatGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of the legacy Concat op, where the axis is the first input and the values follow.
+  # Delegates to the shared concat gradient helper with values starting at input 1 and the axis
+  # at input 0. Returns the per-input gradients (null for the axis).
   return _ConcatGradHelper(
       op, grad, start_value_index=1, end_value_index=len(op.inputs), dim_index=0
   )
@@ -252,6 +300,10 @@ def _ConcatGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("ConcatV2")
 def _ConcatGradV2(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of the ConcatV2 op, where the axis is the last input. Delegates to the shared concat
+  # gradient helper with values spanning all inputs except the last and the axis at the last
+  # position. Returns the per-input gradients (null for the axis).
   return _ConcatGradHelper(
       op, grad, start_value_index=0, end_value_index=-1, dim_index=-1
   )
@@ -262,6 +314,12 @@ ops.NotDifferentiable("ConcatOffset")
 
 @ops.RegisterGradient("Slice")
 def _SliceGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of the Slice op. Pads the incoming gradient with zeros before (by the begin vector)
+  # and after (input shape minus slice size minus begin) each dimension to recover the input
+  # shape. When the default graph is in an XLA context it instead writes the gradient into a
+  # zeros tensor with a dynamic update slice. Returns the input gradient plus null for begin and
+  # size inputs.
   """Gradient for Slice op."""
   # Create an Nx2 padding where the first column represents how many
   # zeros are to be prepended for each dimension, and the second
@@ -298,6 +356,11 @@ def _SliceGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("StridedSlice")
 def _StridedSliceGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of the StridedSlice op. Uses the strided-slice-grad op with the input shape, begin,
+  # end and strides (replaced by static constant values when they can be determined, all in the
+  # begin tensor's dtype) and the five mask attributes copied from the forward op. Returns the
+  # input gradient followed by null for begin, end and strides.
   """Gradient for StridedSlice op."""
   begin = op.inputs[1]
   end = op.inputs[2]
@@ -339,6 +402,11 @@ def _StridedSliceGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("StridedSliceGrad")
 def _StridedSliceGradGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of the StridedSliceGrad op (second-order gradient). Applies a strided slice of the
+  # incoming gradient using the forward op's begin, end, strides and mask attributes. Returns
+  # null for the first four inputs (shape, begin, end, strides) and the sliced tensor for the
+  # last input.
   """Gradient for StridedSliceGrad op."""
   begin = op.inputs[1]
   end = op.inputs[2]
@@ -365,6 +433,12 @@ def _StridedSliceGradGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("TensorStridedSliceUpdate")
 def _TensorStridedSliceUpdateGrad(op: ops.Operation, grad):  # pylint:disable=missing-function-docstring
+  # [FUNCTION DOC]
+  # Gradient of the TensorStridedSliceUpdate op. The gradient for the updated value is the
+  # strided slice of the incoming gradient, sum-reduced over broadcast axes and reshaped to the
+  # value's shape (since the value may have been broadcast). The gradient for the base tensor is
+  # the incoming gradient with the sliced region overwritten by zeros. Returns the base gradient,
+  # null for begin, end, strides, and the value gradient.
   begin = op.inputs[1]
   end = op.inputs[2]
   strides = op.inputs[3]
@@ -375,6 +449,9 @@ def _TensorStridedSliceUpdateGrad(op: ops.Operation, grad):  # pylint:disable=mi
   shrink_axis_mask = op.get_attr("shrink_axis_mask")
 
   def Apply(f, *args):
+    # [FUNCTION DOC]
+    # HELPER: calls a strided-slice style function with the forward op's five mask attributes.
+    # Inputs: the function to call and its positional arguments. Returns the function's result.
     return f(
         *args,
         begin_mask=begin_mask,
@@ -410,11 +487,19 @@ def _TensorStridedSliceUpdateGrad(op: ops.Operation, grad):  # pylint:disable=mi
 
 @ops.RegisterGradient("Split")
 def _SplitGrad(op: ops.Operation, *grads):
+  # [FUNCTION DOC]
+  # Gradient of the Split op. Concatenates the per-output gradients along the split dimension
+  # (the op's first input). Returns null for the dimension input and the concatenated gradient
+  # for the value input.
   return None, array_ops.concat(list(grads), op.inputs[0])
 
 
 @ops.RegisterGradient("SplitV")
 def _SplitVGrad(op: ops.Operation, *grads):
+  # [FUNCTION DOC]
+  # Gradient of the SplitV op. Concatenates the per-output gradients along the axis given by the
+  # op's third input. Returns a list whose first entry is the concatenated gradient and whose
+  # remaining entries (size splits and axis) are null.
   returnval = array_ops.concat(list(grads), op.inputs[2])
   returnval = [returnval] + [
       None,
@@ -427,21 +512,34 @@ ops.NotDifferentiable("Const")
 
 @ops.RegisterGradient("Diag")
 def _DiagGrad(_, grad):
+  # [FUNCTION DOC]
+  # Gradient of the Diag op: the diagonal part of the incoming gradient. The forward op is
+  # unused.
   return array_ops.diag_part(grad)
 
 
 @ops.RegisterGradient("DiagPart")
 def _DiagPartGrad(_, grad):
+  # [FUNCTION DOC]
+  # Gradient of the DiagPart op: builds a diagonal tensor from the incoming gradient. The forward
+  # op is unused.
   return array_ops.diag(grad)
 
 
 @ops.RegisterGradient("MatrixDiag")
 def _MatrixDiagGrad(_, grad):
+  # [FUNCTION DOC]
+  # Gradient of the MatrixDiag op: the batched matrix-diagonal part of the incoming gradient.
+  # The forward op is unused.
   return array_ops.matrix_diag_part(grad)
 
 
 @ops.RegisterGradient("MatrixDiagV2")
 def _MatrixDiagV2Grad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of MatrixDiagV2: extracts the diagonal band given by the diagonal-index input from
+  # the incoming gradient. Returns that tensor followed by four null entries for the remaining
+  # inputs (k, num_rows, num_cols, padding value).
   return (
       array_ops.matrix_diag_part(grad, k=op.inputs[1]),
       None,
@@ -453,6 +551,10 @@ def _MatrixDiagV2Grad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("MatrixDiagV3")
 def _MatrixDiagV3Grad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of MatrixDiagV3: like the V2 version but also passes the op's alignment attribute
+  # when extracting the diagonal band from the incoming gradient. Returns that tensor followed by
+  # four null entries for the remaining inputs.
   return (
       array_ops.matrix_diag_part(
           grad, k=op.inputs[1], align=op.get_attr("align")
@@ -466,6 +568,10 @@ def _MatrixDiagV3Grad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("MatrixDiagPart")
 def _MatrixDiagPartGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of MatrixDiagPart. If the last two input dimensions are statically known and equal
+  # (square matrices) it builds a matrix from the gradient's diagonal; otherwise it sets the
+  # diagonal of a zeros tensor shaped like the input to the gradient. Returns that single tensor.
   matrix_shape = op.inputs[0].get_shape()[-2:]
   if matrix_shape.is_fully_defined() and matrix_shape[0] == matrix_shape[1]:
     return array_ops.matrix_diag(grad)
@@ -475,6 +581,11 @@ def _MatrixDiagPartGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("MatrixDiagPartV2")
 def _MatrixDiagPartV2Grad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of MatrixDiagPartV2. With a fully defined matrix shape it rebuilds a matrix from the
+  # gradient using the diagonal index and the static row and column counts; otherwise it sets the
+  # diagonals of a zeros tensor shaped like the input. Returns the gradient plus two null entries
+  # (diagonal index and padding value).
   """Gradient for MatrixDiagPartV2."""
   matrix_shape = op.inputs[0].get_shape()[-2:]
   if matrix_shape.is_fully_defined():
@@ -500,6 +611,9 @@ def _MatrixDiagPartV2Grad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("MatrixDiagPartV3")
 def _MatrixDiagPartV3Grad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of MatrixDiagPartV3: same strategy as the V2 gradient but also forwards the op's
+  # alignment attribute. Returns the gradient plus two null entries.
   """Gradient for MatrixDiagPartV3."""
   matrix_shape = op.inputs[0].get_shape()[-2:]
   align = op.get_attr("align")
@@ -530,6 +644,11 @@ def _MatrixDiagPartV3Grad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("MatrixSetDiag")
 def _MatrixSetDiagGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of MatrixSetDiag. Merges the static shapes of the input and gradient to find the
+  # diagonal's shape (computed dynamically, colocated with the gradient, if not fully known).
+  # Returns a pair: the gradient with its diagonal zeroed (for the matrix input) and the
+  # gradient's diagonal (for the diagonal input).
   """Gradient for MatrixSetDiag."""
   input_shape = op.inputs[0].get_shape().merge_with(grad.get_shape())
   diag_shape = op.inputs[1].get_shape()
@@ -554,6 +673,11 @@ def _MatrixSetDiagGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("MatrixSetDiagV2")
 def _MatrixSetDiagGradV2(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of MatrixSetDiagV2. When the diagonal input's shape is not fully defined, infers it
+  # from the gradient's shape and the lower/upper diagonal indices using conditional ops. Returns
+  # the gradient with the specified diagonals zeroed, the extracted diagonals of the gradient,
+  # and null for the diagonal-index input.
   """Gradient for MatrixSetDiagV2."""
   diag_shape = op.inputs[1].get_shape()
   if not diag_shape.is_fully_defined():
@@ -592,6 +716,12 @@ def _MatrixSetDiagGradV2(op: ops.Operation, grad):
 
 @ops.RegisterGradient("MatrixSetDiagV3")
 def _MatrixSetDiagGradV3(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the diagonal-shape inference block is a verbatim duplicate of the one in the V2
+  # gradient function; only the alignment attribute handling differs.
+  # Gradient of MatrixSetDiagV3. Same as the V2 gradient but forwards the op's alignment
+  # attribute to both the set-diagonal and diagonal-part calls. Returns the zeroed-diagonal
+  # gradient, the extracted diagonals, and null for the diagonal-index input.
   """Gradient for MatrixSetDiagV3."""
   diag_shape = op.inputs[1].get_shape()
   align = op.get_attr("align")
@@ -634,6 +764,9 @@ def _MatrixSetDiagGradV3(op: ops.Operation, grad):
 
 @ops.RegisterGradient("MatrixBandPart")
 def _MatrixBandPartGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of MatrixBandPart: applies the same band mask (same lower/upper counts from the
+  # forward inputs) to the gradient. Returns the masked gradient and null for both counts.
   num_lower = op.inputs[1]
   num_upper = op.inputs[2]
   return (array_ops.matrix_band_part(grad, num_lower, num_upper), None, None)
@@ -645,6 +778,9 @@ ops.NotDifferentiable("EditDistance")
 
 @ops.RegisterGradient("Fill")
 def _FillGrad(_, grad):
+  # [FUNCTION DOC]
+  # Gradient of Fill: null for the dims input and the sum of all gradient elements for the
+  # scalar value input. The forward op is unused.
   return None, math_ops.reduce_sum(grad)
 
 
@@ -654,12 +790,21 @@ ops.NotDifferentiable("OnesLike")
 
 @ops.RegisterGradient("PreventGradient")
 def _PreventGradientGrad(op: ops.Operation, _):
+  # [FUNCTION DOC]
+  # Gradient of PreventGradient. Never returns: always raises a lookup error whose message
+  # includes the reason string stored in the forward op's message attribute, signalling that
+  # differentiation through this op was deliberately disabled.
   raise LookupError(
       "Gradient explicitly disabled. Reason: %s" % op.get_attr("message")
   )
 
 
 def _IndexedSlicesToTensorNoWarning(indexed_slices):
+  # [FUNCTION DOC]
+  # HELPER: used by the gather, reshape and patch-extraction gradients to densify gradients.
+  # Converts sparse indexed-slices to a dense tensor via an unsorted segment sum over the first
+  # dimension, bypassing the sparse-to-dense conversion warning. Non-indexed-slices input is
+  # returned unchanged. Raises a value error if the dense shape is missing.
   """Converts an IndexedSlices to a Tensor without sparse->dense warnings."""
   if not isinstance(indexed_slices, indexed_slices_lib.IndexedSlices):
     # If it is not IndexedSlices, it's better be a tensor.
@@ -678,6 +823,10 @@ def _IndexedSlicesToTensorNoWarning(indexed_slices):
 
 @ops.RegisterGradient("Gather")
 def _GatherGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of Gather (axis 0). Computes the params shape colocated with params, reshapes the
+  # densified gradient to one row per index, and returns sparse indexed-slices (values, flattened
+  # indices, params shape) for params plus null for indices.
   """Gradient for Gather op."""
   # params can be large, so colocate the shape calculation with it.
   params = op.inputs[0]
@@ -696,6 +845,13 @@ def _GatherGrad(op: ops.Operation, grad):
 
 
 def _GetBatchIndices(params_shape, indices, batch_dims):
+  # [FUNCTION DOC]
+  # HELPER: used by the batched gather gradient helper.
+  # KNOWN ISSUE: the docstring contains a typo ("Addds"); behavior is as described.
+  # Adds per-batch offsets to the indices so that batch dimensions can be flattened: for each
+  # batch dimension (from innermost batch dim outward) it adds a range scaled by the product of
+  # the following parameter dimensions, reshaped to broadcast along that dimension. Inputs:
+  # parameter shape, indices tensor, number of batch dimensions. Returns the offset indices.
   """Addds the batch offsets to the given indices and returns the results."""
   batch_indices = indices
   indices_dtype = indices.dtype.base_dtype
@@ -724,6 +880,14 @@ def _GetBatchIndices(params_shape, indices, batch_dims):
 def _BatchGatherGrad(
     params_shape, values, indices, batch_dims, gather_dim_size
 ):
+  # [FUNCTION DOC]
+  # HELPER: used by the GatherV2 gradient for non-zero axes and batch dimensions.
+  # Computes the dense gradient of a gather whose axis is the first non-batch dimension. If there
+  # are batch dimensions, indices get batch offsets, values are flattened and the segment count
+  # is multiplied by the batch size. It then sums values into the gather dimension with an
+  # unsorted segment sum and restores the batch dimensions by reshaping. Inputs: params shape,
+  # gradient values, indices, number of batch dims, size of the gathered dimension. Returns the
+  # dense gradient for params.
   """Returns the gradient of GatherV2 with batch dimensions."""
 
   # Axis is the first non-batch dimension.
@@ -756,6 +920,13 @@ def _BatchGatherGrad(
 
 @ops.RegisterGradient("GatherV2")
 def _GatherV2Grad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of GatherV2 (params, indices, axis, batch_dims attribute). Negative batch_dims is
+  # normalized using the indices rank (value error if that rank is unknown). For a statically
+  # zero axis it returns sparse indexed-slices; otherwise it transposes the axis to the first
+  # non-batch position, uses the batched gather gradient helper, and transposes back. A dense
+  # result is reshaped to the params shape to avoid zero-size mismatches. Returns the params
+  # gradient plus null for indices and axis.
   """Gradient for GatherV2 op."""
   # params can be large, so colocate the shape calculation with it.
   #
@@ -860,6 +1031,11 @@ def _GatherV2Grad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("GatherNd")
 def _GatherNdGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of GatherNd. If indices are a rank-2 tensor with a statically single-element last
+  # dimension it returns sparse indexed-slices; otherwise it scatters the gradient into a zeros
+  # tensor of the ref shape using the op's bad-indices policy. Returns the ref gradient and null
+  # for indices.
   ref = op.inputs[0]
   indices = op.inputs[1]
   ref_shape = array_ops.shape(ref, out_type=indices.dtype)
@@ -879,6 +1055,12 @@ def _GatherNdGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("ResourceGatherNd")
 def _ResourceGatherNdGrad(op: ops.Operation, grad):  # pylint: disable=missing-docstring
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: unlike the GatherNd gradient, the scatter here does not pass the op's
+  # bad-indices policy, so that setting is ignored for resource variables.
+  # Gradient of ResourceGatherNd. The shape comes from the variable resource. Returns sparse
+  # indexed-slices for single-column rank-2 indices, otherwise a scattered dense gradient, plus
+  # null for indices.
   ref = op.inputs[0]
   indices = op.inputs[1]
   ref_shape = gen_resource_variable_ops.variable_shape(ref, indices.dtype)
@@ -897,6 +1079,10 @@ def _ResourceGatherNdGrad(op: ops.Operation, grad):  # pylint: disable=missing-d
 
 @ops.RegisterGradient("CheckNumerics")
 def _CheckNumericsGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of CheckNumerics: applies a numerics check to the incoming gradient, with an error
+  # message that mentions NaN or infinity in the gradient and appends the forward op's message.
+  # Returns the checked gradient (the op fails at run time if bad values are found).
   """Gradient for check_numerics op."""
   return array_ops.check_numerics(
       grad,
@@ -907,6 +1093,10 @@ def _CheckNumericsGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("CheckNumericsV2")
 def _CheckNumericsV2Grad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says "check_numerics op" but this is the gradient for the V2 op.
+  # Gradient of CheckNumericsV2: same behavior as the V1 gradient but uses the V2 check op.
+  # Returns the checked gradient.
   """Gradient for check_numerics op."""
   return array_ops.check_numerics_v2(
       grad,
@@ -918,11 +1108,17 @@ def _CheckNumericsV2Grad(op: ops.Operation, grad):
 @ops.RegisterGradient("PlaceholderWithDefault")
 @ops.RegisterGradient("Identity")
 def _IdGrad(_, grad):
+  # [FUNCTION DOC]
+  # Gradient shared by Identity and PlaceholderWithDefault: passes the incoming gradient through
+  # unchanged.
   return grad
 
 
 @ops.RegisterGradient("_EagerConst")
 def _EagerConstGrad(_, grad):
+  # [FUNCTION DOC]
+  # Gradient of the internal eager-constant op. Must never be invoked: always raises an
+  # assertion error asking the user to file a bug.
   raise AssertionError(
       "This op should never interact with gradient APIs. Please file a bug."
   )
@@ -930,11 +1126,15 @@ def _EagerConstGrad(_, grad):
 
 @ops.RegisterGradient("RefIdentity")
 def _RefIdGrad(_, grad):
+  # [FUNCTION DOC]
+  # Gradient of RefIdentity: passes the incoming gradient through unchanged.
   return grad
 
 
 @ops.RegisterGradient("IdentityN")
 def _IdNGrad(_, *grad):
+  # [FUNCTION DOC]
+  # Gradient of IdentityN: returns the tuple of incoming gradients unchanged, one per input.
   return grad
 
 
@@ -943,6 +1143,11 @@ ops.NotDifferentiable("StopGradient")
 
 @ops.RegisterGradient("Reshape")
 def _ReshapeGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of Reshape. Densifies the gradient and reshapes it back to the input's shape. If the
+  # input rank is known and exactly one dimension is unknown (and no dimension is zero) it uses a
+  # wildcard dimension to avoid a dynamic shape dependency; otherwise it uses the dynamic input
+  # shape. Returns the input gradient and null for the shape input.
   """Defines the gradient for `array_ops.reshape()`."""
   input_shape = op.inputs[0].shape
   if input_shape.rank is not None and not input_shape.is_fully_defined():
@@ -980,6 +1185,10 @@ ops.NotDifferentiable("InvertPermutation")
 
 
 def _ReshapeToInput(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # HELPER: shared by the ExpandDims and Squeeze gradients.
+  # Densifies the gradient and reshapes it to the dynamic shape of the op's first input.
+  # Returns the reshaped tensor.
   """Reshapes the gradient to the shape of the original input."""
   return array_ops.reshape(
       _IndexedSlicesToTensorNoWarning(grad), array_ops.shape(op.inputs[0])
@@ -988,16 +1197,24 @@ def _ReshapeToInput(op: ops.Operation, grad):
 
 @ops.RegisterGradient("ExpandDims")
 def _ExpandDimsGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of ExpandDims: reshapes the gradient to the input shape; returns it with null for
+  # the dimension input.
   return [_ReshapeToInput(op, grad), None]
 
 
 @ops.RegisterGradient("Squeeze")
 def _SqueezeGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of Squeeze: reshapes the gradient back to the original (unsqueezed) input shape.
   return _ReshapeToInput(op, grad)
 
 
 @ops.RegisterGradient("Transpose")
 def _TransposeGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of Transpose: transposes the gradient by the inverse of the forward permutation.
+  # Returns the input gradient and null for the permutation input.
   """Returns unshuffle(grad)."""
   p = op.inputs[1]
   return [array_ops.transpose(grad, array_ops.invert_permutation(p)), None]
@@ -1005,6 +1222,9 @@ def _TransposeGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("ConjugateTranspose")
 def _ConjugateTransposeGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of ConjugateTranspose: conjugate-transposes the gradient by the inverse of the
+  # forward permutation. Returns the input gradient and null for the permutation input.
   """Returns conj(unshuffle(grad))."""
   p = op.inputs[1]
   return [
@@ -1026,6 +1246,12 @@ ops.NotDifferentiable("Size")
 
 @ops.RegisterGradient("Tile")
 def _TileGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of Tile. Interleaves the multiples and input shape into a split shape, reshapes the
+  # gradient to it and sum-reduces over the tiled (even) axes. Sparse gradients are first
+  # reduced along the first dimension with an unsorted segment sum using index modulo the first
+  # input dimension. In graph mode it sets the static shape of the result to the input's static
+  # shape. Returns the input gradient and null for the multiples input.
   """Sum reduces grad along the tiled dimensions."""
   input_shape = array_ops.shape(op.inputs[0], out_type=op.inputs[1].dtype)
   # We interleave multiples and input_shape to get split_shape,
@@ -1059,6 +1285,13 @@ ops.NotDifferentiable("BroadcastGradientArgs")
 
 
 def _PadGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: a stray closing triple-quote sequence appears inside a code comment in the body;
+  # it is harmless but misleading. Registered for both Pad and PadV2.
+  # Gradient of Pad/PadV2: slices the original input region out of the gradient, using the first
+  # column of the paddings input as the begin offsets and the input shape as sizes. Returns the
+  # sliced gradient plus null for paddings (and null for the constant value input when the op
+  # has three inputs, i.e. PadV2).
   """Gradient for Pad."""
   # Pad introduces values around the original tensor, so the gradient function
   # slices the original shape out of the gradient."""
@@ -1085,6 +1318,9 @@ ops.RegisterGradient("PadV2")(_PadGrad)
 # ReverseSequence is just a permutation.  The gradient permutes back.
 @ops.RegisterGradient("ReverseSequence")
 def _ReverseSequenceGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of ReverseSequence: reverses the gradient again with the same batch axis, sequence
+  # axis and sequence lengths. Returns it plus null for the lengths input.
   seq_lengths = op.inputs[1]
   return [
       array_ops.reverse_sequence(
@@ -1099,18 +1335,27 @@ def _ReverseSequenceGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("Reverse")
 def _ReverseGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of Reverse: reverses the gradient along the same dimensions input. Returns it and
+  # null for the dimensions input.
   reverse_dims = op.inputs[1]
   return gen_array_ops.reverse(grad, reverse_dims), None
 
 
 @ops.RegisterGradient("ReverseV2")
 def _ReverseV2Grad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of ReverseV2: reverses the gradient along the same axes. Returns it and null for
+  # the axis input.
   axis = op.inputs[1]
   return array_ops.reverse_v2(grad, axis), None
 
 
 @ops.RegisterGradient("SpaceToBatch")
 def _SpaceToBatchGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of SpaceToBatch: the inverse rearrangement, batch-to-space, with the same paddings
+  # input and block size attribute. Returns it and null for the paddings input.
   # Its gradient is the opposite op: BatchToSpace.
   block_size = op.get_attr("block_size")
   return [
@@ -1121,6 +1366,9 @@ def _SpaceToBatchGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("SpaceToBatchND")
 def _SpaceToBatchNDGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of SpaceToBatchND: batch-to-space-ND using the op's block shape and paddings
+  # inputs. Returns it and null for those two inputs.
   # Its gradient is the opposite op: BatchToSpaceND.
   return [
       array_ops.batch_to_space_nd(grad, op.inputs[1], op.inputs[2]),
@@ -1131,6 +1379,9 @@ def _SpaceToBatchNDGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("BatchToSpace")
 def _BatchToSpaceGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of BatchToSpace: space-to-batch with the same crops input (used as paddings) and
+  # block size attribute. Returns it and null for the crops input.
   # Its gradient is the opposite op: SpaceToBatch.
   block_size = op.get_attr("block_size")
   return [
@@ -1141,6 +1392,9 @@ def _BatchToSpaceGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("BatchToSpaceND")
 def _BatchToSpaceNDGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of BatchToSpaceND: space-to-batch-ND using the op's block shape and crops inputs.
+  # Returns it and null for those two inputs.
   # Its gradient is the opposite op: SpaceToBatchND.
   return [
       array_ops.space_to_batch_nd(grad, op.inputs[1], op.inputs[2]),
@@ -1151,6 +1405,10 @@ def _BatchToSpaceNDGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("SpaceToDepth")
 def _SpaceToDepthGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of SpaceToDepth: applies depth-to-space with the same block size and data format.
+  # Raises a value error if the data format is the vectorized NCHW_VECT_C layout (quantized
+  # int8 only, unsupported here). Returns the input gradient.
   # Its gradient is the opposite op: DepthToSpace.
   block_size = op.get_attr("block_size")
   data_format = op.get_attr("data_format")
@@ -1164,6 +1422,9 @@ def _SpaceToDepthGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("DepthToSpace")
 def _DepthToSpaceGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of DepthToSpace: applies space-to-depth with the same block size and data format.
+  # Raises a value error for the NCHW_VECT_C data format. Returns the input gradient.
   # Its gradient is the opposite op: SpaceToDepth.
   block_size = op.get_attr("block_size")
   data_format = op.get_attr("data_format")
@@ -1180,12 +1441,18 @@ ops.NotDifferentiable("OneHot")
 
 @ops.RegisterGradient("MirrorPad")
 def _MirrorPadGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of MirrorPad: applies the mirror-pad-grad op with the same paddings and mode.
+  # Returns it and null for the paddings input.
   mode = op.get_attr("mode")
   return [gen_array_ops.mirror_pad_grad(grad, op.inputs[1], mode=mode), None]
 
 
 @ops.RegisterGradient("MirrorPadGrad")
 def _MirrorPadGradGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of MirrorPadGrad: applies the mirror-pad op with the same paddings and mode.
+  # Returns it and null for the paddings input.
   mode = op.get_attr("mode")
   return [gen_array_ops.mirror_pad(grad, op.inputs[1], mode=mode), None]
 
@@ -1197,22 +1464,37 @@ ops.NotDifferentiable("FakeQuantWithMinMaxVarsPerChannelGradient")
 
 @ops.RegisterGradient("QuantizeAndDequantize")
 def _QuantizeAndDequantizeGrad(_, grad):
+  # [FUNCTION DOC]
+  # Gradient of QuantizeAndDequantize: straight-through estimator, passes the gradient unchanged.
   return grad
 
 
 @ops.RegisterGradient("QuantizeAndDequantizeV2")
 def _QuantizeAndDequantizeV2Grad(_, grad):
+  # [FUNCTION DOC]
+  # Gradient of QuantizeAndDequantizeV2: passes the gradient through for the input and returns
+  # null for the two range inputs.
   return [grad, None, None]
 
 
 @ops.RegisterGradient("QuantizeAndDequantizeV3")
 def _QuantizeAndDequantizeV3Grad(_, grad):
+  # [FUNCTION DOC]
+  # Gradient of QuantizeAndDequantizeV3: passes the gradient through for the unquantized input
+  # only; returns null for the min, max and number-of-bits inputs.
   # Only propagate the gradient for the unquantized input.
   return [grad, None, None, None]
 
 
 @ops.RegisterGradient("ExtractImagePatches")
 def _ExtractImagePatchesGrad(op: ops.Operation, grad):  # pylint:disable=missing-function-docstring
+  # [FUNCTION DOC]
+  # Gradient of ExtractImagePatches. Builds an index image numbered from 1 (0 reserved for
+  # padding; float32 because the XLA version lacks int64), extracts patches from it with the
+  # op's ksizes, strides, rates and padding, and uses the resulting indices (shifted by one so
+  # padding becomes -1, ignored) as segment ids to sum the reshaped, transposed gradient back
+  # onto input pixels. Returns a one-element list holding the gradient in batch, row, column,
+  # channel layout. Assumes a four-dimensional input.
   input_bhwc = array_ops.shape(op.inputs[0], out_type=dtypes.int64)
   batch_size, rows_in, cols_in, channels = array_ops_stack.unstack(input_bhwc)
 
@@ -1266,6 +1548,14 @@ def _ExtractImagePatchesGrad(op: ops.Operation, grad):  # pylint:disable=missing
 
 @ops.RegisterGradient("ExtractVolumePatches")
 def _ExtractVolumePatchesGrad(op: ops.Operation, grad):  # pylint:disable=missing-function-docstring
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the first unpacking of static batch size and channel dimensions is immediately
+  # overwritten by dynamic values for batch size and channels; it also requires the plane, row
+  # and column dims (and output dims) to be statically known, failing on unknown dimensions.
+  # Gradient of ExtractVolumePatches. Builds input and output index tensors, maps input to
+  # output positions in a sparse matrix, drops the padding row, and multiplies this sparse
+  # matrix by the reshaped, transposed gradient to accumulate onto input voxels. Returns a
+  # one-element list with the gradient in batch, plane, row, column, channel layout.
   batch_size, planes_in, rows_in, cols_in, channels = [
       dim.value for dim in op.inputs[0].shape.dims
   ]
@@ -1350,6 +1640,9 @@ def _ExtractVolumePatchesGrad(op: ops.Operation, grad):  # pylint:disable=missin
 
 @ops.RegisterGradient("ScatterNd")
 def _ScatterNdGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of ScatterNd: the updates gradient is the gather-nd of the incoming gradient at the
+  # indices. Returns null for indices, the updates gradient, and null for the shape input.
   indices = op.inputs[0]
   updates_grad = array_ops.gather_nd(
       grad,
@@ -1360,6 +1653,10 @@ def _ScatterNdGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("TensorScatterUpdate")
 def _TensorScatterUpdateGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of TensorScatterUpdate. The updates gradient is the gather-nd of the incoming
+  # gradient at the indices; the tensor gradient is the incoming gradient with those positions
+  # overwritten by zeros. Returns the tensor gradient, null for indices, and the updates gradient.
   indices = op.inputs[1]
   updates_grad = array_ops.gather_nd(
       grad,
@@ -1375,6 +1672,10 @@ def _TensorScatterUpdateGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("TensorScatterAdd")
 def _TensorScatterAddGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of TensorScatterAdd: the tensor gradient is a copy of the incoming gradient and the
+  # updates gradient is the gather-nd at the indices. Returns the tensor gradient, null for
+  # indices, and the updates gradient.
   indices = op.inputs[1]
   updates_grad = array_ops.gather_nd(
       grad,
@@ -1385,6 +1686,11 @@ def _TensorScatterAddGrad(op: ops.Operation, grad):
 
 
 def _TensorScatterMinOrMaxGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation behind the TensorScatterMax and TensorScatterMin gradients.
+  # Computes indicators marking where the original tensor and the updates equal the output, and
+  # divides the gradient evenly among ties. Uses the op's bad-indices policy for the gather and
+  # scatter. Returns the gradient for the tensor, null for indices, and the gradient for updates.
   """Gradient for TensorScatterMin and TensorScatterMax."""
   indices = op.inputs[1]
   x = op.inputs[0]
@@ -1417,18 +1723,26 @@ def _TensorScatterMinOrMaxGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("TensorScatterMax")
 def _TensorScatterMaxGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of TensorScatterMax: delegates to the shared min-or-max scatter gradient helper.
   """Gradient for TensorScatterMax op."""
   return _TensorScatterMinOrMaxGrad(op, grad)
 
 
 @ops.RegisterGradient("TensorScatterMin")
 def _TensorScatterMinGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of TensorScatterMin: delegates to the shared min-or-max scatter gradient helper.
   """Gradient for TensorScatterMin op."""
   return _TensorScatterMinOrMaxGrad(op, grad)
 
 
 @ops.RegisterGradient("TensorScatterSub")
 def _TensorScatterSubGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of TensorScatterSub: tensor gradient is a copy of the incoming gradient; updates
+  # gradient is the negated gather-nd at the indices. Returns tensor gradient, null, updates
+  # gradient.
   indices = op.inputs[1]
   updates_grad = array_ops.gather_nd(
       grad,
@@ -1440,6 +1754,10 @@ def _TensorScatterSubGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("ScatterNdNonAliasingAdd")
 def _ScatterNdNonAliasingAddGrad(op: ops.Operation, grad):
+  # [FUNCTION DOC]
+  # Gradient of ScatterNdNonAliasingAdd: the input gradient is the incoming gradient itself and
+  # the updates gradient is the gather-nd at the indices. Returns input gradient, null for
+  # indices, and updates gradient.
   indices = op.inputs[1]
   updates_grad = array_ops.gather_nd(
       grad,
@@ -1450,6 +1768,11 @@ def _ScatterNdNonAliasingAddGrad(op: ops.Operation, grad):
 
 @ops.RegisterGradient("BroadcastTo")
 def _BroadcastToGrad(op: ops.Operation, grad):  # pylint:disable=missing-function-docstring
+  # [FUNCTION DOC]
+  # Gradient of BroadcastTo. Determines the target shape (folding it to a constant when it can
+  # be statically evaluated), finds the broadcast reduction axes, sum-reduces the gradient over
+  # them keeping dimensions, and reshapes to the input's dynamic shape. Returns the input
+  # gradient and null for the shape input.
   input_value = op.inputs[0]
   broadcast_shape = op.inputs[1]
   shape_dtype = dtypes.int32
