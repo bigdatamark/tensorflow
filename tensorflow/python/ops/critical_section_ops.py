@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Implements the public CriticalSection class, a mutex-backed resource that serializes execution of
+# user functions in a graph or eagerly, plus private helpers. Exposes only CriticalSection (exported
+# under the public API name). Defines two graph collection keys: one for created critical sections
+# and one for recorded executions (used to detect conflicting resource access across critical
+# sections). Keeps a thread-local stack of signatures to detect re-entrant locking, which would
+# deadlock. No registrations or flags are created at import time besides the thread-local state.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -42,11 +49,21 @@ class _ExecutionSignature(
     collections.namedtuple("_ExecutionSignature",
                            ("op", "handle",
                             "resources", "exclusive_resource_access"))):
+  # [CLASS DOC]
+  # HELPER: record type for CriticalSection bookkeeping.
+  # Immutable named record with fields: op (the lock op), handle (the mutex handle), resources
+  # (list of resource tensors touched by the execution) and exclusive_resource_access (flag).
+  # Instances are stored in a graph collection so later executions can detect conflicts.
   """A class storing an `ExecuteInCriticalResource` op and associated attrs."""
   pass
 
 
 def _identity(x):
+  # [FUNCTION DOC]
+  # HELPER: used by CriticalSection.execute to wrap function outputs.
+  # Returns an identity of x: for a tensor array its own identity, for an operation a grouped
+  # no-op, for a nothing/null value in eager mode the same null, otherwise an identity tensor.
+  # Takes one value of any of those kinds; has no side effects other than creating graph ops.
   """Identity op that recognizes `TensorArray`, `Operation`, and `Tensor`."""
   if isinstance(x, tensor_array_ops.TensorArray):
     return x.identity()
@@ -59,10 +76,19 @@ def _identity(x):
 
 
 def _get_device_or_colocation(op):
+  # [FUNCTION DOC]
+  # HELPER: builds the device part of a CriticalSection signature.
+  # Returns the op's device string if non-empty, otherwise its colocation attribute value (or
+  # nothing/null if there is none). Takes one operation; no side effects.
   return op.device or _get_colocation(op)
 
 
 def _get_colocation(op):
+  # [FUNCTION DOC]
+  # HELPER: reads colocation info for CriticalSection device comparisons.
+  # Returns the op's colocation-class attribute value, or nothing/null when the attribute is
+  # missing or the object does not support attribute lookup (value or attribute errors are
+  # swallowed). Takes one operation; no side effects.
   """Get colocation symbol from op, if any."""
   try:
     return op.get_attr("_class")
@@ -74,6 +100,10 @@ _CRITICAL_SECTION_STACK = threading.local()
 
 
 def _get_critical_section_stack():
+  # [FUNCTION DOC]
+  # HELPER: accessor for the per-thread stack of active critical section signatures.
+  # Takes no inputs. Returns the list stored in thread-local state, creating an empty list on
+  # first use in the calling thread (side effect: initializes that thread-local value).
   try:
     return _CRITICAL_SECTION_STACK.value
   except AttributeError:
@@ -83,6 +113,12 @@ def _get_critical_section_stack():
 
 @contextlib.contextmanager
 def _push_critical_section_stack(signature):
+  # [FUNCTION DOC]
+  # HELPER: context manager guarding CriticalSection.execute against re-entrant locking.
+  # Pushes the given signature onto the thread-local stack for the duration of the with-block,
+  # yielding nothing. Raises a value error before entering if the signature is already on the
+  # stack. On exit pops the stack and raises a runtime error if the popped entry differs from the
+  # pushed signature. Side effect: mutates the thread-local stack.
   """Push a CriticalSection._signature to the thread-local stack.
 
   If the signature is already on the stack, raise an error because it means
@@ -120,6 +156,13 @@ def _push_critical_section_stack(signature):
 
 @tf_export("CriticalSection")
 class CriticalSection:
+  # [CLASS DOC]
+  # Public wrapper around a mutex resource that makes executed functions run one at a time.
+  # State: the mutex handle tensor and a signature tuple (container, shared name or object id,
+  # device/colocation) uniquely identifying the section. Created with an optional name and shared
+  # name; execute runs a user function under the lock and returns its outputs. In graph mode the
+  # instance is added to a graph collection and each execution is recorded so conflicting
+  # resource use by different sections can be rejected.
   """Critical section.
 
   A `CriticalSection` object is a resource in the graph which executes subgraphs
@@ -190,6 +233,16 @@ class CriticalSection:
 
   def __init__(self, name=None, shared_name=None,
                critical_section_def=None, import_scope=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the error text for the mutual-exclusion check reports shared_name although the
+    # condition tests name; import_scope is accepted but never used; and any non-empty
+    # critical_section_def always ends in an error, so that parameter is effectively unsupported.
+    # Constructs the critical section. Inputs: name (optional string for the op name scope),
+    # shared_name (optional string; defaults to the scope name so sections with equal shared names
+    # share one mutex), critical_section_def (unsupported), import_scope (ignored).
+    # Ensures the eager context is initialized, then creates the mutex via the init helper.
+    # Raises a value error if a definition is given together with a name, or if a definition is
+    # given at all. Side effects: creates a mutex resource and, in graph mode, registers self.
     """Creates a critical section."""
     context.ensure_initialized()
     if critical_section_def and name is not None:
@@ -202,6 +255,13 @@ class CriticalSection:
       self._init_from_args(name, shared_name)
 
   def _init_from_args(self, name, shared_name):  # pylint: disable=invalid-name
+    # [FUNCTION DOC]
+    # HELPER: constructor internals for CriticalSection.
+    # Inside a name scope and the init scope, takes the default graph's container (empty string
+    # if unset), uses the scope name as shared name when none is given, and creates the mutex
+    # resource handle. Stores the handle and a signature tuple (container, shared name or handle
+    # id when the shared name is empty, device or colocation). In graph mode adds the instance to
+    # the critical sections collection. Inputs: name and shared_name (both may be null).
     """Initialize the CriticalSection from constructor arguments."""
     with ops.name_scope(name, "CriticalSection", []) as name:
       with ops.init_scope():
@@ -226,9 +286,23 @@ class CriticalSection:
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the name of the op that created the mutex handle (a string).
+    # No inputs, no side effects.
     return self._handle.op.name
 
   def execute(self, fn, exclusive_resource_access=True, name=None):
+    # [FUNCTION DOC]
+    # Runs fn, which takes no arguments, while holding this section's lock and returns its outputs
+    # (any nested structure of tensors, tensor arrays or operations) wrapped in identities that
+    # depend on the lock being released. Inputs: fn, exclusive_resource_access (default true;
+    # whether other sections may not touch the same resources) and an optional op name.
+    # Acquires the mutex lock, runs fn under a control dependency on it, and in graph mode finds
+    # the ops created by fn, makes the lock wait for all their external inputs (avoiding
+    # deadlock), collects the resource tensors they use, and records the execution in a graph
+    # collection. Raises a value error on re-entrant locking of the same section, or on resource
+    # access that conflicts with another section. Side effects: adds graph ops and a collection
+    # entry; holds the graph lock while fn runs in graph mode.
     """Execute function `fn()` inside the critical section.
 
     `fn` should not accept any arguments.  To add extra arguments to when
@@ -335,6 +409,13 @@ class CriticalSection:
       return outputs
 
   def _add_control_dependencies_to_lock(self, created_ops, lock_op):
+    # [FUNCTION DOC]
+    # HELPER: used by execute in graph mode to prevent deadlocks.
+    # Inputs: created_ops (ops created while running the user function) and lock_op (the lock
+    # operation). Gathers every op feeding or control-feeding the created ops, removes the created
+    # ops themselves, anything lock_op already depends on and lock_op itself, then groups the rest
+    # and adds that group as a control input of lock_op so all arguments are computed before the
+    # lock is taken. Returns nothing; mutates lock_op. Does nothing if no ops remain.
     """To avoid deadlocks, all args must be executed before lock_op."""
     # Get all arguments (explicit and captured) of all ops created by fn().
     all_args = set([input_.op for op in created_ops for input_ in op.inputs])
@@ -373,6 +454,12 @@ class CriticalSection:
     # pylint: enable=protected-access
 
   def _is_self_handle(self, x):
+    # [FUNCTION DOC]
+    # HELPER: identity test for the section's own mutex used by execute and conflict checks.
+    # Takes a tensor x. For eager tensors returns whether it is the same object as the handle. For
+    # graph tensors returns true when the producing op is a mutex op with a non-empty shared name
+    # equal to the handle's and the same device or colocation. Returns a boolean-like value;
+    # no side effects.
     """Check if the tensor `x` is the same Mutex as `self._handle`."""
     if isinstance(x, ops.EagerTensor):
       return x is self._handle
@@ -386,6 +473,13 @@ class CriticalSection:
 
   def _check_multiple_access_to_resources(
       self, captured_resources, exclusive_resource_access):
+    # [FUNCTION DOC]
+    # HELPER: validation step of execute.
+    # Inputs: captured_resources (identity set of resource tensors used by this execution) and
+    # exclusive_resource_access (flag). Scans recorded executions in the graph collection,
+    # skipping ones belonging to this same section and pairs where neither side asked for
+    # exclusive access. Raises a value error naming the overlapping resources if any are shared.
+    # Returns nothing; reads graph state only.
     """Raise if captured_resources are accessed by another CriticalSection.
 
     Args:

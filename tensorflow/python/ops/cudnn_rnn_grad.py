@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: registers gradient functions so automatic differentiation works for the cuDNN RNN ops.
+# Registers gradient functions for the fused cuDNN recurrent-network ops (versions 1, 2 and 3).
+# Importing the module has the side effect of registering each gradient with the global gradient
+# registry under the op type names. Each gradient requires the forward op to have been run in
+# training mode and forwards the op inputs, outputs and incoming gradients to the matching
+# generated backprop op. No public names are exposed.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,6 +26,13 @@ from tensorflow.python.ops import gen_cudnn_rnn_ops
 
 @ops.RegisterGradient("CudnnRNN")
 def _cudnn_rnn_backward(op: ops.Operation, *grads):
+  # [FUNCTION DOC]
+  # HELPER: gradient registered for the CudnnRNN op; called by the gradient machinery.
+  # Computes gradients of the version-1 cuDNN RNN op. Takes the forward op and the incoming
+  # gradients (output, hidden-state output, cell-state output; extra ones ignored). Returns the
+  # tuple of gradients for the op inputs (input, initial hidden, initial cell, params) produced by
+  # the generated backprop op, using the saved reserve space and the op's dropout, seed, mode and
+  # direction attributes. Raises a value error if the op was not run with is_training set.
   """Gradients for the CudnnRNN op."""
   if not op.get_attr("is_training"):
     raise ValueError(
@@ -45,6 +59,12 @@ def _cudnn_rnn_backward(op: ops.Operation, *grads):
 
 @ops.RegisterGradient("CudnnRNNV2")
 def _cudnn_rnn_backward_v2(op: ops.Operation, *grad):
+  # [FUNCTION DOC]
+  # HELPER: gradient registered for the CudnnRNNV2 op; called by the gradient machinery.
+  # Same as the version-1 gradient but also passes the host-reserved buffer (fifth output) to the
+  # version-2 backprop op. Takes the forward op and the incoming gradients for output, hidden and
+  # cell outputs. Returns the gradients for the op inputs. Raises a value error if the forward op
+  # was not run with is_training set.
   if not op.get_attr("is_training"):
     raise ValueError(
         "To use CudnnRNNV2 in gradients, is_training must be set to True.")
@@ -71,6 +91,13 @@ def _cudnn_rnn_backward_v2(op: ops.Operation, *grad):
 
 @ops.RegisterGradient("CudnnRNNV3")
 def _cudnn_rnn_backwardv3(op: ops.Operation, *grads):
+  # [FUNCTION DOC]
+  # HELPER: gradient registered for the CudnnRNNV3 op; called by the gradient machinery.
+  # Computes gradients of the version-3 cuDNN RNN op, which adds per-batch sequence lengths, a
+  # time-major flag and a projection size. Takes the forward op and the incoming gradients.
+  # Returns the backprop results for the first four inputs with an extra nothing/null entry
+  # appended for the non-differentiable sequence lengths input. Raises a value error if the
+  # forward op was not run with is_training set.
   """Gradients for the CudnnRNNV3 op."""
   if not op.get_attr("is_training"):
     raise ValueError(

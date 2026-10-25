@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Python implementation of Connectionist Temporal Classification (CTC) ops: loss functions (v1
+# sparse-label API, v2 dense-label API, and a cuDNN-compatible variant), greedy and beam search
+# decoders, a pure-Python forward-backward implementation of loss and gradient (usable on TPU),
+# and helpers for label/state projection and edge-case handling. Public functions are exported
+# under the nn namespace. Import-time side effects: registers gradient functions for the fused
+# CTC loss ops and marks the greedy and beam search decoder ops as not differentiable. Also
+# defines function-attribute names used to tag backend implementations for device selection.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -52,6 +60,10 @@ _GPU_DEVICE_NAME = "GPU"
 
 
 def _get_context_device_type():
+  # [FUNCTION DOC]
+  # HELPER: used to pick a CTC backend by device type.
+  # Reads the current eager context's device name and returns its device type string such as CPU
+  # or GPU, or nothing/null when no device is set. No inputs, no side effects.
   """Parses the current context and returns the device type, eg CPU/GPU."""
   current_device = context.context().device_name
   if current_device is None:
@@ -60,6 +72,12 @@ def _get_context_device_type():
 
 
 def _generate_defun_backend(unique_api_name, preferred_device, func):
+  # [FUNCTION DOC]
+  # HELPER: wraps a CTC implementation so graph rewriting can choose a backend per device.
+  # Inputs: unique_api_name (string tagging the implemented API), preferred_device (string such
+  # as CPU or GPU) and func (the callable). Returns a compiled function object with those two
+  # values attached as function attributes and automatic graph-conversion of Python control flow
+  # disabled. No other side effects.
   function_attributes = {
       _DEFUN_API_NAME_ATTRIBUTE: unique_api_name,
       _DEFUN_DEVICE_ATTRIBUTE: preferred_device,
@@ -78,6 +96,15 @@ def ctc_loss(labels,
              ignore_longer_outputs_than_inputs=False,
              time_major=True,
              logits=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says "This class" although this is a function; the ctc_merge_repeated
+  # argument is documented only by its default.
+  # Public v1 CTC loss. Inputs: labels (sparse integer tensor of target labels), inputs/logits
+  # (3-D float tensor, alias arguments; exactly one should be given), sequence_length (per-batch
+  # lengths), preprocess_collapse_repeated, ctc_merge_repeated, ignore_longer_outputs_than_inputs
+  # (booleans), time_major (layout of inputs). Delegates to the shared implementation without the
+  # cuDNN variant (blank is the last class). Returns a 1-D tensor with the negative log
+  # probability per batch item. Raises a type error if labels is not a sparse tensor.
   """Computes the CTC (Connectionist Temporal Classification) Loss.
 
   This op implements the CTC loss as presented in (Graves et al., 2006).
@@ -202,6 +229,13 @@ def _ctc_loss_impl(labels,
                    time_major=True,
                    logits=None,
                    use_cudnn=False):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation behind the v1 ctc_loss and the op-based v2 loss variants.
+  # Validates that labels is a sparse tensor (raises a type error otherwise), resolves the
+  # inputs/logits alias, converts to a tensor, transposes to time-major if needed, and casts
+  # half-precision inputs to 32-bit float for the computation (result cast back). Calls the
+  # fused CTC loss op, or its version 2 form when use_cudnn is set (blank index is then 0 rather
+  # than the last class). Other inputs are passed through. Returns the per-batch loss tensor.
   # Helper function of ctc_loss with one additional param:
   # use_cudnn: A bool to enable cuDNN CTC loss operation. If true, the blank
   #   index has to be 0.
@@ -248,6 +282,12 @@ def _ctc_loss_impl(labels,
 
 # pylint: disable=unused-argument
 def _CTCLossGradImpl(op, grad_loss, _):
+  # [FUNCTION DOC]
+  # HELPER: shared gradient logic for the CTCLoss and CTCLossV2 ops.
+  # Takes the forward op, the incoming gradient of the loss and an ignored gradient for the second
+  # output. Uses the op's second output (precomputed gradient) wrapped so second derivatives raise
+  # an error, scales it by the loss gradient with broadcasting, and returns a list: the gradient
+  # for the logits followed by nothing/null for label indices, label values and sequence lengths.
   # Outputs are: loss, grad
   #
   # Currently there is no way to take the second derivative of this op
@@ -267,6 +307,10 @@ def _CTCLossGradImpl(op, grad_loss, _):
 # pylint: disable=unused-argument
 @ops.RegisterGradient("CTCLoss")
 def _CTCLossGrad(op, grad_loss, _):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient for the CTCLoss op (registration happens at import time).
+  # Forwards the op and loss gradient to the shared implementation and returns its list of input
+  # gradients (logits gradient, then nothing for the other three inputs).
   """The derivative provided by CTC Loss.
 
   Args:
@@ -282,6 +326,10 @@ def _CTCLossGrad(op, grad_loss, _):
 # pylint: disable=unused-argument
 @ops.RegisterGradient("CTCLossV2")
 def _CTCLossV2Grad(op, grad_loss, _):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient for the CTCLossV2 op (registration happens at import time).
+  # Forwards the op and loss gradient to the shared implementation and returns its list of input
+  # gradients (logits gradient, then nothing for the other three inputs).
   """The derivative provided by CTC Loss V2.
 
   Args:
@@ -300,6 +348,13 @@ def ctc_greedy_decoder(inputs,
                        sequence_length,
                        merge_repeated=True,
                        blank_index=None):
+  # [FUNCTION DOC]
+  # Public greedy (best path) CTC decoder. Inputs: inputs (3-D float logits, time-major),
+  # sequence_length (1-D integer lengths per batch item), merge_repeated (merge consecutive equal
+  # classes, default true), blank_index (optional class index of the blank; default last class,
+  # negative counts from the end). Calls the fused decoder op. Returns a pair: a one-element list
+  # holding a sparse tensor of decoded labels, and a matrix with the negative summed best logits
+  # per batch item.
   """Performs greedy decoding on the logits given in input (best path).
 
   Given a tensor as `inputs`, the `blank_index` parameter defines the class
@@ -384,6 +439,12 @@ def ctc_beam_search_decoder(inputs,
                             beam_width=100,
                             top_paths=1,
                             merge_repeated=True):
+  # [FUNCTION DOC]
+  # Public v1 CTC beam search decoder. Inputs: inputs (3-D float logits, time-major),
+  # sequence_length (integer lengths per batch item), beam_width (beam size), top_paths (number of
+  # best paths to return, at most the beam width), merge_repeated (merge consecutive equal
+  # entries). Calls the fused decoder op. Returns a pair: a list with one sparse tensor per
+  # returned path, and a matrix of log probabilities shaped batch by top paths.
   """Performs beam search decoding on the logits given in input.
 
   **Note** Although in general greedy search is a special case of beam-search
@@ -449,6 +510,11 @@ def ctc_beam_search_decoder_v2(inputs,
                                sequence_length,
                                beam_width=100,
                                top_paths=1):
+  # [FUNCTION DOC]
+  # Public v2 CTC beam search decoder, without the merge_repeated option. Inputs: inputs (3-D
+  # float logits, time-major), sequence_length, beam_width, top_paths. Delegates to the v1 decoder
+  # with repeated merging always disabled. Returns a list of sparse decoded paths and a matrix of
+  # log probabilities, exactly as the v1 decoder does.
   """Performs beam search decoding on the logits given in input.
 
   **Note** Although in general greedy search is a special case of beam-search
@@ -500,6 +566,13 @@ ops.NotDifferentiable("CTCBeamSearchDecoder")
 
 
 def _ctc_state_trans(label_seq):
+  # [FUNCTION DOC]
+  # HELPER: builds the transition structure for the pure-Python CTC forward-backward algorithm.
+  # Input: label_seq, an integer tensor shaped batch by max label length. Builds, for each batch
+  # item, a matrix over label states and blank states containing self-loops, start-to-first-label,
+  # blank-to-label and label-to-blank transitions, plus label-to-label transitions that are
+  # disallowed (zero) when two adjacent labels are equal. Returns a float tensor shaped batch by
+  # states by states with ones where a transition is allowed.
   """Computes CTC alignment model transition matrix.
 
   Args:
@@ -557,6 +630,13 @@ def _ctc_state_trans(label_seq):
 
 
 def ctc_state_log_probs(seq_lengths, max_seq_length):
+  # [FUNCTION DOC]
+  # Builds initial and final state log probabilities for the CTC alignment model. Inputs:
+  # seq_lengths (integer tensor of label lengths per batch item) and max_seq_length (integer
+  # maximum label length). The initial distribution puts all mass on the first state; the final
+  # distribution allows ending in the label state at each item's length, in either duration state.
+  # Impossible states get a very negative number computed without a float64 log so it works on
+  # TPU. Returns a pair of float tensors shaped batch by states: initial, then final.
   """Computes CTC alignment initial and final state log probabilities.
 
   Create the initial/final state values directly as log values to avoid
@@ -597,6 +677,13 @@ def ctc_state_log_probs(seq_lengths, max_seq_length):
 
 
 def _ilabel_to_state(labels, num_labels, ilabel_log_probs):
+  # [FUNCTION DOC]
+  # HELPER: step of ctc_loss_and_grad. Projects per-frame log probabilities over output labels to
+  # log probabilities over alignment states. Inputs: labels (batch by label length), num_labels
+  # (integer, including blank at index 0) and ilabel_log_probs (frames by batch by labels).
+  # Picks each state's label probability via a one-hot selection, appends blank probability for
+  # all blank states, and pads a leading impossible start state. Returns frames by batch by
+  # states log probabilities.
   """Project ilabel log probs to state log probs."""
 
   num_label_states = _get_dim(labels, 1)
@@ -613,6 +700,12 @@ def _ilabel_to_state(labels, num_labels, ilabel_log_probs):
 
 
 def _state_to_olabel(labels, num_labels, states):
+  # [FUNCTION DOC]
+  # HELPER: step of ctc_loss_and_grad. Collapses state log probabilities back to output-label log
+  # probabilities. Inputs: labels (batch by label length), num_labels (including blank at 0), and
+  # states (frames by batch by states). Label states are combined per label with a log-sum-exp
+  # using a one-hot mask; blank states are combined into the blank label. Returns frames by batch
+  # by labels with blank first.
   """Sum state log probs to ilabel log probs."""
 
   num_label_states = _get_dim(labels, 1) + 1
@@ -632,6 +725,13 @@ def _state_to_olabel(labels, num_labels, states):
 
 # pylint: disable=redefined-outer-name
 def _state_to_olabel_unique(labels, num_labels, states, unique):
+  # [FUNCTION DOC]
+  # HELPER: faster, lower-memory variant of the state-to-label projection, intended for TPU.
+  # Inputs: labels, num_labels, states (frames by batch by states) and unique, a pair of unique
+  # label values and their indices as produced by the unique-labels helper. Sums label states that
+  # share a unique label, scatters the sums into a per-label array, fills unreached labels with a
+  # log-zero value, and appends blank (summed over blank states) as the first label. Returns
+  # frames by batch by labels log probabilities.
   """Sum state log probs to ilabel log probs using unique label indices."""
 
   num_label_states = _get_dim(labels, 1) + 1
@@ -676,6 +776,14 @@ def _state_to_olabel_unique(labels, num_labels, states, unique):
 
 
 def ctc_loss_and_grad(logits, labels, label_length, logit_length, unique=None):
+  # [FUNCTION DOC]
+  # Computes CTC loss and its gradient with respect to logits using a forward-backward pass in
+  # log space built from ordinary ops. Inputs: logits (frames by batch by labels, blank at index
+  # 0), labels (batch by max label length), label_length and logit_length (per-batch integer
+  # lengths), unique (optional pair of unique label data enabling the TPU-friendly projection).
+  # The gradient is the difference of input and output label probabilities, masked beyond each
+  # logit length. Returns a pair: loss (batch) and gradient (same shape as logits). The function
+  # itself has no registered gradient.
   """Computes the CTC loss and gradients.
 
   Most users will want fwd_bwd.ctc_loss
@@ -737,6 +845,13 @@ def ctc_loss_and_grad(logits, labels, label_length, logit_length, unique=None):
 
 
 def _ctc_loss_grad(op, grad_loss, _):
+  # [FUNCTION DOC]
+  # HELPER: gradient function for ops wrapping ctc_loss_and_grad.
+  # KNOWN ISSUE: never referenced or registered anywhere in this file, so it appears to be dead code.
+  # Takes the op, the loss gradient
+  # and an ignored second gradient. Scales the op's second output (the precomputed gradient) by
+  # the loss gradient broadcast over time and classes. Returns a list with that gradient first
+  # and nothing/null for each remaining op input.
   grad = op.outputs[1]
   grad = [array_ops.reshape(grad_loss, [1, -1, 1]) * grad]
   grad += [None] * (len(op.inputs) - len(grad))
@@ -745,6 +860,12 @@ def _ctc_loss_grad(op, grad_loss, _):
 
 def _ctc_loss_op_standard(labels, logits, logit_length, logits_time_major,
                           blank_index):
+  # [FUNCTION DOC]
+  # HELPER: backend for ctc_loss_v2 using the standard fused op, where blank must be the last
+  # class. Inputs: sparse labels, 3-D logits, logit_length, logits_time_major flag, and
+  # blank_index (integer position of blank). Moves the blank column to the end and decrements label
+  # values above the blank index to match. Returns the per-batch loss from the shared
+  # implementation without the cuDNN variant.
   part_before = logits[:, :, :blank_index]
   part_after = logits[:, :, blank_index + 1:]
   part_blank = logits[:, :, blank_index:blank_index + 1]
@@ -763,6 +884,11 @@ def _ctc_loss_op_standard(labels, logits, logit_length, logits_time_major,
 
 def _ctc_loss_op_cudnn(labels, logits, logit_length, logits_time_major,
                        blank_index):
+  # [FUNCTION DOC]
+  # HELPER: backend for ctc_loss_v2 using the cuDNN-compatible op, where blank must be class 0.
+  # Inputs: sparse labels, 3-D logits, logit_length, logits_time_major flag, and blank_index.
+  # Moves the blank column to the front and increments label values below the blank index to
+  # match. Returns the per-batch loss from the shared implementation with the cuDNN variant.
   part_before = logits[:, :, :blank_index]
   part_after = logits[:, :, blank_index + 1:]
   part_blank = logits[:, :, blank_index:blank_index + 1]
@@ -780,6 +906,13 @@ def _ctc_loss_op_cudnn(labels, logits, logit_length, logits_time_major,
 
 
 def _ctc_loss_shape(op):
+  # [FUNCTION DOC]
+  # HELPER: shape inference helper for the CTC loss ops.
+  # KNOWN ISSUE: looks like a leftover shape function; it is never referenced or registered
+  # anywhere in this file, and the shapes returned (third input, then first input) do not obviously match
+  # loss and gradient outputs.
+  # Takes an op and returns a list of two static shapes: that of its third input and that of its
+  # first input. No side effects.
   return [op.inputs[2].get_shape(), op.inputs[0].get_shape()]
 
 
@@ -794,6 +927,16 @@ def ctc_loss_v2(labels,
                 unique=None,
                 blank_index=None,
                 name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the name argument is ignored for sparse labels, and label_length and unique are
+  # unused on that path; the docstring says sparse labels are CPU-only but no device check is made.
+  # Public v1-namespace CTC loss with the newer argument layout. Inputs: labels (dense padded
+  # tensor or sparse tensor), logits, label_length, logit_length, logits_time_major, unique,
+  # blank_index (default 0 for dense labels; required for sparse labels, negative counts from the
+  # end), name. For sparse labels it moves the blank column to the last class, relabels values
+  # above the blank index, and calls the v1 sparse loss. Otherwise it delegates to the dense loss.
+  # Returns a 1-D loss tensor. Raises a value error when labels are sparse and blank_index is
+  # missing.
   """Computes CTC (Connectionist Temporal Classification) loss.
 
   This op implements the CTC loss as presented in (Graves et al., 2006).
@@ -890,6 +1033,21 @@ def ctc_loss_v3(labels,
                 unique=None,
                 blank_index=None,
                 name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says "This class" though this is a function; the name argument is
+  # ignored (and the documented default name is not applied) when labels is a sparse tensor; a
+  # code comment about preferring the GPU path in eager mode is cut off mid-sentence.
+  # Public v2 TensorFlow CTC loss accepting dense padded labels or sparse labels. Inputs: labels
+  # (dense batch by max length tensor or sparse tensor), logits (frames by batch by classes, or
+  # batch-major if logits_time_major is false), label_length (per-batch lengths; unused for sparse
+  # labels), logit_length (per-batch lengths), unique (optional unique-label data for faster TPU
+  # use), blank_index (blank class; default 0 for dense labels, required for sparse labels;
+  # negative counts from the end), name. For sparse labels it uses the fused op: in eager mode it
+  # picks the cuDNN-compatible or standard backend by device availability; in graph mode it builds
+  # both backends tagged with a unique API name so the runtime can choose per device, and adds the
+  # GPU variant and gradient functions to the graph. For dense labels it delegates to the dense
+  # loss. Returns a 1-D loss tensor. Raises a value error when labels are sparse and blank_index is
+  # missing.
   """Computes CTC (Connectionist Temporal Classification) loss.
 
   This op implements the CTC loss as presented in
@@ -1044,6 +1202,18 @@ def ctc_loss_dense(labels,
                    unique=None,
                    blank_index=0,
                    name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: documented as running on GPU/TPU but nothing here is device specific; a positive
+  # blank_index is not range checked.
+  # Computes CTC loss for dense padded labels using the pure-operation forward-backward algorithm
+  # with a custom gradient. Inputs: labels (batch by max length), logits (frames by batch by
+  # classes, or batch-major when logits_time_major is false), label_length, logit_length, unique
+  # (optional pair of unique label values and indices), blank_index (default 0; negative counts from
+  # the end), name. All inputs are converted to tensors, half-precision logits are cast to 32-bit
+  # float, the logits are made time-major, and if blank is not class 0 the blank column and labels
+  # (and unique labels) are shifted so blank becomes class 0. The loss and gradient come from the
+  # loss-and-gradient helper wrapped in a custom-gradient function. Returns a 1-D loss tensor
+  # cast back to the input dtype.
   """Computes CTC (Connectionist Temporal Classification) loss.
 
   This op implements the CTC loss as presented in (Graves et al., 2006),
@@ -1143,6 +1313,13 @@ def ctc_loss_dense(labels,
     @custom_gradient.custom_gradient
     def compute_ctc_loss(logits_t, labels_t, label_length_t, logit_length_t,
                          *unique_t):
+      # [FUNCTION DOC]
+      # HELPER: custom-gradient wrapper used by ctc_loss_dense.
+      # Takes the logits, labels, label lengths and logit lengths tensors plus optional unique
+      # label tensors. Restores their static shapes from the outer tensors, runs the
+      # loss-and-gradient helper, and returns the loss together with a gradient function. That
+      # function scales the precomputed logits gradient by the incoming loss gradient and returns
+      # nothing/null for all other inputs.
       """Compute CTC loss."""
       logits_t.set_shape(logits.shape)
       labels_t.set_shape(labels.shape)
@@ -1157,6 +1334,10 @@ def ctc_loss_dense(labels,
         kwargs["unique"] = unique_t
       result = ctc_loss_and_grad(**kwargs)
       def grad(grad_loss):
+        # [FUNCTION DOC]
+        # HELPER: gradient callback for compute_ctc_loss. Takes the gradient of the loss, reshapes
+        # it to broadcast over time and classes, multiplies the stored logits gradient by it, and
+        # returns a list of that gradient followed by nothing/null for the remaining inputs.
         grad = [array_ops.reshape(grad_loss, [1, -1, 1]) * result[1]]
         grad += [None] * (len(args) - len(grad))
         return grad
@@ -1172,6 +1353,12 @@ def ctc_loss_dense(labels,
 @tf_export("nn.collapse_repeated")
 @dispatch.add_dispatch_support
 def collapse_repeated(labels, seq_length, name=None):
+  # [FUNCTION DOC]
+  # Public op that merges consecutive repeated labels in each batch row, respecting each row's
+  # sequence length. Inputs: labels (batch by max length), seq_length (per-row lengths), name.
+  # Keeps an element if it differs from its predecessor and lies within the row's length, then
+  # compacts kept elements to the left and pads with zeros to the longest new length. Returns a
+  # pair: collapsed labels and new sequence lengths (same dtype as seq_length).
   """Merge repeated labels into single labels.
 
   Args:
@@ -1234,6 +1421,11 @@ def collapse_repeated(labels, seq_length, name=None):
 
 
 def dense_labels_to_sparse(dense, length):
+  # [FUNCTION DOC]
+  # Converts dense padded label rows into a sparse tensor. Inputs: dense (batch by max length
+  # tensor) and length (per-row valid lengths). Keeps only valid elements, casts values to 32-bit
+  # integers, and builds a sparse tensor whose dense shape is the batch size by the longest valid
+  # length. Returns that sparse tensor.
   """Convert dense labels with sequence lengths to sparse tensor.
 
   Args:
@@ -1270,6 +1462,12 @@ def dense_labels_to_sparse(dense, length):
 @tf_export("nn.ctc_unique_labels")
 @dispatch.add_dispatch_support
 def ctc_unique_labels(labels, name=None):
+  # [FUNCTION DOC]
+  # Public op that computes, per batch row, the unique labels and the index of each original label
+  # within them, for use as the optional unique argument of the CTC loss. Input: labels (batch by
+  # max label length, zero padded) and an optional name. Returns a pair of tensors: unique labels
+  # padded with zeros (64-bit integers) and indices into them (32-bit integers), both batch by max
+  # length.
   """Get unique labels and indices for batched labels for `tf.nn.ctc_loss`.
 
   For use with `tf.nn.ctc_loss` optional argument `unique`: This op can be
@@ -1295,6 +1493,10 @@ def ctc_unique_labels(labels, name=None):
     labels = ops.convert_to_tensor(labels, name="labels")
 
     def _unique(x):
+      # [FUNCTION DOC]
+      # HELPER: per-row mapper for ctc_unique_labels. Takes one label row, finds its unique values
+      # and the index of each element, pads the unique values with zeros to the row length, casts
+      # them to 64-bit integers, and returns a list of unique values and indices.
       u = array_ops.unique(x)
       y = array_ops.pad(u.y, [[0, _get_dim(u.idx, 0) - _get_dim(u.y, 0)]])
       y = math_ops.cast(y, dtypes.int64)
@@ -1304,6 +1506,11 @@ def ctc_unique_labels(labels, name=None):
 
 
 def _sum_states(idx, states):
+  # [FUNCTION DOC]
+  # HELPER: used by the unique-label state projection. Inputs: idx (batch by label length, index
+  # of each label's unique entry) and states (frames by batch by label states, log
+  # probabilities). Uses a one-hot selection and log-sum-exp to combine states that share a
+  # unique label. Returns frames by batch by states log probabilities summed per unique label.
   """Take logsumexp for each unique state out of all label states.
 
   Args:
@@ -1333,6 +1540,15 @@ def _sum_states(idx, states):
 def _forward_backward_log(state_trans_log_probs, initial_state_log_probs,
                           final_state_log_probs, observed_log_probs,
                           sequence_length):
+  # [FUNCTION DOC]
+  # HELPER: core of ctc_loss_and_grad.
+  # Runs the forward and backward passes of the alignment model in log space using the scan
+  # helper. Inputs: state transition log probabilities (shared 2-D, or per batch 3-D), initial and
+  # final state log probabilities (batch by states), observed log probabilities (frames by batch by
+  # states) and sequence_length (per batch). The backward pass masks frames past each sequence's
+  # length. Returns a pair: normalized state posteriors (frames by batch by states, masked) and
+  # the log likelihood per batch item. Raises a value error if the transition tensor's rank is not
+  # known to be 2 or 3.
   """Forward-backward algorithm computed in log domain.
 
   Args:
@@ -1365,6 +1581,11 @@ def _forward_backward_log(state_trans_log_probs, initial_state_log_probs,
   batch_size = _get_dim(observed_log_probs, 1)
 
   def _forward(state_log_prob, obs_log_prob):
+    # [FUNCTION DOC]
+    # HELPER: one forward step for the scan. Takes the previous normalized state log probabilities
+    # and the current frame's observation log probabilities, propagates through the transition
+    # matrix with log-sum-exp, adds the observation term and renormalizes. Returns the new state
+    # log probabilities.
     state_log_prob = array_ops.expand_dims(state_log_prob, axis=1)  # Broadcast.
     state_log_prob += state_trans_log_probs
     state_log_prob = math_ops.reduce_logsumexp(state_log_prob, axis=-1)
@@ -1378,6 +1599,12 @@ def _forward_backward_log(state_trans_log_probs, initial_state_log_probs,
       _forward, observed_log_probs, initial_state_log_probs, inclusive=True)
 
   def _backward(accs, elems):
+    # [FUNCTION DOC]
+    # HELPER: one backward step for the scan. Takes the accumulators (state log probabilities and a
+    # running log-normalizer sum) and the element pair (observation log probabilities, frame mask).
+    # Propagates backward through the transposed transitions, normalizes, adds the normalizer to
+    # the running sum only for valid frames, and for masked frames substitutes the final state
+    # log probabilities. Returns the new pair of state log probabilities and cumulative sum.
     """Calculate log probs and cumulative sum masked for sequence length."""
     state_log_prob, cum_log_sum = accs
     obs_log_prob, mask = elems
@@ -1422,6 +1649,15 @@ def _forward_backward_log(state_trans_log_probs, initial_state_log_probs,
 # functional_ops.scan, but could be replaced by that or something similar if
 # things change.
 def _scan(fn, elems, initial, reverse=False, inclusive=False, final_only=False):
+  # [FUNCTION DOC]
+  # HELPER: sequential scan used by the CTC forward-backward code (no gradient support).
+  # Inputs: fn (callback taking accumulators and an element, returning new accumulators of the same
+  # structure), elems (possibly nested tensors scanned along the first dimension), initial
+  # (initial accumulators), reverse (scan from the end), inclusive (also store the initial value,
+  # giving one extra output row), final_only (return only the last accumulators). In eager mode it
+  # runs a plain loop; in graph mode it builds a while-loop op from compiled-function wrappers, with
+  # integer loop variables kept in host memory. Outputs are written with in-place updates.
+  # Returns the accumulated values in the structure of initial.
   """Repeatedly applies callable `fn` to a sequence of elements.
 
   Implemented by functional_ops.While, tpu friendly, no gradient.
@@ -1475,12 +1711,21 @@ def _scan(fn, elems, initial, reverse=False, inclusive=False, final_only=False):
 
   # TODO(tombagby): Update to tfe.defun
   def cond(i, num_elems, *args):
+    # [FUNCTION DOC]
+    # HELPER: loop condition for the scan. Takes the counter, element count and ignored extra loop
+    # variables; returns whether the counter is still non-negative (reverse) or below the count.
     del args
     return i >= 0 if reverse else i < num_elems
 
   # The loop *args are [output tensors] + [accumulator tensors] which must
   # be paired. Each output corresponds to one accumulator.
   def body(i, num_elems, *args):
+    # [FUNCTION DOC]
+    # HELPER: loop body for the scan. Takes the counter, element count and the paired output and
+    # accumulator tensors. Gathers the current slices of all elements, applies the user callback
+    # to the accumulators, writes the new accumulators into the output buffers at the right row
+    # (shifted by one for forward inclusive scans), and steps the counter. Returns the updated
+    # loop variable list.
     """Loop body."""
     i.set_shape([])
     if final_only:
@@ -1536,6 +1781,12 @@ def _scan(fn, elems, initial, reverse=False, inclusive=False, final_only=False):
 
 
 def _get_dim(tensor, i):
+  # [FUNCTION DOC]
+  # HELPER: shape utility used throughout the module.
+  # KNOWN ISSUE: a statically known size of zero is treated as unknown, so the dynamic size is
+  # returned in that case.
+  # Takes a tensor and a dimension index and returns the static size if known (non-zero),
+  # otherwise the dynamic size as a tensor.
   """Get value of tensor shape[i] preferring static value if available."""
   return tensor_shape.dimension_value(
       tensor.shape[i]) or array_ops.shape(tensor)[i]
