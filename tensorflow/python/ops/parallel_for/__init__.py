@@ -1,3 +1,10 @@
+# [PACKAGE DOC]
+# Package for the parallel-for (pfor) machinery: vectorized loop conversion, a for_loop helper
+# and Jacobian/batch-Jacobian computation, implemented in the submodules (control_flow_ops
+# holds the public entry points; pfor, gradients and helpers hold the converter and the
+# gradient utilities). This initializer is intentionally empty apart from its docstring: it
+# re-exports nothing and has no import-time side effects, so users import the submodules
+# directly.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

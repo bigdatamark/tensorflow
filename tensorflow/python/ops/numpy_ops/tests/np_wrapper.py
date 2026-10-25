@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# HELPER: Import-and-configure shim used by the TF NumPy test files in this directory.
+# Provides a single namespace that mimics the public TF NumPy API (array, math, dtype and random
+# routines, ndarray, bfloat16, finfo, promote_types, result_type, dtype configuration helpers)
+# by star-importing the numpy_ops implementation modules, plus the plain numpy module under
+# the name onp. Tests import this module as their "np" so they can run unchanged against
+# TF NumPy.
+# Import-time side effects: sets the default dtype used by the random-normal generator to
+# 32-bit float, enables TensorFlow v2 behavior globally, and enables NumPy-style behavior
+# (type promotion and tensor methods) globally. There are no functions or classes here.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
