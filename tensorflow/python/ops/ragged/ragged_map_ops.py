@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Ragged-aware wrapper around the generic map function. Lets callers declare a ragged output
+# type for the mapped callback and converts it into the spec the underlying implementation
+# expects, then delegates. Exposes the public map function plus one private conversion helper.
+# No import-time side effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,6 +32,16 @@ def map_fn(fn,
            swap_memory=False,
            infer_shape=True,
            name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring references a removed contrib eager defun API and shows lambda
+  # signatures and a ragged type keyword (type) that do not match the code or current API.
+  # Maps fn over the slices of elems along dimension zero, supporting ragged outputs.
+  # Inputs: fn, callback; elems, tensor or nested structure of tensors/ragged tensors;
+  # dtype, optional output type(s), where ragged output types are converted to specs (defaults
+  # to the dtype of each element of elems); parallel_iterations, back_prop, swap_memory,
+  # infer_shape and name, forwarded positionally to the generic map function.
+  # Output: possibly nested structure of (possibly ragged) tensors. Errors (type or value) come
+  # from the underlying map function. No other side effects.
   """map on the list of tensors unpacked from `elems` on dimension 0.
 
   The simplest version of `map_fn` repeatedly applies the callable `fn` to a
@@ -164,6 +179,12 @@ def map_fn(fn,
 
 
 def _ragged_type_to_spec(t):
+  # [FUNCTION DOC]
+  # HELPER: converts a declared output type into what the generic map function expects.
+  # Input: t, either a ragged tensor type or any other type. Output: for a ragged type, a ragged
+  # tensor spec with unknown shape, the same dtype, ragged rank reduced by one (the type
+  # describes the stacked result, the spec describes one mapped output) and the same row-splits
+  # dtype; otherwise t unchanged.
   if isinstance(t, ragged_tensor.RaggedTensorType):
     # Note: need to adjust ragged_rank by 1, since RaggedTensorSpec gives the
     # type for the mapped `fn` output, but RaggedTensorType gives the type for
