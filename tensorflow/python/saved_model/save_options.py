@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Defines the public option objects for saving SavedModels: the variable policy enumeration and
+# the save options container, both exported to the public saved_model API through the export
+# decorator (import-time registration). Also holds a private validator for the namespace
+# whitelist and a module flag marking the open-source build (rewritten by an internal tool).
+# Consumed by the saving code and the save context.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +32,11 @@ is_oss = True  # Updated by copybara.
 
 @tf_export("saved_model.experimental.VariablePolicy")
 class VariablePolicy(enum.Enum):
+  # [CLASS DOC]
+  # Enumeration of how variables are treated on save: no policy (null value), save variable
+  # devices, or expand distributed variables into components. Members carry a string value
+  # (or nothing for the default). Public via export decorator; created by conversion from user
+  # input with the from_obj helper.
   """Enum defining options for variable handling when saving.
 
   NONE
@@ -69,15 +80,27 @@ class VariablePolicy(enum.Enum):
   EXPAND_DISTRIBUTED_VARIABLES = "expand_distributed_variables"
 
   def _save_variable_devices(self):
+    # [FUNCTION DOC]
+    # HELPER: used by the saving code to decide whether to record variable devices.
+    # Returns true for any policy other than the default none policy (so also for expanding
+    # distributed variables), false for none.
     """Checks whether variable devices should be saved."""
     return self != VariablePolicy.NONE
 
   def _expand_distributed_variables(self):
+    # [FUNCTION DOC]
+    # HELPER: used by the saving code to decide whether distributed variables get component info.
+    # Returns true only for the expand-distributed-variables policy, false otherwise.
     """Checks whether distributed variables should be expanded."""
     return self == VariablePolicy.EXPAND_DISTRIBUTED_VARIABLES
 
   @staticmethod
   def from_obj(obj):
+    # [FUNCTION DOC]
+    # Static converter. Input: nothing, a policy member, or a string (any case; non-strings are
+    # turned into text first). Returns the matching policy: none for nothing, the same member if
+    # already a policy, otherwise the member whose string value equals the lower-cased text.
+    # Raises a value error for unrecognized input. No side effects.
     """Tries to convert `obj` to a VariablePolicy instance."""
     if obj is None:
       return VariablePolicy.NONE
@@ -92,6 +115,12 @@ class VariablePolicy(enum.Enum):
 
 @tf_export("saved_model.SaveOptions")
 class SaveOptions:
+  # [CLASS DOC]
+  # Plain container of user-selectable settings for saving a SavedModel (namespace whitelist,
+  # debug info, function aliases, debug stripper, IO device, variable policy, custom gradients,
+  # image format, skip-saver, sharding callback, extra tags). Attributes are fixed by a slots
+  # declaration so no other attributes can be added. Created by users and passed as the options
+  # argument of the save functions; stored in the save context during a save.
   """Options for saving to SavedModel.
 
   This function may be used in the `options` argument in functions that
@@ -127,6 +156,17 @@ class SaveOptions:
       experimental_sharding_callback=None,
       extra_tags=None,
   ):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the error message for a wrong sharding callback type is built from adjacent
+    # string pieces without spaces, so it reads "optionmust" and "providedwas".
+    # Stores all options as attributes. Inputs (all optional): namespace whitelist (list of
+    # strings or nothing, validated), debug-info flag, function aliases (mapping; nothing becomes
+    # an empty mapping), debug stripper flag, IO device string, variable policy (converted to a
+    # policy member), custom gradients flag (default true), image format flag, skip-saver flag,
+    # sharding callback (must be a sharding callback instance or nothing), extra tags (stored
+    # as given). Raises a value error if the image format is enabled in the open-source build
+    # or the sharding callback has the wrong type; the whitelist validator may raise type or
+    # value errors. Returns nothing.
     """Creates an object that stores options for SavedModel saving.
 
     Args:
@@ -224,6 +264,11 @@ class SaveOptions:
 
 
 def _validate_namespace_whitelist(namespace_whitelist):
+  # [FUNCTION DOC]
+  # HELPER: argument validation for the save options constructor.
+  # Input: nothing or a list of strings. Returns nothing for nothing, otherwise a new list of
+  # the entries converted to text. Raises a type error if the input is not a list and a value
+  # error if any entry is not a string.
   """Validates namespace whitelist argument."""
   if namespace_whitelist is None:
     return None

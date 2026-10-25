@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit tests for the SavedModel save context module. Covers thread isolation of the save
+# context and its save options, and rejection of nested entry. Runs under the TensorFlow test
+# runner when executed as a script. Not a helper module.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,8 +26,19 @@ from tensorflow.python.saved_model import save_options
 
 
 class SaveContextTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the save context module: per-thread state and nested-entry rejection.
+  # Has no shared fixtures; each test builds its own save options.
 
   def test_multi_thread(self):
+    # [FUNCTION DOC]
+    # Scenario: the main thread enters a save context with debug info enabled, then a second
+    # thread enters its own context with debug info disabled. Asserts that outside any context
+    # the query is false and getting options raises a value error mentioning "Not in a
+    # SaveContext"; that the worker thread starts outside a context, sees only its own options
+    # while inside, and is outside again after leaving; that the main thread's state and options
+    # are unaffected while the worker runs and after it exits; and that after the main block the
+    # main thread is outside a context again. Two events synchronize the threads.
     self.assertFalse(save_context.in_save_context())
     with self.assertRaisesRegex(ValueError, 'Not in a SaveContext'):
       save_context.get_save_options()
@@ -37,6 +52,12 @@ class SaveContextTest(test.TestCase):
       continue_thread = threading.Event()
 
       def thread_fn():
+        # [FUNCTION DOC]
+        # HELPER: worker body for the multi-thread test.
+        # Runs in a second thread: asserts it starts outside any save context, enters one with
+        # debug info disabled, signals the main thread, waits for permission to continue, then
+        # leaves and asserts it is outside a context again with options retrieval raising a
+        # value error. Takes no inputs, returns nothing.
         self.assertFalse(save_context.in_save_context())
         with self.assertRaisesRegex(ValueError, 'Not in a SaveContext'):
           save_context.get_save_options()
@@ -72,6 +93,9 @@ class SaveContextTest(test.TestCase):
       save_context.get_save_options()
 
   def test_enter_multiple(self):
+    # [FUNCTION DOC]
+    # Scenario: enter the save context and, inside it, try to enter it again on the same thread.
+    # Asserts a value error mentioning "Already in a SaveContext" is raised.
     options = save_options.SaveOptions()
     with self.assertRaisesRegex(ValueError, 'Already in a SaveContext'):
       with save_context.save_context(options):
